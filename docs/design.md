@@ -13,6 +13,7 @@ Every agent UI picks one kind of user. buzz picks non-programmers in rooms, but 
 - **Separate UI and daemon.** The UI only talks to a liton daemon.
 - **Built in Roc.** The UI uses roc-signals. The daemon, provider plugins and tooling are Roc too.
 - **No privileged organizing unit.** Workspace, room and ticket are all just contexts.
+- **Instant.** A tap changes the UI in the same frame: the model applies what the user asked for at once and shows it pending until the daemon confirms, then settles or rolls back with a reason. No control waits on a round trip to show that it worked, and a spec asserts each change before answering its request.
 
 ## Architecture
 
@@ -54,6 +55,8 @@ A capability is a versioned, typed interface made of queries, commands and event
 | `rooms` | people and agents together. Agents speak only when @mentioned |
 | `review` | crit.md-style anchored line comments on diffs, files, agent output and docs. Comments are batched and submitted as one review, then the agent replies per thread and revises |
 | `environment` | the sandbox's static definition (Nix closure, mounts, network policy, granted credentials), live resources, denials/audit, and lifecycle (create, snapshot, destroy) |
+| `attention` | derived by the daemon from `chat` and later `tickets`, `review` and `ci`: what needs you, ranked (needs you > failed > working > done unseen > idle), each item with the responses it allows. Settle and snooze hide an item until something new happens |
+| `discussions` | threaded comments anchored to any context (ticket, PR, file line, room, URL). `review` threads are discussions with a code anchor |
 
 ### Context
 
@@ -76,14 +79,26 @@ Hosting: each user runs a personal daemon, and a personal daemon can also join a
 
 ## UI
 
-- **Layout:** deterministic i3-style tiling. Every node is a split (horizontal or vertical), a tab group or a stack. Sizes are relative.
+The UI is four layers. [docs/research/agent-ui-survey.md](research/agent-ui-survey.md) has the survey behind them.
+
+- **Shell:** an arrangement with named slots, laid over one deterministic tree of splits, tab groups and stacks with relative sizes. Shells constrain the tree rather than replace it:
+  - *Workbench* (the Paseo one): a left drawer of contexts, a main area of tabs on splits, a right drawer of git, diff and files. On a narrow screen the three are panels you swipe between;
+  - *Inbox*: the `attention` list beside the detail of the item it opens;
+  - *Room*: people and agents together, with code panes following the room's focus;
+  - *Tiling*: free splits and tabs, Hyprland-like.
+- **Widget:** one view bound to capabilities. A widget declares, as data apart from its code, the capabilities it needs, the slots it fits and its minimum size, when it is relevant (a small expression over the focus), its typed **options** from a closed set (Bool, Enum, Text, Int, CapabilityRef, ContextRef, ThemeToken) and its styleable **parts**.
+- **Preset:** a shell, the widgets in its slots, their options and a theme. A snapshot holds presets; shipped ones are Developer (Workbench, the default), Inbox and Team (Room).
+- **Escape hatches**, each a rung further from the presets: theme tokens; CSS per widget instance, targeting only its declared parts; a declarative widget loaded at runtime, which composes built-in pieces (list, card, text, badge, button, split, timeline) with capability queries and commands, and is safe to share in a snapshot because it does nothing beyond them; and a full Roc widget, compiled in.
+
+Using it:
+
+- **Settings, not chrome:** a settings sidebar, generated from widgets' options, picks the preset, places widgets and sets options. The working UI shows no controls for adding or enabling widgets.
+- **Editing:** dragging a widget snaps it to the slots it fits, previewing the drop and animating the move (waiting on pointer positions and view transitions in roc-signals); the leader-key palette, the snapshot file with live reload, and agents through the daemon's MCP server make the same tree edits.
 - **Named layouts:** you switch between layouts such as `1:code`, `2:team` and `3:ops`.
-- **Editing:** the leader-key command palette, drag and drop, editing the snapshot file with live reload, or asking an agent to change it. All four produce the same tree edits.
 - **Keys:** a modal leader key (tmux/i3-like) for layout operations. Panes keep their own keys, and a terminal gets raw input.
-- **Mobile:** the same tree, collapsed into tabs or a stack below a width breakpoint. There is no separate mobile config.
+- **Narrow screens:** each shell says how its slots collapse below a breakpoint. There is no separate mobile config.
 - **Missing capability:** the pane stays in place as a placeholder. It names the missing capability and the providers that could supply it.
 - **Theme:** color, spacing and font tokens in light and dark. Themes are shareable like layouts.
-- **Default preset:** Developer, the Paseo-like one: workspace list | agent chat | terminal + diff + CI. Team (rooms-first) and Task (ticket-first) presets come later.
 
 ## Snapshot
 
@@ -113,7 +128,7 @@ A snapshot is a deterministic JSON file. It contains:
 | repo | monorepo |
 | tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md |
 | roc-signals | an SSE subscription effect, as an upstream PR to lukewilliamboswell/roc-signals. Until then the UI polls once a second |
-| layout tree | two levels for now: a row of columns, each a stack or a tab group, with relative widths. Nested `Engine.each` contexts can't recurse, so deeper splits wait on a way to compose views recursively |
+| layout tree | shells constrain one tree. It is two levels deep for now (columns of stacks or tab groups), since nested `Engine.each` contexts can't recurse; deeper splits wait on a way to compose views recursively |
 
 ## MVP
 
