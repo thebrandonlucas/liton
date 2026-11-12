@@ -128,7 +128,11 @@ chat! = |context, request| {
 						schedule!(db, session_id, |next| Mock.on_message(message, next))?
 						Accepted
 					}
-					PaseoSession(daemon) => paseo_answer(tool!(daemon, Paseo.send_prompt(session_id, message)))
+					PaseoSession(daemon) => {
+						outcome = tool!(daemon, Paseo.send_prompt(session_id, message))
+						forget_check!(db, session_id)?
+						paseo_answer(outcome)
+					}
 					NoSession => Rejected("no session ${session_id}")
 				}
 			Ok(AnswerPermission({ session_id, request_id, allowed })) =>
@@ -146,6 +150,7 @@ chat! = |context, request| {
 								known = state_of!(db, session_id)?
 								store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
 							}
+							forget_check!(db, session_id)?
 							paseo_answer(outcome)
 						}
 						NoSession => Rejected("no session ${session_id}")
@@ -233,6 +238,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS entries (session_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (session_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_states (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_checks (what TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS attention_asides (session_id TEXT PRIMARY KEY, signature TEXT NOT NULL, snoozed_until INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's.
 	provider_column : List({ name : Str })
@@ -298,7 +304,7 @@ provider! = |{ db, mock_enabled, paseo }, session_id| {
 watched! : Context, Str, U64 => Try(List(Chat.Entry), _)
 watched! = |context, session_id, after| {
 	match provider!(context, session_id)? {
-		PaseoSession(daemon) => synced!(context.db, daemon, session_id)
+		PaseoSession(daemon) => if (recently_checked!(context.db, session_id)?) {} else synced!(context.db, daemon, session_id)
 		_ => {}
 	}
 	visible!(context.db, session_id, after)
@@ -337,11 +343,12 @@ sessions! = |{ db, mock_enabled, paseo }| {
 	}
 }
 
-## The agents Paseo lists, which the registry keeps: while Paseo can't be
-## reached, the last listed ones with their last synced status.
+## The agents Paseo lists, which the registry keeps: within
+## `paseo_interval_ms` of the last listing, or while Paseo can't be reached,
+## the last listed ones with their last synced status.
 paseo_sessions! : Sqlite.Db, PaseoDaemon => Try(List(Chat.Session), _)
 paseo_sessions! = |db, daemon|
-	match listed!(daemon) {
+	if (recently_checked!(db, "list")?) registered!(db) else match listed!(daemon) {
 		Ok(sessions) => {
 			for (session, position) in sessions.map_with_index(|session, position| (session, position)) {
 				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'paseo', :agent, :title, :position) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap() } })?
@@ -350,15 +357,42 @@ paseo_sessions! = |db, daemon|
 		}
 		Err(err) => {
 			logged!("Paseo: listing its agents failed: ${Str.inspect(err)}")
-			rows : List({ id : Str, agent : Str, title : Str })
-			rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
-			var $sessions = []
-			for row in rows {
-				$sessions = $sessions.append({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
-			}
-			Ok($sessions)
+			registered!(db)
 		}
 	}
+
+## The Paseo agents last listed, with their last synced status.
+registered! : Sqlite.Db => Try(List(Chat.Session), _)
+registered! = |db| {
+	rows : List({ id : Str, agent : Str, title : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	var $sessions = []
+	for row in rows {
+		$sessions = $sessions.append({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
+	}
+	Ok($sessions)
+}
+
+## How often, at most, the daemon asks Paseo for its agent list and for each
+## watched session's timeline. The UI polls every second, from every open tab;
+## each sync is a new WebSocket session on Paseo, and one per second per tab
+## kept Paseo's event loop busy enough that its own clients timed out.
+paseo_interval_ms : I64
+paseo_interval_ms = 3_000
+
+## Whether Paseo was asked about `what` ("list" or a session id) within
+## `paseo_interval_ms`; if not, records that it is being asked now.
+recently_checked! : Sqlite.Db, Str => Try(Bool, _)
+recently_checked! = |db, what| {
+	now = now_ms!()
+	claimed : List({ what : Str })
+	claimed = Sqlite.query_many!({ db, query: "INSERT INTO paseo_checks (what, checked_at) VALUES (:what, :now) ON CONFLICT (what) DO UPDATE SET checked_at = excluded.checked_at WHERE paseo_checks.checked_at <= :since RETURNING what;", params: { what, now, since: now - paseo_interval_ms }, limits: Sqlite.default_query_limits })?
+	Ok(claimed.is_empty())
+}
+
+## Lets the next poll sync `what` at once (after a send, say).
+forget_check! : Sqlite.Db, Str => Try({}, _)
+forget_check! = |db, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE what = :what;", params: { what } })
 
 listed! : PaseoDaemon => Try(List(Chat.Session), _)
 listed! = |daemon| Paseo.sessions(mcp!(daemon, Paseo.list_agents)?)
