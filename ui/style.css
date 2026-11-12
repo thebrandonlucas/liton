@@ -1,0 +1,63 @@
+:root {
+  --bg: #f6f6f4; --surface: #ffffff; --border: #deded9; --text: #1d1d1b; --muted: #6b6b66;
+  --accent: #3559e0; --user: #eef2ff; --tool: #f3f3f0; --fail: #b42318; --warn: #fff7e0; --ok: #1a7f37;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413; --surface: #1d1d1b; --border: #34342f; --text: #ececea; --muted: #9a9a93;
+    --accent: #7b96ff; --user: #23283d; --tool: #24241f; --fail: #ff7b72; --warn: #3a3220; --ok: #56d364;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#app, .liton { height: 100%; display: flex; flex-direction: column; }
+button { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); background: var(--surface); }
+.brand { font-weight: 700; margin-right: 8px; letter-spacing: .02em; }
+.notice { color: var(--fail); margin-left: 8px; }
+.snapshot { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 6px;
+  grid-template-columns: 1fr auto auto; align-items: start; }
+.snapshot p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
+.snapshot textarea { font: 12px var(--mono); min-height: 90px; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.panes { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow-x: auto; }
+.pane { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.pane-title { font-weight: 600; }
+.pane-context { color: var(--muted); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-header .close { border: none; padding: 0 6px; font-size: 16px; }
+.missing { padding: 12px; color: var(--muted); }
+.sessions { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+.session { display: flex; flex-direction: column; padding: 6px 8px; border-radius: 6px; }
+.session button { border: none; padding: 0; text-align: left; background: none; font-weight: 500; }
+.session.focused { background: var(--user); }
+.session-meta { color: var(--muted); font-size: 12px; }
+.chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+.timeline { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.entry pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
+.entry { padding: 6px 8px; border-radius: 6px; }
+.entry.user { background: var(--user); align-self: flex-end; max-width: 85%; }
+.entry.agent { max-width: 95%; }
+.entry.tool, .entry.result { background: var(--tool); }
+.entry.tool pre, .entry.result pre { font: 12px var(--mono); }
+.entry.tool pre::before { content: "$ "; color: var(--muted); }
+.entry.result.failed pre { color: var(--fail); }
+.entry.permission { background: var(--warn); }
+.entry.status, .entry.answer { color: var(--muted); font-size: 12px; padding: 0 8px; }
+.permission { display: flex; gap: 6px; align-items: center; padding: 8px; background: var(--warn); border-top: 1px solid var(--border); }
+.permission span { flex: 1; }
+.permission .allow { border-color: var(--ok); }
+.permission .deny { border-color: var(--fail); }
+.composer { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+.composer input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); }
+.manifest { margin: 0; padding: 12px; font: 12px var(--mono); white-space: pre-wrap; }
+@media (max-width: 640px) { .panes { flex-direction: column; } .pane { min-height: 60vh; } }

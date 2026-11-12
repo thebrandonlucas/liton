@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>liton</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { mountRocEngineApp } from "./runtime.mjs";
+
+      await mountRocEngineApp({
+        wasmUrl: "app.wasm",
+        root: document.getElementById("app"),
+        onFault: (fault) => console.error(`${fault.class}: ${fault.message}`),
+      });
+    </script>
+  </body>
+</html>
