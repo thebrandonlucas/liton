@@ -6,6 +6,9 @@ Capability := [].{
 	chat_v1 : Id
 	chat_v1 = { name: "chat", version: 1 }
 
+	attention_v1 : Id
+	attention_v1 = { name: "attention", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"

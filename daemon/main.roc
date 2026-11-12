@@ -25,6 +25,8 @@ import pf.Tcp
 import pf.UnixTime
 import http.Request
 import http.Response
+import cap.Attention
+import cap.Capability
 import cap.Chat
 import cap.Manifest
 import mock.Mock
@@ -71,11 +73,18 @@ respond! = |request, context| {
 			(GET, Resource({ raw_path: "/", .. })) =>
 				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
 			(GET, Resource({ raw_path: "/api/manifest", .. })) =>
-				Ok(json(Json.to_str({ protocol: Manifest.protocol, providers: (if (context.mock_enabled) [Mock.provider] else []).concat(if (context.paseo.is_ok()) [Paseo.provider] else []) })))
+				{
+					chat_providers = (if (context.mock_enabled) [Mock.provider] else []).concat(if (context.paseo.is_ok()) [Paseo.provider] else [])
+					Ok(json(Json.to_str({ protocol: Manifest.protocol, providers: if (chat_providers.is_empty()) [] else chat_providers.append(liton_provider) })))
+				}
 			(POST, Resource({ raw_path: "/api/chat", .. })) =>
 				chat!(context, request)
 			(POST, Resource({ raw_path: "/api/chat/poll", .. })) =>
 				poll!(context, request)
+			(GET, Resource({ raw_path: "/api/attention", .. })) =>
+				attention_items!(context).map_ok(|items| json(Json.to_str(items)))
+			(POST, Resource({ raw_path: "/api/attention", .. })) =>
+				attention!(context, request)
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -165,6 +174,57 @@ poll! = |context, request| {
 	}
 }
 
+## The built-in provider of what the daemon derives from the others' chat.v1.
+liton_provider : Manifest.Provider
+liton_provider = { id: "liton", name: "liton", capabilities: [Capability.attention_v1] }
+
+## Every session's attention item, ranked. Forgets the settles and snoozes
+## that no longer hold, so an item that came back stays back.
+attention_items! : Context => Try(List(Attention.Item), _)
+attention_items! = |context| {
+	db = context.db
+	var $items = []
+	for session in sessions!(context)? {
+		$items = $items.append(Attention.item(session, visible!(db, session.id, 0)?))
+	}
+	asides : List(Attention.Aside)
+	asides = Sqlite.query_many!({ db, query: "SELECT session_id, signature, snoozed_until FROM attention_asides;", params: {}, limits: Sqlite.default_query_limits })?
+	now = now_ms!()
+	for aside in asides.drop_if(|aside| Attention.holds(aside, $items, now)) {
+		Sqlite.execute!({ db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: aside.session_id } })?
+	}
+	Ok(Attention.ranked($items, asides, now))
+}
+
+attention! : Context, Server.Request => Try(Response, _)
+attention! = |context, request| {
+	decoded : Try(Attention.Request, _)
+	decoded = Json.parse(read_json!(request)?)
+	answer : Attention.Response
+	answer =
+		match decoded {
+			Err(_) => Rejected("expected an attention.v1 request")
+			Ok(ListItems) => Items(attention_items!(context)?)
+			Ok(Settle({ session_id, signature })) => set_aside!(context, { session_id, signature, snoozed_until: 0 })?
+			Ok(Snooze({ session_id, signature, minutes })) => set_aside!(context, { session_id, signature, snoozed_until: now_ms!() + minutes.to_i64() * 60_000 })?
+			Ok(Unsettle({ session_id })) => {
+				Sqlite.execute!({ db: context.db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: session_id } })?
+				Accepted
+			}
+		}
+	Ok(json(Json.to_str(answer)))
+}
+
+set_aside! : Context, Attention.Aside => Try(Attention.Response, _)
+set_aside! = |context, { session_id, signature, snoozed_until }|
+	match provider!(context, session_id)? {
+		NoSession => Ok(Rejected("no session ${session_id}"))
+		_ => {
+			Sqlite.execute!({ db: context.db, query: "INSERT INTO attention_asides (session_id, signature, snoozed_until) VALUES (:session_id, :signature, :snoozed_until) ON CONFLICT (session_id) DO UPDATE SET signature = excluded.signature, snoozed_until = excluded.snoozed_until;", params: { session_id, signature, snoozed_until } })?
+			Ok(Accepted)
+		}
+	}
+
 now_ms! : () => I64
 now_ms! = || (UnixTime.now!().nanos_since_epoch() // 1_000_000).to_i64_wrap()
 
@@ -173,6 +233,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS entries (session_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (session_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_states (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS attention_asides (session_id TEXT PRIMARY KEY, signature TEXT NOT NULL, snoozed_until INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's.
 	provider_column : List({ name : Str })
 	provider_column = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = 'provider';", params: {}, limits: Sqlite.default_query_limits })?

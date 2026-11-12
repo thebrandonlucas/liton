@@ -127,7 +127,8 @@ Paseo := [].{
 		tool_call("respond_to_permission", Json.to_str({ agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny" } }))
 
 	## The agents `list_agents` answered, without archived ones. An agent whose
-	## attention Paseo wants for a permission awaits it.
+	## attention Paseo wants for a permission awaits it, and an idle one whose
+	## attention it wants because it finished, until you look, is finished.
 	sessions : Str -> Try(List(Chat.Session), [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	sessions = |body| {
 		listed : Try({ result : { structured_content : { agents : List(Agent) } } }, _)
@@ -135,9 +136,17 @@ Paseo := [].{
 		Ok(
 			listed?.result.structured_content.agents
 				.drop_if(|agent| agent.archived_at.map_ok(|archived| archived.is_ok()) ?? Bool.False)
-				.map(|agent| { id: agent.id, provider: "paseo", agent: agent.provider, title: agent.title ?? agent.short_id, status: if (agent.attention_reason == Ok(Ok("permission"))) AwaitingPermission else Paseo.chat_status({ status: agent.status, pending_permissions: [], last_error: Err(Missing) }) }),
+				.map(|agent| { id: agent.id, provider: "paseo", agent: agent.provider, title: agent.title ?? agent.short_id, status: Paseo.listed_status(agent) }),
 		)
 	}
+
+	listed_status : Agent -> Chat.Status
+	listed_status = |agent|
+		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: [], last_error: Err(Missing) })) {
+			(Ok(Ok("permission")), _) => AwaitingPermission
+			(Ok(Ok("finished")), Idle) => Finished
+			(_, status) => status
+		}
 
 	status_snapshot : Str -> Try(Snapshot, [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	status_snapshot = |body| {
@@ -458,10 +467,10 @@ expect Paseo.timeline_page("{\"type\":\"pong\"}", "r1").map_ok(|_| {}) == Err(Ot
 expect {
 	body =
 		\\event: message
-		\\data: {"result":{"content":[],"structuredContent":{"agents":[{"id":"a1","shortId":"a1s","title":null,"provider":"codex","model":null,"status":"running","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"labels":{}},{"id":"a2","shortId":"a2s","title":"Old work","provider":"claude","model":null,"status":"closed","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":"2026-01-02T00:00:00.000Z","labels":{}}]}},"jsonrpc":"2.0","id":1}
+		\\data: {"result":{"content":[],"structuredContent":{"agents":[{"id":"a1","shortId":"a1s","title":null,"provider":"codex","model":null,"status":"running","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"labels":{}},{"id":"a3","shortId":"a3s","title":"Done","provider":"claude","model":null,"status":"idle","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"requiresAttention":true,"attentionReason":"finished","labels":{}},{"id":"a2","shortId":"a2s","title":"Old work","provider":"claude","model":null,"status":"closed","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":"2026-01-02T00:00:00.000Z","labels":{}}]}},"jsonrpc":"2.0","id":1}
 		\\
 		\\
-	Paseo.sessions(body) == Ok([{ id: "a1", provider: "paseo", agent: "codex", title: "a1s", status: Running }])
+	Paseo.sessions(body) == Ok([{ id: "a1", provider: "paseo", agent: "codex", title: "a1s", status: Running }, { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }])
 }
 
 expect Paseo.succeeded("event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Agent a9 not found\"}],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}\n\n") == Err(ToolFailed("Agent a9 not found"))
