@@ -185,4 +185,13 @@ pub fn build(b: *std.Build) void {
     run_daemon.step.dependOn(&build_ui.step);
     run_daemon.step.dependOn(&build_daemon.step);
     run_step.dependOn(&run_daemon.step);
+
+    // Drives the UI in headless Chrome (CHROME, or chromium on PATH) against
+    // a daemon of its own serving the mock provider.
+    const e2e_step = b.step("e2e", "Drive the UI in headless Chrome against the daemon");
+    const run_e2e = b.addSystemCommand(&.{ "node", "e2e/journey.mjs" });
+    run_e2e.has_side_effects = true;
+    run_e2e.step.dependOn(&build_ui.step);
+    run_e2e.step.dependOn(&build_daemon.step);
+    e2e_step.dependOn(&run_e2e.step);
 }

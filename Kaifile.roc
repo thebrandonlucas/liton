@@ -27,7 +27,7 @@ kaifile = Std.kaifile(
 			"dev",
 			[
 				Overlays(["roc"]),
-				Tools(roc.concat(["zig_0_16", "git"])),
+				Tools(roc.concat(["zig_0_16", "git", "nodejs"])),
 			],
 		),
 		Shell("default", [Use("dev")]),
