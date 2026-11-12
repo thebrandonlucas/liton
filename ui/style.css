@@ -67,6 +67,11 @@ button:hover { border-color: var(--accent); }
 .tool-card summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .entry.permission { background: var(--warn); }
 .entry.status, .entry.answer { color: var(--muted); font-size: 12px; padding: 0 8px; }
+.entry.pending { opacity: .6; }
+.entry.user.failed { outline: 1px solid var(--fail); }
+.sent-status { display: block; color: var(--muted); font-size: 12px; }
+.sent-status:empty { display: none; }
+.entry.failed .sent-status { color: var(--fail); }
 .permission { display: flex; gap: 6px; align-items: center; padding: 8px; background: var(--warn); border-top: 1px solid var(--border); }
 .permission span { flex: 1; }
 .permission .allow { border-color: var(--ok); }

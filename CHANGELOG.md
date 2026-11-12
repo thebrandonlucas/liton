@@ -18,4 +18,5 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Changed
 
+- Sending a message or allowing or denying a request shows at once: the message appears as "Sending…" and the prompt gives way to "Allowing…" or "Denying…" until the agent has it. A message the agent did not take stays, with why and a Retry button; an answer it did not take brings the prompt back. A chat pane says "Loading…" until its session's timeline arrives.
 - Layouts saved by an earlier version, in the browser or as a snapshot, load as one column per pane.

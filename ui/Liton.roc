@@ -85,13 +85,14 @@ Liton := [].{
 			model.val().map(|state| state.outbox),
 			|outbox| [Http({ method: "POST", url: "/api/chat", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
 			model.on_result(
-				|state, _, res| {
+				|state, outbox, res| {
 					decoded : Try(Chat.Response, _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
 					match decoded {
-						Ok(Rejected(reason)) => { ..state, notice: reason }
-						Ok(_) => state
-						Err(_) => { ..state, notice: "The daemon did not answer." }
+						Ok(Rejected(reason)) => Model.refused(state, outbox.serial, reason)
+						# Polls at once for what the request changed.
+						Ok(_) => { ..state, ticks: state.ticks + 1 }
+						Err(_) => Model.refused(state, outbox.serial, "The daemon did not answer.")
 					}
 				},
 			),
@@ -197,7 +198,7 @@ Liton := [].{
 						Html.span_v(title, [Engine.class("pane-title")]),
 						Html.span_v(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
-							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission),
+							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission and (Model.loading(state, Model.session_of(state, pane)) or Model.pending(state, pane.id).is_ok())),
 							|| Html.span_v(Engine.const("waiting for you"), [Engine.class("badge waiting"), Engine.test_id("session-status")]),
 							|| Engine.text(""),
 						),
@@ -296,9 +297,31 @@ Liton := [].{
 											],
 										),
 								),
+								Engine.each(
+									shown.map(|{ pane, state }| Model.unconfirmed(state, Model.session_of(state, pane))),
+									|sent| sent.serial.to_str(),
+									|row|
+										Html.li(
+											[Engine.class_v(row.field(|sent| Liton.sent_class(sent)))],
+											[
+												Html.pre_v(row.field(|sent| Liton.sent_text(sent.request)), []),
+												Html.span_v(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
+												Engine.when(
+													row.field(|sent| !sent.failed.is_empty()),
+													|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
+													|| Engine.text(""),
+												),
+											],
+										),
+								),
 							],
 						),
 					],
+				),
+				Engine.when(
+					shown.map(|{ pane, state }| Model.loading(state, Model.session_of(state, pane))),
+					|| Html.p("Loading…", "missing"),
+					|| Engine.text(""),
 				),
 				Engine.when(
 					pending.map(|waiting| waiting.is_ok()),
@@ -314,7 +337,7 @@ Liton := [].{
 					|| Engine.text(""),
 				),
 				Html.form(
-					"Message",
+					"Send a message",
 					[Engine.class("composer"), Engine.on("submit:prevent", model0.update_by(id, Model.submit))],
 					[
 						Html.text_input(Engine.const("Message"), "text", id.map2(model0.val(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent")], model0.set_value_by(id, Model.set_draft)),
@@ -407,6 +430,29 @@ Liton := [].{
 			PermissionRequested({ tool, description, .. }) => "asks to ${tool}: ${description}"
 			PermissionAnswered({ allowed, .. }) => if (allowed) "allowed" else "denied"
 			StatusChanged(status) => Liton.status_text(status)
+		}
+
+	sent_text : Chat.Request -> Str
+	sent_text = |request|
+		match request {
+			SendMessage({ text, .. }) => text
+			AnswerPermission({ allowed, .. }) => if (allowed) "Allowing…" else "Denying…"
+			_ => ""
+		}
+
+	## A message's state; an answer's is in its text.
+	sent_status : Model.Sent -> Str
+	sent_status = |sent|
+		match sent.request {
+			SendMessage(_) => if (sent.failed.is_empty()) "Sending…" else "Not sent: ${sent.failed}"
+			_ => ""
+		}
+
+	sent_class : Model.Sent -> Str
+	sent_class = |sent|
+		match sent.request {
+			SendMessage(_) => if (sent.failed.is_empty()) "entry user pending" else "entry user failed"
+			_ => "entry answer pending"
 		}
 
 	entry_class : Chat.Event -> Str

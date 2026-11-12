@@ -11,6 +11,7 @@
 - Prefer "wide and short" code: names that say plainly what a value holds, even when long (underscores welcome, no abbreviations or acronyms such as `cwd`), and fewer lines overall, so a change stays small and easy to take in. Rename unclear names in code you are already changing.
 - Keep pure data separate from effects. Providers and widgets are pure: they take events and return new state plus the effects they request, and only the daemon and UI hosts perform effects.
 - Widgets depend on capabilities (`capabilities/`), never on a provider.
+- The UI never waits on the daemon to show that a control worked. The update that sends a request also changes the model to show its result as pending, and the answer confirms it or rolls it back with a reason. Every control that sends a request has a spec asserting the change before `run-effect` answers it.
 - Don't write tests unless explicitly asked to do a specific set or finish and already started test.
 - Commits should strive to be reviewable by a human. +50/-50 average, upper bound +500/-500 if possible.
 - Do not use conventional commits.

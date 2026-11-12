@@ -15,6 +15,9 @@
     (run-effect 4)
     (expect-visible (text "Allow edit: src/Main.roc?"))
     (click (role button :name "Allow"))
+    ; Shown before the daemon answers.
+    (expect-absent (role button :name "Allow"))
+    (expect-visible (text "Allowing…"))
     ; The answer is a request of its own, beside the polls still waiting.
     (expect-pending-effects 3)
     (stub-http "answer" :url "/api/chat" :status 200 :body "\"Accepted\"")
@@ -24,5 +27,6 @@
     (expect-absent (role button :name "Allow"))
     (expect-absent (text "waiting for you"))
     (expect-visible (text "allowed"))
+    (expect-absent (text "Allowing…"))
   )
 )

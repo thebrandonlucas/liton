@@ -20,6 +20,11 @@ Model := [].{
 
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
+	## A message or permission answer sent, until its session's timeline shows
+	## it after the event numbered `after`. `failed` says why the daemon did not
+	## take it, or is "" while it waits.
+	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
+
 	State : {
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
@@ -35,6 +40,10 @@ Model := [].{
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
 		outbox : { serial : U64, request : Chat.Request },
+		sent : List(Sent),
+
+		## Counts each second, and each request the daemon accepts, so the UI
+		## polls again.
 		ticks : U64,
 		notice : Str,
 		show_snapshot : Bool,
@@ -64,6 +73,7 @@ Model := [].{
 				next_id: 1,
 				drafts: [],
 				outbox: { serial: 0, request: ListSessions },
+				sent: [],
 				ticks: 0,
 				notice: "",
 				show_snapshot: Bool.False,
@@ -258,11 +268,63 @@ Model := [].{
 			},
 		)
 		focus = if (state.focus.is_empty()) (answer.sessions.first().map_ok(|first| first.id) ?? "") else state.focus
-		{ ..state, sessions: answer.sessions, timelines: merged, focus }
+		settled = { ..state, sessions: answer.sessions, timelines: merged, focus }
+		{ ..settled, sent: settled.sent.drop_if(|sent| Model.confirmed(settled, sent)) }
 	}
 
+	## Whether a sent request's session's timeline shows it.
+	confirmed : State, Sent -> Bool
+	confirmed = |state, sent| {
+		timeline = Model.entries(state, sent.session_id)
+		match sent.request {
+			SendMessage({ text, .. }) => timeline.any(|entry| entry.sequence > sent.after and entry.event == UserMessage({ text: text }))
+			AnswerPermission({ request_id, .. }) => !Chat.pending_permissions(timeline).contains(request_id)
+			_ => Bool.True
+		}
+	}
+
+	## Sends a request, and shows a message or permission answer as sent until
+	## its session's timeline shows it.
 	send : State, Chat.Request -> State
-	send = |state, request| { ..state, outbox: { serial: state.outbox.serial + 1, request }, notice: "" }
+	send = |state, request| {
+		serial = state.outbox.serial + 1
+		session_id = match request {
+			SendMessage(message) => message.session_id
+			AnswerPermission(answered) => answered.session_id
+			_ => ""
+		}
+		sent = { serial, session_id, request, after: Model.last_sequence(state, session_id), failed: "" }
+		{ ..state, outbox: { serial, request }, sent: state.sent.append(sent), notice: "" }
+	}
+
+	## Takes the daemon's refusal of a request: a message stays, failed with
+	## `reason`, and a permission request's prompt comes back.
+	refused : State, U64, Str -> State
+	refused = |state, serial, reason| {
+		answer = |sent|
+			match sent.request {
+				AnswerPermission(_) => sent.serial == serial
+				_ => Bool.False
+			}
+		sent = state.sent.drop_if(answer).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
+		{ ..state, sent, notice: reason }
+	}
+
+	## Sends a failed message again.
+	retry : State, Str -> State
+	retry = |state, serial|
+		match state.sent.find_first(|sent| sent.serial.to_str() == serial) {
+			Ok(failed) => Model.send({ ..state, sent: state.sent.drop_if(|sent| sent.serial == failed.serial) }, failed.request)
+			Err(NotFound) => state
+		}
+
+	## What was sent to a session that its timeline does not show yet.
+	unconfirmed : State, Str -> List(Sent)
+	unconfirmed = |state, session_id| state.sent.keep_if(|sent| sent.session_id == session_id)
+
+	## Whether a chat pane shows a session whose timeline has not arrived yet.
+	loading : State, Str -> Bool
+	loading = |state, session_id| !session_id.is_empty() and !state.timelines.any(|timeline| timeline.session_id == session_id)
 
 	draft : State, Str -> Str
 	draft = |state, pane_id| state.drafts.find_first(|candidate| candidate.pane == pane_id).map_ok(|found| found.text) ?? ""
@@ -281,12 +343,20 @@ Model := [].{
 			Model.send(Model.set_draft(state, pane_id, ""), SendMessage({ session_id, text }))
 	}
 
-	## The latest unanswered permission request in the session a pane shows.
+	## The latest permission request in the session a pane shows that no answer
+	## follows, in the timeline or on its way.
 	pending : State, Str -> Try({ session_id : Str, request_id : Str, tool : Str, description : Str }, [NoneWaiting])
 	pending = |state, pane_id| {
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
 		timeline = Model.entries(state, session_id)
-		request_id = Chat.pending_permissions(timeline).last() ? |_| NoneWaiting
+		answering = state.sent.keep_oks(
+			|sent|
+				match sent.request {
+					AnswerPermission(answered) => Ok(answered.request_id)
+					_ => Err(NotAnswer)
+				},
+		)
+		request_id = Chat.pending_permissions(timeline).drop_if(|id| answering.contains(id)).last() ? |_| NoneWaiting
 		asked = timeline.find_first(
 			|entry|
 				match entry.event {
