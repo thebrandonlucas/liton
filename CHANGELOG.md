@@ -16,6 +16,10 @@ All notable changes to liton are documented in this file. The format is based on
 - Sessions waiting for you to allow or deny something stand out: Sessions shows each status as a badge, and a chat pane showing such a session says "waiting for you" in its header, next to the session's title.
 - A tool call shows as one card with its result: the tool and whether it is running, done or failed, its input, and its output, with all but the first 4 lines folded away until you open them.
 - Connect a running Paseo daemon by setting `PASEO_PASSWORD` (and `PASEO_HOST` or `PASEO_PORT` if it isn't at 127.0.0.1:6767): its agents show up as sessions, and you can chat with them and allow or deny what they ask. `LITON_MOCK=off` hides the scripted mock agents.
+- An Inbox widget lists every session by what it needs from you: Needs you, then Failed, Done and Working, each with its agent, state and the agent's last message. Click one to open it in the chat (on a phone, it jumps to the chat). Allow or deny what a session asks for right in the inbox.
+- Settle an inbox item, or snooze it for an hour, to move it to Later until something new happens in that session or the hour is up. It moves at once, and comes back with why if the daemon refuses.
+- The Inbox preset, in Settings: a workbench with the Inbox in the left drawer, the chat in the middle, and the right drawer hidden. Paseo agents that finished since you last looked show as done.
+- The browser tab's title counts the sessions that need you, as in "(2) liton", and so does the Inbox's tab.
 
 ### Changed
 

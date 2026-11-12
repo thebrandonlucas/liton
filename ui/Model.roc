@@ -1,5 +1,6 @@
 ## The UI's state and every change to it, apart from the view so they can be
 ## tested without a browser.
+import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
@@ -56,6 +57,13 @@ Model := [].{
 		drafts : List({ pane : Str, text : Str }),
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
+		attention : List(Attention.Item),
+
+		## A settle or snooze sent, shown until the daemon's items show it, or
+		## until the first fetch after the tick the daemon `accepted` it on (0
+		## while it waits).
+		setting_aside : List({ serial : U64, session_id : Str, set_aside : [No, Settled, Snoozed], accepted : U64 }),
+		attention_outbox : { serial : U64, request : Attention.Request },
 
 		## Counts each second, and each request the daemon accepts, so the UI
 		## polls again.
@@ -77,6 +85,11 @@ Model := [].{
 			{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "" }, { id: "pane-4", widget: "capabilities", pinned: "" }] },
 		],
 	}
+
+	## The Inbox preset: a Workbench of what needs you, the chat following the
+	## item opened, and the Developer preset's right drawer, collapsed.
+	inbox : Layout
+	inbox = { ..Model.developer, columns: Model.developer.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "" }] } else column) }
 
 	## The Tiling preset: sessions, a wider chat and what the daemon advertises,
 	## each in a column.
@@ -108,6 +121,9 @@ Model := [].{
 				drafts: [],
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
+				attention: [],
+				setting_aside: [],
+				attention_outbox: { serial: 0, request: ListItems },
 				ticks: 0,
 				notice: "",
 				show_settings: Bool.False,
@@ -366,7 +382,7 @@ Model := [].{
 		timeline = Model.entries(state, sent.session_id)
 		match sent.request {
 			SendMessage({ text, .. }) => timeline.any(|entry| entry.sequence > sent.after and entry.event == UserMessage({ text: text }))
-			AnswerPermission({ request_id, .. }) => !Chat.pending_permissions(timeline).contains(request_id)
+			AnswerPermission({ request_id, .. }) => !Chat.pending_permissions(timeline).contains(request_id) and !state.attention.any(|item| item.permissions.any(|asked| asked.request_id == request_id))
 			_ => Bool.True
 		}
 	}
@@ -465,9 +481,93 @@ Model := [].{
 			Err(NoneWaiting) => state
 		}
 
+	## The attention items as the inbox shows them: set aside, or back, as soon
+	## as asked.
+	inbox_items : State -> List(Attention.Item)
+	inbox_items = |state|
+		state.attention.map(|item| state.setting_aside.find_last(|asked| asked.session_id == item.session_id).map_ok(|asked| { ..item, set_aside: asked.set_aside }) ?? item)
+
+	## The items in `attention_state` not set aside.
+	waiting : State, Attention.State -> List(Attention.Item)
+	waiting = |state, attention_state| Model.inbox_items(state).keep_if(|item| item.state == attention_state and item.set_aside == No)
+
+	later : State -> List(Attention.Item)
+	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
+
+	## How many items need you, as the document title and the inbox's tab show.
+	needs_you : State -> U64
+	needs_you = |state| Model.waiting(state, NeedsYou).len()
+
+	## Takes the items a fetch issued at tick `asked` answered.
+	attention_fetched : State, U64, List(Attention.Item) -> State
+	attention_fetched = |state, asked, items| {
+		shown = |aside| (aside.accepted > 0 and aside.accepted <= asked) or items.any(|item| item.session_id == aside.session_id and item.set_aside == aside.set_aside)
+		fetched = { ..state, attention: items, setting_aside: state.setting_aside.drop_if(shown) }
+		{ ..fetched, sent: fetched.sent.drop_if(|sent| Model.confirmed(fetched, sent)) }
+	}
+
+	## Settles or snoozes an item for an hour, or brings it back (`No`).
+	set_aside : State, Str, [No, Settled, Snoozed] -> State
+	set_aside = |state, session_id, set_aside|
+		match state.attention.find_first(|item| item.session_id == session_id) {
+			Err(NotFound) => state
+			Ok({ signature, .. }) => {
+				serial = state.attention_outbox.serial + 1
+				request =
+					match set_aside {
+						Settled => Settle({ session_id, signature })
+						Snoozed => Snooze({ session_id, signature, minutes: 60 })
+						No => Unsettle({ session_id: session_id })
+					}
+				{ ..state, attention_outbox: { serial, request }, setting_aside: state.setting_aside.append({ serial, session_id, set_aside, accepted: 0 }), notice: "" }
+			}
+		}
+
+	## Takes the daemon's answer to a settle or snooze: accepted, it holds until
+	## the next fetch shows it; refused, the item comes back, with why.
+	set_aside_answered : State, U64, Attention.Response -> State
+	set_aside_answered = |state, serial, response|
+		match response {
+			Rejected(reason) => { ..state, setting_aside: state.setting_aside.drop_if(|aside| aside.serial == serial), notice: reason }
+			_ => { ..state, ticks: state.ticks + 1, setting_aside: state.setting_aside.map(|aside| if (aside.serial == serial) { ..aside, accepted: state.ticks + 1 } else aside) }
+		}
+
+	## The latest permission request of an item that no answer on its way
+	## follows.
+	item_permission : State, Str -> Try(Attention.Permission, [NoneWaiting])
+	item_permission = |state, session_id| {
+		answering = state.sent.keep_oks(
+			|sent|
+				match sent.request {
+					AnswerPermission(answered) => Ok(answered.request_id)
+					_ => Err(NotAnswer)
+				},
+		)
+		permissions = state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| item.permissions) ?? []
+		permissions.drop_if(|asked| answering.contains(asked.request_id)).last().map_err(|_| NoneWaiting)
+	}
+
+	answer_item : State, Str, Bool -> State
+	answer_item = |state, session_id, allowed|
+		match Model.item_permission(state, session_id) {
+			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
+			Err(NoneWaiting) => state
+		}
+
+	## Focuses an item's session, so chat panes follow it, and shows the first
+	## chat's column, which on a narrow screen is a jump to it.
+	open_item : State, Str -> State
+	open_item = |state, session_id| {
+		focused = { ..state, focus: session_id }
+		match state.columns.find_first(|column| column.panes.any(|shown| shown.widget == "chat")) {
+			Ok(column) => Model.show_column(focused, column.id)
+			Err(NotFound) => focused
+		}
+	}
+
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## or a placeholder naming what is missing.
-	Body : [Sessions, Chat, Capabilities, Connecting, Missing]
+	Body : [Sessions, Chat, Inbox, Capabilities, Connecting, Missing]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -484,6 +584,7 @@ Model := [].{
 			match shown.widget {
 				"sessions" => Sessions
 				"chat" => Chat
+				"inbox" => Inbox
 				_ => Capabilities
 			}
 	}

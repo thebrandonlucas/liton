@@ -78,6 +78,15 @@ try {
   await step("the flaky CI session is waiting for you", () =>
     until("its status", () => page.evaluate(() =>
       [...document.querySelectorAll(".session")].some((s) => s.textContent.includes("Find the flaky CI test") && s.querySelector('[data-testid="session-status"]')?.textContent === "waiting for you"))));
+  await step("the Inbox preset lists it under Needs you, and the title counts it", async () => {
+    await page.click(".settings-toggle");
+    await click("Settings", "button", "Inbox preset");
+    await see("Inbox", ".inbox-section", "Needs you");
+    await see("Inbox", ".inbox-section .inbox-item", "Find the flaky CI test");
+    await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
+    await click("Settings", "button", "Developer preset");
+    await page.click(".settings-toggle");
+  });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Sessions", ".session button", "Find the flaky CI test");
     await see("Chat", ".pane-context", "following Find the flaky CI test");
@@ -118,7 +127,7 @@ try {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });
   await browser.close();
-  console.log("ok   e2e journey: panes, sessions, permission prompts and tool cards against the mock daemon");
+  console.log("ok   e2e journey: panes, sessions, the inbox, permission prompts and tool cards against the mock daemon");
   process.exit(0);
 } catch (error) {
   fail(error);

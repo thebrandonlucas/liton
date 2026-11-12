@@ -2,6 +2,8 @@
 ## daemon advertises, and the effects that keep them current.
 import pf.Engine exposing [Elem, In, Root, Row, RowRef, State, Val]
 import pf.Html
+import cap.Attention
+import cap.Capability
 import cap.Chat
 import cap.Manifest
 import Model
@@ -40,7 +42,7 @@ Liton := [].{
 							|column| column.id,
 							|row|
 								Html.button_v(
-									row.field(|column| Str.join_with(column.panes.map(|pane| Widgets.find(pane.widget).title), " · ")),
+									row.field(|column| column).map2(model.val().lift_row(), |column, state| Str.join_with(column.panes.map(|pane| Liton.label(state, pane)), " · ")),
 									[
 										Html.flag("aria-pressed", row.key().map2(model.val().lift_row(), |key, state| key == state.active_column)),
 										Engine.test_id_v(row.key().map2(model.val().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
@@ -88,6 +90,32 @@ Liton := [].{
 				},
 			),
 		),
+		Engine.watch(
+			model.val().map(|state| { ticks: state.ticks, advertised: state.capabilities.contains(Capability.attention_v1) }),
+			|asked| if (asked.advertised) [Http({ method: "GET", url: "/api/attention", headers: [], body: "", timeout_ms: 5000 })] else [],
+			model.on_result(
+				|state, asked, res| {
+					decoded : Try(List(Attention.Item), _)
+					decoded = Json.parse(Engine.http_text(res) ?? "")
+					match decoded {
+						Ok(items) => Model.attention_fetched(state, asked.ticks, items)
+						Err(_) => state
+					}
+				},
+			),
+		),
+		Engine.on_change(
+			model.val().map(|state| state.attention_outbox),
+			|outbox| [Http({ method: "POST", url: "/api/attention", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
+			model.on_result(
+				|state, outbox, res| {
+					decoded : Try(Attention.Response, _)
+					decoded = Json.parse(Engine.http_text(res) ?? "")
+					Model.set_aside_answered(state, outbox.serial, decoded ?? Rejected("The daemon did not answer."))
+				},
+			),
+		),
+		Engine.watch(model.val().map(Model.needs_you), |count| [Title(if (count == 0) "liton" else "(${count.to_str()}) liton")], Engine.ignore({})),
 		Engine.on_change(
 			model.val().map(|state| state.outbox),
 			|outbox| [Http({ method: "POST", url: "/api/chat", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
@@ -146,7 +174,8 @@ Liton := [].{
 						Html.div(
 							"choices",
 							[
-								Html.button("Developer preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Workbench))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
+								Html.button("Developer preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Workbench and !Liton.inbox_preset(state)))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
+								Html.button("Inbox preset", [Html.flag("aria-pressed", model.val().map(Liton.inbox_preset))], model.update(|state| Model.with_snapshot_text(Model.toggle_drawer(Model.layout(state, Model.inbox), Right)))),
 								Html.button("Tiling preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Tiling))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.tiling)))),
 							],
 						),
@@ -204,7 +233,7 @@ Liton := [].{
 							|pane| pane.id,
 							|tab|
 								Html.button_v(
-									tab.field(|pane| Widgets.find(pane.widget).title),
+									tab.field(|pane| pane).map2(model.val().lift_row(), |pane, state| Liton.label(state, pane)),
 									[Engine.class("tab"), Html.flag("aria-pressed", tab.key().map2(column.lift_row(), |key, shown| key == shown.active))],
 									model.lift_row().update_by(tab.key(), Model.activate_tab),
 								),
@@ -242,7 +271,7 @@ Liton := [].{
 				Html.div(
 					"pane-header",
 					[
-						Html.span_v(title, [Engine.class("pane-title")]),
+						Html.span_v(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
 						Html.span_v(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
 							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission and (Model.loading(state, Model.session_of(state, pane)) or Model.pending(state, pane.id).is_ok())),
@@ -271,11 +300,12 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Chat, Capabilities, Connecting, Missing],
+					[Sessions, Chat, Inbox, Capabilities, Connecting, Missing],
 					|body|
 						match body {
 							Sessions => Liton.sessions(model)
 							Chat => Liton.chat(model, id, shown)
+							Inbox => Liton.inbox(model)
 							Capabilities => Liton.capabilities(model)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
@@ -300,6 +330,135 @@ Liton := [].{
 		]
 		Str.join_with(classes.drop_if(|class| class.is_empty()).prepend("column"), " ")
 	}
+
+	## A pane's title, the inbox's with how many items need you.
+	label : Model.State, Model.Pane -> Str
+	label = |state, pane| {
+		title = Widgets.find(pane.widget).title
+		count = Model.needs_you(state)
+		if (pane.widget == "inbox" and count > 0) "${title} (${count.to_str()})" else title
+	}
+
+	inbox_preset : Model.State -> Bool
+	inbox_preset = |state| state.shell == Workbench and (state.columns.first().map_ok(|column| column.panes.any(|pane| pane.widget == "inbox")) ?? Bool.False)
+
+	## What needs you, then what failed, is done or working, then what you set
+	## aside, folded away.
+	inbox : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	inbox = |model|
+		Html.div(
+			"inbox",
+			[
+				Liton.inbox_section(model, "Needs you", |state| Model.waiting(state, NeedsYou)),
+				Liton.inbox_section(model, "Failed", |state| Model.waiting(state, Failed)),
+				Liton.inbox_section(model, "Done", |state| Model.waiting(state, Done)),
+				Liton.inbox_section(model, "Working", |state| Model.waiting(state, Working)),
+				Engine.when(
+					model.val().map(|state| !Model.later(state).is_empty()),
+					||
+						Engine.element(
+							"details",
+							[Engine.class("inbox-later"), Engine.test_id("later")],
+							[Engine.element("summary", [], [Engine.text_v(model.val().map(|state| "Later (${Model.later(state).len().to_str()})"))]), Liton.inbox_items(model, Model.later)],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+
+	inbox_section : State(PaneCtx, Model.State), Str, (Model.State -> List(Attention.Item)) -> Elem(PaneCtx)
+	inbox_section = |model, name, items|
+		Engine.when(
+			model.val().map(|state| !items(state).is_empty()),
+			|| Html.div("inbox-section", [Html.h3(name, ""), Liton.inbox_items(model, items)]),
+			|| Engine.text(""),
+		)
+
+	## Each item: its title, which opens it, its agent, state and summary, the
+	## permission it asks for, and Settle and Snooze, or Bring back once set aside.
+	inbox_items : State(PaneCtx, Model.State), (Model.State -> List(Attention.Item)) -> Elem(PaneCtx)
+	inbox_items = |model0, items|
+		Html.ul(
+			[Engine.class("inbox-items")],
+			[
+				Engine.each(
+					model0.val().map(items),
+					|item| item.session_id,
+					|row| {
+						model = model0.lift_row()
+						id = row.key()
+						title = row.field(|item| item.title)
+						permission = id.map2(model.val(), |session_id, state| Model.item_permission(state, session_id))
+						Html.li(
+							[Engine.class_v(id.map2(model.val(), |key, state| if (key == state.focus) "inbox-item focused" else "inbox-item"))],
+							[
+								Html.button_v(title, [], model.update_by(id, Model.open_item)),
+								Html.div(
+									"session-meta",
+									[
+										Engine.text_v(row.field(|item| item.agent)),
+										Html.span_v(row.field(|item| Liton.attention_text(item.state)), [Engine.class_v(row.field(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
+									],
+								),
+								Html.p_v(row.field(|item| item.summary), [Engine.class("summary")]),
+								Engine.when(
+									permission.map(|asked| asked.is_ok()),
+									||
+										Html.div(
+											"permission",
+											[
+												Html.span_v(permission.map(|asked| asked.map_ok(|{ tool, description, .. }| "Allow ${tool}: ${description}?") ?? ""), []),
+												Html.button("Allow", [Engine.class("allow"), Html.aria_label_v(title.map(|name| "Allow ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.True))),
+												Html.button("Deny", [Engine.class("deny"), Html.aria_label_v(title.map(|name| "Deny ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.False))),
+											],
+										),
+									|| Engine.text(""),
+								),
+								Html.span_v(id.map2(model.val(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
+								Engine.when(
+									row.field(|item| item.set_aside == No),
+									||
+										Html.div(
+											"inbox-actions",
+											[
+												Html.button("Settle", [Html.aria_label_v(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
+												Html.button("Snooze 1 h", [Html.aria_label_v(title.map(|name| "Snooze ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Snoozed))),
+											],
+										),
+									|| Html.div("inbox-actions", [Html.button("Bring back", [Html.aria_label_v(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
+								),
+							],
+						)
+					},
+				),
+			],
+		)
+
+	## "Allowing…" or "Denying…" for an answer on its way.
+	answering : Model.Sent -> Try(Str, [NotAnswer])
+	answering = |sent|
+		match sent.request {
+			AnswerPermission(_) => Ok(Liton.sent_text(sent.request))
+			_ => Err(NotAnswer)
+		}
+
+	attention_text : Attention.State -> Str
+	attention_text = |state|
+		match state {
+			NeedsYou => "needs you"
+			Failed => "failed"
+			Working => "working"
+			Done => "done"
+			Idle => "idle"
+		}
+
+	attention_class : Attention.State -> Str
+	attention_class = |state|
+		match state {
+			NeedsYou => "badge waiting"
+			Failed => "badge failed"
+			_ => "badge"
+		}
 
 	context_label : Model.State, Model.Pane -> Str
 	context_label = |state, pane|

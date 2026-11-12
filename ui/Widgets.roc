@@ -9,6 +9,7 @@ Widgets := [].{
 	all = [
 		{ id: "sessions", title: "Sessions", needs: [Capability.chat_v1], follows_session: Bool.False },
 		{ id: "chat", title: "Chat", needs: [Capability.chat_v1], follows_session: Bool.True },
+		{ id: "inbox", title: "Inbox", needs: [Capability.attention_v1], follows_session: Bool.False },
 		{ id: "changes", title: "Changes", needs: [{ name: "workspace.git", version: 1 }], follows_session: Bool.True },
 		{ id: "capabilities", title: "Capabilities", needs: [], follows_session: Bool.False },
 		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], follows_session: Bool.True },

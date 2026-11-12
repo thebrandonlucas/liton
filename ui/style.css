@@ -58,6 +58,17 @@ button:hover { border-color: var(--accent); }
 .session button { border: none; padding: 0; text-align: left; background: none; font-weight: 500; }
 .session.focused { background: var(--user); }
 .session-meta { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.inbox { overflow-y: auto; padding: 6px; }
+.inbox h3, .inbox-later summary { margin: 8px 8px 2px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.inbox-items { list-style: none; margin: 0; padding: 0; }
+.inbox-item { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 6px; }
+.inbox-item > button { border: none; padding: 0; text-align: left; background: none; font-weight: 500; }
+.inbox-item.focused { background: var(--user); }
+.inbox-item .summary { margin: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-item .summary:empty { display: none; }
+.inbox-item .permission { border: none; border-radius: 6px; flex-wrap: wrap; }
+.inbox-actions { display: flex; gap: 6px; }
+.inbox-actions button { font-size: 12px; }
 .badge { font-size: 11px; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); white-space: nowrap; }
 .badge.waiting { background: var(--warn); border-color: var(--warn-strong); color: var(--warn-strong); font-weight: 600; }
 .badge.failed { border-color: var(--fail); color: var(--fail); }
