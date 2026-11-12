@@ -18,8 +18,8 @@ Every agent UI picks one kind of user. buzz picks non-programmers in rooms, but 
 
 ```
  UI (roc-signals: web, native, TUI)
-   │  WebSocket + JSON-RPC (queries, commands, event streams)
- liton daemon (Roc)
+   │  JSON-RPC over HTTP POST (queries, commands) + SSE (event streams)
+ liton daemon (Roc, on basic-webserver)
    ├─ capability registry  (typed, versioned interfaces)
    ├─ context graph        (workspace ↔ agent ↔ room ↔ ticket ↔ PR ↔ sandbox)
    ├─ providers (compile-time Roc packages)
@@ -29,9 +29,13 @@ Every agent UI picks one kind of user. buzz picks non-programmers in rooms, but 
 
 ### Providers
 
-A provider is a Roc package compiled into the daemon. It connects to a backend and implements one or more capabilities. Examples:
+A provider is a Roc package compiled into the daemon. It connects to a backend and implements one or more capabilities.
 
-- the Paseo provider talks to the running Paseo daemon API and supplies `chat`, `terminal` and `workspace.git`;
+Providers are pure, following kai's plans pattern. A provider is a state machine: an event comes in, and the updated state plus a list of requested effects come out. The daemon host performs those effects. This makes every provider testable with recorded fixtures.
+
+Examples:
+
+- the Paseo provider talks to the running Paseo daemon API and supplies `chat`, `terminal` and `workspace.git`. liton does not run ptys itself: terminals come from providers and liton proxies their streams;
 - the GitHub provider supplies `ci` (Actions) and `tickets`.
 
 Several providers can serve the same capability. Their results are **merged**, and every item is tagged with its source.
@@ -95,21 +99,42 @@ A snapshot is a deterministic JSON file. It contains:
 | topic | decision |
 |---|---|
 | plugin model | compile-time Roc packages |
-| UI ↔ daemon | WebSocket + JSON-RPC |
-| daemon language | Roc |
+| UI ↔ daemon | JSON-RPC over HTTP + SSE streams. Possibly WebSocket later, behind the same capability types |
+| daemon language | Roc, on roc-lang/basic-webserver (HTTP server, SSE, HTTP client). It has no WebSocket and no pty |
 | first provider | Paseo, via its daemon API |
 | first CI | GitHub Actions |
 | identity | Nostr keypairs |
 | native tickets | Nostr events |
 | agents using liton | yes, through the daemon's MCP server |
-| render targets | web, native and TUI eventually |
+| render targets | web first (roc-signals is browser-only). Native and TUI need other renderers |
 | license | MIT / Apache-2.0 |
 | hosting | local only for now: a personal daemon on the developer's machine |
+| shared types | `capabilities/`: a platform-agnostic Roc package of types and JSON codecs, imported by the daemon and the UI |
+| repo | monorepo |
+| tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md |
+| roc-signals | add an SSE subscription effect: fork now, upstream PR to lukewilliamboswell/roc-signals |
+
+## MVP
+
+**Goal:** prove the capability → widget binding works.
+
+- **Daemon:** runs on basic-webserver and hosts a **mock provider**. The mock provider plays back scripted agent sessions that include tool calls and a permission prompt, and it echoes what you send.
+- **`chat.v1`:** `listSessions`, `watchSession` (SSE timeline), `sendMessage`, `answerPermission`.
+- **UI:** web only (roc-signals). It has minimal tiling (splits and tabs) and a palette of widgets filtered by the capabilities the daemon advertises. One chat widget binds to `chat.v1`, and the session it shows follows linked focus. The snapshot is saved and loaded as JSON.
+- **Widget declaration:** a Roc record `{ id, requires, context, config, view }`.
+- **Tests:**
+  - roc-signals `.scm` specs for the UI;
+  - daemon contract tests (JSON-RPC and SSE fixtures);
+  - end-to-end: browser → daemon → mock provider;
+  - a snapshot round-trip that must produce identical JSON.
+- **Dev:** a preview served from the developer's machine.
+
+The order after the MVP: the Paseo provider (`chat`), then `workspace.git`, then `ci` (GitHub Actions), then `terminal` proxied through Paseo, then rooms, review and tickets.
 
 ## Open questions
 
-- roc-signals: what renderers it has today, and how a widget package declares its view, its capability needs and its config.
-- The Roc platform for the daemon: WebSocket server, processes, pty, and an HTTP client for providers.
+- roc-signals: how a widget's view composes into the layout, and what an SSE subscription would look like as a `Req`/`Res` pair.
+- basic-webserver: whether its no-background-work model can hold many long-lived SSE streams, and whether it can keep polling or pushing from upstream providers.
 - Paseo's daemon API: how stable it is, how auth works, and how it maps onto `chat`, `terminal` and `workspace.git`.
 - Capability schema format: Roc types as the source of truth, with JSON Schema generated for the wire?
 - Room sync between daemons: Nostr relays or direct daemon-to-daemon.
