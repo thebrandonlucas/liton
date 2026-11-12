@@ -1,0 +1,12 @@
+# Claude Code's local state, including its agents' worktrees.
+.claude/
+.direnv/
+.zig-cache/
+zig-pkg/
+zig-out/
+# kai update writes the root lock; the rest of every .kai is generated.
+**/.kai/*
+!/.kai/lock.json
+result
+result-*
+docs/roc-isms/
