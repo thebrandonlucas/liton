@@ -57,6 +57,7 @@ A capability is a versioned, typed interface made of queries, commands and event
 | `environment` | the sandbox's static definition (Nix closure, mounts, network policy, granted credentials), live resources, denials/audit, and lifecycle (create, snapshot, destroy) |
 | `attention` | derived by the daemon from `chat` and later `tickets`, `review` and `ci`: what needs you, ranked (needs you > failed > working > done unseen > idle), each item with the responses it allows. Settle and snooze hide an item until something new happens |
 | `discussions` | threaded comments anchored to any context (ticket, PR, file line, room, URL). `review` threads are discussions with a code anchor |
+| `voice` | dictation into any composer, and a spoken conversation with an agent. Speech-to-text and text-to-speech come from a provider, private local models first (Paseo runs Parakeet, Kokoro and Silero VAD). Audio streams in numbered chunks the daemon acknowledges, so a dropped link loses nothing; talking over the agent interrupts it. Unlike Paseo, the agent's reply is spoken from its own text rather than a `speak` tool it must choose to call, voice turns on without reloading the session, and audio travels outside the JSON control channel |
 
 ### Context
 
@@ -145,7 +146,7 @@ A snapshot is a deterministic JSON file. It contains:
   - a snapshot round-trip that must produce identical JSON.
 - **Dev:** a preview served from the developer's machine.
 
-The order after the MVP: the Paseo provider (`chat`), then `workspace.git`, then `ci` (GitHub Actions), then `terminal` proxied through Paseo, then rooms, review and tickets.
+The order after the MVP: the Paseo provider (`chat`), then `workspace.git`, then `voice`, then `ci` (GitHub Actions), then `terminal` proxied through Paseo, then rooms, review and tickets.
 
 ## Open questions
 
