@@ -9,6 +9,9 @@ Capability := [].{
 	attention_v1 : Id
 	attention_v1 = { name: "attention", version: 1 }
 
+	workspace_git_v1 : Id
+	workspace_git_v1 = { name: "workspace.git", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"

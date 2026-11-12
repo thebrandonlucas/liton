@@ -1,10 +1,11 @@
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.WorkspaceGit
 
 Mock := [].{
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1] }
 
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }
@@ -93,9 +94,44 @@ Mock := [].{
 					_ => current
 				},
 		)
+
+	## A session's git workspace. fix-auth's has the login fix uncommitted and
+	## one commit ahead of main; the others are clean on main.
+	git : WorkspaceGit.Poll -> WorkspaceGit.Found
+	git = |{ session_id, scope, file, .. }| {
+		directory = "/mock/${session_id}"
+		workspace = { id: directory, provider: "mock", name: session_id, directory, repository_root: directory, kind: Checkout }
+		clean = { branch: Branch("main"), base: Base("main"), dirty: Bool.False, ahead: 0, behind: 0, upstream: NoUpstream }
+		if session_id != "fix-auth" {
+			{ workspace, status: Status(clean), fingerprint: WorkspaceGit.fingerprint(scope, []), diff: [], commits: [] }
+		} else {
+			commit = { sha: "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f", short_sha: "4f2a9c1", subject: "Test the login redirect", author: "Mock Agent", date: "2026-01-01T09:00:00Z", pushed: Bool.False, on_base: Bool.False, files: [login_test.file] }
+			diff =
+				match scope {
+					Uncommitted => [login_fix]
+					AgainstBase => [login_fix, login_test]
+					Commit(sha) => if (sha == commit.sha) [{ file: login_test.file, hunks: if (file == Selected(login_test.file.path)) login_test.hunks else [] }] else []
+				}
+			{ workspace, status: Status({ ..clean, branch: Branch("fix-auth"), dirty: Bool.True, ahead: 1 }), fingerprint: WorkspaceGit.fingerprint(scope, diff), diff, commits: [commit] }
+		}
+	}
+}
+
+login_fix : WorkspaceGit.FileDiff
+login_fix = {
+	file: { path: "src/Auth.roc", change: Modified, additions: 1, deletions: 1, body: Text },
+	hunks: [WorkspaceGit.hunk({ old_start: 40, old_count: 3, new_start: 40, new_count: 3 }, [{ kind: Context, text: "login = |request|" }, { kind: Removed, text: "\tredirect_to = \"/login\"" }, { kind: Added, text: "\tredirect_to = request.came_from" }, { kind: Context, text: "\tSession.start(redirect_to)" }])],
+}
+
+login_test : WorkspaceGit.FileDiff
+login_test = {
+	file: { path: "tests/Auth.roc", change: Added, additions: 3, deletions: 0, body: Text },
+	hunks: [WorkspaceGit.hunk({ old_start: 0, old_count: 0, new_start: 1, new_count: 3 }, [{ kind: Added, text: "import Auth" }, { kind: Added, text: "" }, { kind: Added, text: "expect Auth.login({ came_from: \"/inbox\" }).redirect_to == \"/inbox\"" }])],
 }
 
 expect Mock.on_message("hi", 7).len() == 7
 expect Mock.on_answer("p", Bool.False, 3).len() == 3
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
+expect Mock.git({ session_id: "notes", scope: Uncommitted, known: "", file: NoFile }).diff == []
+expect Mock.git({ session_id: "fix-auth", scope: Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), known: "", file: Selected("tests/Auth.roc") }).diff.map(|shown| shown.hunks.len()) == [1]
