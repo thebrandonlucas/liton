@@ -1,0 +1,28 @@
+(test "Liton — a session waiting for permission is badged, and Allow answers it"
+  (steps
+    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}],\"timelines\":[]}")
+    (run-effect 2)
+    (expect-text (test-id "session-status") "idle")
+    (expect-visible (text "waiting for you"))
+    (expect-absent (role button :name "Allow"))
+    ; Selecting the session makes the chat follow it and poll for its timeline.
+    (click (role button :name "Fix tests"))
+    (expect-visible (text "following Fix tests"))
+    (expect-pending-effects 2)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s2\",\"entries\":[{\"event\":{\"PermissionRequested\":{\"description\":\"src/Main.roc\",\"request_id\":\"p1\",\"tool\":\"edit\"}},\"sequence\":1}]}]}")
+    (run-effect 4)
+    (expect-visible (text "Allow edit: src/Main.roc?"))
+    (click (role button :name "Allow"))
+    ; The answer is a request of its own, beside the polls still waiting.
+    (expect-pending-effects 3)
+    (stub-http "answer" :url "/api/chat" :status 200 :body "\"Accepted\"")
+    (run-effect 6)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s2\",\"entries\":[{\"event\":{\"PermissionAnswered\":{\"allowed\":true,\"request_id\":\"p1\"}},\"sequence\":2}]}]}")
+    (run-effect 5)
+    (expect-absent (role button :name "Allow"))
+    (expect-absent (text "waiting for you"))
+    (expect-visible (text "allowed"))
+  )
+)

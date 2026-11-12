@@ -144,6 +144,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&test_roc.step);
     }
 
+    // The UI's .scm specs, in the native runner roc-signals builds the UI into
+    // for x64musl.
+    const spec_step = b.step("spec", "Run the UI's specs natively");
+    const run_specs = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -e
+        \\mkdir -p zig-out/bin
+        \\roc build --target=x64musl ui/main.roc --output=zig-out/bin/liton-specs
+        \\zig-out/bin/liton-specs ui/specs/*.scm
+    });
+    run_specs.has_side_effects = true;
+    run_specs.step.dependOn(&vendor.step);
+    spec_step.dependOn(&run_specs.step);
+    test_step.dependOn(&run_specs.step);
+
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
     const build_ui = b.addSystemCommand(&.{
