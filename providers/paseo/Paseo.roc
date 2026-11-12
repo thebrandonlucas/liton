@@ -2,13 +2,13 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 
-## Paseo's agents as chat.v1 sessions. Agents are listed and prompted, and
-## permissions answered, over Paseo's MCP endpoint; timelines are fetched over
-## its WebSocket. Paseo's own JSON is camelCase, which `Json.parser_camel`
+## Paseo's agents as chat.v1 sessions. Agents are prompted, and permissions
+## answered, over Paseo's MCP endpoint; they are listed, and timelines fetched,
+## over its WebSocket. Paseo's own JSON is camelCase, which `Json.parser_camel`
 ## reads into the snake_case fields below; liton reads only these fields.
 Paseo := [].{
 	provider : Manifest.Provider
-	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1] }
+	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
 
 	## How many timeline entries a fetch asks for: a session's first fetch
 	## takes its last ones, later fetches follow on while a page `has_newer`.
@@ -36,8 +36,6 @@ Paseo := [].{
 				}
 		}
 	}
-
-	Agent : { id : Str, short_id : Str, title : Try(Str, [Null]), provider : Str, status : Str, cwd : Str, archived_at : Try(Try(Str, [Null]), [Missing]), attention_reason : Try(Try(Str, [Null]), [Missing]) }
 
 	Permission : { id : Str, name : Str, title : Try(Str, [Missing]), description : Try(Str, [Missing]) }
 
@@ -111,10 +109,6 @@ Paseo := [].{
 		{ name: "Authorization", value: "Bearer ${password}" },
 	]
 
-	## As many as Paseo lists at once.
-	list_agents : Str
-	list_agents = tool_call("list_agents", Json.to_str({ limit: 200.U16 }))
-
 	agent_status : Str -> Str
 	agent_status = |agent_id| tool_call("get_agent_status", Json.to_str({ agentId: agent_id }))
 
@@ -126,28 +120,70 @@ Paseo := [].{
 	answer_permission = |agent_id, request_id, allowed|
 		tool_call("respond_to_permission", Json.to_str({ agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny" } }))
 
-	## The agents `list_agents` answered, without archived ones. An agent whose
-	## attention Paseo wants for a permission awaits it, and an idle one whose
-	## attention it wants because it finished, until you look, is finished.
-	## Each comes with the directory it works in.
-	sessions : Str -> Try(List({ session : Chat.Session, directory : Str }), [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	sessions = |body| {
-		listed : Try({ result : { structured_content : { agents : List(Agent) } } }, _)
-		listed = Json.parser_camel()(tool_answer(body)?)
+	## An agent as `fetch_agents_response` lists it, with the workspace it works
+	## in.
+	ListedAgent : {
+		id : Str,
+		provider : Str,
+		cwd : Str,
+		workspace_id : Try(Str, [Missing]),
+		title : Try(Str, [Null]),
+		status : Str,
+		pending_permissions : List(Permission),
+		last_error : Try(Str, [Missing]),
+		attention_reason : Try(Try(Str, [Null]), [Missing]),
+		requires_attention : Try(Bool, [Missing]),
+		created_at : Str,
+		updated_at : Str,
+		last_user_message_at : Try(Str, [Null]),
+		attention_timestamp : Try(Try(Str, [Null]), [Missing]),
+	}
+
+	## Asks for as many agents as Paseo lists at once, without archived ones.
+	agents_request : Str -> Str
+	agents_request = |request_id|
+		Json.to_str({ type: "session", message: { type: "fetch_agents_request", requestId: request_id, page: { limit: 200.U16 } } })
+
+	## The agents a `fetch_agents_response` lists, each with the directory and
+	## the workspace it works in ("" for none). An agent whose attention Paseo
+	## wants for a permission awaits it, and an idle one whose attention it
+	## wants because it finished, until you look, is finished. An untitled one
+	## goes by its id's first 7 characters, as Paseo's short id. They are in
+	## the order of Paseo's MCP `list_agents` (see `listed_order`).
+	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
+	agents_answer = |text, request_id| {
+		answered : Try({ message : { payload : { entries : List({ agent : ListedAgent }) } } }, _)
+		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_agents_response", request_id)?)
 		Ok(
-			listed?.result.structured_content.agents
-				.drop_if(|agent| agent.archived_at.map_ok(|archived| archived.is_ok()) ?? Bool.False)
-				.map(|agent| { session: { id: agent.id, provider: "paseo", agent: agent.provider, title: agent.title ?? agent.short_id, status: Paseo.listed_status(agent) }, directory: agent.cwd }),
+			answered?.message.payload.entries.map(|{ agent }| agent).sort_with(listed_order).map(
+				|agent| {
+					title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
+					{ session: { id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
+				},
+			),
 		)
 	}
 
-	listed_status : Agent -> Chat.Status
+	listed_status : ListedAgent -> Chat.Status
 	listed_status = |agent|
-		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: [], last_error: Err(Missing) })) {
+		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: agent.pending_permissions, last_error: agent.last_error })) {
 			(Ok(Ok("permission")), _) => AwaitingPermission
 			(Ok(Ok("finished")), Idle) => Finished
 			(_, status) => status
 		}
+
+	## `text` when it is the `type` message answering `request_id`.
+	answer_to : Str, Str, Str -> Try(Str, [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
+	answer_to = |text, type, request_id| {
+		envelope : Try({ message : Try({ type : Str }, [Missing]) }, _)
+		envelope = Json.parser_camel()(text)
+		if envelope?.message.map_ok(|message| message.type) != Ok(type) {
+			return Err(OtherMessage)
+		}
+		answered : Try({ message : { payload : { request_id : Str } } }, _)
+		answered = Json.parser_camel()(text)
+		if (answered?.message.payload.request_id == request_id) Ok(text) else Err(OtherMessage)
+	}
 
 	status_snapshot : Str -> Try(Snapshot, [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	status_snapshot = |body| {
@@ -316,6 +352,26 @@ step = |walk, entry, is_final| {
 	}
 }
 
+## Paseo's MCP `list_agents` order: those that want your attention first,
+## then running, initializing, idle, failed and closed ones, each the latest
+## active first.
+listed_order : Paseo.ListedAgent, Paseo.ListedAgent -> [Before, After, Same]
+listed_order = |left, right| {
+	compared = |earlier, later| if (earlier < later) Before else if (earlier > later) After else Same
+	wants = |agent| if (agent.requires_attention ?? Bool.False) 0 else 1
+	rank = |agent| ["running", "initializing", "idle", "error", "closed"].find_first_index(|status| status == agent.status) ?? 5
+	[compared(wants(left), wants(right)), compared(rank(left), rank(right)), compared(active_at(right), active_at(left))].find_first(|order| order != Same) ?? Same
+}
+
+## When an agent was last active, as the digits of the latest of its
+## timestamps: Paseo writes them all as `2026-01-01T00:00:00.000Z`.
+active_at : Paseo.ListedAgent -> U64
+active_at = |agent|
+	[Ok(agent.created_at), Ok(agent.updated_at), agent.last_user_message_at, agent.attention_timestamp ?? Err(Null)]
+		.keep_oks(|timestamp| timestamp)
+		.map(|timestamp| timestamp.to_utf8().keep_if(|byte| byte >= '0' and byte <= '9').fold(0, |number, digit| number * 10 + (digit - '0').to_u64()))
+		.fold(0, |latest, at| if (at > latest) at else latest)
+
 ## What a tool call works on: a shell command, a file, a query... or its name.
 tool_input : Paseo.Item -> Str
 tool_input = |item| {
@@ -479,12 +535,20 @@ expect !Paseo.answers_request("{\"type\":\"session\",\"message\":{\"type\":\"sta
 expect !Paseo.answers_request("{\"type\":\"pong\"}", "r1")
 
 expect {
-	body =
-		\\event: message
-		\\data: {"result":{"content":[],"structuredContent":{"agents":[{"id":"a1","shortId":"a1s","title":null,"provider":"codex","model":null,"status":"running","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"labels":{}},{"id":"a3","shortId":"a3s","title":"Done","provider":"claude","model":null,"status":"idle","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"requiresAttention":true,"attentionReason":"finished","labels":{}},{"id":"a2","shortId":"a2s","title":"Old work","provider":"claude","model":null,"status":"closed","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":"2026-01-02T00:00:00.000Z","labels":{}}]}},"jsonrpc":"2.0","id":1}
-		\\
-		\\
-	Paseo.sessions(body) == Ok([{ session: { id: "a1", provider: "paseo", agent: "codex", title: "a1s", status: Running }, directory: "/work" }, { session: { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }, directory: "/work" }])
+	agent = |fields| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"model\":null,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"currentModeId\":null,\"availableModes\":[],\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null,\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null}}}"
+	entries = [
+		agent("\"id\":\"a1b2c3d4e5\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]"),
+		agent("\"id\":\"a3\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\""),
+		agent("\"id\":\"a4\",\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]"),
+	]
+	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
+	Paseo.agents_answer(text, "r1")
+		== Ok([
+			{ session: { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }, directory: "/work", workspace_id: "w1" },
+			{ session: { id: "a4", provider: "paseo", agent: "claude", title: "Asks", status: AwaitingPermission }, directory: "/work", workspace_id: "" },
+			{ session: { id: "a1b2c3d4e5", provider: "paseo", agent: "claude", title: "a1b2c3d", status: Running }, directory: "/work", workspace_id: "w1" },
+		])
+		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
 
 expect Paseo.succeeded("event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Agent a9 not found\"}],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}\n\n") == Err(ToolFailed("Agent a9 not found"))

@@ -1,8 +1,11 @@
-## `workspace.git.v1`: the git state of the directory a session works in: its
-## branch and how far it is from its base and upstream, the files that changed
-## (uncommitted, against the base, or in one commit) and the branch's commits.
+## `workspace.git.v1`: the git state of the directory a session works in, or a
+## workspace is: its branch and how far it is from its base and upstream, the
+## files that changed (uncommitted, against the base, or in one commit) and the
+## branch's commits.
 ## The UI polls it with the fingerprint of the changes it has, so unchanged
 ## changes don't travel again, and gets the hunks of the one file it shows.
+import Context
+
 WorkspaceGit := [].{
 
 	## `id` is the directory, `name` the repository's folder.
@@ -34,7 +37,11 @@ WorkspaceGit := [].{
 	Commit : { sha : Str, short_sha : Str, subject : Str, author : Str, date : Str, pushed : Bool, on_base : Bool, files : List(File) }
 
 	## `known` is the fingerprint of the changes the client has ("" for none).
+	## A `Poll` is of a session's workspace, a `ContextPoll` of a session's or a
+	## workspace's.
 	Poll : { session_id : Str, scope : Scope, known : Str, file : [Selected(Str), NoFile] }
+
+	ContextPoll : { context : Context.Id, scope : Scope, known : Str, file : [Selected(Str), NoFile] }
 
 	Polled : {
 		workspace : [Known(Workspace), Unknown],
@@ -121,4 +128,12 @@ expect {
 		Unchanged => first
 	}
 	first.file == Hunks({ path: "README.md", hunks: readme.hunks }) and again.changes == Unchanged and again.file == NoFile
+}
+
+expect {
+	decoded : Try(WorkspaceGit.ContextPoll, _)
+	decoded = Json.parse("{\"context\":{\"Workspace\":\"w1\"},\"file\":\"NoFile\",\"known\":\"\",\"scope\":\"Uncommitted\"}")
+	session : Try(WorkspaceGit.ContextPoll, _)
+	session = Json.parse("{\"file\":\"NoFile\",\"known\":\"\",\"scope\":\"Uncommitted\",\"session_id\":\"s1\"}")
+	decoded == Ok({ context: Workspace("w1"), scope: Uncommitted, known: "", file: NoFile }) and session.is_err()
 }

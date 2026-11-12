@@ -1,6 +1,6 @@
-## liton's daemon: advertises its providers' capabilities and serves chat.v1
-## and workspace.git.v1 over HTTP, from what it keeps in SQLite, and serves
-## the UI.
+## liton's daemon: advertises its providers' capabilities and serves chat.v1,
+## workspace.git.v1 and workspaces.v1 over HTTP, from what it keeps in SQLite,
+## and serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
@@ -31,9 +31,11 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 import cap.WorkspaceGit
+import cap.Workspaces
 import mock.Mock
 import paseo.Paseo
 import paseo.PaseoGit
+import paseo.PaseoWorkspaces
 import paseo.WebSocket
 
 Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]) }
@@ -90,6 +92,10 @@ respond! = |request, context| {
 				attention_items!(context).map_ok(|items| json(Json.to_str(items)))
 			(POST, Resource({ raw_path: "/api/attention", .. })) =>
 				attention!(context, request)
+			(GET, Resource({ raw_path: "/api/workspaces", .. })) =>
+				workspaces!(context).map_ok(|listed| json(Json.to_str(listed)))
+			(POST, Resource({ raw_path: "/api/workspaces", .. })) =>
+				workspaces_request!(context, request)
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -180,46 +186,75 @@ poll! = |context, request| {
 	}
 }
 
-## Answers a workspace.git.v1 poll. A workspace that can't be read is
-## `Unknown`, never an error.
+## Answers a workspace.git.v1 poll, of a context or, as the UI sends it, of a
+## session. A workspace that can't be read is `Unknown`, never an error.
 git_poll! : Context, Server.Request => Try(Response, _)
 git_poll! = |context, request| {
-	decoded : Try(WorkspaceGit.Poll, _)
-	decoded = Json.parse(read_json!(request)?)
-	match decoded {
-		Err(_) => Ok(text(400, "expected a workspace.git.v1 poll"))
-		Ok(poll) => {
+	body = read_json!(request)?
+	of_context : Try(WorkspaceGit.ContextPoll, _)
+	of_context = Json.parse(body)
+	of_session : Try(WorkspaceGit.Poll, _)
+	of_session = Json.parse(body)
+	# `polled` and `unknown` read only the poll's scope, known and file.
+	asked =
+		match (of_context, of_session) {
+			(Ok({ context: focus, scope, known, file }), _) => Ok({ focus, poll: { session_id: "", scope, known, file } })
+			(_, Ok(poll)) => Ok({ focus: Session(poll.session_id), poll })
+			_ => Err(NotAPoll)
+		}
+	match asked {
+		Err(NotAPoll) => Ok(text(400, "expected a workspace.git.v1 poll"))
+		Ok({ focus, poll }) => {
 			polled : WorkspaceGit.Polled
 			polled =
-				match provider!(context, poll.session_id)? {
-					MockSession => WorkspaceGit.polled(poll, Mock.git(poll))
-					PaseoSession(_) =>
-						match paseo_git!(context, poll) {
+				match located!(context, focus)? {
+					MockWorkspace(workspace_id) => WorkspaceGit.polled(poll, Mock.git(workspace_id, poll.scope, poll.file))
+					PaseoDirectory(directory) =>
+						match paseo_git!(context, directory, poll) {
 							Ok(Ok(found)) => WorkspaceGit.polled(poll, found)
 							Ok(Err(NothingCached)) => WorkspaceGit.unknown(poll)
 							Err(err) => {
-								logged!("Paseo: answering a git poll of ${poll.session_id} failed: ${Str.inspect(err)}")
+								logged!("Paseo: answering a git poll of ${directory} failed: ${Str.inspect(err)}")
 								WorkspaceGit.unknown(poll)
 							}
 						}
-					NoSession => WorkspaceGit.unknown(poll)
+					Nowhere => WorkspaceGit.unknown(poll)
 				}
 			Ok(json(Json.to_str(polled)))
 		}
 	}
 }
 
-## A Paseo session's workspace, from what the git cache holds of its
-## directory once the cycle asked Paseo what is due.
-paseo_git! : Context, WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
-paseo_git! = |context, poll| {
-	db = context.db
-	rows : List({ directory : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id: poll.session_id }, limits: Sqlite.default_query_limits })?
-	directory = rows.first().map_ok(|row| row.directory) ?? ""
-	if directory == "" {
-		return Ok(Err(NothingCached))
+## Where a context's workspace is: a mock workspace, or a Paseo directory. A
+## session's is the one it works in.
+located! : Context, [Session(Str), Workspace(Str)] => Try([MockWorkspace(Str), PaseoDirectory(Str), Nowhere], _)
+located! = |context, focus|
+	match focus {
+		Session(session_id) =>
+			match provider!(context, session_id)? {
+				MockSession => Ok(Mock.workspaces.find_first(|shown| shown.session_ids.contains(session_id)).map_ok(|shown| MockWorkspace(shown.id)) ?? Nowhere)
+				PaseoSession(_) => {
+					rows : List({ directory : Str })
+					rows = Sqlite.query_many!({ db: context.db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+					Ok(rows.first().map_ok(|row| if (row.directory == "") Nowhere else PaseoDirectory(row.directory)) ?? Nowhere)
+				}
+				NoSession => Ok(Nowhere)
+			}
+		Workspace(workspace_id) =>
+			if context.mock_enabled and Mock.workspaces.any(|shown| shown.id == workspace_id) {
+				Ok(MockWorkspace(workspace_id))
+			} else if context.paseo.is_ok() {
+				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| PaseoDirectory(shown.directory)) ?? Nowhere)
+			} else {
+				Ok(Nowhere)
+			}
 	}
+
+## A Paseo directory's workspace, from what the git cache holds of it once
+## the cycle asked Paseo what is due.
+paseo_git! : Context, Str, WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
+paseo_git! = |context, directory, poll| {
+	db = context.db
 	wanted!(db, "workspace", directory)?
 	selected =
 		match (poll.scope, poll.file) {
@@ -316,6 +351,47 @@ set_aside! = |context, { session_id, signature, snoozed_until }|
 		}
 	}
 
+## Every enabled provider's projects and workspaces, each workspace with its
+## sessions and as urgent as the most urgent of them. Paseo's come from what
+## the cycle last listed, its agents placed by the workspace each works in.
+workspaces! : Context => Try(Workspaces.Listed, _)
+workspaces! = |context| {
+	db = context.db
+	if context.paseo.is_ok() {
+		wanted!(db, "workspace_list", "")?
+	}
+	items = sessions!(context)?.map(|session| Attention.item(session, []))
+	from_mock = if (context.mock_enabled) { projects: Mock.projects, workspaces: Mock.workspaces } else { projects: [], workspaces: [] }
+	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
+	placed : List({ id : Str, workspace_id : Str })
+	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	paseo_workspaces = from_paseo.workspaces.map(|shown| { ..shown, session_ids: placed.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id) })
+	Ok({ projects: from_mock.projects.concat(from_paseo.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(items, shown.session_ids) }) })
+}
+
+workspaces_request! : Context, Server.Request => Try(Response, _)
+workspaces_request! = |context, request| {
+	decoded : Try(Workspaces.Request, _)
+	decoded = Json.parse(read_json!(request)?)
+	answer : Workspaces.Response
+	answer =
+		match decoded {
+			Ok(ListWorkspaces) => Listed(workspaces!(context)?)
+			Err(_) => Rejected("expected a workspaces.v1 request")
+		}
+	Ok(json(Json.to_str(answer)))
+}
+
+## Paseo's projects and workspaces as the cycle last listed them, none before.
+paseo_listed! : Sqlite.Db => Try(Workspaces.Listed, _)
+paseo_listed! = |db| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'workspaces';", params: {}, limits: Sqlite.default_query_limits })?
+	listed : Try(Workspaces.Listed, _)
+	listed = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(listed ?? { projects: [], workspaces: [] })
+}
+
 now_ms! : () => I64
 now_ms! = || (UnixTime.now!().nanos_since_epoch() // 1_000_000).to_i64_wrap()
 
@@ -328,9 +404,11 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS attention_asides (session_id TEXT PRIMARY KEY, signature TEXT NOT NULL, snoozed_until INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
-	# Paseo's stored before git came have no directory until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''")] {
+	# Paseo's stored before git, workspaces or the WebSocket listing came have
+	# no directory, workspace or listed status until listed again.
+	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("status", "TEXT NOT NULL DEFAULT ''")] {
 		existing : List({ name : Str })
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
@@ -436,45 +514,37 @@ sessions! = |{ db, mock_enabled, paseo }| {
 	for row in if (mock_enabled) rows else [] {
 		$sessions = $sessions.append({ id: row.id, provider: Mock.provider.id, agent: row.agent, title: row.title, status: Mock.status(visible!(db, row.id, 0)?) })
 	}
-	match paseo {
-		Ok(daemon) => Ok($sessions.concat(paseo_sessions!(db, daemon)?))
-		Err(Disabled) => Ok($sessions)
+	if paseo.is_ok() {
+		wanted!(db, "agent_list", "")?
+		paseo_cycle!({ db, mock_enabled, paseo })?
+		Ok($sessions.concat(registered!(db)?))
+	} else {
+		Ok($sessions)
 	}
 }
 
-## The agents Paseo lists, which the registry keeps: within
-## `paseo_interval_ms` of the last listing, or while Paseo can't be reached,
-## the last listed ones with their last synced status. It keeps the directory
-## each works in, for workspace.git.
-paseo_sessions! : Sqlite.Db, PaseoDaemon => Try(List(Chat.Session), _)
-paseo_sessions! = |db, daemon|
-	if (recently_checked!(db, "list")?) registered!(db) else match listed!(daemon) {
-		Ok(listed) => {
-			for ({ session, directory }, position) in listed.map_with_index(|agent, position| (agent, position)) {
-				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory) VALUES (:id, 'paseo', :agent, :title, :position, :directory) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory } })?
-			}
-			Ok(listed.map(|{ session, .. }| session))
-		}
-		Err(err) => {
-			logged!("Paseo: listing its agents failed: ${Str.inspect(err)}")
-			registered!(db)
-		}
-	}
-
-## The Paseo agents last listed, with their last synced status.
+## The Paseo agents the cycle last listed, with the status they were listed
+## with, or, listed before it was kept, their last synced status.
 registered! : Sqlite.Db => Try(List(Chat.Session), _)
 registered! = |db| {
-	rows : List({ id : Str, agent : Str, title : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows : List({ id : Str, agent : Str, title : Str, status : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, status FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	var $sessions = []
 	for row in rows {
-		$sessions = $sessions.append({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
+		listed : Try(Chat.Status, _)
+		listed = Json.parse(row.status)
+		status =
+			match listed {
+				Ok(known) => known
+				Err(_) => state_of!(db, row.id)?.state.status
+			}
+		$sessions = $sessions.append({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status })
 	}
 	Ok($sessions)
 }
 
-## How often, at most, the daemon asks Paseo for its agent list, and runs a
-## cycle (see `paseo_cycle!`). The UI polls every second, from every open tab;
+## How often, at most, the daemon runs a cycle (see `paseo_cycle!`), which
+## lists Paseo's agents too. The UI polls every second, from every open tab;
 ## each sync was a new WebSocket session on Paseo, and one per second per tab
 ## kept Paseo's event loop busy enough that its own clients timed out.
 paseo_interval_ms : I64
@@ -491,9 +561,10 @@ interest_ms = 10_000
 cycle_lease_ms : I64
 cycle_lease_ms = 30_000
 
-## Notes that a poll watches `subject` as `kind`: "timeline" (a session id),
-## "workspace", "uncommitted" or "base" (a directory), or "commit_file". What
-## no poll watched within `interest_ms` is asked about in a cycle at once.
+## Notes that a poll watches `subject` as `kind`: "agent_list" or
+## "workspace_list" (no subject), "timeline" (a session id), "workspace",
+## "uncommitted" or "base" (a directory), or "commit_file". What no poll
+## watched within `interest_ms` is asked about in a cycle at once.
 wanted! : Sqlite.Db, Str, Str => Try({}, _)
 wanted! = |db, kind, subject| {
 	now = now_ms!()
@@ -503,8 +574,8 @@ wanted! = |db, kind, subject| {
 	if (watched.is_empty()) forget_check!(db, "cycle") else Ok({})
 }
 
-## Whether Paseo was asked about `what` ("list" or "cycle") within
-## `paseo_interval_ms`; if not, records that it is being asked now.
+## Whether a cycle ran (`what` is "cycle") within `paseo_interval_ms`; if
+## not, records that one is running now.
 recently_checked! : Sqlite.Db, Str => Try(Bool, _)
 recently_checked! = |db, what| {
 	now = now_ms!()
@@ -516,9 +587,6 @@ recently_checked! = |db, what| {
 ## Lets the next poll ask about `what` at once (after a send, say).
 forget_check! : Sqlite.Db, Str => Try({}, _)
 forget_check! = |db, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE what = :what;", params: { what } })
-
-listed! : PaseoDaemon => Try(List({ session : Chat.Session, directory : Str }), _)
-listed! = |daemon| Paseo.sessions(mcp!(daemon, Paseo.list_agents)?)
 
 logged! : Str => {}
 logged! = |line| {
@@ -577,11 +645,11 @@ store! = |db, session_id, stored, { state, events }| {
 }
 
 ## Asks Paseo, at most every `paseo_interval_ms`, about all that polls
-## watched within `interest_ms`, over one WebSocket connection: each
-## timeline's new entries, then each directory's status and, when due (see
-## `PaseoGit.refresh`), its commits and diffs, then the commit files not
-## cached yet. Nothing watched, no connection. A question that fails is
-## logged and the next asked; a lost connection ends the cycle.
+## watched within `interest_ms`, over one WebSocket connection: its agents
+## and its workspaces, each timeline's new entries, then each directory's
+## status and, when due (see `PaseoGit.refresh`), its commits and diffs, then
+## the commit files not cached yet. Nothing watched, no connection. A question
+## that fails is logged and the next asked; a lost connection ends the cycle.
 paseo_cycle! : Context => Try({}, _)
 paseo_cycle! = |{ db, paseo, .. }|
 	match paseo {
@@ -597,7 +665,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 					held!(db, now_ms!() + cycle_lease_ms)?
 					match connected!(daemon) {
 						Ok(connection) => {
-							ordered = ["timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							ordered = ["agent_list", "workspace_list", "timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, daemon, connection, ordered, 1)
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
@@ -652,6 +720,8 @@ asked_each! = |db, daemon, connection, wanted, number|
 asked! : Sqlite.Db, PaseoDaemon, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
 asked! = |db, daemon, connection, { kind, subject }, request_id|
 	match kind {
+		"agent_list" => listed_agents!(db, connection, request_id)
+		"workspace_list" => listed_workspaces!(db, connection, request_id)
 		"timeline" => fetch!(db, daemon, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, connection, subject, request_id)
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
@@ -659,6 +729,25 @@ asked! = |db, daemon, connection, { kind, subject }, request_id|
 		"commit_file" => commit_file!(db, connection, subject, request_id)
 		_ => Ok({})
 	}
+
+## Keeps the agents Paseo lists in the registry, in its order, with the
+## title, status, directory and workspace of each, and drops those it no
+## longer lists, such as archived ones.
+listed_agents! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
+listed_agents! = |db, connection, request_id| {
+	listed = Paseo.agents_answer(exchange!(connection, Paseo.agents_request(request_id), request_id)?, request_id)?
+	for ({ session, directory, workspace_id }, position) in listed.map_with_index(|agent, position| (agent, position)) {
+		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, status) VALUES (:id, 'paseo', :agent, :title, :position, :directory, :workspace_id, :status) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, status = excluded.status;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, status: Json.to_str(session.status) } })?
+	}
+	Sqlite.execute!({ db, query: "DELETE FROM sessions WHERE provider = 'paseo' AND id NOT IN (SELECT value FROM json_each(:ids));", params: { ids: Json.to_str(listed.map(|{ session, .. }| session.id)) } })
+}
+
+## Keeps the projects and workspaces Paseo lists.
+listed_workspaces! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
+listed_workspaces! = |db, connection, request_id| {
+	listed = PaseoWorkspaces.answer(exchange!(connection, PaseoWorkspaces.request(request_id), request_id)?, request_id)?
+	Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('workspaces', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+}
 
 ## Sends a request, and answers the message that answers it, skipping
 ## Paseo's others. Failing to write or read is `ConnectionLost`.

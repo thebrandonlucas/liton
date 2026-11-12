@@ -2,10 +2,11 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 import cap.WorkspaceGit
+import cap.Workspaces
 
 Mock := [].{
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
 
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }
@@ -95,14 +96,26 @@ Mock := [].{
 				},
 		)
 
-	## A session's git workspace. fix-auth's has the login fix uncommitted and
-	## one commit ahead of main; the others are clean on main.
-	git : WorkspaceGit.Poll -> WorkspaceGit.Found
-	git = |{ session_id, scope, file, .. }| {
-		directory = "/mock/${session_id}"
-		workspace = { id: directory, provider: "mock", name: session_id, directory, repository_root: directory, kind: Checkout }
+	## The seed sessions' project, liton, in two workspaces: fix-auth's
+	## worktree, and the checkout of main the others work in.
+	projects : List(Workspaces.Project)
+	projects = [{ id: "liton", provider: "mock", name: "liton", directory: "/mock/liton" }]
+
+	## Each Idle: the daemon rolls up its sessions' states (see `Workspaces.state`).
+	workspaces : List(Workspaces.Workspace)
+	workspaces = [
+		{ id: "fix-auth", provider: "mock", project_id: "liton", name: "fix-auth", directory: "/mock/liton-fix-auth", kind: Worktree, branch: Branch("fix-auth"), state: Idle, dirty: Bool.True, changes: Counted({ additions: 1, deletions: 1 }), pinned: Bool.True, labels: ["auth"], session_ids: ["fix-auth"] },
+		{ id: "main", provider: "mock", project_id: "liton", name: "main", directory: "/mock/liton", kind: Checkout, branch: Branch("main"), state: Idle, dirty: Bool.False, changes: Counted({ additions: 0, deletions: 0 }), pinned: Bool.False, labels: [], session_ids: ["flaky-ci", "notes"] },
+	]
+
+	## A workspace's git. fix-auth's has the login fix uncommitted and one
+	## commit ahead of main; main is clean.
+	git : Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> WorkspaceGit.Found
+	git = |workspace_id, scope, file| {
+		directory = Mock.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "/mock/${workspace_id}"
+		workspace = { id: directory, provider: "mock", name: "liton", directory, repository_root: directory, kind: if (workspace_id == "fix-auth") Worktree else Checkout }
 		clean = { branch: Branch("main"), base: Base("main"), dirty: Bool.False, ahead: 0, behind: 0, upstream: NoUpstream }
-		if session_id != "fix-auth" {
+		if workspace_id != "fix-auth" {
 			{ workspace, status: Status(clean), fingerprint: WorkspaceGit.fingerprint(scope, []), diff: [], commits: [] }
 		} else {
 			commit = { sha: "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f", short_sha: "4f2a9c1", subject: "Test the login redirect", author: "Mock Agent", date: "2026-01-01T09:00:00Z", pushed: Bool.False, on_base: Bool.False, files: [login_test.file] }
@@ -133,5 +146,9 @@ expect Mock.on_message("hi", 7).len() == 7
 expect Mock.on_answer("p", Bool.False, 3).len() == 3
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
-expect Mock.git({ session_id: "notes", scope: Uncommitted, known: "", file: NoFile }).diff == []
-expect Mock.git({ session_id: "fix-auth", scope: Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), known: "", file: Selected("tests/Auth.roc") }).diff.map(|shown| shown.hunks.len()) == [1]
+expect Mock.git("main", Uncommitted, NoFile).diff == []
+expect Mock.git("fix-auth", Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), Selected("tests/Auth.roc")).diff.map(|shown| shown.hunks.len()) == [1]
+
+# Each seed session works in one workspace, of a listed project.
+expect Mock.seeds.all(|seed| Mock.workspaces.keep_if(|shown| shown.session_ids.contains(seed.id)).len() == 1)
+expect Mock.workspaces.all(|shown| Mock.projects.any(|project| project.id == shown.project_id))

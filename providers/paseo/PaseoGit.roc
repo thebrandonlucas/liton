@@ -1,4 +1,5 @@
 import cap.WorkspaceGit
+import Paseo
 
 ## A session's workspace.git.v1 from Paseo: requests for a directory's
 ## checkout status, diff and commits on Paseo's WebSocket, and their answers
@@ -72,7 +73,7 @@ PaseoGit := [].{
 	status_answer : Str, Str, Str -> Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	status_answer = |text, directory, request_id| {
 		answered : Try({ message : { payload : Checkout } }, _)
-		answered = Json.parser_camel()(answer_to(text, "checkout_status_response", request_id)?)
+		answered = Json.parser_camel()(Paseo.answer_to(text, "checkout_status_response", request_id)?)
 		checkout = answered?.message.payload
 		repository_root = checkout.repo_root ?? directory
 		workspace = { id: directory, provider: "paseo", name: repository_root.split_on("/").last() ?? repository_root, directory, repository_root, kind: Checkout }
@@ -101,7 +102,7 @@ PaseoGit := [].{
 	diff_answer : Str, Str -> Try(List(WorkspaceGit.FileDiff), [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	diff_answer = |text, request_id| {
 		answered : Try({ message : { payload : { files : List(DiffFile), error : Try(Failure, [Null]) } } }, _)
-		answered = Json.parser_camel()(answer_to(text, "checkout.diff.get.response", request_id)?)
+		answered = Json.parser_camel()(Paseo.answer_to(text, "checkout.diff.get.response", request_id)?)
 		payload = answered?.message.payload
 		match payload.error {
 			Ok({ message, .. }) => Err(GitFailed(message))
@@ -112,7 +113,7 @@ PaseoGit := [].{
 	commits_answer : Str, Str -> Try(List(WorkspaceGit.Commit), [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	commits_answer = |text, request_id| {
 		answered : Try({ message : { payload : { commits : List(Commit), error : Try(Failure, [Null]) } } }, _)
-		answered = Json.parser_camel()(answer_to(text, "checkout.commits.list.response", request_id)?)
+		answered = Json.parser_camel()(Paseo.answer_to(text, "checkout.commits.list.response", request_id)?)
 		payload = answered?.message.payload
 		match payload.error {
 			Ok({ message, .. }) => Err(GitFailed(message))
@@ -132,26 +133,13 @@ PaseoGit := [].{
 	commit_file_answer : Str, Str -> Try(List(WorkspaceGit.Hunk), [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	commit_file_answer = |text, request_id| {
 		answered : Try({ message : { payload : { file : Try(DiffFile, [Null]), error : Try(Failure, [Null]) } } }, _)
-		answered = Json.parser_camel()(answer_to(text, "checkout.commits.file_diff.response", request_id)?)
+		answered = Json.parser_camel()(Paseo.answer_to(text, "checkout.commits.file_diff.response", request_id)?)
 		payload = answered?.message.payload
 		match payload.error {
 			Ok({ message, .. }) => Err(GitFailed(message))
 			Err(Null) => Ok(payload.file.map_ok(|file| file_diff(file).hunks) ?? [])
 		}
 	}
-}
-
-## `text` when it is the `type` message answering `request_id`.
-answer_to : Str, Str, Str -> Try(Str, [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
-answer_to = |text, type, request_id| {
-	envelope : Try({ message : Try({ type : Str }, [Missing]) }, _)
-	envelope = Json.parser_camel()(text)
-	if envelope?.message.map_ok(|message| message.type) != Ok(type) {
-		return Err(OtherMessage)
-	}
-	answered : Try({ message : { payload : { request_id : Str } } }, _)
-	answered = Json.parser_camel()(text)
-	if (answered?.message.payload.request_id == request_id) Ok(text) else Err(OtherMessage)
 }
 
 ## Paseo's diff of a file, without its hunks' header lines.
