@@ -25,7 +25,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "liton-e2e-"));
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
   stdio: ["ignore", "ignore", "inherit"],
-  env: { ...process.env, LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db"), LITON_UI: path.join(repo, "zig-out/www") },
+  env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db"), LITON_UI: path.join(repo, "zig-out/www") },
 });
 process.on("exit", () => {
   if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");

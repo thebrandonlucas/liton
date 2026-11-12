@@ -14,6 +14,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, a strip of tabs above the panes picks the one column shown.
 - Sessions waiting for you to allow or deny something stand out: Sessions shows each status as a badge, and a chat pane showing such a session says "waiting for you" in its header, next to the session's title.
 - A tool call shows as one card with its result: the tool and whether it is running, done or failed, its input, and its output, with all but the first 4 lines folded away until you open them.
+- Connect a running Paseo daemon by setting `PASEO_PASSWORD` (and `PASEO_HOST` or `PASEO_PORT` if it isn't at 127.0.0.1:6767): its agents show up as sessions, and you can chat with them and allow or deny what they ask. `LITON_MOCK=off` hides the scripted mock agents.
 
 ### Changed
 
