@@ -1,0 +1,1 @@
+["ListSessions",{"WatchSession":{"after":0,"session_id":"s1"}},{"SendMessage":{"session_id":"s1","text":"Fix the failing test"}},{"AnswerPermission":{"allowed":true,"request_id":"p1","session_id":"s1"}}]
