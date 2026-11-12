@@ -12,6 +12,8 @@ All notable changes to liton are documented in this file. The format is based on
 - A mock provider of scripted agents, so all of this works without a real backend.
 - Panes tile in columns. Move a pane into the column beside it with its ← and → buttons (past the edge it gets a column of its own), switch a column between a stack and tabs, and make it narrower or wider. The Developer preset gives the chat a column twice as wide.
 - On a phone, a strip of tabs above the panes picks the one column shown.
+- Sessions waiting for you to allow or deny something stand out: Sessions shows each status as a badge, and a chat pane showing such a session says "waiting for you" in its header, next to the session's title.
+- A tool call shows as one card with its result: the tool and whether it is running, done or failed, its input, and its output, with all but the first 4 lines folded away until you open them.
 
 ### Changed
 

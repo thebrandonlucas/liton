@@ -189,6 +189,43 @@ Model := [].{
 	entries = |state, session_id|
 		state.timelines.find_first(|timeline| timeline.session_id == session_id).map_ok(|timeline| timeline.entries) ?? []
 
+	## A known session, or one named by its id until the daemon lists it.
+	session : State, Str -> Chat.Session
+	session = |state, session_id| state.sessions.find_first(|known| known.id == session_id) ?? { id: session_id, provider: "", agent: "", title: session_id, status: Idle }
+
+	## A tool call and the result with its `call_id`, once one arrives. Output
+	## past its first 4 lines is `folded`.
+	ToolCard : { tool : Str, input : Str, state : [Running, Done, Failed], output : Str, folded : Str }
+
+	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]) }
+
+	## A timeline as a chat pane shows it: each tool call as a card holding its
+	## result, which shows no entry of its own.
+	with_tool_cards : List(Chat.Entry) -> List(Shown)
+	with_tool_cards = |timeline| {
+		results = timeline.keep_oks(
+			|entry|
+				match entry.event {
+					ToolResult(result) => Ok(result)
+					_ => Err(NotResult)
+				},
+		)
+		timeline.keep_oks(
+			|{ sequence, event }|
+				match event {
+					ToolResult(_) => Err(InCard)
+					ToolCall({ call_id, tool, input }) => {
+						(state, lines) = match results.find_first(|result| result.call_id == call_id) {
+							Ok(result) => (if (result.failed) Failed else Done, result.output.split_on("\n"))
+							Err(NotFound) => (Running, [])
+						}
+						Ok({ sequence, event, card: Ok({ tool, input, state, output: Str.join_with(lines.take_first(4), "\n"), folded: Str.join_with(lines.drop_first(4), "\n") }) })
+					}
+					_ => Ok({ sequence, event, card: Err(NotTool) })
+				},
+		)
+	}
+
 	last_sequence : State, Str -> U64
 	last_sequence = |state, session_id| Model.entries(state, session_id).last().map_ok(|entry| entry.sequence) ?? 0
 
@@ -332,4 +369,15 @@ expect {
 expect {
 	closed = Model.close_pane({ ..Model.initial(""), active_column: "column-2" }, "pane-2")
 	closed.columns.map(|column| column.id) == ["column-1", "column-3"] and closed.active_column == "column-1"
+}
+
+expect {
+	call = { sequence: 1, event: ToolCall({ call_id: "c", tool: "bash", input: "ls" }) }
+	result = { sequence: 2, event: ToolResult({ call_id: "c", output: "1\n2\n3\n4\n5", failed: Bool.False }) }
+	Model.with_tool_cards([call, result]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Done, output: "1\n2\n3\n4", folded: "5" })]
+}
+
+expect {
+	call = { sequence: 1, event: ToolCall({ call_id: "c", tool: "bash", input: "ls" }) }
+	Model.with_tool_cards([call]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Running, output: "", folded: "" })]
 }

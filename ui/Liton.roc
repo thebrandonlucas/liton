@@ -197,6 +197,11 @@ Liton := [].{
 						Html.span_v(title, [Engine.class("pane-title")]),
 						Html.span_v(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
+							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission),
+							|| Html.span_v(Engine.const("waiting for you"), [Engine.class("badge waiting"), Engine.test_id("session-status")]),
+							|| Engine.text(""),
+						),
+						Engine.when(
 							row.field(|pane| Widgets.find(pane.widget).follows_session),
 							|| Html.button_v(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
 							|| Engine.text(""),
@@ -231,8 +236,8 @@ Liton := [].{
 		if (!Widgets.find(pane.widget).follows_session)
 			""
 		else {
-			session_id = Model.session_of(state, pane)
-			if (pane.pinned.is_empty()) "following ${session_id}" else "pinned to ${session_id}"
+			title = Model.session(state, Model.session_of(state, pane)).title
+			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
 	sessions : State(PaneCtx, Model.State) -> Elem(PaneCtx)
@@ -249,7 +254,13 @@ Liton := [].{
 							[Engine.class_v(row.key().map2(model.val(), |key, state| if (key == state.focus) "session focused" else "session"))],
 							[
 								Html.button_v(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: key })),
-								Html.span_v(row.field(|session| "${session.agent} · ${Liton.status_text(session.status)}"), [Engine.class("session-meta")]),
+								Html.div(
+									"session-meta",
+									[
+										Engine.text_v(row.field(|session| session.agent)),
+										Html.span_v(row.field(|session| Liton.status_text(session.status)), [Engine.class_v(row.field(|session| Liton.badge_class(session.status))), Engine.test_id("session-status")]),
+									],
+								),
 							],
 						)
 					},
@@ -271,12 +282,18 @@ Liton := [].{
 							[Engine.class("timeline")],
 							[
 								Engine.each(
-									shown.map(|{ pane, state }| Model.entries(state, Model.session_of(state, pane))),
+									shown.map(|{ pane, state }| Model.with_tool_cards(Model.entries(state, Model.session_of(state, pane)))),
 									|entry| entry.sequence.to_str(),
 									|row|
 										Html.li(
 											[Engine.class_v(row.field(|entry| Liton.entry_class(entry.event)))],
-											[Html.pre_v(row.field(|entry| Liton.describe(entry.event)), [])],
+											[
+												Engine.when(
+													row.field(|entry| entry.card.is_ok()),
+													|| Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" })),
+													|| Html.pre_v(row.field(|entry| Liton.describe(entry.event)), []),
+												),
+											],
 										),
 								),
 							],
@@ -330,6 +347,55 @@ Liton := [].{
 			Finished => "finished"
 			Failed(reason) => "failed: ${reason}"
 		}
+
+	badge_class : Chat.Status -> Str
+	badge_class = |status|
+		match status {
+			AwaitingPermission => "badge waiting"
+			Failed(_) => "badge failed"
+			_ => "badge"
+		}
+
+	## A tool call's name and state over its input, then its output with all
+	## but the first lines folded away.
+	tool_card : Val(ctx, Model.ToolCard) -> Elem(ctx)
+	tool_card = |card| {
+		state = card.map(
+			|shown|
+				match shown.state {
+					Running => "running"
+					Done => "done"
+					Failed => "failed"
+				},
+		)
+		Html.div_attrs(
+			[Engine.class_v(state.map(|name| "tool-card ${name}"))],
+			[
+				Html.div(
+					"tool-header",
+					[
+						Html.span_v(card.map(|shown| shown.tool), [Engine.class("tool-name")]),
+						Html.span_v(state, [Engine.class_v(state.map(|name| "badge ${name}")), Engine.test_id("tool-state")]),
+					],
+				),
+				Html.pre_v(card.map(|shown| shown.input), [Engine.class("tool-input")]),
+				Html.pre_v(card.map(|shown| shown.output), [Engine.class("tool-output")]),
+				Engine.when(
+					card.map(|shown| !shown.folded.is_empty()),
+					||
+						Engine.element(
+							"details",
+							[],
+							[
+								Engine.element("summary", [], [Engine.text_v(card.map(|shown| "${shown.folded.split_on("\n").len().to_str()} more lines"))]),
+								Html.pre_v(card.map(|shown| shown.folded), [Engine.class("tool-output")]),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+	}
 
 	describe : Chat.Event -> Str
 	describe = |event|
