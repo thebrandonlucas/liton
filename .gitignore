@@ -10,3 +10,6 @@ zig-out/
 result
 result-*
 docs/roc-isms/
+/vendor/
+*.db
+*.db-*

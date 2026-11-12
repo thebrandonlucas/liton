@@ -12,6 +12,7 @@ const excluded_source_dirs = [_][]const u8{
     ".git",
     ".kai",
     ".zig-cache",
+    "vendor",
     "zig-out",
 };
 
@@ -116,11 +117,18 @@ fn addFilesCommand(
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
+    // The UI's platform, roc-signals, has no release: check it out at the
+    // commit .roc-signals pins and build its browser host.
+    const vendor = b.addSystemCommand(&.{"scripts/vendor-roc-signals.sh"});
+    vendor.has_side_effects = true;
+
     const check_step = b.step("check", "Run formatting and static checks");
     addFilesCommand(b, check_step, &.{ "roc", "fmt", "--check" }, sources.roc_files);
     addFilesCommand(b, check_step, &.{ "zig", "fmt", "--check" }, sources.zig_files);
     for (sources.roc_roots) |root| {
-        check_step.dependOn(&b.addSystemCommand(&.{ "roc", "check", root }).step);
+        const check_roc = b.addSystemCommand(&.{ "roc", "check", root });
+        check_roc.step.dependOn(&vendor.step);
+        check_step.dependOn(&check_roc.step);
     }
 
     // Mutating format step for devs without editor support for Roc and Zig.
@@ -135,4 +143,31 @@ pub fn build(b: *std.Build) void {
         test_roc.step.dependOn(check_step);
         test_step.dependOn(&test_roc.step);
     }
+
+    // The browser UI, its page and the roc-signals runtime, into zig-out/www.
+    const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
+    const build_ui = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -e
+        \\mkdir -p zig-out/www
+        \\roc build --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
+        \\cp ui/index.html ui/style.css vendor/roc-signals/platform/runtime.mjs zig-out/www/
+    });
+    build_ui.has_side_effects = true;
+    build_ui.step.dependOn(&vendor.step);
+    ui_step.dependOn(&build_ui.step);
+
+    const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
+    const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && roc build daemon/main.roc --output=zig-out/bin/liton-daemon" });
+    build_daemon.has_side_effects = true;
+    daemon_step.dependOn(&build_daemon.step);
+
+    // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
+    // LITON_PORT to change it).
+    const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
+    const run_daemon = b.addSystemCommand(&.{"zig-out/bin/liton-daemon"});
+    run_daemon.has_side_effects = true;
+    run_daemon.step.dependOn(&build_ui.step);
+    run_daemon.step.dependOn(&build_daemon.step);
+    run_step.dependOn(&run_daemon.step);
 }
