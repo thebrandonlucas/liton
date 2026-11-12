@@ -10,7 +10,7 @@
     (expect-attr (test-id "slot-right") class "column slot slot-right tabbed collapsed")
     (stub-http "attention" :url "/api/attention" :status 200 :body "[{\"agent\":\"codex\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Working 2\",\"state\":\"Working\",\"summary\":\"\",\"title\":\"Refactor\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s2\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 3\",\"state\":\"NeedsYou\",\"summary\":\"Can I?\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s3\",\"set_aside\":\"No\",\"signature\":\"Idle 1\",\"state\":\"Idle\",\"summary\":\"\",\"title\":\"Scratch\"}]")
     (run-effect 3)
-    (expect-text (test-id "slot-left") "Inbox (1)Inbox (1)×Needs youFix testsclaudeneeds youCan I?SettleSnooze 1 hWorkingRefactorcodexworkingSettleSnooze 1 h")
+    (expect-text (test-id "slot-left") "Inbox (1)Inbox (1)×Needs youFix testsclaudeneeds youCan I?SettleSnooze 1 hourWorkingRefactorcodexworkingSettleSnooze 1 hour")
     (click (test-id "show-left"))
     (click (role button :name "Fix tests"))
     (expect-visible (text "following Fix tests"))

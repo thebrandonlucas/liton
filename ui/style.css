@@ -25,7 +25,25 @@ button:hover { border-color: var(--accent); }
 .drawer-toggles button { padding: 0 8px; color: var(--muted); }
 .drawer-toggles [aria-expanded="true"], .settings-toggle[aria-expanded="true"], .choices [aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
 .settings-toggle { margin-left: auto; }
-.settings { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; }
+.work { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* A side sheet over the work area, from the right. */
+.settings { position: absolute; top: 0; right: 0; bottom: 0; z-index: 10; width: min(400px, 100%); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; overflow-y: auto; background: var(--surface);
+  border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgb(0 0 0 / .12); }
+.settings-header { display: flex; align-items: center; justify-content: space-between; }
+.settings h2 { margin: 0; font-size: 16px; }
+.settings-header .close { border: none; font-size: 18px; padding: 0 6px; }
+.settings select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.settings-column { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.settings-slot { font-size: 12px; color: var(--muted); }
+.settings-pane summary { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 2px 0; }
+.settings-pane-title { flex: 1; }
+.settings-pane summary::before { content: "▸"; color: var(--muted); }
+.settings-pane[open] summary::before { content: "▾"; }
+.settings-pane summary button { font-size: 12px; padding: 0 8px; }
+.settings-option { padding: 2px 0 4px 18px; }
+.settings-option label { display: flex; gap: 6px; align-items: center; }
+.settings .help { font-size: 12px; }
 .settings h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .settings p { margin: 0; color: var(--muted); }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -33,7 +51,7 @@ button:hover { border-color: var(--accent); }
   border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
 .column-tabs { display: none; }
 .columns { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow-x: auto; }
-.column { position: relative; flex: 1 1 0; min-width: 260px; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.column { position: relative; flex: 1 1 0; min-width: var(--minimum-width, 260px); min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 .panel-anchor { position: absolute; inset: 0; pointer-events: none; outline: none; }
 .workbench .slot-left { flex: 0 1 280px; min-width: 200px; }
 .workbench .slot-right { flex: 0 1 380px; min-width: 240px; }
@@ -105,6 +123,7 @@ button:hover { border-color: var(--accent); }
 .manifest { margin: 0; padding: 12px; font: 12px var(--mono); white-space: pre-wrap; }
 @media (max-width: 640px) {
   .column-tabs { display: flex; gap: 6px; padding: 8px 8px 0; overflow-x: auto; }
+  .settings { width: 100%; border-left: none; }
   .column { min-width: 0; overflow-y: auto; }
   .tiling .column { display: none; }
   .tiling .column.shown { display: flex; }

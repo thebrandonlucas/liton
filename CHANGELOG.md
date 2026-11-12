@@ -20,8 +20,11 @@ All notable changes to liton are documented in this file. The format is based on
 - Settle an inbox item, or snooze it for an hour, to move it to Later until something new happens in that session or the hour is up. It moves at once, and comes back with why if the daemon refuses.
 - The Inbox preset, in Settings: a workbench with the Inbox in the left drawer, the chat in the middle, and the right drawer hidden. Paseo agents that finished since you last looked show as done.
 - The browser tab's title counts the sessions that need you, as in "(2) liton", and so does the Inbox's tab.
+- Settings is now a sidebar that slides over the panes from the right (the whole screen on a phone). Besides the preset, it lists each drawer's or column's panes: move a pane to another drawer it fits, remove it, or open it to set its options. Adding a widget offers only those that fit. Every change shows at once.
+- Per-pane options, set in Settings: a chat shows tool output in full, folded or not at all, and shows or hides status lines; Sessions shows or hides each session's agent; the Inbox can list idle sessions too, and snoozes for an hour, a day or a week (its Snooze button says which).
 
 ### Changed
 
 - Sending a message or allowing or denying a request shows at once: the message appears as "Sending…" and the prompt gives way to "Allowing…" or "Denying…" until the agent has it. A message the agent did not take stays, with why and a Retry button; an answer it did not take brings the prompt back. A chat pane says "Loading…" until its session's timeline arrives.
+- The browser remembers which drawers you hid, and each pane's options. Layouts saved before options existed load with every option at its default.
 - Layouts saved by an earlier version, in the browser or as a snapshot, load in Tiling, the oldest with one column per pane. One that is just the old default of Sessions, Chat and Capabilities loads as the new Developer workbench instead.

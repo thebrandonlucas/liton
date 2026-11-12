@@ -5,6 +5,6 @@
     (expect-text (test-id "show-right") "Changes · Capabilities")
     (expect-absent (label "Make column wider"))
     (click (role button :name "Capabilities"))
-    (expect-local-storage "liton.snapshot" "{\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"pinned\":\"\",\"widget\":\"sessions\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-2\",\"id\":\"column-2\",\"panes\":[{\"id\":\"pane-2\",\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-4\",\"id\":\"column-3\",\"panes\":[{\"id\":\"pane-3\",\"pinned\":\"\",\"widget\":\"changes\"},{\"id\":\"pane-4\",\"pinned\":\"\",\"widget\":\"capabilities\"}],\"size\":1,\"tabbed\":true}],\"shell\":\"Workbench\",\"version\":3}")
+    (expect-local-storage "liton.snapshot" "{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"sessions\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-2\",\"id\":\"column-2\",\"panes\":[{\"id\":\"pane-2\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-4\",\"id\":\"column-3\",\"panes\":[{\"id\":\"pane-3\",\"options\":[],\"pinned\":\"\",\"widget\":\"changes\"},{\"id\":\"pane-4\",\"options\":[],\"pinned\":\"\",\"widget\":\"capabilities\"}],\"size\":1,\"tabbed\":true}],\"shell\":\"Workbench\",\"version\":4}")
   )
 )
