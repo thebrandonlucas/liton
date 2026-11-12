@@ -1,4 +1,4 @@
-## liton's UI: a row of panes, each a widget bound to a capability the
+## liton's UI: columns of panes, each a widget bound to a capability the
 ## daemon advertises, and the effects that keep them current.
 import pf.Engine exposing [Elem, In, Root, Row, RowRef, State, Val]
 import pf.Html
@@ -10,7 +10,9 @@ import Widgets
 Liton := [].{
 	Ctx : In(Root, Model.State)
 
-	PaneCtx : Row(Ctx, Model.Pane)
+	ColumnCtx : Row(Ctx, Model.Column)
+
+	PaneCtx : Row(ColumnCtx, Model.Pane)
 
 	snapshot_key : Str
 	snapshot_key = "liton.snapshot"
@@ -28,10 +30,23 @@ Liton := [].{
 			[
 				Liton.toolbar(model),
 				Liton.snapshot_panel(model),
+				# Shown by CSS on narrow screens, which show one column at a time.
 				Html.div(
-					"panes",
-					[Engine.each(model.val().map(|state| state.panes), |pane| pane.id, |row| Liton.pane_view(model, row))],
+					"column-tabs",
+					[
+						Engine.each(
+							model.val().map(|state| state.columns),
+							|column| column.id,
+							|row|
+								Html.button_v(
+									row.field(|column| Str.join_with(column.panes.map(|pane| Widgets.find(pane.widget).title), " · ")),
+									[Html.flag("aria-pressed", row.key().map2(model.val().lift_row(), |key, state| key == state.active_column))],
+									model.lift_row().update_by(row.key(), |state, key| { ..state, active_column: key }),
+								),
+						),
+					],
 				),
+				Html.div("columns", [Engine.each(model.val().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))]),
 			].concat(Liton.effects(model)),
 		)
 
@@ -126,31 +141,68 @@ Liton := [].{
 						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
 						Html.textarea(Engine.const("Snapshot"), model.val().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
 						Html.button("Load snapshot", [], model.update(Model.load_snapshot)),
-						Html.button("Reset to the Developer preset", [], model.update(|state| { ..state, panes: Model.preset, next_pane: Model.preset.len() + 1 })),
+						Html.button("Reset to the Developer preset", [], model.update(|state| Model.layout(state, Model.preset))),
 					],
 				),
 			|| Engine.text(""),
 		)
 
-	pane_view : State(Ctx, Model.State), RowRef(Ctx, Model.Pane) -> Elem(PaneCtx)
-	pane_view = |model0, row| {
+	## A column: a bar of its tabs, when tabbed, and its controls, over its panes.
+	column_view : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)
+	column_view = |model0, row| {
 		model = model0.lift_row()
 		id = row.key()
+		column = row.field(|shown| shown)
+		classes = column.map2(model.val(), |shown, state| "column${if (shown.tabbed) " tabbed" else ""}${if (shown.id == state.active_column) " shown" else ""}")
+		Engine.element(
+			"div",
+			[Engine.class_v(classes), Engine.attr_v("style", row.field(|shown| "flex-grow: ${shown.size.to_str()}"))],
+			[
+				Html.div(
+					"column-header",
+					[
+						Engine.each(
+							row.field(|shown| shown.panes),
+							|pane| pane.id,
+							|tab|
+								Html.button_v(
+									tab.field(|pane| Widgets.find(pane.widget).title),
+									[Engine.class("tab"), Html.flag("aria-pressed", tab.key().map2(column.lift_row(), |key, shown| key == shown.active))],
+									model.lift_row().update_by(tab.key(), Model.activate_tab),
+								),
+						),
+						Html.button_v(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [Engine.class("layout")], model.update_by(id, Model.toggle_tabs)),
+						Html.icon_button("−", Engine.const("Make column narrower"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Narrower))),
+						Html.icon_button("+", Engine.const("Make column wider"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Wider))),
+					],
+				),
+				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, column, pane_row)),
+			],
+		)
+	}
+
+	pane_view : State(ColumnCtx, Model.State), Val(ColumnCtx, Model.Column), RowRef(ColumnCtx, Model.Pane) -> Elem(PaneCtx)
+	pane_view = |model0, column, row| {
+		model = model0.lift_row()
+		id = row.key()
+		title = row.field(|pane| Widgets.find(pane.widget).title)
 		shown = row.field(|pane| pane).map2(model.val(), |pane, state| { pane: pane, state: state })
-		Html.section_v(
-			row.field(|pane| Widgets.find(pane.widget).title),
-			"pane",
+		Engine.element(
+			"section",
+			[Html.aria_label_v(title), Engine.class_v(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane"))],
 			[
 				Html.div(
 					"pane-header",
 					[
-						Html.span_v(row.field(|pane| Widgets.find(pane.widget).title), [Engine.class("pane-title")]),
+						Html.span_v(title, [Engine.class("pane-title")]),
 						Html.span_v(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
 							row.field(|pane| Widgets.find(pane.widget).follows_session),
 							|| Html.button_v(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
 							|| Engine.text(""),
 						),
+						Html.icon_button("←", title.map(|name| "Move ${name} left"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Left))),
+						Html.icon_button("→", title.map(|name| "Move ${name} right"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Right))),
 						Html.button("×", [Html.aria_label("Close pane"), Engine.class("close")], model.update_by(id, Model.close_pane)),
 					],
 				),

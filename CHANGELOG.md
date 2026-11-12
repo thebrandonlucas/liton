@@ -10,3 +10,9 @@ All notable changes to liton are documented in this file. The format is based on
 - Sessions, Chat and Capabilities widgets on chat.v1. Chat panes follow the session selected in Sessions, or are pinned to one; they show the agent's messages, tool calls and results, and ask you to allow or deny what it requests.
 - Snapshot shows the layout as JSON to copy or to paste and load; the browser keeps the last layout.
 - A mock provider of scripted agents, so all of this works without a real backend.
+- Panes tile in columns. Move a pane into the column beside it with its ← and → buttons (past the edge it gets a column of its own), switch a column between a stack and tabs, and make it narrower or wider. The Developer preset gives the chat a column twice as wide.
+- On a phone, a strip of tabs above the panes picks the one column shown.
+
+### Changed
+
+- Layouts saved by an earlier version, in the browser or as a snapshot, load as one column per pane.

@@ -26,13 +26,20 @@ button:hover { border-color: var(--accent); }
 .snapshot p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
 .snapshot textarea { font: 12px var(--mono); min-height: 90px; background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
-.panes { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow-x: auto; }
-.pane { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; background: var(--surface);
+.column-tabs { display: none; }
+.columns { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow-x: auto; }
+.column { flex: 1 1 0; min-width: 260px; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.column-header { display: flex; gap: 4px; align-items: center; }
+.column-header .layout { margin-left: auto; }
+.column-header button, .column-tabs button { padding: 0 8px; font-size: 12px; color: var(--muted); }
+.column-header [aria-pressed="true"], .column-tabs [aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
+.column:not(.tabbed) .tab, .pane.hidden { display: none; }
+.pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .pane-title { font-weight: 600; }
 .pane-context { color: var(--muted); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-header .close { border: none; padding: 0 6px; font-size: 16px; }
+.pane-header .close, .pane-header .move { border: none; padding: 0 6px; font-size: 16px; }
 .missing { padding: 12px; color: var(--muted); }
 .sessions { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
 .session { display: flex; flex-direction: column; padding: 6px 8px; border-radius: 6px; }
@@ -60,4 +67,10 @@ button:hover { border-color: var(--accent); }
 .composer input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg); color: var(--text); }
 .manifest { margin: 0; padding: 12px; font: 12px var(--mono); white-space: pre-wrap; }
-@media (max-width: 640px) { .panes { flex-direction: column; } .pane { min-height: 60vh; } }
+@media (max-width: 640px) {
+  .column-tabs { display: flex; gap: 6px; padding: 8px 8px 0; overflow-x: auto; }
+  .column { display: none; min-width: 0; overflow-y: auto; }
+  .column.shown { display: flex; }
+  .column-header .resize { display: none; }
+  .pane { min-height: 60vh; }
+}
