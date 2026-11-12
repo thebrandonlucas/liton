@@ -1,11 +1,12 @@
 ## liton's UI: columns of panes, each a widget bound to a capability the
 ## daemon advertises, and the effects that keep them current.
-import pf.Engine exposing [Elem, In, Root, Row, RowRef, State, Val]
+import pf.Engine exposing [Elem, Handler, In, Root, Row, RowRef, State, Val]
 import pf.Html
 import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.WorkspaceGit
 import Model
 import Widgets
 
@@ -411,12 +412,13 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Chat, Inbox, Capabilities, Connecting, Missing],
+					[Sessions, Chat, Inbox, Changes, Capabilities, Connecting, Missing],
 					|body|
 						match body {
 							Sessions => Liton.sessions(model, row.field(|pane| pane))
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
+							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Capabilities => Liton.capabilities(model)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
@@ -692,6 +694,291 @@ Liton := [].{
 			],
 		)
 	}
+
+	## The git of the session a pane shows: its branch, the files of the scope
+	## picked, the diff of the file picked and the branch's commits. It polls
+	## only while it is on screen.
+	changes : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	changes = |model, id, pane| {
+		shown = pane.map2(model.val(), |pane_shown, state| { pane: pane_shown, state })
+		git = shown.map(|{ pane: pane_shown, state }| Model.git_of(state, pane_shown))
+		scope = id.map2(model.val(), |pane_id, state| Model.git_pane(state, pane_id).scope)
+		files = shown.map(|{ pane: pane_shown, state }| Model.git_files(state, pane_shown))
+		hunks = shown.map(|{ pane: pane_shown, state }| Model.git_hunks_of(state, pane_shown))
+		Html.div(
+			"changes",
+			[
+				Engine.when(id.map2(model.val(), |pane_id, state| Model.pane_visible(state, pane_id)), || Liton.git_polls(model, id), || Engine.text("")),
+				Engine.switch(
+					shown.map(|{ pane: pane_shown, state }| Model.git_shown(state, pane_shown)),
+					[NoSession, Loading, Unreadable, NotGit, Shown],
+					|showing|
+						match showing {
+							NoSession => Html.p("Pick a session to see its changes.", "missing")
+							Loading => Html.p("Loading…", "missing")
+							Unreadable => Html.p("Can't read this workspace right now.", "missing")
+							NotGit => Html.p("Not a git workspace.", "missing")
+							Shown =>
+								Html.div(
+									"git",
+									[
+										Html.div_attrs(
+											[Engine.class("git-status"), Engine.attr("data-part", "status")],
+											[
+												Html.span_v(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
+												Html.span_v(git.map(|known| Liton.base_text(known.status)), [Engine.test_id("ahead-behind")]),
+												Html.span_v(git.map(|known| if (Liton.dirty(known.status)) "uncommitted changes" else ""), [Engine.class("badge dirty")]),
+											],
+										),
+										Html.div(
+											"choices",
+											[
+												Liton.scope_button(model, id, scope, "Uncommitted", Uncommitted),
+												Liton.scope_button(model, id, scope, "Against base", AgainstBase),
+												Html.span_v(scope.map2(git, Liton.commit_text), [Engine.class("badge")]),
+											],
+										),
+										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_v(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
+										Html.ul(
+											[Engine.class("git-files"), Engine.attr("data-part", "files")],
+											[
+												Engine.each(
+													files.map(
+														|listed|
+															match listed {
+																Files(shown_files) => shown_files
+																Loading => []
+															},
+													),
+													|file| file.path,
+													|row| {
+														asked = row.key().map2(id.lift_row(), |path, pane_id| { path, pane_id })
+														picked = asked.map2(model.val().lift_row(), |{ path, pane_id }, state| Model.git_pane(state, pane_id).file == Selected(path))
+														Liton.git_file(row.field(|file| file), picked, model.lift_row().update_by(asked, |state, { path, pane_id }| Model.show_git(state, pane_id, Model.git_pane(state, pane_id).scope, Selected(path))))
+													},
+												),
+											],
+										),
+										Engine.switch(
+											hunks.map(
+												|asked|
+													match asked {
+														Hunks(_) => Shown
+														Loading => Loading
+														NoFile => NoFile
+													},
+											),
+											[Shown, Loading, NoFile],
+											|hunks_shown|
+												match hunks_shown {
+													NoFile => Engine.text("")
+													Loading => Html.p("Loading…", "missing")
+													Shown => Liton.git_diff(pane.map(|pane_shown| Model.option(pane_shown, "diff_layout")), hunks.map(Liton.hunks_or_none))
+												},
+										),
+										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
+									],
+								)
+						},
+				),
+			],
+		)
+	}
+
+	## Shows a scope's files at once, pressed while shown. Top-level because,
+	## as a closure inside `changes`, it keeps `roc check` (nightly-2026-11-07)
+	## from ever finishing; not reported upstream yet.
+	scope_button : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
+	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
+
+	## A visible Changes pane's polls: every 2 s, and at once when it shows
+	## another session, scope or file.
+	git_polls : State(PaneCtx, Model.State), Val(PaneCtx, Str) -> Elem(PaneCtx)
+	git_polls = |model, id|
+		Html.div(
+			"git-polls",
+			[
+				Engine.watch(id, |_| [Interval(2000)], model.on_result(|state, pane_id, _| Model.ask_git(state, pane_id))),
+				Engine.watch(
+					id.map2(model.val(), |pane_id, state| { pane_id, session_id: Model.session_of(state, Model.pane(state, pane_id)), scope: Model.git_pane(state, pane_id).scope, file: Model.git_pane(state, pane_id).file }),
+					|_| [Self],
+					model.on_result(|state, asked, _| Model.ask_git(state, asked.pane_id)),
+				),
+				Engine.on_change(
+					id.map2(model.val(), |pane_id, state| { serial: Model.git_pane(state, pane_id).serial, poll: Model.git_pane(state, pane_id).poll }),
+					|asked| [Http({ method: "POST", url: "/api/git/poll", headers: [("Content-Type", "application/json")], body: Json.to_str(asked.poll), timeout_ms: 10000 })],
+					model.on_result(
+						|state, asked, res| {
+							decoded : Try(WorkspaceGit.Polled, _)
+							decoded = Json.parse(Engine.http_text(res) ?? "")
+							Model.git_polled(state, asked.poll, decoded ?? WorkspaceGit.unknown(asked.poll))
+						},
+					),
+				),
+			],
+		)
+
+	## A changed file: its path, which picks it, how it changed and by how many
+	## lines.
+	git_file : Val(ctx, WorkspaceGit.File), Val(ctx, Bool), Handler(ctx) -> Elem(ctx)
+	git_file = |file, picked, pick|
+		Html.li(
+			[Engine.class("git-file"), Engine.attr("data-part", "file")],
+			[
+				Html.button_v(file.map(Liton.file_label), [Html.flag("aria-pressed", picked)], pick),
+				Html.span_v(file.map(|shown| Liton.change_text(shown.change)), [Engine.class_v(file.map(|shown| "badge change ${Liton.change_text(shown.change)}"))]),
+				Html.span_v(file.map(Liton.file_lines), [Engine.class("lines")]),
+			],
+		)
+
+	## A file's hunks, in one column or old beside new.
+	git_diff : Val(ctx, Str), Val(ctx, List(WorkspaceGit.Hunk)) -> Elem(ctx)
+	git_diff = |layout, hunks|
+		Html.div_v(
+			layout.map(|shown| if (shown == "Split") "file-diff split" else "file-diff unified"),
+			[
+				Engine.when(hunks.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
+				Engine.each(
+					hunks,
+					|hunk| "${hunk.old_start.to_str()},${hunk.new_start.to_str()}",
+					|row|
+						Html.div_attrs(
+							[Engine.class("hunk"), Engine.attr("data-part", "hunk")],
+							[
+								Html.div("hunk-header", [Engine.text_v(row.field(|hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"))]),
+								Engine.each(
+									row.field(|hunk| hunk.lines).map2(layout.lift_row(), |lines, shown| Model.diff_rows(shown, lines)),
+									|line| line.key,
+									|line_row| Html.div_attrs([Engine.class("diff-line"), Engine.attr("data-part", "line")], [Engine.each(line_row.field(|line| line.cells), |cell| cell.key, |cell| Html.span_v(cell.field(|shown| shown.text), [Engine.class_v(cell.field(|shown| shown.class))]))]),
+								),
+							],
+						),
+				),
+			],
+		)
+
+	## The branch's commits, folded away, each with its files, which pick that
+	## commit's diff of them.
+	git_commits : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, Model.Git) -> Elem(PaneCtx)
+	git_commits = |model, id, git|
+		Engine.element(
+			"details",
+			[Engine.class("git-commits"), Engine.attr("data-part", "commits")],
+			[
+				Engine.element("summary", [], [Engine.text_v(git.map(|known| "Commits (${known.commits.len().to_str()})"))]),
+				Html.ul(
+					[Engine.class("commits")],
+					[
+						Engine.each(
+							git.map(|known| known.commits),
+							|commit| commit.sha,
+							|row|
+								Html.li(
+									[Engine.class("commit")],
+									[
+										Html.div(
+											"commit-line",
+											[
+												Html.span_v(row.field(|commit| commit.short_sha), [Engine.class("sha")]),
+												Html.span_v(row.field(|commit| commit.subject), [Engine.class("subject")]),
+												Html.span_v(row.field(|commit| if (commit.pushed) "pushed" else "not pushed"), [Engine.class("badge")]),
+											],
+										),
+										Html.div("session-meta", [Engine.text_v(row.field(|commit| "${commit.author} · ${commit.date.split_first("T").map_ok(|parts| parts.before) ?? commit.date}"))]),
+										Html.ul(
+											[Engine.class("git-files")],
+											[
+												Engine.each(
+													row.field(|commit| commit.files),
+													|file| file.path,
+													|file_row| {
+														asked = file_row.key().map2(row.key().lift_row(), |path, sha| { path, sha }).map2(id.lift_row().lift_row(), |{ path, sha }, pane_id| { path, sha, pane_id })
+														picked = asked.map2(model.val().lift_row().lift_row(), |{ path, sha, pane_id }, state| Model.git_pane(state, pane_id).scope == Commit(sha) and Model.git_pane(state, pane_id).file == Selected(path))
+														Liton.git_file(file_row.field(|file| file), picked, model.lift_row().lift_row().update_by(asked, |state, { path, sha, pane_id }| Model.show_git(state, pane_id, Commit(sha), Selected(path))))
+													},
+												),
+											],
+										),
+									],
+								),
+						),
+					],
+				),
+			],
+		)
+
+	hunks_or_none : [Hunks(List(WorkspaceGit.Hunk)), Loading, NoFile] -> List(WorkspaceGit.Hunk)
+	hunks_or_none = |asked|
+		match asked {
+			Hunks(listed) => listed
+			_ => []
+		}
+
+	branch_text : [Status(WorkspaceGit.Status), NoStatus] -> Str
+	branch_text = |status|
+		match status {
+			Status({ branch: Branch(name), .. }) => name
+			Status({ branch: Detached, .. }) => "detached"
+			NoStatus => ""
+		}
+
+	## "1 ahead / 0 behind main", against the base.
+	base_text : [Status(WorkspaceGit.Status), NoStatus] -> Str
+	base_text = |status|
+		match status {
+			Status({ base: Base(name), ahead, behind, .. }) => "${ahead.to_str()} ahead / ${behind.to_str()} behind ${name}"
+			_ => ""
+		}
+
+	dirty : [Status(WorkspaceGit.Status), NoStatus] -> Bool
+	dirty = |status|
+		match status {
+			Status(known) => known.dirty
+			NoStatus => Bool.False
+		}
+
+	## The commit a pane shows the files of, by its short sha.
+	commit_text : WorkspaceGit.Scope, Model.Git -> Str
+	commit_text = |scope, git|
+		match scope {
+			Commit(sha) => "Commit ${git.commits.find_first(|commit| commit.sha == sha).map_ok(|commit| commit.short_sha) ?? sha}"
+			_ => ""
+		}
+
+	no_files_text : [Files(List(WorkspaceGit.File)), Loading], WorkspaceGit.Scope -> Str
+	no_files_text = |files, scope|
+		match (files, scope) {
+			(Files([]), Uncommitted) => "Working tree clean"
+			(Files([]), AgainstBase) => "No changes against the base"
+			(Files([]), _) => "No files changed"
+			_ => ""
+		}
+
+	## A path, or a rename's old path → new path.
+	file_label : WorkspaceGit.File -> Str
+	file_label = |file|
+		match file.change {
+			Renamed({ from }) if !from.is_empty() => "${from} → ${file.path}"
+			_ => file.path
+		}
+
+	change_text : WorkspaceGit.Change -> Str
+	change_text = |change|
+		match change {
+			Added => "added"
+			Modified => "modified"
+			Deleted => "deleted"
+			Renamed(_) => "renamed"
+		}
+
+	## "+3 −1", or what a diff can't show.
+	file_lines : WorkspaceGit.File -> Str
+	file_lines = |file|
+		match file.body {
+			Text => "+${file.additions.to_str()} −${file.deletions.to_str()}"
+			Binary => "Binary"
+			TooLarge => "Too large"
+		}
 
 	capabilities : State(PaneCtx, Model.State) -> Elem(PaneCtx)
 	capabilities = |model|

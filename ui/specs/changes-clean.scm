@@ -1,0 +1,18 @@
+(test "Liton — a clean workspace shows Working tree clean, and one that can't be read says so"
+  (steps
+    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 3)
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[],\"fingerprint\":\"f0\",\"scope\":\"Uncommitted\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":0,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"main\"},\"dirty\":false,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
+    (run-effect 4)
+    (expect-visible (text "Working tree clean"))
+    (expect-absent (text "uncommitted changes"))
+    (tick-interval 2000)
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":\"Unchanged\",\"file\":\"NoFile\",\"status\":\"NoStatus\",\"workspace\":\"Unknown\",\"commits\":[]}")
+    (run-effect 5)
+    (expect-visible (text "Can't read this workspace right now."))
+  )
+)

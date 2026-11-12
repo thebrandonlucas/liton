@@ -87,6 +87,13 @@ try {
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });
+  await step("focusing the login fix shows its changed file in Changes, and picking it shows a hunk", async () => {
+    await click("Sessions", ".session button", "Fix the login redirect");
+    await see("Changes", ".git-status", "fix-auth");
+    await click("Changes", ".git-file button", "src/Auth.roc");
+    await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
+    await see("Changes", ".diff-line .added", "redirect_to = request.came_from");
+  });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Sessions", ".session button", "Find the flaky CI test");
     await see("Chat", ".pane-context", "following Find the flaky CI test");
@@ -127,7 +134,7 @@ try {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });
   await browser.close();
-  console.log("ok   e2e journey: panes, sessions, the inbox, permission prompts and tool cards against the mock daemon");
+  console.log("ok   e2e journey: panes, sessions, the inbox, changes, permission prompts and tool cards against the mock daemon");
   process.exit(0);
 } catch (error) {
   fail(error);

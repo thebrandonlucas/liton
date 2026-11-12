@@ -4,6 +4,7 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.WorkspaceGit
 import Widgets
 
 Model := [].{
@@ -77,7 +78,22 @@ Model := [].{
 		notice : Str,
 		show_settings : Bool,
 		snapshot_text : Str,
+
+		## What git polls answered of each session: its workspace, status and
+		## commits, the changes of each scope asked for, and the hunks of each
+		## file shown.
+		git : List(Git),
+		git_changes : List({ session_id : Str, changes : WorkspaceGit.Changes }),
+		git_hunks : List({ session_id : Str, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk) }),
+
+		## What each Changes pane shows, and the last poll it sent, counted by
+		## `serial` so each is new.
+		git_panes : List(GitPane),
 	}
+
+	Git : { session_id : Str, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
+
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], serial : U64, poll : WorkspaceGit.Poll }
 
 	## The Developer preset, the default: a Workbench of sessions, the chat
 	## following the focus, and the focused session's changes beside what the
@@ -136,6 +152,10 @@ Model := [].{
 				notice: "",
 				show_settings: Bool.False,
 				snapshot_text: "",
+				git: [],
+				git_changes: [],
+				git_hunks: [],
+				git_panes: [],
 			},
 			Model.restore(saved) ?? Model.developer,
 		)
@@ -633,9 +653,149 @@ Model := [].{
 		}
 	}
 
+	## Whether a pane is on screen: not a tab behind another, nor in a
+	## collapsed drawer.
+	pane_visible : State, Str -> Bool
+	pane_visible = |state, pane_id|
+		match state.columns.find_first(|column| column.panes.any(|shown| shown.id == pane_id)) {
+			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id))
+			Err(NotFound) => Bool.False
+		}
+
+	## A Changes pane shows uncommitted changes and no file until picked.
+	git_pane : State, Str -> GitPane
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, serial: 0, poll: { session_id: "", scope: Uncommitted, known: "", file: NoFile } }
+
+	set_git_pane : State, GitPane -> State
+	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
+
+	## Shows a scope, or a file of it, in a Changes pane at once; the poll that
+	## follows brings what the UI doesn't have yet.
+	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
+	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
+
+	## Sends a Changes pane's poll of the session, scope and file it shows, with
+	## the fingerprint of the changes the UI has of them.
+	ask_git : State, Str -> State
+	ask_git = |state, pane_id| {
+		shown = Model.git_pane(state, pane_id)
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		known = Model.git_changes_of(state, session_id, shown.scope).map_ok(|changes| changes.fingerprint) ?? ""
+		if (session_id.is_empty()) state else Model.set_git_pane(state, { ..shown, serial: shown.serial + 1, poll: { session_id, scope: shown.scope, known, file: shown.file } })
+	}
+
+	## Takes a git poll's answer. `Unchanged` keeps the changes the UI has, and
+	## changed ones drop their scope's old hunks.
+	git_polled : State, WorkspaceGit.Poll, WorkspaceGit.Polled -> State
+	git_polled = |state, poll, reply| {
+		session_id = poll.session_id
+		git = state.git.drop_if(|known| known.session_id == session_id).append({ session_id, workspace: reply.workspace, status: reply.status, commits: reply.commits })
+		scoped = |known| known.session_id == session_id and known.scope == poll.scope
+		changed =
+			match reply.changes {
+				Changed(changes) => { ..state, git_changes: state.git_changes.drop_if(|known| known.session_id == session_id and known.changes.scope == changes.scope).append({ session_id, changes }), git_hunks: state.git_hunks.drop_if(scoped) }
+				Unchanged => state
+			}
+		hunks =
+			match reply.file {
+				Hunks(shown) => shown.hunks
+				NoFile => []
+			}
+		match poll.file {
+			Selected(path) => { ..changed, git, git_hunks: changed.git_hunks.drop_if(|known| scoped(known) and known.path == path).append({ session_id, scope: poll.scope, path, hunks }) }
+			NoFile => { ..changed, git }
+		}
+	}
+
+	git_changes_of : State, Str, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
+	git_changes_of = |state, session_id, scope| state.git_changes.find_first(|known| known.session_id == session_id and known.changes.scope == scope).map_ok(|known| known.changes)
+
+	## What polls answered of the session a pane shows.
+	git_of : State, Pane -> Git
+	git_of = |state, shown| {
+		session_id = Model.session_of(state, shown)
+		state.git.find_first(|known| known.session_id == session_id) ?? { session_id, workspace: Unknown, status: NoStatus, commits: [] }
+	}
+
+	## What a Changes pane shows: its session's git, or why it can't yet.
+	git_shown : State, Pane -> [NoSession, Loading, Unreadable, NotGit, Shown]
+	git_shown = |state, shown|
+		if (Model.session_of(state, shown).is_empty())
+			NoSession
+		else if (!state.git.any(|known| known.session_id == Model.session_of(state, shown)))
+			Loading
+		else
+			match Model.git_of(state, shown).workspace {
+				Unknown => Unreadable
+				Known({ kind: NotGit, .. }) => NotGit
+				Known(_) => Shown
+			}
+
+	## The files of the scope a Changes pane shows, until its poll answers.
+	git_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
+	git_files = |state, shown| Model.git_changes_of(state, Model.session_of(state, shown), Model.git_pane(state, shown.id).scope).map_ok(|changes| Files(changes.files)) ?? Loading
+
+	## The hunks of the file a Changes pane shows, until its poll answers, if
+	## its scope has that file.
+	git_hunks_of : State, Pane -> [Hunks(List(WorkspaceGit.Hunk)), Loading, NoFile]
+	git_hunks_of = |state, shown| {
+		session_id = Model.session_of(state, shown)
+		{ scope, file, .. } = Model.git_pane(state, shown.id)
+		match (file, Model.git_files(state, shown)) {
+			(Selected(_), Loading) => Loading
+			(Selected(path), Files(listed)) if listed.any(|listed_file| listed_file.path == path) => state.git_hunks.find_first(|known| known.session_id == session_id and known.scope == scope and known.path == path).map_ok(|known| Hunks(known.hunks)) ?? Loading
+			_ => NoFile
+		}
+	}
+
+	DiffCell : { key : Str, class : Str, text : Str }
+
+	## A hunk's lines as rows of cells: unified, each line under its old and new
+	## numbers, or split, old beside new with a removed line beside the added
+	## line replacing it.
+	diff_rows : Str, List(WorkspaceGit.Line) -> List({ key : Str, cells : List(DiffCell) })
+	diff_rows = |diff_layout, lines| {
+		number = |line_number| if (line_number == 0) "" else line_number.to_str()
+		kind = |line|
+			match line.kind {
+				Added => "added"
+				Removed => "removed"
+				Context => "context"
+			}
+		old = |line| [{ class: "number", text: number(line.old_line) }, { class: kind(line), text: line.text }]
+		new = |line| [{ class: "number", text: number(line.new_line) }, { class: kind(line), text: line.text }]
+		blank = [{ class: "number", text: "" }, { class: "empty", text: "" }]
+		rows =
+			if diff_layout == "Split" {
+				paired = lines.fold(
+					{ rows: [], open: 0 },
+					|so_far, line|
+						match line.kind {
+							Context => { rows: so_far.rows.append({ left: old(line), right: new(line) }), open: so_far.rows.len() + 1 }
+							Removed => { ..so_far, rows: so_far.rows.append({ left: old(line), right: blank }) }
+							Added =>
+								if (so_far.open < so_far.rows.len())
+									{ rows: so_far.rows.map_with_index(|row, index| if (index == so_far.open) { ..row, right: new(line) } else row), open: so_far.open + 1 }
+								else
+									{ rows: so_far.rows.append({ left: blank, right: new(line) }), open: so_far.rows.len() + 1 }
+						},
+				)
+				paired.rows.map(|row| row.left.concat(row.right))
+			} else {
+				sign = |line|
+					match line.kind {
+						Added => "+"
+						Removed => "-"
+						Context => " "
+					}
+				lines.map(|line| [{ class: "number", text: number(line.old_line) }, { class: "number", text: number(line.new_line) }, { class: kind(line), text: "${sign(line)} ${line.text}" }])
+			}
+		rows.map_with_index(|cells, index| { key: index.to_str(), cells: cells.map_with_index(|cell, column| { key: column.to_str(), class: cell.class, text: cell.text }) })
+	}
+
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## or a placeholder naming what is missing.
-	Body : [Sessions, Chat, Inbox, Capabilities, Connecting, Missing]
+	Body : [Sessions, Chat, Inbox, Changes, Capabilities, Connecting, Missing]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -653,6 +813,7 @@ Model := [].{
 				"sessions" => Sessions
 				"chat" => Chat
 				"inbox" => Inbox
+				"changes" => Changes
 				_ => Capabilities
 			}
 	}

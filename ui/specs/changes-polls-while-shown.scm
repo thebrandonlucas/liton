@@ -1,0 +1,32 @@
+(test "Liton — the Changes pane polls the focused session's git every 2 s, and stops while its drawer is collapsed"
+  (steps
+    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 3)
+    ; On screen, it asks at once for the focused session's changes.
+    (expect-pending-effects 1)
+    (expect-interval 2000 1)
+    (expect-visible (text "Loading…"))
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"}],\"fingerprint\":\"f1\",\"scope\":\"Uncommitted\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
+    (run-effect 4)
+    (expect-text (test-id "ahead-behind") "1 ahead / 0 behind main")
+    (expect-visible (text "uncommitted changes"))
+    (tick-interval 2000)
+    (expect-pending-effects 1)
+    ; Unchanged keeps the files it has.
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":\"Unchanged\",\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
+    (run-effect 5)
+    (expect-visible (role button :name "src/Auth.roc"))
+    (click (role button :name "Right drawer"))
+    (expect-interval 2000 0)
+    (tick-interval-if-active 2000)
+    (expect-pending-effects 0)
+    ; Shown again, it asks at once.
+    (click (role button :name "Right drawer"))
+    (expect-interval 2000 1)
+    (expect-pending-effects 1)
+  )
+)

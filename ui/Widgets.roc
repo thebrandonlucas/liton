@@ -57,7 +57,19 @@ Widgets := [].{
 			],
 			parts: ["header", "section", "item", "actions"],
 		},
-		{ id: "changes", title: "Changes", needs: [{ name: "workspace.git", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
+		{
+			id: "changes",
+			title: "Changes",
+			needs: [Capability.workspace_git_v1],
+			slots: [Right, Main],
+			minimum_width: 240,
+			follows_session: Bool.True,
+			options: [
+				{ key: "diff_layout", label: "Diff layout", help: "Show a file's diff in one column, or old beside new.", kind: Choice({ default: "Unified", choices: ["Unified", "Split"] }) },
+				{ key: "show_commits", label: "Show commits", help: "List the branch's commits under its changes.", kind: Bool(Bool.True) },
+			],
+			parts: ["header", "status", "files", "file", "hunk", "line", "commits"],
+		},
 		{ id: "capabilities", title: "Capabilities", needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: ["header", "manifest"] },
 		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
 	]

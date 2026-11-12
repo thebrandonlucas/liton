@@ -1,0 +1,28 @@
+(test "Liton — switching the Changes pane's scope shows at once, loading until answered, then cached"
+  (steps
+    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (run-effect 3)
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"}],\"fingerprint\":\"f1\",\"scope\":\"Uncommitted\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
+    (run-effect 4)
+    (click (role button :name "Against base"))
+    ; Switched before the daemon answers.
+    (expect-attr (role button :name "Against base") aria-pressed "true")
+    (expect-visible (text "Loading…"))
+    (expect-absent (role button :name "src/Auth.roc"))
+    (expect-pending-effects 1)
+    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"},{\"additions\":3,\"body\":\"Text\",\"change\":\"Added\",\"deletions\":0,\"path\":\"tests/Auth.roc\"}],\"fingerprint\":\"f2\",\"scope\":\"AgainstBase\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
+    (run-effect 5)
+    (expect-visible (role button :name "tests/Auth.roc"))
+    (expect-visible (text "added"))
+    ; Back to uncommitted, its files show from the cache while it asks again.
+    (click (role button :name "Uncommitted"))
+    (expect-absent (text "Loading…"))
+    (expect-absent (role button :name "tests/Auth.roc"))
+    (expect-visible (role button :name "src/Auth.roc"))
+    (expect-pending-effects 1)
+  )
+)
