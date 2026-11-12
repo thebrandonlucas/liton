@@ -99,7 +99,7 @@ A snapshot is a deterministic JSON file. It contains:
 | topic | decision |
 |---|---|
 | plugin model | compile-time Roc packages |
-| UI ↔ daemon | JSON-RPC over HTTP + SSE streams. Possibly WebSocket later, behind the same capability types |
+| UI ↔ daemon | JSON-RPC over HTTP. Timelines are polled (`chat.v1`'s `Poll`) until roc-signals has an SSE subscription; SSE streams then, possibly WebSocket later, behind the same capability types |
 | daemon language | Roc, on roc-lang/basic-webserver (HTTP server, SSE, HTTP client). It has no WebSocket and no pty |
 | first provider | Paseo, via its daemon API |
 | first CI | GitHub Actions |
@@ -112,15 +112,16 @@ A snapshot is a deterministic JSON file. It contains:
 | shared types | `capabilities/`: a platform-agnostic Roc package of types and JSON codecs, imported by the daemon and the UI |
 | repo | monorepo |
 | tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md |
-| roc-signals | add an SSE subscription effect: fork now, upstream PR to lukewilliamboswell/roc-signals |
+| roc-signals | an SSE subscription effect, as an upstream PR to lukewilliamboswell/roc-signals. Until then the UI polls once a second |
+| layout tree | two levels for now: a row of columns, each a stack or a tab group, with relative widths. Nested `Engine.each` contexts can't recurse, so deeper splits wait on a way to compose views recursively |
 
 ## MVP
 
 **Goal:** prove the capability → widget binding works.
 
 - **Daemon:** runs on basic-webserver and hosts a **mock provider**. The mock provider plays back scripted agent sessions that include tool calls and a permission prompt, and it echoes what you send.
-- **`chat.v1`:** `listSessions`, `watchSession` (SSE timeline), `sendMessage`, `answerPermission`.
-- **UI:** web only (roc-signals). It has minimal tiling (splits and tabs) and a palette of widgets filtered by the capabilities the daemon advertises. One chat widget binds to `chat.v1`, and the session it shows follows linked focus. The snapshot is saved and loaded as JSON.
+- **`chat.v1`:** `listSessions`, `watchSession` (polled, see Decisions), `sendMessage`, `answerPermission`.
+- **UI:** web only (roc-signals). It has minimal tiling (columns of stacks or tabs) and a palette of widgets filtered by the capabilities the daemon advertises. One chat widget binds to `chat.v1`, and the session it shows follows linked focus. The snapshot is saved and loaded as JSON.
 - **Widget declaration:** a Roc record `{ id, requires, context, config, view }`.
 - **Tests:**
   - roc-signals `.scm` specs for the UI;
