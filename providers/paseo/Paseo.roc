@@ -8,7 +8,7 @@ import cap.Manifest
 ## reads into the snake_case fields below; liton reads only these fields.
 Paseo := [].{
 	provider : Manifest.Provider
-	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1] }
+	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1] }
 
 	## How many timeline entries a fetch asks for: a session's first fetch
 	## takes its last ones, later fetches follow on while a page `has_newer`.
@@ -37,7 +37,7 @@ Paseo := [].{
 		}
 	}
 
-	Agent : { id : Str, short_id : Str, title : Try(Str, [Null]), provider : Str, status : Str, archived_at : Try(Try(Str, [Null]), [Missing]), attention_reason : Try(Try(Str, [Null]), [Missing]) }
+	Agent : { id : Str, short_id : Str, title : Try(Str, [Null]), provider : Str, status : Str, cwd : Str, archived_at : Try(Try(Str, [Null]), [Missing]), attention_reason : Try(Try(Str, [Null]), [Missing]) }
 
 	Permission : { id : Str, name : Str, title : Try(Str, [Missing]), description : Try(Str, [Missing]) }
 
@@ -129,14 +129,15 @@ Paseo := [].{
 	## The agents `list_agents` answered, without archived ones. An agent whose
 	## attention Paseo wants for a permission awaits it, and an idle one whose
 	## attention it wants because it finished, until you look, is finished.
-	sessions : Str -> Try(List(Chat.Session), [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	## Each comes with the directory it works in.
+	sessions : Str -> Try(List({ session : Chat.Session, directory : Str }), [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	sessions = |body| {
 		listed : Try({ result : { structured_content : { agents : List(Agent) } } }, _)
 		listed = Json.parser_camel()(tool_answer(body)?)
 		Ok(
 			listed?.result.structured_content.agents
 				.drop_if(|agent| agent.archived_at.map_ok(|archived| archived.is_ok()) ?? Bool.False)
-				.map(|agent| { id: agent.id, provider: "paseo", agent: agent.provider, title: agent.title ?? agent.short_id, status: Paseo.listed_status(agent) }),
+				.map(|agent| { session: { id: agent.id, provider: "paseo", agent: agent.provider, title: agent.title ?? agent.short_id, status: Paseo.listed_status(agent) }, directory: agent.cwd }),
 		)
 	}
 
@@ -209,6 +210,15 @@ Paseo := [].{
 				Err(Null) => Ok(page)
 			}
 		}
+	}
+
+	## Whether a WebSocket message answers the request `request_id`, as a
+	## timeline page or a checkout answer does in its payload.
+	answers_request : Str, Str -> Bool
+	answers_request = |text, request_id| {
+		envelope : Try({ message : Try({ payload : Try({ request_id : Try(Str, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		envelope = Json.parser_camel()(text)
+		envelope.map_ok(|{ message }| message.map_ok(|{ payload }| payload.map_ok(|{ request_id: answered }| answered == Ok(request_id)) ?? Bool.False) ?? Bool.False) ?? Bool.False
 	}
 
 	## The chat.v1 events a page and the agent's snapshot add, in timeline
@@ -463,6 +473,10 @@ expect {
 
 expect Paseo.timeline_page("{\"type\":\"session\",\"message\":{\"type\":\"status\",\"payload\":{\"status\":\"server_info\"}}}", "r1").map_ok(|_| {}) == Err(OtherMessage)
 expect Paseo.timeline_page("{\"type\":\"pong\"}", "r1").map_ok(|_| {}) == Err(OtherMessage)
+expect Paseo.answers_request(response({ epoch: "e1", reset: "false", end: "null", status: "idle", permissions: "", entries: [] }), "r1")
+expect !Paseo.answers_request(response({ epoch: "e1", reset: "false", end: "null", status: "idle", permissions: "", entries: [] }), "r2")
+expect !Paseo.answers_request("{\"type\":\"session\",\"message\":{\"type\":\"status\",\"payload\":{\"status\":\"server_info\"}}}", "r1")
+expect !Paseo.answers_request("{\"type\":\"pong\"}", "r1")
 
 expect {
 	body =
@@ -470,7 +484,7 @@ expect {
 		\\data: {"result":{"content":[],"structuredContent":{"agents":[{"id":"a1","shortId":"a1s","title":null,"provider":"codex","model":null,"status":"running","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"labels":{}},{"id":"a3","shortId":"a3s","title":"Done","provider":"claude","model":null,"status":"idle","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":null,"requiresAttention":true,"attentionReason":"finished","labels":{}},{"id":"a2","shortId":"a2s","title":"Old work","provider":"claude","model":null,"status":"closed","cwd":"/work","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","lastUserMessageAt":null,"archivedAt":"2026-01-02T00:00:00.000Z","labels":{}}]}},"jsonrpc":"2.0","id":1}
 		\\
 		\\
-	Paseo.sessions(body) == Ok([{ id: "a1", provider: "paseo", agent: "codex", title: "a1s", status: Running }, { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }])
+	Paseo.sessions(body) == Ok([{ session: { id: "a1", provider: "paseo", agent: "codex", title: "a1s", status: Running }, directory: "/work" }, { session: { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }, directory: "/work" }])
 }
 
 expect Paseo.succeeded("event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Agent a9 not found\"}],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}\n\n") == Err(ToolFailed("Agent a9 not found"))

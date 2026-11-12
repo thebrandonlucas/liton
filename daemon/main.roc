@@ -1,5 +1,6 @@
 ## liton's daemon: advertises its providers' capabilities and serves chat.v1
-## over HTTP, from timelines it keeps in SQLite, and serves the UI.
+## and workspace.git.v1 over HTTP, from what it keeps in SQLite, and serves
+## the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
@@ -29,8 +30,10 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.WorkspaceGit
 import mock.Mock
 import paseo.Paseo
+import paseo.PaseoGit
 import paseo.WebSocket
 
 Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]) }
@@ -81,6 +84,8 @@ respond! = |request, context| {
 				chat!(context, request)
 			(POST, Resource({ raw_path: "/api/chat/poll", .. })) =>
 				poll!(context, request)
+			(POST, Resource({ raw_path: "/api/git/poll", .. })) =>
+				git_poll!(context, request)
 			(GET, Resource({ raw_path: "/api/attention", .. })) =>
 				attention_items!(context).map_ok(|items| json(Json.to_str(items)))
 			(POST, Resource({ raw_path: "/api/attention", .. })) =>
@@ -121,7 +126,7 @@ chat! = |context, request| {
 		match decoded {
 			Err(_) => Rejected("expected a chat.v1 request")
 			Ok(ListSessions) => Sessions(sessions!(context)?)
-			Ok(WatchSession({ session_id, after })) => Entries(watched!(context, session_id, after)?)
+			Ok(WatchSession({ session_id, after })) => Entries(timelines!(context, [{ session_id, after }])?.first().map_ok(|timeline| timeline.entries) ?? [])
 			Ok(SendMessage({ session_id, text: message })) =>
 				match provider!(context, session_id)? {
 					MockSession => {
@@ -130,7 +135,7 @@ chat! = |context, request| {
 					}
 					PaseoSession(daemon) => {
 						outcome = tool!(daemon, Paseo.send_prompt(session_id, message))
-						forget_check!(db, session_id)?
+						forget_check!(db, "cycle")?
 						paseo_answer(outcome)
 					}
 					NoSession => Rejected("no session ${session_id}")
@@ -150,7 +155,7 @@ chat! = |context, request| {
 								known = state_of!(db, session_id)?
 								store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
 							}
-							forget_check!(db, session_id)?
+							forget_check!(db, "cycle")?
 							paseo_answer(outcome)
 						}
 						NoSession => Rejected("no session ${session_id}")
@@ -168,15 +173,96 @@ poll! = |context, request| {
 		Err(_) => Ok(text(400, "expected a chat.v1 poll"))
 		Ok({ watches }) => {
 			sessions = sessions!(context)?
-			var $timelines = []
-			for { session_id, after } in watches {
-				$timelines = $timelines.append({ session_id, entries: watched!(context, session_id, after)? })
-			}
 			polled : Chat.Polled
-			polled = { sessions, timelines: $timelines }
+			polled = { sessions, timelines: timelines!(context, watches)? }
 			Ok(json(Json.to_str(polled)))
 		}
 	}
+}
+
+## Answers a workspace.git.v1 poll. A workspace that can't be read is
+## `Unknown`, never an error.
+git_poll! : Context, Server.Request => Try(Response, _)
+git_poll! = |context, request| {
+	decoded : Try(WorkspaceGit.Poll, _)
+	decoded = Json.parse(read_json!(request)?)
+	match decoded {
+		Err(_) => Ok(text(400, "expected a workspace.git.v1 poll"))
+		Ok(poll) => {
+			polled : WorkspaceGit.Polled
+			polled =
+				match provider!(context, poll.session_id)? {
+					MockSession => WorkspaceGit.polled(poll, Mock.git(poll))
+					PaseoSession(_) =>
+						match paseo_git!(context, poll) {
+							Ok(Ok(found)) => WorkspaceGit.polled(poll, found)
+							Ok(Err(NothingCached)) => WorkspaceGit.unknown(poll)
+							Err(err) => {
+								logged!("Paseo: answering a git poll of ${poll.session_id} failed: ${Str.inspect(err)}")
+								WorkspaceGit.unknown(poll)
+							}
+						}
+					NoSession => WorkspaceGit.unknown(poll)
+				}
+			Ok(json(Json.to_str(polled)))
+		}
+	}
+}
+
+## A Paseo session's workspace, from what the git cache holds of its
+## directory once the cycle asked Paseo what is due.
+paseo_git! : Context, WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
+paseo_git! = |context, poll| {
+	db = context.db
+	rows : List({ directory : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id: poll.session_id }, limits: Sqlite.default_query_limits })?
+	directory = rows.first().map_ok(|row| row.directory) ?? ""
+	if directory == "" {
+		return Ok(Err(NothingCached))
+	}
+	wanted!(db, "workspace", directory)?
+	selected =
+		match (poll.scope, poll.file) {
+			(Commit(sha), Selected(path)) => Ok({ sha, path, what: "commit ${sha} ${path}" })
+			_ => Err(NoFile)
+		}
+	match (poll.scope, selected) {
+		(Uncommitted, _) => wanted!(db, "uncommitted", directory)?
+		(AgainstBase, _) => wanted!(db, "base", directory)?
+		(_, Ok({ sha, path, what })) => if (cached!(db, directory, what)?.is_err()) wanted!(db, "commit_file", Json.to_str({ directory, sha, path }))? else {}
+		_ => {}
+	}
+	paseo_cycle!(context)?
+	known : Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, _)
+	known = Json.parse(cached!(db, directory, "workspace")?.map_ok(|row| row.value) ?? "")
+	commits : Try(List(WorkspaceGit.Commit), _)
+	commits = Json.parse(cached!(db, directory, "commits")?.map_ok(|row| row.value) ?? "")
+	selected_hunks : Try(List(WorkspaceGit.Hunk), _)
+	selected_hunks =
+		match selected {
+			Ok({ what, .. }) => Json.parse(cached!(db, directory, what)?.map_ok(|row| row.value) ?? "")
+			Err(NoFile) => Ok([])
+		}
+	scope_diff =
+		match poll.scope {
+			Uncommitted => cached!(db, directory, "uncommitted")?
+			AgainstBase => cached!(db, directory, "base")?
+			Commit(_) => Err(NothingCached)
+		}
+	cached_diff : Try(List(WorkspaceGit.FileDiff), _)
+	cached_diff = Json.parse(scope_diff.map_ok(|row| row.value) ?? "")
+	diff =
+		match poll.scope {
+			Commit(sha) => ((commits ?? []).find_first(|commit| commit.sha == sha).map_ok(|commit| commit.files) ?? []).map(|file| { file, hunks: if (poll.file == Selected(file.path)) selected_hunks ?? [] else [] })
+			_ => cached_diff ?? []
+		}
+	fingerprint =
+		match (poll.scope, scope_diff) {
+			(Commit(_), _) => WorkspaceGit.fingerprint(poll.scope, diff)
+			(_, Ok(row)) => row.fingerprint
+			(_, Err(NothingCached)) => WorkspaceGit.fingerprint(poll.scope, [])
+		}
+	Ok(known.map_ok(|{ workspace, status }| { workspace, status, fingerprint, diff, commits: commits ?? [] }).map_err(|_| NothingCached))
 }
 
 ## The built-in provider of what the daemon derives from the others' chat.v1.
@@ -240,11 +326,16 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_states (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_checks (what TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS attention_asides (session_id TEXT PRIMARY KEY, signature TEXT NOT NULL, snoozed_until INTEGER NOT NULL);", params: {} })?
-	# Sessions stored before Paseo came are all the mock provider's.
-	provider_column : List({ name : Str })
-	provider_column = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = 'provider';", params: {}, limits: Sqlite.default_query_limits })?
-	if provider_column.is_empty() {
-		Sqlite.execute!({ db, query: "ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'mock';", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
+	# Sessions stored before Paseo came are all the mock provider's, and
+	# Paseo's stored before git came have no directory until listed again.
+	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''")] {
+		existing : List({ name : Str })
+		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
+		if existing.is_empty() {
+			Sqlite.execute!({ db, query: "ALTER TABLE sessions ADD COLUMN ${column} ${definition};", params: {} })?
+		}
 	}
 	Ok({})
 }
@@ -300,14 +391,22 @@ provider! = |{ db, mock_enabled, paseo }, session_id| {
 	)
 }
 
-## A session's entries after `after`, a Paseo session's synced first.
-watched! : Context, Str, U64 => Try(List(Chat.Entry), _)
-watched! = |context, session_id, after| {
-	match provider!(context, session_id)? {
-		PaseoSession(daemon) => if (recently_checked!(context.db, session_id)?) {} else synced!(context.db, daemon, session_id)
-		_ => {}
+## Each watched session's entries after its `after`, once Paseo's watched
+## sessions are synced when due (see `paseo_cycle!`).
+timelines! : Context, List({ session_id : Str, after : U64 }) => Try(List({ session_id : Str, entries : List(Chat.Entry) }), _)
+timelines! = |context, watches| {
+	for { session_id, .. } in watches {
+		match provider!(context, session_id)? {
+			PaseoSession(_) => wanted!(context.db, "timeline", session_id)?
+			_ => {}
+		}
 	}
-	visible!(context.db, session_id, after)
+	paseo_cycle!(context)?
+	var $timelines = []
+	for { session_id, after } in watches {
+		$timelines = $timelines.append({ session_id, entries: visible!(context.db, session_id, after)? })
+	}
+	Ok($timelines)
 }
 
 visible! : Sqlite.Db, Str, U64 => Try(List(Chat.Entry), _)
@@ -345,15 +444,16 @@ sessions! = |{ db, mock_enabled, paseo }| {
 
 ## The agents Paseo lists, which the registry keeps: within
 ## `paseo_interval_ms` of the last listing, or while Paseo can't be reached,
-## the last listed ones with their last synced status.
+## the last listed ones with their last synced status. It keeps the directory
+## each works in, for workspace.git.
 paseo_sessions! : Sqlite.Db, PaseoDaemon => Try(List(Chat.Session), _)
 paseo_sessions! = |db, daemon|
 	if (recently_checked!(db, "list")?) registered!(db) else match listed!(daemon) {
-		Ok(sessions) => {
-			for (session, position) in sessions.map_with_index(|session, position| (session, position)) {
-				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'paseo', :agent, :title, :position) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap() } })?
+		Ok(listed) => {
+			for ({ session, directory }, position) in listed.map_with_index(|agent, position| (agent, position)) {
+				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory) VALUES (:id, 'paseo', :agent, :title, :position, :directory) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory } })?
 			}
-			Ok(sessions)
+			Ok(listed.map(|{ session, .. }| session))
 		}
 		Err(err) => {
 			logged!("Paseo: listing its agents failed: ${Str.inspect(err)}")
@@ -373,14 +473,37 @@ registered! = |db| {
 	Ok($sessions)
 }
 
-## How often, at most, the daemon asks Paseo for its agent list and for each
-## watched session's timeline. The UI polls every second, from every open tab;
-## each sync is a new WebSocket session on Paseo, and one per second per tab
+## How often, at most, the daemon asks Paseo for its agent list, and runs a
+## cycle (see `paseo_cycle!`). The UI polls every second, from every open tab;
+## each sync was a new WebSocket session on Paseo, and one per second per tab
 ## kept Paseo's event loop busy enough that its own clients timed out.
 paseo_interval_ms : I64
 paseo_interval_ms = 3_000
 
-## Whether Paseo was asked about `what` ("list" or a session id) within
+## How long the daemon keeps asking Paseo about what a poll watched, such as
+## a session's timeline or a directory's git status, after the last poll
+## that did.
+interest_ms : I64
+interest_ms = 10_000
+
+## How long a cycle may run before another can start: Paseo answers a
+## directory's first status in seconds, and Tcp gives up after 30.
+cycle_lease_ms : I64
+cycle_lease_ms = 30_000
+
+## Notes that a poll watches `subject` as `kind`: "timeline" (a session id),
+## "workspace", "uncommitted" or "base" (a directory), or "commit_file". What
+## no poll watched within `interest_ms` is asked about in a cycle at once.
+wanted! : Sqlite.Db, Str, Str => Try({}, _)
+wanted! = |db, kind, subject| {
+	now = now_ms!()
+	watched : List({ kind : Str })
+	watched = Sqlite.query_many!({ db, query: "SELECT kind FROM paseo_interests WHERE kind = :kind AND subject = :subject AND wanted_at > :since;", params: { kind, subject, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
+	Sqlite.execute!({ db, query: "INSERT INTO paseo_interests (kind, subject, wanted_at) VALUES (:kind, :subject, :now) ON CONFLICT (kind, subject) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { kind, subject, now } })?
+	if (watched.is_empty()) forget_check!(db, "cycle") else Ok({})
+}
+
+## Whether Paseo was asked about `what` ("list" or "cycle") within
 ## `paseo_interval_ms`; if not, records that it is being asked now.
 recently_checked! : Sqlite.Db, Str => Try(Bool, _)
 recently_checked! = |db, what| {
@@ -390,11 +513,11 @@ recently_checked! = |db, what| {
 	Ok(claimed.is_empty())
 }
 
-## Lets the next poll sync `what` at once (after a send, say).
+## Lets the next poll ask about `what` at once (after a send, say).
 forget_check! : Sqlite.Db, Str => Try({}, _)
 forget_check! = |db, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE what = :what;", params: { what } })
 
-listed! : PaseoDaemon => Try(List(Chat.Session), _)
+listed! : PaseoDaemon => Try(List({ session : Chat.Session, directory : Str }), _)
 listed! = |daemon| Paseo.sessions(mcp!(daemon, Paseo.list_agents)?)
 
 logged! : Str => {}
@@ -453,18 +576,48 @@ store! = |db, session_id, stored, { state, events }| {
 	transaction.commit!()
 }
 
-## Appends what a Paseo session's timeline adds since its last sync. A failure
-## leaves the session as it was and is only logged.
-synced! : Sqlite.Db, PaseoDaemon, Str => {}
-synced! = |db, daemon, session_id|
-	match sync!(db, daemon, session_id) {
-		Ok({}) => {}
-		Err(err) => logged!("Paseo: syncing ${session_id} failed: ${Str.inspect(err)}")
+## Asks Paseo, at most every `paseo_interval_ms`, about all that polls
+## watched within `interest_ms`, over one WebSocket connection: each
+## timeline's new entries, then each directory's status and, when due (see
+## `PaseoGit.refresh`), its commits and diffs, then the commit files not
+## cached yet. Nothing watched, no connection. A question that fails is
+## logged and the next asked; a lost connection ends the cycle.
+paseo_cycle! : Context => Try({}, _)
+paseo_cycle! = |{ db, paseo, .. }|
+	match paseo {
+		Err(Disabled) => Ok({})
+		Ok(daemon) =>
+			if recently_checked!(db, "cycle")? {
+				Ok({})
+			} else {
+				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: now_ms!() - interest_ms } })?
+				wanted : List({ kind : Str, subject : Str })
+				wanted = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
+				if !wanted.is_empty() {
+					held!(db, now_ms!() + cycle_lease_ms)?
+					match connected!(daemon) {
+						Ok(connection) => {
+							ordered = ["timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							asked_each!(db, daemon, connection, ordered, 1)
+							_ = connection.write!(WebSocket.close(websocket_mask))
+							{}
+						}
+						Err(err) => logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
+					}
+					held!(db, now_ms!())?
+				}
+				Ok({})
+			}
 	}
 
-## Syncs over one WebSocket connection to Paseo, up to 10 pages.
-sync! : Sqlite.Db, PaseoDaemon, Str => Try({}, _)
-sync! = |db, daemon, session_id| {
+## Keeps the next cycle from starting before `until`, `paseo_interval_ms`
+## after it.
+held! : Sqlite.Db, I64 => Try({}, _)
+held! = |db, until| Sqlite.execute!({ db, query: "UPDATE paseo_checks SET checked_at = :until WHERE what = 'cycle';", params: { until } })
+
+## A WebSocket connection to Paseo, past its handshake and hello.
+connected! : PaseoDaemon => Try(Tcp.Connection, _)
+connected! = |daemon| {
 	connection = Tcp.connect!(daemon.host, daemon.port)?
 	connection.write_utf8!(WebSocket.handshake({ host: daemon.host, port: daemon.port, path: "/ws", protocol: "paseo.bearer.${daemon.password}", key: "bGl0b24tZGFlbW9uLWtleQ==" }))?
 	status_line = connection.read_line!()?
@@ -473,9 +626,128 @@ sync! = |db, daemon, session_id| {
 	}
 	skip_headers!(connection)?
 	connection.write!(WebSocket.text(Paseo.hello("liton-daemon"), websocket_mask))?
-	fetched = fetch!(db, daemon, connection, session_id, 10)
-	_ = connection.write!(WebSocket.close(websocket_mask))
-	fetched
+	Ok(connection)
+}
+
+## Asks about each of `wanted` in turn, the `number`th first, until the
+## connection is lost.
+asked_each! : Sqlite.Db, PaseoDaemon, Tcp.Connection, List({ kind : Str, subject : Str }), U64 => {}
+asked_each! = |db, daemon, connection, wanted, number|
+	match wanted.first() {
+		Err(_) => {}
+		Ok({ kind, subject }) =>
+			match asked!(db, daemon, connection, { kind, subject }, "liton-${number.to_str()}") {
+				Err(ConnectionLost(err)) => logged!("Paseo: its WebSocket failed, asking about the ${kind} ${subject}: ${err}")
+				outcome => {
+					match outcome {
+						Ok({}) => {}
+						Err(err) => logged!("Paseo: asking about the ${kind} ${subject} failed: ${Str.inspect(err)}")
+					}
+					asked_each!(db, daemon, connection, wanted.drop_first(1), number + 1)
+				}
+			}
+	}
+
+## Asks Paseo about one thing a poll watched, and keeps the answer.
+asked! : Sqlite.Db, PaseoDaemon, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
+asked! = |db, daemon, connection, { kind, subject }, request_id|
+	match kind {
+		"timeline" => fetch!(db, daemon, connection, subject, request_id, 10)
+		"workspace" => checked_out!(db, connection, subject, request_id)
+		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
+		"base" => diffed!(db, connection, subject, AgainstBase, request_id)
+		"commit_file" => commit_file!(db, connection, subject, request_id)
+		_ => Ok({})
+	}
+
+## Sends a request, and answers the message that answers it, skipping
+## Paseo's others. Failing to write or read is `ConnectionLost`.
+exchange! : Tcp.Connection, Str, Str => Try(Str, _)
+exchange! = |connection, request, request_id| {
+	connection.write!(WebSocket.text(request, websocket_mask)).map_err(|err| ConnectionLost(Str.inspect(err)))?
+	reply!(connection, request_id)
+}
+
+reply! : Tcp.Connection, Str => Try(Str, _)
+reply! = |connection, request_id| {
+	answer = message!(connection, []).map_err(|err| ConnectionLost(Str.inspect(err)))?
+	if (Paseo.answers_request(answer, request_id)) Ok(answer) else reply!(connection, request_id)
+}
+
+## What the git cache holds of a directory: "workspace" (its workspace and
+## status), "commits", "uncommitted" or "base" (a diff), or
+## "commit <sha> <path>" (a file's hunks), with the status it was fetched at.
+Cached : { status : Str, fingerprint : Str, fetched_at : I64, value : Str }
+
+cached! : Sqlite.Db, Str, Str => Try(Try(Cached, [NothingCached]), _)
+cached! = |db, directory, what| {
+	rows : List(Cached)
+	rows = Sqlite.query_many!({ db, query: "SELECT status, fingerprint, fetched_at, value FROM git_cache WHERE directory = :directory AND what = :what;", params: { directory, what }, limits: Sqlite.default_query_limits })?
+	Ok(rows.first().map_err(|_| NothingCached))
+}
+
+cache! : Sqlite.Db, Str, Str, { status : Str, fingerprint : Str, value : Str } => Try({}, _)
+cache! = |db, directory, what, { status, fingerprint, value }|
+	Sqlite.execute!({ db, query: "INSERT INTO git_cache (directory, what, status, fingerprint, fetched_at, value) VALUES (:directory, :what, :status, :fingerprint, :now, :value) ON CONFLICT (directory, what) DO UPDATE SET status = excluded.status, fingerprint = excluded.fingerprint, fetched_at = excluded.fetched_at, value = excluded.value;", params: { directory, what, status, fingerprint, now: now_ms!(), value } })
+
+## When the cached `what` was fetched, and at what status.
+fetched! : Sqlite.Db, Str, Str => Try(Try({ status : WorkspaceGit.Status, fetched_at : I64 }, [NothingCached]), _)
+fetched! = |db, directory, what|
+	match cached!(db, directory, what)? {
+		Err(NothingCached) => Ok(Err(NothingCached))
+		Ok(row) => {
+			status : Try(WorkspaceGit.Status, _)
+			status = Json.parse(row.status)
+			Ok(status.map_ok(|parsed| { status: parsed, fetched_at: row.fetched_at }).map_err(|_| NothingCached))
+		}
+	}
+
+## Asks for a directory's status and keeps it, then its commits when due.
+checked_out! : Sqlite.Db, Tcp.Connection, Str, Str => Try({}, _)
+checked_out! = |db, connection, directory, request_id| {
+	checkout = PaseoGit.status_answer(exchange!(connection, PaseoGit.status_request(directory, request_id), request_id)?, directory, request_id)?
+	cache!(db, directory, "workspace", { status: "", fingerprint: "", value: Json.to_str(checkout) })?
+	match checkout.status {
+		Status(status) if PaseoGit.refresh(Commits, fetched!(db, directory, "commits")?, status, now_ms!()) => {
+			commits_id = "${request_id}-commits"
+			commits = PaseoGit.commits_answer(exchange!(connection, PaseoGit.commits_request(directory, commits_id), commits_id)?, commits_id)?
+			cache!(db, directory, "commits", { status: Json.to_str(status), fingerprint: "", value: Json.to_str(commits) })
+		}
+		_ => Ok({})
+	}
+}
+
+## Fetches a directory's diff when due by the status just asked for.
+diffed! : Sqlite.Db, Tcp.Connection, Str, WorkspaceGit.Scope, Str => Try({}, _)
+diffed! = |db, connection, directory, scope, request_id| {
+	what = if (scope == Uncommitted) "uncommitted" else "base"
+	known : Try({ status : [Status(WorkspaceGit.Status), NoStatus] }, _)
+	known = Json.parse(cached!(db, directory, "workspace")?.map_ok(|row| row.value) ?? "")
+	match known.map_ok(|{ status }| status) {
+		Ok(Status(status)) if PaseoGit.refresh(Diff, fetched!(db, directory, what)?, status, now_ms!()) => {
+			# A diff Paseo can't make, such as against a base it can't find, is
+			# kept empty, so it is asked for again only when a diff would be.
+			answered = PaseoGit.diff_answer(exchange!(connection, PaseoGit.diff_request(directory, scope, request_id), request_id)?, request_id)
+			cache!(db, directory, what, { status: Json.to_str(status), fingerprint: WorkspaceGit.fingerprint(scope, answered ?? []), value: Json.to_str(answered ?? []) })?
+			answered.map_ok(|_| {})
+		}
+		_ => Ok({})
+	}
+}
+
+## Fetches the hunks of a file in a commit, which never change, once.
+commit_file! : Sqlite.Db, Tcp.Connection, Str, Str => Try({}, _)
+commit_file! = |db, connection, subject, request_id| {
+	decoded : Try({ directory : Str, sha : Str, path : Str }, _)
+	decoded = Json.parse(subject)
+	{ directory, sha, path } = decoded?
+	what = "commit ${sha} ${path}"
+	if cached!(db, directory, what)?.is_ok() {
+		Ok({})
+	} else {
+		hunks = PaseoGit.commit_file_answer(exchange!(connection, PaseoGit.commit_file_request(directory, sha, path, request_id), request_id)?, request_id)?
+		cache!(db, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
+	}
 }
 
 websocket_mask : List(U8)
@@ -487,12 +759,11 @@ skip_headers! = |connection| if (connection.read_line!()?.trim() == "") Ok({}) e
 
 ## Fetches the page after a session's state and stores what it adds, again
 ## while Paseo has newer entries, `pages` times at most.
-fetch! : Sqlite.Db, PaseoDaemon, Tcp.Connection, Str, U64 => Try({}, _)
-fetch! = |db, daemon, connection, session_id, pages| {
+fetch! : Sqlite.Db, PaseoDaemon, Tcp.Connection, Str, Str, U64 => Try({}, _)
+fetch! = |db, daemon, connection, session_id, request_id, pages| {
 	known = state_of!(db, session_id)?
-	request_id = "page-${pages.to_str()}"
-	connection.write!(WebSocket.text(Paseo.timeline_request(known.state, session_id, request_id), websocket_mask))?
-	page = page!(connection, request_id)?
+	page_id = "${request_id}-page-${pages.to_str()}"
+	page = Paseo.timeline_page(exchange!(connection, Paseo.timeline_request(known.state, session_id, page_id), page_id)?, page_id)?
 	snapshot =
 		match page.agent {
 			Ok(agent) => agent
@@ -502,23 +773,15 @@ fetch! = |db, daemon, connection, session_id, pages| {
 	if updated.state != known.state or !updated.events.is_empty() {
 		store!(db, session_id, known.stored, updated)?
 	}
-	if (page.has_newer and pages > 1) fetch!(db, daemon, connection, session_id, pages - 1) else Ok({})
+	if (page.has_newer and pages > 1) fetch!(db, daemon, connection, session_id, request_id, pages - 1) else Ok({})
 }
-
-## The page answering `request_id`, skipping Paseo's other messages.
-page! : Tcp.Connection, Str => Try(Paseo.Page, _)
-page! = |connection, request_id|
-	match Paseo.timeline_page(message!(connection, [])?, request_id) {
-		Err(OtherMessage) => page!(connection, request_id)
-		other => other
-	}
 
 ## The next text message, after `received` of its fragments, answering pings.
 message! : Tcp.Connection, List(U8) => Try(Str, _)
 message! = |connection, received| {
 	first_two = connection.read_exactly!(2)?
 	header = WebSocket.header(first_two.concat(connection.read_exactly!(WebSocket.header_rest_size(first_two))?))
-	payload = WebSocket.unmask(connection.read_exactly!(header.length)?, header.mask)
+	payload = WebSocket.unmask(read_bytes!(connection, header.length)?, header.mask)
 	match header.opcode {
 		Text | Continuation => if (header.fin) Str.from_utf8(received.concat(payload)) else message!(connection, received.concat(payload))
 		Ping => {
@@ -529,3 +792,9 @@ message! = |connection, received| {
 		_ => message!(connection, received)
 	}
 }
+
+## `count` bytes, read 8 MiB at a time, the most Tcp reads at once: a diff
+## can be bigger.
+read_bytes! : Tcp.Connection, U64 => Try(List(U8), _)
+read_bytes! = |connection, count|
+	if (count <= 8_388_608) connection.read_exactly!(count) else Ok(connection.read_exactly!(8_388_608)?.concat(read_bytes!(connection, count - 8_388_608)?))
