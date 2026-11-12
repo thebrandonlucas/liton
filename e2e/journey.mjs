@@ -103,6 +103,17 @@ try {
     await see("Chat", ".tool-card.done .tool-output", "TODO handle the empty case");
   });
   await step("a new permission prompt asks to edit", () => see("Chat", "div.permission", "Allow edit: Edit src/Main.roc to handle the empty case?", 8000));
+  await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the sessions", async () => {
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: true });
+    await page.goto(`${base}/`);
+    const in_view = (pane) => page.evaluate((pane) => {
+      const left = document.querySelector(`section[aria-label="${pane}"]`)?.getBoundingClientRect().left ?? -1;
+      return left >= 0 && left < 20;
+    }, pane);
+    await until("the chat panel in view", () => in_view("Chat"));
+    await page.click('[data-testid="show-left"]');
+    await until("the sessions panel in view", () => in_view("Sessions"));
+  });
   await step("the page threw no errors", async () => {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });

@@ -29,8 +29,9 @@ Liton := [].{
 			"liton",
 			[
 				Liton.toolbar(model),
-				Liton.snapshot_panel(model),
-				# Shown by CSS on narrow screens, which show one column at a time.
+				Liton.settings(model),
+				# Shown by CSS on narrow screens: Tiling shows the column picked here,
+				# and a Workbench, which is swiped through, scrolls to it.
 				Html.div(
 					"column-tabs",
 					[
@@ -40,13 +41,19 @@ Liton := [].{
 							|row|
 								Html.button_v(
 									row.field(|column| Str.join_with(column.panes.map(|pane| Widgets.find(pane.widget).title), " · ")),
-									[Html.flag("aria-pressed", row.key().map2(model.val().lift_row(), |key, state| key == state.active_column))],
-									model.lift_row().update_by(row.key(), |state, key| { ..state, active_column: key }),
+									[
+										Html.flag("aria-pressed", row.key().map2(model.val().lift_row(), |key, state| key == state.active_column)),
+										Engine.test_id_v(row.key().map2(model.val().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
+									],
+									model.lift_row().update_by(row.key(), Model.show_column),
 								),
 						),
 					],
 				),
-				Html.div("columns", [Engine.each(model.val().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))]),
+				Html.div_v(
+					model.val().map(|state| if (state.shell == Workbench) "columns workbench" else "columns tiling"),
+					[Engine.each(model.val().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))],
+				),
 			].concat(Liton.effects(model)),
 		)
 
@@ -97,6 +104,7 @@ Liton := [].{
 				},
 			),
 		),
+		Engine.watch(model.val().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
 		Engine.on_change(
 			model.val().map(|state| Json.to_str(Model.snapshot(state))),
 			|text| [StorageSet(Liton.snapshot_key, text)],
@@ -108,57 +116,86 @@ Liton := [].{
 	toolbar = |model|
 		Html.div(
 			"toolbar",
-			[Html.span_v(Engine.const("liton"), [Engine.class("brand")])]
-				.concat(
-					Widgets.all.map(
-						|widget|
-							Html.button_v(
-								model.val().map(
-									|state|
-										match Widgets.missing(widget, state.capabilities) {
-											[] => "+ ${widget.title}"
-											_ => "+ ${widget.title} (unavailable)"
-										},
-								),
-								[Engine.class("add")],
-								model.update(|state| Model.add_pane(state, widget.id)),
-							),
-					),
-				)
-				.concat([
-					Html.button("Snapshot", [Engine.class("snapshot-toggle")], model.update(|state| { ..state, show_snapshot: !state.show_snapshot, snapshot_text: Json.to_str(Model.snapshot(state)) })),
-					Html.span_v(model.val().map(|state| state.notice), [Engine.class("notice")]),
-				]),
+			[
+				Html.span_v(Engine.const("liton"), [Engine.class("brand")]),
+				Engine.when(
+					model.val().map(|state| state.shell == Workbench),
+					|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "◧", "Left drawer"), Liton.drawer_toggle(model, Right, "◨", "Right drawer")]),
+					|| Engine.text(""),
+				),
+				Html.button("Settings", [Engine.class("settings-toggle"), Html.flag("aria-expanded", model.val().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
+				Html.span_v(model.val().map(|state| state.notice), [Engine.class("notice")]),
+			],
 		)
 
-	snapshot_panel : State(Ctx, Model.State) -> Elem(Ctx)
-	snapshot_panel = |model|
+	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str, Str -> Elem(Ctx)
+	drawer_toggle = |model, drawer, glyph, name|
+		Html.button(glyph, [Html.aria_label(name), Html.flag("aria-expanded", model.val().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+
+	## Picks the preset, adds widgets, and shows the layout as a snapshot.
+	settings : State(Ctx, Model.State) -> Elem(Ctx)
+	settings = |model|
 		Engine.when(
-			model.val().map(|state| state.show_snapshot),
+			model.val().map(|state| state.show_settings),
 			||
-				Html.div(
-					"snapshot",
+				Html.section(
+					"Settings",
+					"settings",
 					[
+						Html.h3("Preset", ""),
+						Html.div(
+							"choices",
+							[
+								Html.button("Developer preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Workbench))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
+								Html.button("Tiling preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Tiling))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.tiling)))),
+							],
+						),
+						Html.h3("Add a widget", ""),
+						Html.div(
+							"choices",
+							Widgets.all.map(
+								|widget|
+									Html.button_v(
+										model.val().map(|state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
+										[],
+										model.update(|state| Model.with_snapshot_text(Model.add_pane(state, widget.id))),
+									),
+							),
+						),
+						Html.h3("Snapshot", ""),
 						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
 						Html.textarea(Engine.const("Snapshot"), model.val().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
-						Html.button("Load snapshot", [], model.update(Model.load_snapshot)),
-						Html.button("Reset to the Developer preset", [], model.update(|state| Model.layout(state, Model.preset))),
+						Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 					],
 				),
 			|| Engine.text(""),
 		)
 
-	## A column: a bar of its tabs, when tabbed, and its controls, over its panes.
+	## A column: a bar of its tabs, when tabbed, and its controls, over its
+	## panes. In a Workbench it is a slot, without the controls.
 	column_view : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)
 	column_view = |model0, row| {
 		model = model0.lift_row()
 		id = row.key()
 		column = row.field(|shown| shown)
-		classes = column.map2(model.val(), |shown, state| "column${if (shown.tabbed) " tabbed" else ""}${if (shown.id == state.active_column) " shown" else ""}")
+		slot = id.map2(model.val(), |column_id, state| Model.slot_of(state, column_id))
+		tiling = model.val().map(|state| state.shell == Tiling)
+		classes = column.map2(model.val(), |shown, state| Liton.column_class(state, shown))
 		Engine.element(
 			"div",
-			[Engine.class_v(classes), Engine.attr_v("style", row.field(|shown| "flex-grow: ${shown.size.to_str()}"))],
 			[
+				Engine.class_v(classes),
+				Engine.test_id_v(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
+				Engine.attr_v("style", column.map2(model.val(), |shown, state| if (state.shell == Tiling) "flex-grow: ${shown.size.to_str()}" else "")),
+				# Swiping shows no state, but using a panel says it is the one shown.
+				Engine.on("focus", model.update_by(id, |state, column_id| { ..state, active_column: column_id })),
+			],
+			[
+				Engine.switch(
+					slot,
+					[Left, Main, Right, Free],
+					|shown| if (shown == Free) Engine.text("") else Engine.element("span", [Engine.ref(Model.panel_ref(shown)), Engine.attr("tabindex", "-1"), Engine.class("panel-anchor")], []),
+				),
 				Html.div(
 					"column-header",
 					[
@@ -172,9 +209,19 @@ Liton := [].{
 									model.lift_row().update_by(tab.key(), Model.activate_tab),
 								),
 						),
-						Html.button_v(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [Engine.class("layout")], model.update_by(id, Model.toggle_tabs)),
-						Html.icon_button("−", Engine.const("Make column narrower"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Narrower))),
-						Html.icon_button("+", Engine.const("Make column wider"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Wider))),
+						Engine.when(
+							tiling,
+							||
+								Html.div(
+									"column-controls",
+									[
+										Html.button_v(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [], model.update_by(id, Model.toggle_tabs)),
+										Html.icon_button("−", Engine.const("Make column narrower"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Narrower))),
+										Html.icon_button("+", Engine.const("Make column wider"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Wider))),
+									],
+								),
+							|| Engine.text(""),
+						),
 					],
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, column, pane_row)),
@@ -207,8 +254,18 @@ Liton := [].{
 							|| Html.button_v(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
 							|| Engine.text(""),
 						),
-						Html.icon_button("←", title.map(|name| "Move ${name} left"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Left))),
-						Html.icon_button("→", title.map(|name| "Move ${name} right"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Right))),
+						Engine.when(
+							model.val().map(|state| state.shell == Tiling),
+							||
+								Html.div(
+									"moves",
+									[
+										Html.icon_button("←", title.map(|name| "Move ${name} left"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Left))),
+										Html.icon_button("→", title.map(|name| "Move ${name} right"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Right))),
+									],
+								),
+							|| Engine.text(""),
+						),
 						Html.button("×", [Html.aria_label("Close pane"), Engine.class("close")], model.update_by(id, Model.close_pane)),
 					],
 				),
@@ -230,6 +287,18 @@ Liton := [].{
 				),
 			],
 		)
+	}
+
+	column_class : Model.State, Model.Column -> Str
+	column_class = |state, column| {
+		slot = Model.slot_of(state, column.id)
+		classes = [
+			if (slot == Free) "" else "slot slot-${Model.slot_name(slot)}",
+			if (column.tabbed) "tabbed" else "",
+			if (column.id == state.active_column) "shown" else "",
+			if (state.collapsed.contains(slot)) "collapsed" else "",
+		]
+		Str.join_with(classes.drop_if(|class| class.is_empty()).prepend("column"), " ")
 	}
 
 	context_label : Model.State, Model.Pane -> Str

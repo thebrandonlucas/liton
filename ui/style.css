@@ -21,16 +21,28 @@ button:hover { border-color: var(--accent); }
   border-bottom: 1px solid var(--border); background: var(--surface); }
 .brand { font-weight: 700; margin-right: 8px; letter-spacing: .02em; }
 .notice { color: var(--fail); margin-left: 8px; }
-.snapshot { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 6px;
-  grid-template-columns: 1fr auto auto; align-items: start; }
-.snapshot p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
-.snapshot textarea { font: 12px var(--mono); min-height: 90px; background: var(--surface); color: var(--text);
+.drawer-toggles { display: flex; gap: 4px; }
+.drawer-toggles button { padding: 0 8px; color: var(--muted); }
+.drawer-toggles [aria-expanded="true"], .settings-toggle[aria-expanded="true"], .choices [aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
+.settings-toggle { margin-left: auto; }
+.settings { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; }
+.settings h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.settings p { margin: 0; color: var(--muted); }
+.choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings textarea { font: 12px var(--mono); min-height: 90px; background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
 .column-tabs { display: none; }
 .columns { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow-x: auto; }
-.column { flex: 1 1 0; min-width: 260px; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.column { position: relative; flex: 1 1 0; min-width: 260px; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.panel-anchor { position: absolute; inset: 0; pointer-events: none; outline: none; }
+.workbench .slot-left { flex: 0 1 280px; min-width: 200px; }
+.workbench .slot-right { flex: 0 1 380px; min-width: 240px; }
+.workbench .slot-main { min-width: 300px; }
+.workbench .collapsed { display: none; }
+.workbench .column-header:has(> .tab:only-of-type) { display: none; }
 .column-header { display: flex; gap: 4px; align-items: center; }
-.column-header .layout { margin-left: auto; }
+.column-controls { display: flex; gap: 4px; margin-left: auto; }
+.moves { display: flex; }
 .column-header button, .column-tabs button { padding: 0 8px; font-size: 12px; color: var(--muted); }
 .column-header [aria-pressed="true"], .column-tabs [aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
 .column:not(.tabbed) .tab, .pane.hidden { display: none; }
@@ -82,8 +94,30 @@ button:hover { border-color: var(--accent); }
 .manifest { margin: 0; padding: 12px; font: 12px var(--mono); white-space: pre-wrap; }
 @media (max-width: 640px) {
   .column-tabs { display: flex; gap: 6px; padding: 8px 8px 0; overflow-x: auto; }
-  .column { display: none; min-width: 0; overflow-y: auto; }
-  .column.shown { display: flex; }
-  .column-header .resize { display: none; }
-  .pane { min-height: 60vh; }
+  .column { min-width: 0; overflow-y: auto; }
+  .tiling .column { display: none; }
+  .tiling .column.shown { display: flex; }
+  .column-header .resize, .drawer-toggles { display: none; }
+  .tiling .pane { min-height: 60vh; }
+  /* A Workbench's slots are full-width panels, swiped between. */
+  .column-tabs:has(+ .workbench) { justify-content: center; }
+  .column-tabs:has(+ .workbench) button { border-radius: 999px; }
+  .column-tabs:has(+ .workbench) button::before { content: "● "; }
+  .workbench { gap: 0; padding: 0; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .workbench .column, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: 8px; scroll-snap-align: start; scroll-snap-stop: always; }
 }
+/* Where the browser can, the strip follows the swipe: it marks the panel
+   scrolled to, not just the one last tapped. */
+@supports (animation-timeline: scroll()) {
+  @media (max-width: 640px) {
+    .liton { timeline-scope: --panels; }
+    .workbench { scroll-timeline: --panels x; }
+    .column-tabs:has(+ .workbench) button { animation: linear both; animation-timeline: --panels; }
+    .column-tabs:has(+ .workbench) button:nth-child(1) { animation-name: panel-left; }
+    .column-tabs:has(+ .workbench) button:nth-child(2) { animation-name: panel-main; }
+    .column-tabs:has(+ .workbench) button:nth-child(3) { animation-name: panel-right; }
+  }
+}
+@keyframes panel-left { 0%, 25% { color: var(--text); border-color: var(--accent); } 26%, 100% { color: var(--muted); border-color: var(--border); } }
+@keyframes panel-main { 0%, 24% { color: var(--muted); border-color: var(--border); } 25%, 75% { color: var(--text); border-color: var(--accent); } 76%, 100% { color: var(--muted); border-color: var(--border); } }
+@keyframes panel-right { 0%, 74% { color: var(--muted); border-color: var(--border); } 75%, 100% { color: var(--text); border-color: var(--accent); } }

@@ -15,8 +15,17 @@ Model := [].{
 	## when `tabbed` shows only its `active` one. `size` weighs its width.
 	Column : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(Pane) }
 
+	## How columns are laid out: freely in Tiling, or in a Workbench's three
+	## slots, the left drawer, the main area and the right drawer.
+	Shell : [Workbench, Tiling]
+
+	Layout : { shell : Shell, columns : List(Column) }
+
+	## Where a column sits: in a Workbench's slots, or anywhere in Tiling.
+	Slot : [Left, Main, Right, Free]
+
 	## The part of the model a snapshot saves: deterministic JSON others can load.
-	Snapshot : { version : U32, columns : List(Column) }
+	Snapshot : { version : U32, shell : Shell, columns : List(Column) }
 
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
@@ -31,10 +40,16 @@ Model := [].{
 		sessions : List(Chat.Session),
 		timelines : List(Timeline),
 		focus : Str,
+		shell : Shell,
 		columns : List(Column),
+		collapsed : List(Slot),
 
 		## The column a narrow screen shows.
 		active_column : Str,
+
+		## The panel a narrow Workbench last scrolled to, by the reference
+		## focusing it; `serial` counts each scroll.
+		jump : { serial : U64, panel : Str },
 
 		## Counts on the numbers ending pane and column ids, so each is new.
 		next_id : U64,
@@ -46,18 +61,34 @@ Model := [].{
 		## polls again.
 		ticks : U64,
 		notice : Str,
-		show_snapshot : Bool,
+		show_settings : Bool,
 		snapshot_text : Str,
 	}
 
-	## The Developer preset: sessions, a wider chat following the focus, and
-	## what the daemon advertises.
-	preset : List(Column)
-	preset = [
-		{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "" }] },
-		{ id: "column-2", size: 2, tabbed: Bool.False, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "" }] },
-		{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "" }] },
-	]
+	## The Developer preset, the default: a Workbench of sessions, the chat
+	## following the focus, and the focused session's changes beside what the
+	## daemon advertises.
+	developer : Layout
+	developer = {
+		shell: Workbench,
+		columns: [
+			{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "" }] },
+			{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "" }] },
+			{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "" }, { id: "pane-4", widget: "capabilities", pinned: "" }] },
+		],
+	}
+
+	## The Tiling preset: sessions, a wider chat and what the daemon advertises,
+	## each in a column.
+	tiling : Layout
+	tiling = {
+		shell: Tiling,
+		columns: [
+			{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "" }] },
+			{ id: "column-2", size: 2, tabbed: Bool.False, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "" }] },
+			{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "" }] },
+		],
+	}
 
 	initial : Str -> State
 	initial = |saved|
@@ -68,49 +99,68 @@ Model := [].{
 				sessions: [],
 				timelines: [],
 				focus: "",
+				shell: Tiling,
 				columns: [],
+				collapsed: [],
 				active_column: "",
+				jump: { serial: 0, panel: "" },
 				next_id: 1,
 				drafts: [],
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				ticks: 0,
 				notice: "",
-				show_snapshot: Bool.False,
+				show_settings: Bool.False,
 				snapshot_text: "",
 			},
-			Model.restore(saved) ?? Model.preset,
+			Model.restore(saved) ?? Model.developer,
 		)
 
-	## Shows `columns`, counting ids on from the numbers ending theirs.
-	layout : State, List(Column) -> State
-	layout = |state, columns| {
+	## Shows a layout, counting ids on from the numbers ending theirs. A
+	## Workbench shows its main area first.
+	layout : State, Layout -> State
+	layout = |state, { shell, columns }| {
 		ids = columns.join_map(|column| column.panes.map(|pane| pane.id).append(column.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
-		{ ..state, columns, next_id, active_column: columns.first().map_ok(|column| column.id) ?? "" }
+		shown = if (shell == Workbench) columns.get(1) else columns.first()
+		jump = { serial: state.jump.serial + 1, panel: if (shell == Workbench) Model.panel_ref(Main) else "" }
+		{ ..state, shell, columns, next_id, collapsed: [], jump, active_column: shown.map_ok(|column| column.id) ?? "" }
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: 2, columns: state.columns }
+	snapshot = |state| { version: 3, shell: state.shell, columns: state.columns }
 
-	## Reads a snapshot, giving each pane of a version 1 one its own column.
-	restore : Str -> Try(List(Column), [Invalid])
+	## The snapshot settings show, of the layout as it is now.
+	with_snapshot_text : State -> State
+	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
+
+	## Reads a snapshot. A version 1 or 2 one loads in Tiling, a version 1 one
+	## with a column for each pane, unless it holds just the old default's
+	## widgets: then it loads the Developer preset.
+	restore : Str -> Try(Layout, [Invalid])
 	restore = |text| {
 		current : Try(Snapshot, _)
 		current = Json.parse(text)
+		second : Try({ version : U32, columns : List(Column) }, _)
+		second = Json.parse(text)
 		first : Try({ version : U32, panes : List(Pane) }, _)
 		first = Json.parse(text)
-		match (current, first) {
-			(Ok({ version: 2, columns }), _) => Ok(columns)
-			(_, Ok({ version: 1, panes })) => Ok(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] }))
+		match (current, second, first) {
+			(Ok({ version: 3, shell, columns }), _, _) if shell == Tiling or columns.len() == 3 => Ok({ shell, columns })
+			(_, Ok({ version: 2, columns }), _) => Ok(Model.migrated(columns))
+			(_, _, Ok({ version: 1, panes })) => Ok(Model.migrated(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] })))
 			_ => Err(Invalid)
 		}
 	}
 
+	migrated : List(Column) -> Layout
+	migrated = |columns|
+		if (columns.map(|column| column.panes.map(|pane| pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns }
+
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(columns) => { ..Model.layout(state, columns), notice: "Loaded a layout of ${columns.len().to_str()} columns." }
+			Ok(loaded) => { ..Model.layout(state, loaded), notice: "Loaded a layout of ${loaded.columns.len().to_str()} columns." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -121,24 +171,62 @@ Model := [].{
 	panes : State -> List(Pane)
 	panes = |state| state.columns.join_map(|column| column.panes)
 
-	## A new column at the end holding a new pane of `widget`.
+	## A new pane of `widget`: a tab in a Workbench's main area, or a column of
+	## its own at the end in Tiling.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		pane = { id: "pane-${state.next_id.to_str()}", widget, pinned: "" }
 		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] }
-		{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
+		if (state.shell == Workbench)
+			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: pane.id, panes: main.panes.append(pane) } else main), next_id: state.next_id + 1 }
+		else
+			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
 	}
+
+	slot_of : State, Str -> Slot
+	slot_of = |state, column_id|
+		match (state.shell, state.columns.find_first_index(|column| column.id == column_id)) {
+			(Workbench, Ok(0)) => Left
+			(Workbench, Ok(1)) => Main
+			(Workbench, Ok(2)) => Right
+			_ => Free
+		}
+
+	slot_name : Slot -> Str
+	slot_name = |slot|
+		match slot {
+			Left => "left"
+			Main => "main"
+			Right => "right"
+			Free => "free"
+		}
+
+	## The focus reference of a Workbench slot's panel, which focusing scrolls
+	## into view.
+	panel_ref : Slot -> Str
+	panel_ref = |slot| if (slot == Free) "" else "panel-${Model.slot_name(slot)}"
+
+	## Shows a column on a narrow screen, scrolling a Workbench to its panel.
+	show_column : State, Str -> State
+	show_column = |state, column_id| {
+		panel = Model.panel_ref(Model.slot_of(state, column_id))
+		{ ..state, active_column: column_id, jump: if (panel.is_empty()) state.jump else { serial: state.jump.serial + 1, panel } }
+	}
+
+	toggle_drawer : State, Slot -> State
+	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
 	close_pane : State, Str -> State
 	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) }) })
 
-	## Drops columns left without panes, and points a tab group or the narrow
-	## screen that showed what is gone at what is left.
+	## Drops columns left without panes, apart from a Workbench's slots, and
+	## points a tab group or the narrow screen that showed what is gone at what
+	## is left.
 	drop_empty_columns : State -> State
 	drop_empty_columns = |state| {
 		columns =
 			state.columns
-				.drop_if(|column| column.panes.is_empty())
+				.drop_if(|column| column.panes.is_empty() and state.shell == Tiling)
 				.map(|column| if (column.panes.any(|pane| pane.id == column.active)) column else { ..column, active: column.panes.first().map_ok(|pane| pane.id) ?? "" })
 		active_column = if (columns.any(|column| column.id == state.active_column)) state.active_column else columns.first().map_ok(|column| column.id) ?? ""
 		{ ..state, columns, active_column }
@@ -425,20 +513,41 @@ expect {
 }
 
 expect {
-	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
-	chat = { id: "pane-7", widget: "chat", pinned: "" }
-	Model.restore(saved) == Ok([{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }]) and Model.initial(saved).next_id == 8
+	saved = Json.to_str(Model.snapshot(Model.layout(Model.initial(""), Model.tiling)))
+	Json.to_str(Model.snapshot(Model.initial(saved))) == saved
 }
 
 expect {
-	state = Model.initial("")
+	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
+	chat = { id: "pane-7", widget: "chat", pinned: "" }
+	Model.restore(saved) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }] }) and Model.initial(saved).next_id == 8
+}
+
+expect {
+	version_2 : List(Model.Column) -> Str
+	version_2 = |columns| {
+		old : { version : U32, columns : List(Model.Column) }
+		old = { version: 2, columns }
+		Json.to_str(old)
+	}
+	old_default = version_2(Model.tiling.columns.map(|column| { ..column, size: 3 }))
+	Model.restore(old_default) == Ok(Model.developer) and Model.restore(version_2(Model.tiling.columns.drop_first(1))).map_ok(|layout| layout.shell) == Ok(Tiling)
+}
+
+expect {
+	state = Model.layout(Model.initial(""), Model.tiling)
 	split = Model.move_pane(Model.move_pane(state, "pane-2", Left), "pane-2", Left)
 	Model.move_pane(state, "pane-1", Left).columns == state.columns and split.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-2"], ["pane-1"], ["pane-3"]]
 }
 
 expect {
-	closed = Model.close_pane({ ..Model.initial(""), active_column: "column-2" }, "pane-2")
+	closed = Model.close_pane({ ..Model.layout(Model.initial(""), Model.tiling), active_column: "column-2" }, "pane-2")
 	closed.columns.map(|column| column.id) == ["column-1", "column-3"] and closed.active_column == "column-1"
+}
+
+expect {
+	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "capabilities"]] and state.active_column == "column-2"
 }
 
 expect {

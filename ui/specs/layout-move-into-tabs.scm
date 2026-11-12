@@ -1,5 +1,10 @@
-(test "Liton — a pane moved into its neighbour's column can share it as a tab"
+(test "Liton — in Tiling, a pane moved into its neighbour's column can share it as a tab"
   (steps
+    (click (role button :name "Settings"))
+    (click (role button :name "Tiling preset"))
+    (expect-attr (role button :name "Tiling preset") aria-pressed "true")
+    (click (role button :name "Settings"))
+    (expect-absent (role region :name "Settings"))
     (click (role button :name "Move Chat left"))
     ; Chat joined the Sessions column, and the Capabilities column is next.
     (expect-visible (role button :name "Sessions · Chat"))
