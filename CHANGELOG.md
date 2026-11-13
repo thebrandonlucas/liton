@@ -23,6 +23,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings is now a sidebar that slides over the panes from the right (the whole screen on a phone). Besides the preset, it lists each drawer's or column's panes: move a pane to another drawer it fits, remove it, or open it to set its options. Adding a widget offers only those that fit. Every change shows at once.
 - Per-pane options, set in Settings: a chat shows tool output in full, folded or not at all, and shows or hides status lines; Sessions shows or hides each session's agent; the Inbox can list idle sessions too, and snoozes for an hour, a day or a week (its Snooze button says which).
 - The right drawer's Changes shows the focused session's branch, how far it is ahead of and behind its base, and its changed files, uncommitted or against the base; click a file to see its diff, unified or split (an option in Settings), and open the branch's commits to see each one's files. It works with Paseo or any provider of `workspace.git`, and asks for updates every 2 seconds only while it is on screen.
+- Connect a Paseo daemon reached through a relay with pairing, end-to-end encrypted: run `bridges/paseo-relay/bridge.mjs` with the pairing offer and the password, and point `PASEO_HOST` and `PASEO_PORT` at it. It keeps one connection to the daemon however many liton daemons use it.
 
 ### Changed
 

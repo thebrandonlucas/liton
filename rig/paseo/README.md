@@ -37,5 +37,17 @@ PASEO_HOST=127.0.0.1 PASEO_PORT=16767 PASEO_PASSWORD=liton-rig-password zig buil
   (`wrangler dev --local`) on 127.0.0.1:18787. `relay/wrangler.toml` has no
   account, routes or upstream. `RIG_RELAY=true rig/paseo/daemon.sh` then
   connects the daemon to it, and `./paseo.sh daemon pair --json` prints the
-  pairing offer. liton can't use the relay yet: that needs a bridge (see
-  `docs/research/relay-paired-paseo.md`).
+  pairing offer.
+- **Bridge.** `rig/paseo/bridge.sh` pairs liton's relay bridge
+  (`bridges/paseo-relay`) with the daemon, from `./paseo.sh daemon pair
+  --json`, and listens on 127.0.0.1:18767 (`RIG_BRIDGE_PORT`). The bridge
+  holds the password, so liton's is ignored but must be set:
+
+  ```sh
+  rig/paseo/relay.sh                     # each in a terminal of its own
+  RIG_RELAY=true rig/paseo/daemon.sh
+  rig/paseo/bridge.sh
+  LITON_PORT=18095 LITON_DB=/tmp/liton-rig.db LITON_MOCK=off \
+  PASEO_HOST=127.0.0.1 PASEO_PORT=18767 PASEO_PASSWORD=bridge zig build run
+  curl http://127.0.0.1:18767/status     # the bridge's state, relay round trip, last error
+  ```

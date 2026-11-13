@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "Bridges liton's daemon to a Paseo daemon reached through a relay with pairing",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@getpaseo/relay": "0.15.3",
+    "ws": "8.23.0"
+  }
+}
