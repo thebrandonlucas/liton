@@ -72,6 +72,13 @@ WebSocket := [].{
 	## Closes with status 1000, a normal closure.
 	close : List(U8) -> List(U8)
 	close = |mask| WebSocket.frame(Close, [0x03, 0xE8], mask)
+
+	## A close frame's status code (0 for none) and reason.
+	closed : List(U8) -> { code : U16, reason : Str }
+	closed = |payload| {
+		code = payload.take_first(2).fold(0, |so_far, byte| so_far * 256 + byte.to_u16())
+		{ code: if (payload.len() < 2) 0 else code, reason: Str.from_utf8(payload.drop_first(2)) ?? "" }
+	}
 }
 
 extended_length_size : U8 -> U64
@@ -127,5 +134,7 @@ expect {
 
 expect read_back([0x01, 0x02, 0x68, 0x69]) == { header: { fin: Bool.False, opcode: Text, mask: [], length: 2 }, payload: "hi".to_utf8() }
 expect read_back(WebSocket.close(mask)).header.opcode == Close
+expect WebSocket.closed([0x11, 0x31].concat("Incorrect password".to_utf8())) == { code: 4401, reason: "Incorrect password" }
+expect WebSocket.closed([]) == { code: 0, reason: "" }
 expect WebSocket.accepted("HTTP/1.1 101 Switching Protocols\r\n")
 expect !WebSocket.accepted("HTTP/1.1 403 Forbidden\r\n")

@@ -2,10 +2,11 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 
-## Paseo's agents as chat.v1 sessions. Agents are prompted, and permissions
-## answered, over Paseo's MCP endpoint; they are listed, and timelines fetched,
-## over its WebSocket. Paseo's own JSON is camelCase, which `Json.parser_camel`
-## reads into the snake_case fields below; liton reads only these fields.
+## Paseo's agents as chat.v1 sessions, all over Paseo's WebSocket, the one
+## thing a relay carries: agents are listed, timelines fetched, agents
+## prompted and permissions answered there. Speaks Paseo 0.9.2 to 0.15.3.
+## Paseo's own JSON is camelCase, which `Json.parser_camel` reads into the
+## snake_case fields below; liton reads only these fields.
 Paseo := [].{
 	provider : Manifest.Provider
 	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
@@ -99,27 +100,88 @@ Paseo := [].{
 	initial : State
 	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle }
 
-	mcp_path : Str
-	mcp_path = "/mcp/agents"
+	## Prompts an agent, interrupting it if it is running, as Paseo's own app
+	## does. Paseo answers once the agent took the prompt (see `sent`).
+	send_request : Str, Str, Str -> Str
+	send_request = |agent_id, text, request_id|
+		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text } })
 
-	## Paseo refuses (406) an MCP client that doesn't accept server-sent events.
-	mcp_headers : Str -> List({ name : Str, value : Str })
-	mcp_headers = |password| [
-		{ name: "Content-Type", value: "application/json" },
-		{ name: "Accept", value: "application/json, text/event-stream" },
-		{ name: "Authorization", value: "Bearer ${password}" },
-	]
+	## Whether a `send_agent_message_response` says the agent took the prompt.
+	sent : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	sent = |text, request_id| {
+		answered : Try({ message : { payload : { accepted : Bool, error : Try(Str, [Null]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "send_agent_message_response", request_id)?)
+		payload = answered?.message.payload
+		if (payload.accepted) Ok({}) else Err(Refused(payload.error ?? "Paseo did not take the message"))
+	}
 
-	agent_status : Str -> Str
-	agent_status = |agent_id| tool_call("get_agent_status", Json.to_str({ agentId: agent_id }))
+	## Answers a permission request. Paseo answers with the request's id: an
+	## `agent_permission_resolved` once it took the answer (see `resolved`).
+	permission_answer : Str, Str, Bool -> Str
+	permission_answer = |agent_id, request_id, allowed|
+		Json.to_str({ type: "session", message: { type: "agent_permission_response", agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny" } } })
 
-	## In the background: otherwise Paseo answers only once the agent is done.
-	send_prompt : Str, Str -> Str
-	send_prompt = |agent_id, prompt| tool_call("send_agent_prompt", Json.to_str({ agentId: agent_id, prompt: prompt, background: Bool.True }))
+	resolved : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	resolved = |text, request_id| Paseo.write_answer(text, "agent_permission_resolved", request_id).map_ok(|_| {})
 
-	answer_permission : Str, Str, Bool -> Str
-	answer_permission = |agent_id, request_id, allowed|
-		tool_call("respond_to_permission", Json.to_str({ agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny" } }))
+	## Asks for one agent, for its state when a timeline page lacks it.
+	agent_request : Str, Str -> Str
+	agent_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "fetch_agent_request", agentId: agent_id, requestId: request_id } })
+
+	agent_snapshot : Str, Str -> Try(Snapshot, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	agent_snapshot = |text, request_id| {
+		answered : Try({ message : { payload : { agent : Try(Snapshot, [Null]), error : Try(Str, [Null]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "fetch_agent_response", request_id)?)
+		payload = answered?.message.payload
+		match payload.agent {
+			Ok(agent) => Ok(agent)
+			Err(Null) => Err(Refused(payload.error ?? "no agent"))
+		}
+	}
+
+	## `text` when it is the `type` message answering `request_id`, or the
+	## reason of the `rpc_error` Paseo answers it with instead.
+	write_answer : Str, Str, Str -> Try(Str, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	write_answer = |text, type, request_id| {
+		failed : Try({ message : { type : Str, payload : { request_id : Str, error : Str } } }, _)
+		failed = Json.parser_camel()(text)
+		match failed {
+			Ok({ message }) if message.type == "rpc_error" and message.payload.request_id == request_id => Err(Refused(message.payload.error))
+			_ =>
+				match Paseo.answer_to(text, type, request_id) {
+					Ok(answer) => Ok(answer)
+					Err(OtherMessage) => Err(OtherMessage)
+					Err(InvalidJson(problem)) => Err(InvalidJson(problem))
+					Err(MissingRequiredField(field)) => Err(MissingRequiredField(field))
+				}
+		}
+	}
+
+	## Sessions Paseo's providers keep that Paseo doesn't run yet, such as a
+	## sandboxed agent's: all of them, not those of one directory, since a
+	## remote one reports the directory "/".
+	importable_request : Str -> Str
+	importable_request = |request_id| Json.to_str({ type: "session", message: { type: "fetch_recent_provider_sessions_request", requestId: request_id, limit: 200.U16 } })
+
+	## The sessions a `fetch_recent_provider_sessions_response` lists, read
+	## only: each id is "import:<provider>:<its id>", a session's agent is its
+	## provider's label, and its title the session's, or its first prompt.
+	## Importing one (`import_agent_request`) would make it an agent.
+	Importable : { provider_id : Str, provider_label : Str, provider_handle_id : Str, cwd : Str, title : Try(Str, [Null]), first_prompt_preview : Try(Str, [Null]) }
+
+	importable_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str }), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	importable_answer = |text, request_id| {
+		answered : Try({ message : { payload : { entries : List(Importable) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "fetch_recent_provider_sessions_response", request_id)?)
+		Ok(
+			answered?.message.payload.entries.map(
+				|entry| {
+					title = entry.title ?? (entry.first_prompt_preview ?? entry.provider_handle_id)
+					{ session: { id: "import:${entry.provider_id}:${entry.provider_handle_id}", provider: "paseo", agent: entry.provider_label, title, status: Idle }, directory: entry.cwd }
+				},
+			),
+		)
+	}
 
 	## An agent as `fetch_agents_response` lists it, with the workspace it works
 	## in.
@@ -186,17 +248,6 @@ Paseo := [].{
 		if (answered?.message.payload.request_id == request_id) Ok(text) else Err(OtherMessage)
 	}
 
-	status_snapshot : Str -> Try(Snapshot, [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	status_snapshot = |body| {
-		answered : Try({ result : { structured_content : { snapshot : Snapshot } } }, _)
-		answered = Json.parser_camel()(tool_answer(body)?)
-		Ok(answered?.result.structured_content.snapshot)
-	}
-
-	## Whether `send_prompt` or `answer_permission` succeeded.
-	succeeded : Str -> Try({}, [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	succeeded = |body| tool_answer(body).map_ok(|_| {})
-
 	chat_status : Snapshot -> Chat.Status
 	chat_status = |{ status: paseo_status, pending_permissions, last_error }|
 		if !pending_permissions.is_empty() {
@@ -212,10 +263,51 @@ Paseo := [].{
 		}
 
 	## The first message on Paseo's WebSocket. With these capabilities Paseo
-	## sends a client only what it asks for, not every agent's stream.
-	hello : Str -> Str
-	hello = |client_id|
-		Json.to_str({ type: "hello", clientId: client_id, clientType: "cli", protocolVersion: 1.U8, capabilities: { explicit_event_subscriptions: Bool.True, selective_agent_timeline: Bool.True } })
+	## sends a client only what it asks for, not every agent's stream, lists
+	## the agents of every provider, not only Claude, Codex and OpenCode (a
+	## sandboxed agent's provider is an ACP one), answers a permission answer
+	## (`owned_subscriptions`), and says why it refuses a hello (see
+	## `greeting`). The password in `auth` is
+	## what a relay carries: from 0.15 Paseo checks it when the connection
+	## brought none in its headers; Paseo 0.9 ignores it and wants the
+	## WebSocket protocol `paseo.bearer.<password>` (see `protocol`).
+	hello : Str, Str -> Str
+	hello = |client_id, password|
+		Json.to_str({ type: "hello", clientId: client_id, clientType: "cli", protocolVersion: 1.U8, auth: { kind: "password", password }, capabilities: { explicit_event_subscriptions: Bool.True, selective_agent_timeline: Bool.True, hello_rejection: Bool.True, all_providers: Bool.True, owned_subscriptions: Bool.True } })
+
+	## The WebSocket protocol that carries the password when Paseo is reached
+	## directly. Paseo 0.15 still takes it there, until 2027-03.
+	protocol : Str -> Str
+	protocol = |password| "paseo.bearer.${password}"
+
+	## What a message after `hello` says of it: Paseo welcomes a client with
+	## its `server_info`, or refuses it with `hello.rejected` and a reason.
+	greeting : Str -> [Welcomed, Rejected(Str), NotGreeting]
+	greeting = |text| {
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed = Json.parser_camel()(text)
+		match parsed {
+			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info") }) }), .. }) => Welcomed
+			_ => NotGreeting
+		}
+	}
+
+	## Why Paseo refused liton, from a `hello.rejected` reason or, as Paseo 0.9
+	## and a wrong `protocol` say it, the reason it closed the connection with.
+	refusal : Str -> Str
+	refusal = |reason|
+		match reason {
+			"password_required" | "Password required" => "Paseo wants a password: set PASEO_PASSWORD to its password"
+			"incorrect_password" | "Incorrect password" => "Paseo refused the password in PASEO_PASSWORD"
+			"incompatible_protocol" | "Incompatible protocol version" => "Paseo doesn't speak liton's protocol version"
+			_ => "Paseo refused liton: ${reason}"
+		}
+
+	## A session that stands for Paseo refusing liton, listed first so the
+	## refusal shows where Paseo's sessions do.
+	refused_session : Str -> Chat.Session
+	refused_session = |reason| { id: "paseo-refused", provider: "paseo", agent: "paseo", title: Paseo.refusal(reason), status: Failed(Paseo.refusal(reason)) }
 
 	## Fetches the entries after the state's cursor, or the last `page_limit`
 	## on a session's first fetch.
@@ -310,7 +402,7 @@ Paseo := [].{
 	}
 
 	## Forgets a permission request liton answered itself, once Paseo took the
-	## answer (`succeeded`), so `update` doesn't
+	## answer (`resolved`), so `update` doesn't
 	## emit an answer for it; the daemon records the real one.
 	answered : State, Str -> State
 	answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
@@ -423,29 +515,6 @@ loose_text = |value|
 		_ => ""
 	}
 
-tool_call : Str, Str -> Str
-tool_call = |name, arguments| "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":${Json.to_str(name)},\"arguments\":${arguments}}}"
-
-## The JSON of a tool's answer. Paseo sends it as one server-sent event,
-## whose `data:` lines hold it.
-tool_answer : Str -> Try(Str, [ToolFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
-tool_answer = |body| {
-	data = body.split_on("\n").keep_if(|line| line.starts_with("data:")).map(|line| line.drop_prefix("data:").trim())
-	json = if (data.is_empty()) body else Str.join_with(data, "\n")
-	answer : Try({ result : Try({ is_error : Try(Bool, [Missing]), content : List({ text : Try(Str, [Missing]) }) }, [Missing]), error : Try({ message : Str }, [Missing]) }, _)
-	answer = Json.parser_camel()(json)
-	match answer? {
-		{ error: Ok({ message }), .. } => Err(ToolFailed(message))
-		{ result: Ok(result), .. } =>
-			if result.is_error == Ok(Bool.True) {
-				Err(ToolFailed(Str.join_with(result.content.map(|content| content.text ?? ""), "\n")))
-			} else {
-				Ok(json)
-			}
-		_ => Err(ToolFailed("no result"))
-	}
-}
-
 # Synthetic fixtures in Paseo's shapes.
 
 entry : U64, Str -> Str
@@ -552,14 +621,61 @@ expect {
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
 
-expect Paseo.succeeded("event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Agent a9 not found\"}],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}\n\n") == Err(ToolFailed("Agent a9 not found"))
+session : Str -> Str
+session = |message| "{\"type\":\"session\",\"message\":${message}}"
+
+## A request as liton writes it: Json.to_str orders fields by name.
+request : Str -> Str
+request = |message| "{\"message\":${message},\"type\":\"session\"}"
+
+expect Paseo.permission_answer("a1", "p1", Bool.False) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
+expect Paseo.send_request("a1", "Go on", "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
 
 expect {
-	body = "data: {\"result\":{\"content\":[],\"structuredContent\":{\"status\":\"error\",\"snapshot\":{\"id\":\"a1\",\"status\":\"error\",\"pendingPermissions\":[],\"lastError\":\"rate limited\"}}},\"jsonrpc\":\"2.0\",\"id\":1}"
-	Paseo.status_snapshot(body).map_ok(Paseo.chat_status) == Ok(Failed("rate limited"))
+	answer = |fields| session("{\"type\":\"send_agent_message_response\",\"payload\":{\"requestId\":\"w1\",\"agentId\":\"a1\",${fields}}}")
+	Paseo.sent(answer("\"accepted\":true,\"error\":null"), "w1") == Ok({})
+		and Paseo.sent(answer("\"accepted\":true,\"deliveryStatus\":\"queued\",\"error\":null"), "w1") == Ok({})
+		and Paseo.sent(answer("\"accepted\":false,\"error\":\"Agent a9 not found\""), "w1") == Err(Refused("Agent a9 not found"))
+		and Paseo.sent(answer("\"accepted\":true,\"error\":null"), "w2") == Err(OtherMessage)
 }
 
-expect Paseo.answer_permission("a1", "p1", Bool.False) == "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"respond_to_permission\",\"arguments\":{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"}}}}"
+expect {
+	resolution = session("{\"type\":\"agent_permission_resolved\",\"payload\":{\"agentId\":\"a1\",\"requestId\":\"p1\",\"resolution\":{\"behavior\":\"allow\"}}}")
+	failure = session("{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"p1\",\"requestType\":\"agent_permission_response\",\"error\":\"Request failed: No pending permission\",\"code\":\"handler_error\"}}")
+	Paseo.resolved(resolution, "p1") == Ok({})
+		and Paseo.resolved(failure, "p1") == Err(Refused("Request failed: No pending permission"))
+		and Paseo.resolved(failure, "p2") == Err(OtherMessage)
+		and Paseo.answers_request(resolution, "p1")
+		and Paseo.answers_request(failure, "p1")
+}
+
+expect {
+	answer = |payload| session("{\"type\":\"fetch_agent_response\",\"payload\":{\"requestId\":\"s1\",${payload}}}")
+	found = answer("\"agent\":{\"id\":\"a1\",\"status\":\"error\",\"pendingPermissions\":[],\"lastError\":\"rate limited\"},\"project\":null,\"error\":null")
+	Paseo.agent_snapshot(found, "s1").map_ok(Paseo.chat_status) == Ok(Failed("rate limited"))
+		and Paseo.agent_snapshot(answer("\"agent\":null,\"error\":\"Agent a9 not found\""), "s1").map_ok(|_| {}) == Err(Refused("Agent a9 not found"))
+}
+
+expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
+
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed
+expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting
+expect Paseo.greeting("{\"type\":\"pong\"}") == NotGreeting
+expect Paseo.refusal("incorrect_password") == Paseo.refusal("Incorrect password")
+expect Paseo.refused_session("password_required").status == Failed("Paseo wants a password: set PASEO_PASSWORD to its password")
+
+expect {
+	entry_of = |fields| "{\"providerId\":\"sandbox\",\"providerLabel\":\"Sandbox\",\"cwd\":\"/\",\"lastPromptPreview\":null,\"lastActivityAt\":\"2026-01-01T00:00:00.000Z\",${fields}}"
+	text = session("{\"type\":\"fetch_recent_provider_sessions_response\",\"payload\":{\"requestId\":\"i1\",\"entries\":[${entry_of("\"providerHandleId\":\"h1\",\"title\":\"Fix the build\",\"firstPromptPreview\":\"Fix it\"")},${entry_of("\"providerHandleId\":\"h2\",\"title\":null,\"firstPromptPreview\":null")}],\"providerErrors\":[{\"provider\":\"claude\",\"message\":\"disabled\"}]}}")
+	Paseo.importable_answer(text, "i1")
+		== Ok([
+			{ session: { id: "import:sandbox:h1", provider: "paseo", agent: "Sandbox", title: "Fix the build", status: Idle }, directory: "/" },
+			{ session: { id: "import:sandbox:h2", provider: "paseo", agent: "Sandbox", title: "h2", status: Idle }, directory: "/" },
+		])
+}
+
+expect Paseo.importable_request("i1") == request("{\"limit\":200,\"requestId\":\"i1\",\"type\":\"fetch_recent_provider_sessions_request\"}")
 
 expect {
 	decoded : Try(Paseo.State, _)

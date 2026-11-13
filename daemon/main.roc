@@ -6,7 +6,9 @@
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
 ## LITON_MOCK=off leaves out the mock provider. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
-## PASEO_PORT (default 6767).
+## PASEO_PORT (default 6767), reached over its WebSocket alone.
+## GET /api/paseo/importable lists, read only, the sessions Paseo's providers
+## keep that Paseo doesn't run, such as sandboxed agents'.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -16,7 +18,6 @@ app [Context, program] {
 }
 
 import pf.Env
-import pf.Http
 import pf.OsStr
 import pf.Path
 import pf.Server
@@ -24,7 +25,6 @@ import pf.Sqlite
 import pf.Stderr
 import pf.Tcp
 import pf.UnixTime
-import http.Request
 import http.Response
 import cap.Attention
 import cap.Capability
@@ -53,6 +53,8 @@ init! = || {
 	host = env_or!("LITON_HOST", "127.0.0.1")
 	db = Sqlite.open!(Sqlite.default_config(Path.utf8(env_or!("LITON_DB", "liton.db")))) ? |_| Exit(2)
 	create_tables!(db) ? |_| Exit(3)
+	# A password Paseo refused may have been fixed since.
+	Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) ? |_| Exit(3)
 	mock_enabled = env_or!("LITON_MOCK", "on") != "off"
 	if mock_enabled {
 		seed!(db) ? |_| Exit(4)
@@ -96,6 +98,8 @@ respond! = |request, context| {
 				workspaces!(context).map_ok(|listed| json(Json.to_str(listed)))
 			(POST, Resource({ raw_path: "/api/workspaces", .. })) =>
 				workspaces_request!(context, request)
+			(GET, Resource({ raw_path: "/api/paseo/importable", .. })) =>
+				importable!(context).map_ok(|listed| json(listed))
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -140,7 +144,8 @@ chat! = |context, request| {
 						Accepted
 					}
 					PaseoSession(daemon) => {
-						outcome = tool!(daemon, Paseo.send_prompt(session_id, message))
+						request_id = "liton-send-${now_ms!().to_str()}"
+						outcome = written!(daemon, Paseo.send_request(session_id, message, request_id), request_id, Paseo.sent)
 						forget_check!(db, "cycle")?
 						paseo_answer(outcome)
 					}
@@ -156,7 +161,7 @@ chat! = |context, request| {
 							Accepted
 						}
 						PaseoSession(daemon) => {
-							outcome = tool!(daemon, Paseo.answer_permission(session_id, request_id, allowed))
+							outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed), request_id, Paseo.resolved)
 							if outcome.is_ok() {
 								known = state_of!(db, session_id)?
 								store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
@@ -236,7 +241,7 @@ located! = |context, focus|
 				PaseoSession(_) => {
 					rows : List({ directory : Str })
 					rows = Sqlite.query_many!({ db: context.db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
-					Ok(rows.first().map_ok(|row| if (row.directory == "") Nowhere else PaseoDirectory(row.directory)) ?? Nowhere)
+					Ok(rows.first().map_ok(|row| paseo_directory(row.directory)) ?? Nowhere)
 				}
 				NoSession => Ok(Nowhere)
 			}
@@ -244,11 +249,16 @@ located! = |context, focus|
 			if context.mock_enabled and Mock.workspaces.any(|shown| shown.id == workspace_id) {
 				Ok(MockWorkspace(workspace_id))
 			} else if context.paseo.is_ok() {
-				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| PaseoDirectory(shown.directory)) ?? Nowhere)
+				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(shown.directory)) ?? Nowhere)
 			} else {
 				Ok(Nowhere)
 			}
 	}
+
+## A directory Paseo can tell the git of. A remote agent's, such as a
+## sandboxed one's, is "/", which Paseo has nothing to tell of.
+paseo_directory : Str -> [PaseoDirectory(Str), Nowhere]
+paseo_directory = |directory| if (directory == "" or directory == "/") Nowhere else PaseoDirectory(directory)
 
 ## A Paseo directory's workspace, from what the git cache holds of it once
 ## the cycle asked Paseo what is due.
@@ -517,7 +527,8 @@ sessions! = |{ db, mock_enabled, paseo }| {
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?
 		paseo_cycle!({ db, mock_enabled, paseo })?
-		Ok($sessions.concat(registered!(db)?))
+		refused = refusal!(db)?.map_ok(|{ reason, .. }| [Paseo.refused_session(reason)]) ?? []
+		Ok($sessions.concat(refused).concat(registered!(db)?))
 	} else {
 		Ok($sessions)
 	}
@@ -561,8 +572,13 @@ interest_ms = 10_000
 cycle_lease_ms : I64
 cycle_lease_ms = 30_000
 
-## Notes that a poll watches `subject` as `kind`: "agent_list" or
-## "workspace_list" (no subject), "timeline" (a session id), "workspace",
+## How often, at most, the daemon asks Paseo for the sessions its providers
+## keep: for each, Paseo may read a provider's history from disk.
+importable_interval_ms : I64
+importable_interval_ms = 60_000
+
+## Notes that a poll watches `subject` as `kind`: "agent_list",
+## "workspace_list" or "importable" (no subject), "timeline" (a session id), "workspace",
 ## "uncommitted" or "base" (a directory), or "commit_file". What no poll
 ## watched within `interest_ms` is asked about in a cycle at once.
 wanted! : Sqlite.Db, Str, Str => Try({}, _)
@@ -574,13 +590,14 @@ wanted! = |db, kind, subject| {
 	if (watched.is_empty()) forget_check!(db, "cycle") else Ok({})
 }
 
-## Whether a cycle ran (`what` is "cycle") within `paseo_interval_ms`; if
-## not, records that one is running now.
-recently_checked! : Sqlite.Db, Str => Try(Bool, _)
-recently_checked! = |db, what| {
+## Whether `what` ran within `interval_ms`: a cycle ("cycle"), every
+## `paseo_interval_ms`, or the importable sessions' listing ("importable"),
+## every `importable_interval_ms`. If not, records that it runs now.
+recently_checked! : Sqlite.Db, Str, I64 => Try(Bool, _)
+recently_checked! = |db, what, interval_ms| {
 	now = now_ms!()
 	claimed : List({ what : Str })
-	claimed = Sqlite.query_many!({ db, query: "INSERT INTO paseo_checks (what, checked_at) VALUES (:what, :now) ON CONFLICT (what) DO UPDATE SET checked_at = excluded.checked_at WHERE paseo_checks.checked_at <= :since RETURNING what;", params: { what, now, since: now - paseo_interval_ms }, limits: Sqlite.default_query_limits })?
+	claimed = Sqlite.query_many!({ db, query: "INSERT INTO paseo_checks (what, checked_at) VALUES (:what, :now) ON CONFLICT (what) DO UPDATE SET checked_at = excluded.checked_at WHERE paseo_checks.checked_at <= :since RETURNING what;", params: { what, now, since: now - interval_ms }, limits: Sqlite.default_query_limits })?
 	Ok(claimed.is_empty())
 }
 
@@ -594,25 +611,39 @@ logged! = |line| {
 	{}
 }
 
-## Calls one of Paseo's MCP tools and answers the response's body.
-mcp! : PaseoDaemon, Str => Try(Str, _)
-mcp! = |{ host, port, password }, body| {
-	request = Request.from_method(POST).with_uri("http://${host}:${port.to_str()}${Paseo.mcp_path}").with_headers(Paseo.mcp_headers(password)).with_body(body.to_utf8())
-	response = Http.send_with!(request, Http.default_config.with_timeout_millis(5_000))?
-	if (response.status() == 200) Str.from_utf8(response.body()) else Err(HttpStatus(response.status()))
+## Sends one write, such as a prompt, over a connection of its own, and reads
+## Paseo's answer to it with `answer`.
+written! : PaseoDaemon, Str, Str, (Str, Str -> Try({}, _)) => Try({}, _)
+written! = |daemon, request, request_id, answer| {
+	connection = connected!(daemon, "liton-daemon-writes")?
+	answered = exchange!(connection, request, request_id)
+	_ = connection.write!(WebSocket.close(websocket_mask))
+	answer(answered?, request_id)
 }
-
-## Calls a Paseo tool that acts, such as sending a prompt.
-tool! : PaseoDaemon, Str => Try({}, _)
-tool! = |daemon, body| Paseo.succeeded(mcp!(daemon, body)?)
 
 paseo_answer : Try({}, _) -> Chat.Response
 paseo_answer = |outcome|
 	match outcome {
 		Ok({}) => Accepted
-		Err(ToolFailed(reason)) => Rejected(reason)
+		Err(Refused(reason)) => Rejected(reason)
+		Err(HelloRejected(reason)) => Rejected(Paseo.refusal(reason))
 		Err(err) => Rejected("Paseo: ${Str.inspect(err)}")
 	}
+
+## How long the daemon waits after Paseo refused its password before asking
+## again, unless a poll watches something new or a send asks at once.
+refused_wait_ms : I64
+refused_wait_ms = 60_000
+
+## Why Paseo last refused liton, and when, until a connection succeeds.
+refusal! : Sqlite.Db => Try(Try({ reason : Str, at : I64 }, [NotRefused]), _)
+refusal! = |db| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'refusal';", params: {}, limits: Sqlite.default_query_limits })?
+	refused : Try({ reason : Str, at : I64 }, _)
+	refused = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(refused.map_err(|_| NotRefused))
+}
 
 ## A Paseo session's state from its last sync, and its JSON ("" before the first).
 state_of! : Sqlite.Db, Str => Try({ stored : Str, state : Paseo.State }, _)
@@ -650,12 +681,13 @@ store! = |db, session_id, stored, { state, events }| {
 ## status and, when due (see `PaseoGit.refresh`), its commits and diffs, then
 ## the commit files not cached yet. Nothing watched, no connection. A question
 ## that fails is logged and the next asked; a lost connection ends the cycle.
+## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
 paseo_cycle! : Context => Try({}, _)
 paseo_cycle! = |{ db, paseo, .. }|
 	match paseo {
 		Err(Disabled) => Ok({})
 		Ok(daemon) =>
-			if recently_checked!(db, "cycle")? {
+			if recently_checked!(db, "cycle", paseo_interval_ms)? or (refusal!(db)?.map_ok(|{ at, .. }| at + refused_wait_ms) ?? 0) > now_ms!() {
 				Ok({})
 			} else {
 				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: now_ms!() - interest_ms } })?
@@ -663,12 +695,17 @@ paseo_cycle! = |{ db, paseo, .. }|
 				wanted = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
 				if !wanted.is_empty() {
 					held!(db, now_ms!() + cycle_lease_ms)?
-					match connected!(daemon) {
+					match connected!(daemon, "liton-daemon") {
 						Ok(connection) => {
-							ordered = ["agent_list", "workspace_list", "timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
-							asked_each!(db, daemon, connection, ordered, 1)
+							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
+							ordered = ["agent_list", "workspace_list", "importable", "timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							asked_each!(db, connection, ordered, 1)
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
+						}
+						Err(HelloRejected(reason)) => {
+							logged!("Paseo: ${Paseo.refusal(reason)}. Asking again in ${(refused_wait_ms // 1000).to_str()} s.")
+							Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('refusal', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str({ reason, at: now_ms!() }) } })?
 						}
 						Err(err) => logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
 					}
@@ -683,46 +720,65 @@ paseo_cycle! = |{ db, paseo, .. }|
 held! : Sqlite.Db, I64 => Try({}, _)
 held! = |db, until| Sqlite.execute!({ db, query: "UPDATE paseo_checks SET checked_at = :until WHERE what = 'cycle';", params: { until } })
 
-## A WebSocket connection to Paseo, past its handshake and hello.
-connected! : PaseoDaemon => Try(Tcp.Connection, _)
-connected! = |daemon| {
+## A WebSocket connection to Paseo as `client_id`, once Paseo welcomed its
+## hello. The password goes both in the WebSocket protocol and in the hello
+## (see `Paseo.hello`). Paseo refusing it is `HelloRejected`.
+connected! : PaseoDaemon, Str => Try(Tcp.Connection, _)
+connected! = |daemon, client_id| {
 	connection = Tcp.connect!(daemon.host, daemon.port)?
-	connection.write_utf8!(WebSocket.handshake({ host: daemon.host, port: daemon.port, path: "/ws", protocol: "paseo.bearer.${daemon.password}", key: "bGl0b24tZGFlbW9uLWtleQ==" }))?
+	connection.write_utf8!(WebSocket.handshake({ host: daemon.host, port: daemon.port, path: "/ws", protocol: Paseo.protocol(daemon.password), key: "bGl0b24tZGFlbW9uLWtleQ==" }))?
 	status_line = connection.read_line!()?
 	if !WebSocket.accepted(status_line) {
 		return Err(HandshakeRefused(status_line.trim()))
 	}
 	skip_headers!(connection)?
-	connection.write!(WebSocket.text(Paseo.hello("liton-daemon"), websocket_mask))?
+	connection.write!(WebSocket.text(Paseo.hello(client_id, daemon.password), websocket_mask))?
+	greeted!(connection)?
 	Ok(connection)
 }
 
+## Waits for Paseo's welcome. Paseo 0.9, and 0.15 given a wrong password in
+## the WebSocket protocol, close with 4401 instead of rejecting the hello.
+greeted! : Tcp.Connection => Try({}, _)
+greeted! = |connection|
+	match message!(connection, []) {
+		Ok(received) =>
+			match Paseo.greeting(received) {
+				Welcomed => Ok({})
+				Rejected(reason) => Err(HelloRejected(reason))
+				NotGreeting => greeted!(connection)
+			}
+		Err(ClosedByPaseo({ code: 4401, reason })) => Err(HelloRejected(reason))
+		Err(err) => Err(err)
+	}
+
 ## Asks about each of `wanted` in turn, the `number`th first, until the
 ## connection is lost.
-asked_each! : Sqlite.Db, PaseoDaemon, Tcp.Connection, List({ kind : Str, subject : Str }), U64 => {}
-asked_each! = |db, daemon, connection, wanted, number|
+asked_each! : Sqlite.Db, Tcp.Connection, List({ kind : Str, subject : Str }), U64 => {}
+asked_each! = |db, connection, wanted, number|
 	match wanted.first() {
 		Err(_) => {}
 		Ok({ kind, subject }) =>
-			match asked!(db, daemon, connection, { kind, subject }, "liton-${number.to_str()}") {
+			match asked!(db, connection, { kind, subject }, "liton-${number.to_str()}") {
 				Err(ConnectionLost(err)) => logged!("Paseo: its WebSocket failed, asking about the ${kind} ${subject}: ${err}")
 				outcome => {
 					match outcome {
 						Ok({}) => {}
 						Err(err) => logged!("Paseo: asking about the ${kind} ${subject} failed: ${Str.inspect(err)}")
 					}
-					asked_each!(db, daemon, connection, wanted.drop_first(1), number + 1)
+					asked_each!(db, connection, wanted.drop_first(1), number + 1)
 				}
 			}
 	}
 
 ## Asks Paseo about one thing a poll watched, and keeps the answer.
-asked! : Sqlite.Db, PaseoDaemon, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
-asked! = |db, daemon, connection, { kind, subject }, request_id|
+asked! : Sqlite.Db, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
+asked! = |db, connection, { kind, subject }, request_id|
 	match kind {
 		"agent_list" => listed_agents!(db, connection, request_id)
 		"workspace_list" => listed_workspaces!(db, connection, request_id)
-		"timeline" => fetch!(db, daemon, connection, subject, request_id, 10)
+		"importable" => listed_importable!(db, connection, request_id)
+		"timeline" => fetch!(db, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, connection, subject, request_id)
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
 		"base" => diffed!(db, connection, subject, AgainstBase, request_id)
@@ -747,6 +803,30 @@ listed_workspaces! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
 listed_workspaces! = |db, connection, request_id| {
 	listed = PaseoWorkspaces.answer(exchange!(connection, PaseoWorkspaces.request(request_id), request_id)?, request_id)?
 	Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('workspaces', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+}
+
+## Keeps the sessions Paseo's providers keep, every `importable_interval_ms`
+## at most.
+listed_importable! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
+listed_importable! = |db, connection, request_id|
+	if recently_checked!(db, "importable", importable_interval_ms)? {
+		Ok({})
+	} else {
+		listed = Paseo.importable_answer(exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('importable', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+	}
+
+## The sessions Paseo's providers keep as the cycle last listed them (none
+## before), as JSON: each a chat.v1 session, read only, and its directory.
+importable! : Context => Try(Str, _)
+importable! = |context| {
+	if context.paseo.is_ok() {
+		wanted!(context.db, "importable", "")?
+		paseo_cycle!(context)?
+	}
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'importable';", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(rows.first().map_ok(|row| row.value) ?? "[]")
 }
 
 ## Sends a request, and answers the message that answers it, skipping
@@ -848,21 +928,24 @@ skip_headers! = |connection| if (connection.read_line!()?.trim() == "") Ok({}) e
 
 ## Fetches the page after a session's state and stores what it adds, again
 ## while Paseo has newer entries, `pages` times at most.
-fetch! : Sqlite.Db, PaseoDaemon, Tcp.Connection, Str, Str, U64 => Try({}, _)
-fetch! = |db, daemon, connection, session_id, request_id, pages| {
+fetch! : Sqlite.Db, Tcp.Connection, Str, Str, U64 => Try({}, _)
+fetch! = |db, connection, session_id, request_id, pages| {
 	known = state_of!(db, session_id)?
 	page_id = "${request_id}-page-${pages.to_str()}"
 	page = Paseo.timeline_page(exchange!(connection, Paseo.timeline_request(known.state, session_id, page_id), page_id)?, page_id)?
 	snapshot =
 		match page.agent {
 			Ok(agent) => agent
-			Err(Null) => Paseo.status_snapshot(mcp!(daemon, Paseo.agent_status(session_id))?)?
+			Err(Null) => {
+				agent_id = "${page_id}-agent"
+				Paseo.agent_snapshot(exchange!(connection, Paseo.agent_request(session_id, agent_id), agent_id)?, agent_id)?
+			}
 		}
 	updated = Paseo.update(known.state, page, snapshot)
 	if updated.state != known.state or !updated.events.is_empty() {
 		store!(db, session_id, known.stored, updated)?
 	}
-	if (page.has_newer and pages > 1) fetch!(db, daemon, connection, session_id, request_id, pages - 1) else Ok({})
+	if (page.has_newer and pages > 1) fetch!(db, connection, session_id, request_id, pages - 1) else Ok({})
 }
 
 ## The next text message, after `received` of its fragments, answering pings.
@@ -877,7 +960,7 @@ message! = |connection, received| {
 			connection.write!(WebSocket.frame(Pong, payload, websocket_mask))?
 			message!(connection, received)
 		}
-		Close => Err(ClosedByPaseo)
+		Close => Err(ClosedByPaseo(WebSocket.closed(payload)))
 		_ => message!(connection, received)
 	}
 }
