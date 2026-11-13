@@ -1,0 +1,26 @@
+(test "Liton — selecting a session polls for its timeline at once, one poll at a time"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 3)
+    (expect-pending-effects 0)
+    (click (role button :name "Fix tests"))
+    ; At once, not on the next tick.
+    (expect-pending-effects 1)
+    ; Another change while it is on its way waits for it, as does the tick.
+    (click (role button :name "Write docs"))
+    (tick-interval 1000)
+    (expect-pending-effects 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s2\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 4)
+    (expect-pending-effects 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 5)
+    (expect-pending-effects 0)
+    (tick-interval 1000)
+    (expect-pending-effects 1)
+  )
+)

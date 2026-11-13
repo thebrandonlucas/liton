@@ -1,29 +1,32 @@
 (test "Liton — a session waiting for permission is badged, and Allow answers it"
   (steps
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}],\"timelines\":[]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}]}]}]}")
     (run-effect 2)
     (expect-text (test-id "session-status") "idle")
     (expect-visible (text "waiting for you"))
     (expect-absent (role button :name "Allow"))
-    ; Selecting the session makes the chat follow it and poll for its timeline.
+    ; Selecting the session makes the chat follow it, and polls for its
+    ; timeline once the poll on its way, of the first session's, answers.
     (click (role button :name "Fix tests"))
     (expect-visible (text "following Fix tests"))
-    (expect-pending-effects 2)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s2\",\"entries\":[{\"event\":{\"PermissionRequested\":{\"description\":\"src/Main.roc\",\"request_id\":\"p1\",\"tool\":\"edit\"}},\"sequence\":1}]}]}")
+    (expect-pending-effects 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 3)
+    (expect-pending-effects 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s2\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"PermissionRequested\":{\"description\":\"src/Main.roc\",\"request_id\":\"p1\",\"tool\":\"edit\"}},\"sequence\":1}}]}]}")
     (run-effect 4)
     (expect-visible (text "Allow edit: src/Main.roc?"))
     (click (role button :name "Allow"))
     ; Shown before the daemon answers.
     (expect-absent (role button :name "Allow"))
     (expect-visible (text "Allowing…"))
-    ; The answer is a request of its own, beside the polls still waiting.
-    (expect-pending-effects 3)
-    (stub-http "answer" :url "/api/chat" :status 200 :body "\"Accepted\"")
-    (run-effect 6)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s2\",\"entries\":[{\"event\":{\"PermissionAnswered\":{\"allowed\":true,\"request_id\":\"p1\"}},\"sequence\":2}]}]}")
+    (expect-pending-effects 1)
+    (stub-http "answer" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
     (run-effect 5)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s2\",\"cursor\":\"2\",\"events\":[{\"Entry\":{\"event\":{\"PermissionAnswered\":{\"allowed\":true,\"request_id\":\"p1\"}},\"sequence\":2}}]}]}")
+    (run-effect 6)
     (expect-absent (role button :name "Allow"))
     (expect-absent (text "waiting for you"))
     (expect-visible (text "allowed"))

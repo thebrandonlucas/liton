@@ -1,16 +1,17 @@
 (test "Liton — a tool call and its result show as one card"
   (steps
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}],\"timelines\":[]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}]}]}]}")
     (run-effect 2)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s1\",\"entries\":[{\"event\":{\"ToolCall\":{\"call_id\":\"c1\",\"input\":\"zig build test\",\"tool\":\"bash\"}},\"sequence\":1}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"ToolCall\":{\"call_id\":\"c1\",\"input\":\"zig build test\",\"tool\":\"bash\"}},\"sequence\":1}}]}]}")
     (run-effect 3)
     (expect-text (test-id "tool-state") "running")
     (expect-visible (text "zig build test"))
     ; The result fills in its call's card: no entry of its own.
     (mark-metrics)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}],\"timelines\":[{\"session_id\":\"s1\",\"entries\":[{\"event\":{\"ToolResult\":{\"call_id\":\"c1\",\"failed\":true,\"output\":\"1 failed\"}},\"sequence\":2}]}]}")
+    (tick-interval 1000)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"2\",\"events\":[{\"Entry\":{\"event\":{\"ToolResult\":{\"call_id\":\"c1\",\"failed\":true,\"output\":\"1 failed\"}},\"sequence\":2}}]}]}")
     (run-effect 4)
     (expect-metric-delta rows_created 0)
     (expect-text (test-id "tool-state") "failed")

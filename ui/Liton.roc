@@ -6,6 +6,7 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.Protocol
 import cap.WorkspaceGit
 import Model
 import Widgets
@@ -65,76 +66,61 @@ Liton := [].{
 			].concat(Liton.effects(model)),
 		)
 
+	## Every request to the daemon is a call or a poll of /liton/v1
+	## (docs/protocol.md). One poll at a time follows every topic the panes
+	## show, each second and at once when what they show changes.
 	effects : State(Ctx, Model.State) -> List(Elem(Ctx))
 	effects = |model| [
 		Engine.watch(
 			Engine.const({}),
-			|_| [Http({ method: "GET", url: "/api/manifest", headers: [], body: "", timeout_ms: 5000 })],
+			|_| [Http({ method: "GET", url: "/liton/v1/manifest", headers: [], body: "", timeout_ms: 5000 })],
 			model.on_result(
 				|state, _, res| {
-					decoded : Try(Manifest.Advertised, _)
+					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
 					match decoded {
-						Ok(advertised) => Model.advertise(state, advertised)
+						Ok(offered) => Model.advertise(state, offered)
 						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
 			),
 		),
-		Engine.watch(Engine.const({}), |_| [Interval(1000)], model.on_result(|state, _, _| { ..state, ticks: state.ticks + 1 })),
-		Engine.watch(
-			model.signal().map(|state| { ticks: state.ticks, watches: Model.watches(state) }),
-			|asked| [Http({ method: "POST", url: "/api/chat/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ watches: asked.watches }), timeout_ms: 5000 })],
+		Engine.watch(Engine.const({}), |_| [Interval(1000)], model.on_result(|state, _, _| Model.tick(state))),
+		Engine.watch(model.signal().map(Model.subjects), |_| [Self], model.on_result(|state, _, _| Model.follow(state))),
+		Engine.watch_changes(
+			model.signal().map(|state| state.poll),
+			|poll| [Http({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout_ms: 10000 })],
 			model.on_result(
-				|state, _, res| {
-					decoded : Try(Chat.Polled, _)
+				|state, poll, res| {
+					decoded : Try(Protocol.Polled, _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
 					match decoded {
-						Ok(answer) => Model.polled(state, answer)
-						Err(_) => state
-					}
-				},
-			),
-		),
-		Engine.watch(
-			model.signal().map(|state| { ticks: state.ticks, advertised: state.capabilities.contains(Capability.attention_v1) }),
-			|asked| if (asked.advertised) [Http({ method: "GET", url: "/api/attention", headers: [], body: "", timeout_ms: 5000 })] else [],
-			model.on_result(
-				|state, asked, res| {
-					decoded : Try(List(Attention.Item), _)
-					decoded = Json.parse(Engine.http_text(res) ?? "")
-					match decoded {
-						Ok(items) => Model.attention_fetched(state, asked.ticks, items)
-						Err(_) => state
+						Ok(answer) => Model.polled(state, poll, answer.topics)
+						Err(_) => Model.poll_failed(state)
 					}
 				},
 			),
 		),
 		Engine.watch_changes(
 			model.signal().map(|state| state.attention_outbox),
-			|outbox| [Http({ method: "POST", url: "/api/attention", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
+			|outbox| [Liton.call(Json.to_str({ capability: "attention.v1", request: outbox.request }))],
 			model.on_result(
 				|state, outbox, res| {
-					decoded : Try(Attention.Response, _)
+					decoded : Try(Protocol.Answer(Attention.Response), _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
-					Model.set_aside_answered(state, outbox.serial, decoded ?? Rejected("The daemon did not answer."))
+					Model.set_aside_answered(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
 		),
 		Engine.watch(model.signal().map(Model.needs_you), |count| [Title(if (count == 0) "liton" else "(${count.to_str()}) liton")], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.outbox),
-			|outbox| [Http({ method: "POST", url: "/api/chat", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
+			|outbox| [Liton.call(Json.to_str({ capability: "chat.v1", request: outbox.request }))],
 			model.on_result(
 				|state, outbox, res| {
-					decoded : Try(Chat.Response, _)
+					decoded : Try(Protocol.Answer(Chat.Response), _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
-					match decoded {
-						Ok(Rejected(reason)) => Model.refused(state, outbox.serial, reason)
-						# Polls at once for what the request changed.
-						Ok(_) => { ..state, ticks: state.ticks + 1 }
-						Err(_) => Model.refused(state, outbox.serial, "The daemon did not answer.")
-					}
+					Model.called(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
 		),
@@ -145,6 +131,10 @@ Liton := [].{
 			Engine.ignore({}),
 		),
 	]
+
+	## A call, its JSON `body` naming the capability and holding the request.
+	call : Str -> Engine.Request
+	call = |body| Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout_ms: 5000 })
 
 	toolbar : State(Ctx, Model.State) -> Elem(Ctx)
 	toolbar = |model|
@@ -696,8 +686,8 @@ Liton := [].{
 	}
 
 	## The git of the session a pane shows: its branch, the files of the scope
-	## picked, the diff of the file picked and the branch's commits. It polls
-	## only while it is on screen.
+	## picked, the diff of the file picked and the branch's commits. Polls
+	## follow them only while it is on screen (see `Model.subjects`).
 	changes : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	changes = |model, id, pane| {
 		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
@@ -708,7 +698,6 @@ Liton := [].{
 		Html.div(
 			"changes",
 			[
-				Engine.when(id.map2(model.signal(), |pane_id, state| Model.pane_visible(state, pane_id)), || Liton.git_polls(model, id), || Engine.text("")),
 				Engine.switch(
 					shown.map(|{ pane: pane_shown, state }| Model.git_shown(state, pane_shown)),
 					[NoSession, Loading, Unreadable, NotGit, Shown],
@@ -790,33 +779,6 @@ Liton := [].{
 	## from ever finishing; not reported upstream yet.
 	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
 	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
-
-	## A visible Changes pane's polls: every 2 s, and at once when it shows
-	## another session, scope or file.
-	git_polls : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	git_polls = |model, id|
-		Html.div(
-			"git-polls",
-			[
-				Engine.watch(id, |_| [Interval(2000)], model.on_result(|state, pane_id, _| Model.ask_git(state, pane_id))),
-				Engine.watch(
-					id.map2(model.signal(), |pane_id, state| { pane_id, session_id: Model.session_of(state, Model.pane(state, pane_id)), scope: Model.git_pane(state, pane_id).scope, file: Model.git_pane(state, pane_id).file }),
-					|_| [Self],
-					model.on_result(|state, asked, _| Model.ask_git(state, asked.pane_id)),
-				),
-				Engine.watch_changes(
-					id.map2(model.signal(), |pane_id, state| { serial: Model.git_pane(state, pane_id).serial, poll: Model.git_pane(state, pane_id).poll }),
-					|asked| [Http({ method: "POST", url: "/api/git/poll", headers: [("Content-Type", "application/json")], body: Json.to_str(asked.poll), timeout_ms: 10000 })],
-					model.on_result(
-						|state, asked, res| {
-							decoded : Try(WorkspaceGit.Polled, _)
-							decoded = Json.parse(Engine.http_text(res) ?? "")
-							Model.git_polled(state, asked.poll, decoded ?? WorkspaceGit.unknown(asked.poll))
-						},
-					),
-				),
-			],
-		)
 
 	## A changed file: its path, which picks it, how it changed and by how many
 	## lines.
@@ -980,13 +942,16 @@ Liton := [].{
 			TooLarge => "Too large"
 		}
 
+	## The providers and transformers, each with what it offers.
 	capabilities : State(PaneCtx, Model.State) -> Elem(PaneCtx)
 	capabilities = |model|
 		Html.pre_s(
 			model.signal().map(
 				|state|
 					Str.join_with(
-						state.providers.map(|provider| "${provider.name} (${provider.id})\n${Str.join_with(provider.capabilities.map(|id| "  ${id.name}.v${id.version.to_str()}"), "\n")}"),
+						state.providers
+							.map(|provider| "${provider.name} (${provider.id})\n${Str.join_with(provider.capabilities.map(|id| "  ${Capability.to_str(id)}"), "\n")}")
+							.concat(state.transformers.map(|transformer| "${transformer.name} (${transformer.id})\n  ${Capability.to_str(transformer.offers)} from ${Str.join_with(transformer.uses.map(Capability.to_str), ", ")}")),
 						"\n\n",
 					),
 			),

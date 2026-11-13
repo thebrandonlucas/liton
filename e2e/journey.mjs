@@ -46,7 +46,7 @@ const until = async (what, test, timeout = 10000) => {
 
 try {
   const base = `http://127.0.0.1:${port}`;
-  await until("the manifest", async () => (await fetch(`${base}/api/manifest`)).ok);
+  await until("the manifest", async () => (await fetch(`${base}/liton/v1/manifest`)).ok);
 
   const browser = await launch({ executablePath: process.env.CHROME || "chromium" });
   const page = await browser.newPage();

@@ -1,10 +1,11 @@
 (test "Liton — the Developer preset lists the sessions once the daemon answers"
   (steps
+    ; The manifest, and the first poll, of the sessions.
     (expect-pending-effects 2)
     (expect-visible (text "Connecting to the daemon…"))
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"},{\"agent\":\"codex\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"}],\"timelines\":[]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"},{\"agent\":\"codex\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"}]}]}]}")
     (run-effect 2)
     (expect-visible (role region :name "Sessions"))
     (expect-visible (role region :name "Chat"))

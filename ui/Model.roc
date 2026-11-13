@@ -4,6 +4,7 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.Protocol
 import cap.WorkspaceGit
 import Widgets
 
@@ -45,6 +46,7 @@ Model := [].{
 	State : {
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
+		transformers : List(Manifest.Transformer),
 		sessions : List(Chat.Session),
 		timelines : List(Timeline),
 		focus : Str,
@@ -67,33 +69,39 @@ Model := [].{
 		attention : List(Attention.Item),
 
 		## A settle or snooze sent, shown until the daemon's items show it, or
-		## until the first fetch after the tick the daemon `accepted` it on (0
-		## while it waits).
+		## until the poll numbered `accepted` answers, the first sent after the
+		## daemon accepted it (0 while it waits).
 		setting_aside : List({ serial : U64, session_id : Str, set_aside : [No, Settled, Snoozed], accepted : U64 }),
 		attention_outbox : { serial : U64, request : Attention.Request },
 
-		## Counts each second, and each request the daemon accepts, so the UI
-		## polls again.
-		ticks : U64,
+		## The last poll sent, while `polling`, and whether another is to
+		## follow it at once; the cursor of each topic polled.
+		poll : Poll,
+		polling : Bool,
+		poll_again : Bool,
+		cursors : List({ capability : Str, topic : Str, cursor : Str }),
 		notice : Str,
 		show_settings : Bool,
 		snapshot_text : Str,
 
-		## What git polls answered of each session: its workspace, status and
+		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
 		git : List(Git),
 		git_changes : List({ session_id : Str, changes : WorkspaceGit.Changes }),
 		git_hunks : List({ session_id : Str, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk) }),
 
-		## What each Changes pane shows, and the last poll it sent, counted by
-		## `serial` so each is new.
+		## What each Changes pane shows.
 		git_panes : List(GitPane),
 	}
 
+	## A poll of `subjects`, numbered by `serial`, as `topics` after the
+	## cursors the UI had.
+	Poll : { serial : U64, subjects : List(Protocol.Subject), topics : List(Protocol.Wanted) }
+
 	Git : { session_id : Str, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
-	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], serial : U64, poll : WorkspaceGit.Poll }
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
 
 	## The Developer preset, the default: a Workbench of sessions, the chat
 	## following the focus, and the focused session's changes beside what the
@@ -133,6 +141,7 @@ Model := [].{
 			{
 				capabilities: [],
 				providers: [],
+				transformers: [],
 				sessions: [],
 				timelines: [],
 				focus: "",
@@ -148,7 +157,10 @@ Model := [].{
 				attention: [],
 				setting_aside: [],
 				attention_outbox: { serial: 0, request: ListItems },
-				ticks: 0,
+				poll: { serial: 0, subjects: [], topics: [] },
+				polling: Bool.False,
+				poll_again: Bool.False,
+				cursors: [],
 				notice: "",
 				show_settings: Bool.False,
 				snapshot_text: "",
@@ -215,8 +227,8 @@ Model := [].{
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
-	advertise : State, Manifest.Advertised -> State
-	advertise = |state, advertised| { ..state, providers: advertised.providers, capabilities: Manifest.capabilities(advertised) }
+	advertise : State, Manifest.Offered -> State
+	advertise = |state, offered| { ..state, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
 	## Every pane, column by column.
 	panes : State -> List(Pane)
@@ -422,38 +434,117 @@ Model := [].{
 	last_sequence : State, Str -> U64
 	last_sequence = |state, session_id| Model.entries(state, session_id).last().map_ok(|entry| entry.sequence) ?? 0
 
-	## What one poll asks for: each session a chat pane shows, after the last
-	## event the UI has of it.
-	watches : State -> List({ session_id : Str, after : U64 })
-	watches = |state| {
-		shown =
-			Model.panes(state)
-				.keep_if(|candidate| candidate.widget == "chat")
-				.map(|candidate| Model.session_of(state, candidate))
-				.drop_if(|session_id| session_id.is_empty())
-		unique = shown.fold([], |found, session_id| if (found.contains(session_id)) found else found.append(session_id))
-		unique.map(|session_id| { session_id, after: Model.last_sequence(state, session_id) })
+	## The topics the panes follow: the sessions; the timeline of each session
+	## a chat pane shows; the attention items while the layout has an inbox;
+	## and, of each Changes pane on screen, its scope's changes and the hunks
+	## of the file it shows. Until the manifest arrives, every capability
+	## counts as offered.
+	subjects : State -> List(Protocol.Subject)
+	subjects = |state| {
+		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
+		laid_out = Model.panes(state)
+		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty()).map(|session_id| Timeline(session_id))
+		items = if (offered(Capability.attention_v1) and laid_out.any(|shown| shown.widget == "inbox")) [Items] else []
+		git = |shown| {
+			context = Session(Model.session_of(state, shown))
+			{ scope, file, .. } = Model.git_pane(state, shown.id)
+			match file {
+				Selected(path) => [Changes({ context, scope }), File({ context, scope, path })]
+				NoFile => [Changes({ context, scope })]
+			}
+		}
+		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and !Model.session_of(state, shown).is_empty()).join_map(git) else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes)
+		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
-	## Takes a poll's answer: the sessions, and the events after those the UI
-	## already has, so overlapping polls add nothing twice.
-	polled : State, Chat.Polled -> State
-	polled = |state, answer| {
-		merged = answer.timelines.fold(
-			state.timelines,
-			|timelines, { session_id, entries: fresh }| {
-				after = Model.last_sequence({ ..state, timelines }, session_id)
-				added = fresh.keep_if(|entry| entry.sequence > after)
-				if (timelines.any(|timeline| timeline.session_id == session_id))
-					timelines.map(|timeline| if (timeline.session_id == session_id) { ..timeline, entries: timeline.entries.concat(added) } else timeline)
-				else
-					timelines.append({ session_id, entries: added })
+	## Sends a poll of what the panes follow, each topic after the cursor the
+	## UI has, unless a poll is on its way: then another follows it.
+	poll : State -> State
+	poll = |state| {
+		followed = Model.subjects(state)
+		topics = followed.map(
+			|subject| {
+				{ capability, topic } = Protocol.named(subject)
+				{ capability, topic, after: state.cursors.find_first(|known| known.capability == capability and known.topic == topic).map_ok(|known| known.cursor) ?? "" }
 			},
 		)
-		focus = if (state.focus.is_empty()) (answer.sessions.first().map_ok(|first| first.id) ?? "") else state.focus
-		settled = { ..state, sessions: answer.sessions, timelines: merged, focus }
-		{ ..settled, sent: settled.sent.drop_if(|sent| Model.confirmed(settled, sent)) }
+		if (state.polling)
+			{ ..state, poll_again: Bool.True }
+		else if (followed.is_empty())
+			state
+		else
+			{ ..state, poll: { serial: state.poll.serial + 1, subjects: followed, topics }, polling: Bool.True, poll_again: Bool.False }
 	}
+
+	## Polls each second, unless a poll is still on its way.
+	tick : State -> State
+	tick = |state| if (state.polling) state else Model.poll(state)
+
+	## Polls at once when the topics the panes follow change, or once the
+	## poll on its way answers.
+	follow : State -> State
+	follow = |state| if (state.polling and state.poll.subjects == Model.subjects(state)) state else Model.poll(state)
+
+	## Takes a poll's answer, each topic's in the order asked: its events and
+	## cursor. Then sends the poll asked for meanwhile, if any.
+	polled : State, Poll, List(Protocol.Update) -> State
+	polled = |state, sent, updates| {
+		applied = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
+			state,
+			|so_far, (subject, update)|
+				match subject {
+					Ok(followed) if Protocol.named(followed).topic == update.topic and update.error.is_err() => Model.updated(so_far, sent.serial, followed, update)
+					_ => so_far
+				},
+		)
+		focus = if (applied.focus.is_empty()) (applied.sessions.first().map_ok(|first| first.id) ?? "") else applied.focus
+		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
+		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)) }
+		if (state.poll_again) Model.poll(answered) else answered
+	}
+
+	## A poll that failed asks again with the next.
+	poll_failed : State -> State
+	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False }) else { ..state, polling: Bool.False }
+
+	## Takes a topic's update from the poll numbered `serial`.
+	updated : State, U64, Protocol.Subject, Protocol.Update -> State
+	updated = |state, serial, subject, { capability, topic, cursor, events, .. }| {
+		cursors = state.cursors.drop_if(|known| known.capability == capability and known.topic == topic).append({ capability, topic, cursor })
+		received = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		match subject {
+			Timeline(session_id) if !received.timelines.any(|timeline| timeline.session_id == session_id) => { ..received, timelines: received.timelines.append({ session_id, entries: [] }) }
+			# Unchanged items still settle what was set aside.
+			Items => Model.attention_fetched(received, serial, received.attention)
+			_ => received
+		}
+	}
+
+	## Takes a topic's event: a timeline's entries after those the UI has, or
+	## a snapshot's value.
+	received : State, Protocol.Subject, Protocol.Event -> State
+	received = |state, subject, event|
+		match (subject, event) {
+			(_, Sessions(sessions)) => { ..state, sessions }
+			(Timeline(session_id), Entry(entry)) =>
+				if (entry.sequence <= Model.last_sequence(state, session_id))
+					state
+				else if (state.timelines.any(|timeline| timeline.session_id == session_id))
+					{ ..state, timelines: state.timelines.map(|timeline| if (timeline.session_id == session_id) { ..timeline, entries: timeline.entries.append(entry) } else timeline) }
+				else
+					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
+			(_, Items(items)) => { ..state, attention: items }
+			(Changes({ context: Session(session_id), .. }), Changes({ workspace, status, changes, commits })) =>
+				{
+					..state,
+					git: state.git.drop_if(|known| known.session_id == session_id).append({ session_id, workspace, status, commits }),
+					git_changes: state.git_changes.drop_if(|known| known.session_id == session_id and known.changes.scope == changes.scope).append({ session_id, changes }),
+				}
+			(File({ context: Session(session_id), scope, .. }), File({ path, hunks })) =>
+				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.session_id == session_id and known.scope == scope and known.path == path).append({ session_id, scope, path, hunks }) }
+			_ => state
+		}
 
 	## Whether a sent request's session's timeline shows it.
 	confirmed : State, Sent -> Bool
@@ -492,6 +583,16 @@ Model := [].{
 		sent = state.sent.drop_if(answer).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
 		{ ..state, sent, notice: reason }
 	}
+
+	## Takes the daemon's answer to a chat request: accepted, it polls for what
+	## the request changed.
+	called : State, U64, Protocol.Answer(Chat.Response) -> State
+	called = |state, serial, answered|
+		match answered {
+			Ok(Rejected(reason)) => Model.refused(state, serial, reason)
+			Ok(_) => Model.poll(state)
+			Err({ message, .. }) => Model.refused(state, serial, message)
+		}
 
 	## Sends a failed message again.
 	retry : State, Str -> State
@@ -573,11 +674,17 @@ Model := [].{
 	later : State -> List(Attention.Item)
 	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
 
-	## How many items need you, as the document title and the inbox's tab show.
+	## How many items need you, as the document title and the inbox's tab
+	## show. Without an inbox, whose items the UI follows, the sessions that
+	## wait for you.
 	needs_you : State -> U64
-	needs_you = |state| Model.waiting(state, NeedsYou).len()
+	needs_you = |state|
+		if (Model.panes(state).any(|shown| shown.widget == "inbox"))
+			Model.waiting(state, NeedsYou).len()
+		else
+			state.sessions.keep_if(|listed| listed.status == AwaitingPermission).len()
 
-	## Takes the items a fetch issued at tick `asked` answered.
+	## Takes the items the poll numbered `asked` answered.
 	attention_fetched : State, U64, List(Attention.Item) -> State
 	attention_fetched = |state, asked, items| {
 		shown = |aside| (aside.accepted > 0 and aside.accepted <= asked) or items.any(|item| item.session_id == aside.session_id and item.set_aside == aside.set_aside)
@@ -612,12 +719,12 @@ Model := [].{
 		}
 
 	## Takes the daemon's answer to a settle or snooze: accepted, it holds until
-	## the next fetch shows it; refused, the item comes back, with why.
-	set_aside_answered : State, U64, Attention.Response -> State
-	set_aside_answered = |state, serial, response|
-		match response {
-			Rejected(reason) => { ..state, setting_aside: state.setting_aside.drop_if(|aside| aside.serial == serial), notice: reason }
-			_ => { ..state, ticks: state.ticks + 1, setting_aside: state.setting_aside.map(|aside| if (aside.serial == serial) { ..aside, accepted: state.ticks + 1 } else aside) }
+	## the poll it asks for shows it; refused, the item comes back, with why.
+	set_aside_answered : State, U64, Protocol.Answer(Attention.Response) -> State
+	set_aside_answered = |state, serial, answered|
+		match answered {
+			Ok(Rejected(reason)) | Err({ message: reason, .. }) => { ..state, setting_aside: state.setting_aside.drop_if(|aside| aside.serial == serial), notice: reason }
+			Ok(_) => Model.poll({ ..state, setting_aside: state.setting_aside.map(|aside| if (aside.serial == serial) { ..aside, accepted: state.poll.serial + 1 } else aside) })
 		}
 
 	## The latest permission request of an item that no answer on its way
@@ -664,48 +771,15 @@ Model := [].{
 
 	## A Changes pane shows uncommitted changes and no file until picked.
 	git_pane : State, Str -> GitPane
-	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, serial: 0, poll: { session_id: "", scope: Uncommitted, known: "", file: NoFile } }
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile }
 
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
 
-	## Shows a scope, or a file of it, in a Changes pane at once; the poll that
-	## follows brings what the UI doesn't have yet.
+	## Shows a scope, or a file of it, in a Changes pane at once; the poll it
+	## sends at once brings what the UI doesn't have yet.
 	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
 	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
-
-	## Sends a Changes pane's poll of the session, scope and file it shows, with
-	## the fingerprint of the changes the UI has of them.
-	ask_git : State, Str -> State
-	ask_git = |state, pane_id| {
-		shown = Model.git_pane(state, pane_id)
-		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		known = Model.git_changes_of(state, session_id, shown.scope).map_ok(|changes| changes.fingerprint) ?? ""
-		if (session_id.is_empty()) state else Model.set_git_pane(state, { ..shown, serial: shown.serial + 1, poll: { session_id, scope: shown.scope, known, file: shown.file } })
-	}
-
-	## Takes a git poll's answer. `Unchanged` keeps the changes the UI has, and
-	## changed ones drop their scope's old hunks.
-	git_polled : State, WorkspaceGit.Poll, WorkspaceGit.Polled -> State
-	git_polled = |state, poll, reply| {
-		session_id = poll.session_id
-		git = state.git.drop_if(|known| known.session_id == session_id).append({ session_id, workspace: reply.workspace, status: reply.status, commits: reply.commits })
-		scoped = |known| known.session_id == session_id and known.scope == poll.scope
-		changed =
-			match reply.changes {
-				Changed(changes) => { ..state, git_changes: state.git_changes.drop_if(|known| known.session_id == session_id and known.changes.scope == changes.scope).append({ session_id, changes }), git_hunks: state.git_hunks.drop_if(scoped) }
-				Unchanged => state
-			}
-		hunks =
-			match reply.file {
-				Hunks(shown) => shown.hunks
-				NoFile => []
-			}
-		match poll.file {
-			Selected(path) => { ..changed, git, git_hunks: changed.git_hunks.drop_if(|known| scoped(known) and known.path == path).append({ session_id, scope: poll.scope, path, hunks }) }
-			NoFile => { ..changed, git }
-		}
-	}
 
 	git_changes_of : State, Str, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
 	git_changes_of = |state, session_id, scope| state.git_changes.find_first(|known| known.session_id == session_id and known.changes.scope == scope).map_ok(|known| known.changes)
@@ -819,16 +893,28 @@ Model := [].{
 	}
 }
 
-expect {
-	state = Model.initial("")
-	Model.watches({ ..state, focus: "a" }) == [{ session_id: "a", after: 0 }]
-}
-
+# A Changes pane's git is followed only while it is on screen.
 expect {
 	state = { ..Model.initial(""), focus: "a" }
-	answer = { sessions: [], timelines: [{ session_id: "a", entries: [{ sequence: 1, event: StatusChanged(Running) }] }] }
-	twice = Model.polled(Model.polled(state, answer), answer)
-	Model.entries(twice, "a").len() == 1 and Model.watches(twice) == [{ session_id: "a", after: 1 }]
+	Model.subjects(state) == [Sessions, Timeline("a"), Changes({ context: Session("a"), scope: Uncommitted })] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a")]
+}
+
+# A poll follows each topic after its cursor, and takes an entry it has once.
+expect {
+	sent = Model.poll({ ..Model.initial(""), focus: "a" })
+	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
+	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
+	answered = Model.polled(sent, sent.poll, answer)
+	again = Model.poll(answered)
+	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]
+}
+
+# One poll at a time: what is asked meanwhile is sent once it answers.
+expect {
+	sent = Model.poll({ ..Model.initial(""), focus: "a" })
+	meanwhile = Model.follow({ ..sent, focus: "b" })
+	answered = Model.polled(meanwhile, sent.poll, [])
+	Model.tick(sent).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
 }
 
 expect {

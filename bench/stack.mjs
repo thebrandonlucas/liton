@@ -110,7 +110,7 @@ export async function start_liton({ repo, scratch, log, www }) {
   });
   child.stdout.pipe(log);
   child.stderr.pipe(log);
-  await until("liton's manifest", async () => (await fetch(`http://127.0.0.1:${ports.liton}/api/manifest`)).ok, 30000, 100);
+  await until("liton's manifest", async () => (await fetch(`http://127.0.0.1:${ports.liton}/liton/v1/manifest`)).ok, 30000, 100);
   return { child };
 }
 

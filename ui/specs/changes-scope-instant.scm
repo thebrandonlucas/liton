@@ -1,21 +1,19 @@
 (test "Liton — switching the Changes pane's scope shows at once, loading until answered, then cached"
   (steps
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}]}]}]}")
     (run-effect 2)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}],\"timelines\":[{\"session_id\":\"fix-auth\",\"entries\":[]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/Uncommitted\",\"cursor\":\"g1\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"Uncommitted\",\"fingerprint\":\"f1\",\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"}]},\"commits\":[]}}]}]}")
     (run-effect 3)
-    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"}],\"fingerprint\":\"f1\",\"scope\":\"Uncommitted\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
-    (run-effect 4)
     (click (role button :name "Against base"))
-    ; Switched before the daemon answers.
+    ; Switched before the daemon answers, and asked for at once.
     (expect-attr (role button :name "Against base") aria-pressed "true")
     (expect-visible (text "Loading…"))
     (expect-absent (role button :name "src/Auth.roc"))
     (expect-pending-effects 1)
-    (stub-http "git" :url "/api/git/poll" :status 200 :body "{\"changes\":{\"Changed\":{\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"},{\"additions\":3,\"body\":\"Text\",\"change\":\"Added\",\"deletions\":0,\"path\":\"tests/Auth.roc\"}],\"fingerprint\":\"f2\",\"scope\":\"AgainstBase\"}},\"file\":\"NoFile\",\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"commits\":[]}")
-    (run-effect 5)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/AgainstBase\",\"cursor\":\"g2\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"AgainstBase\",\"fingerprint\":\"f2\",\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"},{\"additions\":3,\"body\":\"Text\",\"change\":\"Added\",\"deletions\":0,\"path\":\"tests/Auth.roc\"}]},\"commits\":[]}}]}]}")
+    (run-effect 4)
     (expect-visible (role button :name "tests/Auth.roc"))
     (expect-visible (text "added"))
     ; Back to uncommitted, its files show from the cache while it asks again.

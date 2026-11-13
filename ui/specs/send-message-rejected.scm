@@ -1,13 +1,13 @@
 (test "Liton — a message the daemon rejects stays, failed with why, and Retry sends it again"
   (steps
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (stub-http "poll" :url "/api/chat/poll" :status 200 :body "{\"sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}],\"timelines\":[]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
     (run-effect 2)
     (fill (label "Message") "Find the TODOs")
     (click (role button :name "Send"))
     (expect-text (test-id "sent-status") "Sending…")
-    (stub-http "send" :url "/api/chat" :status 200 :body "{\"Rejected\":\"no session s1\"}")
+    (stub-http "send" :url "/liton/v1/call" :status 200 :body "{\"Err\":{\"code\":\"NotFound\",\"message\":\"no session s1\"}}")
     (run-effect 4)
     (expect-visible (text "Find the TODOs"))
     (expect-text (test-id "sent-status") "Not sent: no session s1")

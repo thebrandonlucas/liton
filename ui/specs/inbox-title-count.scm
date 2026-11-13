@@ -1,10 +1,17 @@
-(test "Liton — the document title counts what needs you"
+(test "Liton — the document title counts the sessions waiting for you, and with an inbox, its items that need you"
   (steps
-    (stub-http "manifest" :url "/api/manifest" :status 200 :body "{\"protocol\":1,\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"attention\",\"version\":1}],\"id\":\"liton\",\"name\":\"liton\"}]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[{\"id\":\"attention\",\"name\":\"Attention\",\"offers\":{\"name\":\"attention\",\"version\":1},\"uses\":[{\"name\":\"chat\",\"version\":1}]}],\"topics\":[]}")
     (run-effect 1)
     (expect-document-title "liton")
-    (stub-http "attention" :url "/api/attention" :status 200 :body "[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 3\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s2\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s3\",\"set_aside\":\"Settled\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Scratch\"}]")
-    (run-effect 3)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s3\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 2)
     (expect-document-title "(2) liton")
+    (click (role button :name "Settings"))
+    (click (role button :name "Inbox preset"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 3)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s2\",\"set_aside\":\"Settled\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s3\",\"set_aside\":\"No\",\"signature\":\"Idle 1\",\"state\":\"Idle\",\"summary\":\"\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 4)
+    (expect-document-title "(1) liton")
   )
 )
