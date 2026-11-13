@@ -31,6 +31,10 @@ Chat := [].{
 
 	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str)]
 
+	## A session a provider keeps but doesn't run, such as a sandboxed agent's,
+	## read only, and the directory it worked in.
+	Importable : { session : Session, directory : Str }
+
 	## For clients that cannot hold a stream open: one request lists the
 	## sessions and fetches several timelines, each after the last sequence
 	## number the client has.

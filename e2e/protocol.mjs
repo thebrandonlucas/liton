@@ -60,7 +60,8 @@ try {
     assert.equal(manifest.protocol, 1);
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock"]);
     assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
-    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>"]);
+    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable"]);
+    assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
   });
   await step("each capability answers a call", async () => {
     assert.ok((await call("chat.v1", "ListSessions")).Ok.Sessions.some((s) => s.id === "flaky-ci"));
@@ -85,15 +86,19 @@ try {
       { capability: "attention.v1", topic: "items", after: "" },
       { capability: "workspaces.v1", topic: "list", after: "" },
       { capability: "workspace.git.v1", topic: "changes/fix-auth/Uncommitted", after: "" },
+      { capability: "workspace.git.v1", topic: "file/fix-auth/Uncommitted/src%2FAuth.roc", after: "" },
+      { capability: "chat.v1", topic: "importable", after: "" },
       { capability: "chat.v1", topic: "nothing", after: "" },
     ];
     const first = (await post("poll", { topics })).topics;
-    assert.deepEqual(first.map((t) => t.events.length), [1, 6, 1, 1, 1, 0]);
+    assert.deepEqual(first.map((t) => t.events.length), [1, 6, 1, 1, 1, 1, 1, 0]);
     assert.equal(first[1].cursor, "6");
     assert.equal(first[4].events[0].Changes.changes.files[0].path, "src/Auth.roc");
-    assert.equal(first[5].error.code, "NotFound");
+    assert.deepEqual([first[5].events[0].File.path, first[5].events[0].File.hunks[0].old_start], ["src/Auth.roc", 40]);
+    assert.deepEqual(first[6].events[0], { Importable: [] });
+    assert.equal(first[7].error.code, "NotFound");
     const again = (await post("poll", { topics: first.map(({ capability, topic, cursor }) => ({ capability, topic, after: cursor })) })).topics;
-    assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
   });
   await step("the liton CLI prints the manifest and answers, and exits 1 on an error", async () => {

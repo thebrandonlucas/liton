@@ -119,15 +119,22 @@ events when nothing changed:
 |---|---|---|---|
 | `chat.v1` | `sessions` | snapshot | `{"Sessions": [Session]}` |
 | `chat.v1` | `timeline/<session_id>` | append-only | `{"Entry": {"sequence", "event"}}`, one per entry |
+| `chat.v1` | `importable` | snapshot | `{"Importable": [{"session", "directory"}]}` |
 | `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, ranked |
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
+| `workspace.git.v1` | `file/<context>/<scope>/<path>` | snapshot | `{"File": {"path", "hunks"}}` |
 
-A `changes` context is a session id, or `workspace:<id>`; its scope is
-`Uncommitted`, `AgainstBase` or `Commit:<sha>`. Its event holds the workspace
-(`Unknown` while it can't be read), its status, the scope's changed files with
-their `fingerprint`, and the branch's commits; a file's hunks are not on the
-protocol yet.
+`importable` lists the sessions a provider keeps but doesn't run, such as a
+sandboxed agent's, read only, each with the directory it worked in.
+
+A `changes` or `file` context is a session id, or `workspace:<id>`; its scope
+is `Uncommitted`, `AgainstBase` or `Commit:<sha>`. A `changes` event holds the
+workspace (`Unknown` while it can't be read), its status, the scope's changed
+files with their `fingerprint`, and the branch's commits. A `file` event holds
+the hunks of one of those files, none when the scope has no such file; its path
+is written with `%` as `%25` and `/` as `%2F`, so `src/Auth.roc` is
+`file/fix-auth/Uncommitted/src%2FAuth.roc`.
 
 A cursor is opaque to the client: for an append-only topic the last sequence
 number, for a snapshot topic a fingerprint of its value, whose one event is the

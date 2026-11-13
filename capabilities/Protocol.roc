@@ -35,7 +35,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -43,17 +43,18 @@ Protocol := [].{
 
 	Polled : { topics : List(Update) }
 
-	## What a topic follows. A `Changes` scope is named `Uncommitted`,
-	## `AgainstBase` or `Commit:<sha>`.
-	Subject : [Sessions, Timeline(Str), Items, WorkspaceList, Changes({ context : Context.Id, scope : WorkspaceGit.Scope })]
+	## What a topic follows. A `Changes` or `File` scope is named
+	## `Uncommitted`, `AgainstBase` or `Commit:<sha>`, and a `File` path is
+	## written with its `%` as `%25` and its `/` as `%2F`.
+	Subject : [Sessions, Timeline(Str), Importable, Items, WorkspaceList, Changes({ context : Context.Id, scope : WorkspaceGit.Scope }), File({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str })]
 
 	## The topics of each capability, as the manifest lists them.
 	topics : List(Manifest.Topics)
 	topics = [
-		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>"] },
+		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>", "importable"] },
 		{ capability: Capability.attention_v1, patterns: ["items"] },
 		{ capability: Capability.workspaces_v1, patterns: ["list"] },
-		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>"] },
+		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -83,9 +84,11 @@ Protocol := [].{
 			match Capability.to_str(id) {
 				"chat.v1" if topic == "sessions" => Ok(Sessions)
 				"chat.v1" if topic.starts_with("timeline/") and topic != "timeline/" => Ok(Timeline(topic.drop_prefix("timeline/")))
+				"chat.v1" if topic == "importable" => Ok(Importable)
 				"attention.v1" if topic == "items" => Ok(Items)
 				"workspaces.v1" if topic == "list" => Ok(WorkspaceList)
 				"workspace.git.v1" if topic.starts_with("changes/") => changes_subject(topic.drop_prefix("changes/"))
+				"workspace.git.v1" if topic.starts_with("file/") => file_subject(topic.drop_prefix("file/"))
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -97,19 +100,13 @@ Protocol := [].{
 		match followed {
 			Sessions => { capability: "chat.v1", topic: "sessions" }
 			Timeline(session_id) => { capability: "chat.v1", topic: "timeline/${session_id}" }
+			Importable => { capability: "chat.v1", topic: "importable" }
 			Items => { capability: "attention.v1", topic: "items" }
 			WorkspaceList => { capability: "workspaces.v1", topic: "list" }
-			Changes({ context, scope }) => {
-				focus = match context {
-					Session(session_id) => session_id
-					Workspace(workspace_id) => "workspace:${workspace_id}"
-				}
-				scope_name = match scope {
-					Uncommitted => "Uncommitted"
-					AgainstBase => "AgainstBase"
-					Commit(sha) => "Commit:${sha}"
-				}
-				{ capability: "workspace.git.v1", topic: "changes/${focus}/${scope_name}" }
+			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
+			File({ context, scope, path }) => {
+				escaped = Str.join_with(path.split_on("%").map(|part| Str.join_with(part.split_on("/"), "%2F")), "%25")
+				{ capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped}" }
 			}
 		}
 
@@ -158,6 +155,33 @@ changes_subject = |rest| {
 	if (focus == "" or focus == "workspace:") Err(NoTopic) else scope.map_ok(|picked| Changes({ context, scope: picked }))
 }
 
+## A file/ topic's subject from the rest of its name: a changes/ topic's
+## context and scope, then the escaped path.
+file_subject : Str -> Try(Protocol.Subject, [NoTopic])
+file_subject = |rest| {
+	parts = rest.split_on("/")
+	path = Str.join_with((parts.last() ?? "").split_on("%25").map(|part| Str.join_with(part.split_on("%2F"), "/")), "%")
+	match changes_subject(Str.join_with(parts.drop_last(1), "/")) {
+		Ok(Changes({ context, scope })) if path != "" => Ok(File({ context, scope, path }))
+		_ => Err(NoTopic)
+	}
+}
+
+## A context and scope as changes/ and file/ topics name them.
+scoped_name : { context : Context.Id, scope : WorkspaceGit.Scope } -> Str
+scoped_name = |{ context, scope }| {
+	focus = match context {
+		Session(session_id) => session_id
+		Workspace(workspace_id) => "workspace:${workspace_id}"
+	}
+	scope_name = match scope {
+		Uncommitted => "Uncommitted"
+		AgainstBase => "AgainstBase"
+		Commit(sha) => "Commit:${sha}"
+	}
+	"${focus}/${scope_name}"
+}
+
 offered : Manifest.Offered
 offered = {
 	protocol: 1,
@@ -190,11 +214,13 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase })]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" })]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 
 expect Protocol.named(Changes({ context: Workspace("w1"), scope: Uncommitted })).topic == "changes/workspace:w1/Uncommitted"
+expect Protocol.named(File({ context: Session("s1"), scope: Commit("c1"), path: "src/a%.roc" })).topic == "file/s1/Commit:c1/src%2Fa%25.roc"
+expect ["file/s1/Uncommitted", "file/s1/Uncommitted/", "file/s1/Staged/a.roc", "file/Uncommitted/a.roc"].all(|topic| Protocol.subject(offered, { capability: "workspace.git.v1", topic, after: "" }).map_err(|error| error.code) == Err(NotFound))
 
 expect ["timeline/", "everything", "changes/s1/Uncommitted"].all(|topic| Protocol.subject(offered, { capability: "chat.v1", topic, after: "" }).map_err(|error| error.code) == Err(NotFound))
 expect ["changes/s1/Staged", "changes/s1", "changes/workspace:/Uncommitted", "changes/s1/Commit:"].all(|topic| Protocol.subject(offered, { capability: "workspace.git.v1", topic, after: "" }).map_err(|error| error.code) == Err(NotFound))

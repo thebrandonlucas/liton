@@ -107,7 +107,7 @@ respond! = |request, context| {
 			(POST, Resource({ raw_path: "/api/workspaces", .. })) =>
 				workspaces_request!(context, request)
 			(GET, Resource({ raw_path: "/api/paseo/importable", .. })) =>
-				importable!(context).map_ok(|listed| json(listed))
+				importable_listed!(context)
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -246,11 +246,9 @@ interested! = |context, subject| {
 				PaseoSession(_) => wanted!(db, "timeline", session_id)
 				_ => Ok({})
 			}
-		Changes({ context: focus, scope }) =>
-			match located!(context, focus)? {
-				PaseoDirectory(directory) => git_wanted!(db, directory, { session_id: "", scope, known: "", file: NoFile })
-				_ => Ok({})
-			}
+		Changes({ context: focus, scope }) => git_interested!(context, focus, { scope, file: NoFile })
+		File({ context: focus, scope, path }) => git_interested!(context, focus, { scope, file: Selected(path) })
+		Importable if context.paseo.is_ok() => wanted!(db, "importable", "")
 		WorkspaceList if context.paseo.is_ok() => {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
@@ -258,6 +256,14 @@ interested! = |context, subject| {
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
+
+## Notes that a poll watches what is asked of a context's workspace.
+git_interested! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Asked => Try({}, _)
+git_interested! = |context, focus, asked|
+	match located!(context, focus)? {
+		PaseoDirectory(directory) => git_wanted!(context.db, directory, asked)
+		_ => Ok({})
+	}
 
 ## A topic's update: a timeline's entries after its cursor, or a snapshot of
 ## anything else.
@@ -272,7 +278,9 @@ update! = |context, wanted, subject|
 			}
 		Items => Ok(Protocol.snapshot(wanted, Items(attention_items!(context)?)))
 		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
-		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { session_id: "", scope, known: "", file: NoFile })?))))
+		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
+		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
+		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
 	}
 
 chat! : Context, Server.Request => Try(Response, _)
@@ -393,7 +401,7 @@ git_poll! = |context, request| {
 		Ok({ focus, poll }) => {
 			polled : WorkspaceGit.Polled
 			polled =
-				match git_found!(context, focus, poll)? {
+				match git_found!(context, focus, { scope: poll.scope, file: poll.file })? {
 					Ok(found) => WorkspaceGit.polled(poll, found)
 					Err(Unknown) => WorkspaceGit.unknown(poll)
 				}
@@ -402,9 +410,9 @@ git_poll! = |context, request| {
 	}
 }
 
-## What a provider has of a context's workspace for a poll, `Unknown` when
-## the workspace can't be read.
-git_found! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [Unknown]), _)
+## What a provider has of a context's workspace for what is asked, `Unknown`
+## when the workspace can't be read.
+git_found! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [Unknown]), _)
 git_found! = |context, focus, poll|
 	match located!(context, focus)? {
 		MockWorkspace(workspace_id) => Ok(Ok(Mock.git(workspace_id, poll.scope, poll.file)))
@@ -452,7 +460,7 @@ paseo_directory = |directory| if (directory == "" or directory == "/") Nowhere e
 
 ## A Paseo directory's workspace, from what the git cache holds of it once
 ## the cycle asked Paseo what is due.
-paseo_git! : Context, Str, WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
+paseo_git! : Context, Str, WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
 paseo_git! = |context, directory, poll| {
 	db = context.db
 	git_wanted!(db, directory, poll)?
@@ -492,7 +500,7 @@ paseo_git! = |context, directory, poll| {
 
 ## Notes that a poll watches a Paseo directory's workspace, the poll's scope
 ## and, of a commit, the selected file not cached yet.
-git_wanted! : Sqlite.Db, Str, WorkspaceGit.Poll => Try({}, _)
+git_wanted! : Sqlite.Db, Str, WorkspaceGit.Asked => Try({}, _)
 git_wanted! = |db, directory, poll| {
 	wanted!(db, "workspace", directory)?
 	match (poll.scope, selected_commit_file(poll)) {
@@ -504,7 +512,7 @@ git_wanted! = |db, directory, poll| {
 }
 
 ## The file a poll of a commit selects, and what the git cache holds it as.
-selected_commit_file : WorkspaceGit.Poll -> Try({ sha : Str, path : Str, what : Str }, [NoFile])
+selected_commit_file : WorkspaceGit.Asked -> Try({ sha : Str, path : Str, what : Str }, [NoFile])
 selected_commit_file = |poll|
 	match (poll.scope, poll.file) {
 		(Commit(sha), Selected(path)) => Ok({ sha, path, what: "commit ${sha} ${path}" })
@@ -1030,17 +1038,23 @@ listed_importable! = |db, connection, request_id|
 		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('importable', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
 	}
 
-## The sessions Paseo's providers keep as the cycle last listed them (none
-## before), as JSON: each a chat.v1 session, read only, and its directory.
-importable! : Context => Try(Str, _)
+## GET /api/paseo/importable: the importable sessions, once a cycle asked.
+importable_listed! : Context => Try(Response, _)
+importable_listed! = |context| {
+	interested!(context, Importable)?
+	paseo_cycle!(context)?
+	Ok(json(Json.to_str(importable!(context)?)))
+}
+
+## The sessions Paseo's providers keep that Paseo doesn't run, as the cycle
+## last listed them (none before).
+importable! : Context => Try(List(Chat.Importable), _)
 importable! = |context| {
-	if context.paseo.is_ok() {
-		wanted!(context.db, "importable", "")?
-		paseo_cycle!(context)?
-	}
 	rows : List({ value : Str })
 	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'importable';", params: {}, limits: Sqlite.default_query_limits })?
-	Ok(rows.first().map_ok(|row| row.value) ?? "[]")
+	listed : Try(List(Chat.Importable), _)
+	listed = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(if (context.paseo.is_ok()) listed ?? [] else [])
 }
 
 ## Sends a request, and answers the message that answers it, skipping

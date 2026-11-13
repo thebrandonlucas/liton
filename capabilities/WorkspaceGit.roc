@@ -43,6 +43,10 @@ WorkspaceGit := [].{
 
 	ContextPoll : { context : Context.Id, scope : Scope, known : Str, file : [Selected(Str), NoFile] }
 
+	## What a client asks of a workspace: a scope, and a file of it whose hunks
+	## it shows.
+	Asked : { scope : Scope, file : [Selected(Str), NoFile] }
+
 	Polled : {
 		workspace : [Known(Workspace), Unknown],
 		status : [Status(Status), NoStatus],
@@ -61,6 +65,11 @@ WorkspaceGit := [].{
 	## status, the scope's changed files and the branch's commits.
 	Snapshot : { workspace : [Known(Workspace), Unknown], status : [Status(Status), NoStatus], changes : Changes, commits : List(Commit) }
 
+	## The one event of a `file/<context>/<scope>/<path>` topic: the file's
+	## hunks, none when the scope has no such file or the workspace can't be
+	## read.
+	FileHunks : { path : Str, hunks : List(Hunk) }
+
 	## A workspace's snapshot of `scope`, or the one of a workspace that can't
 	## be read.
 	snapshot : Scope, Try(Found, [Unknown]) -> Snapshot
@@ -69,6 +78,9 @@ WorkspaceGit := [].{
 			Ok({ workspace, status, fingerprint, diff, commits }) => { workspace: Known(workspace), status, changes: { scope, fingerprint, files: diff.map(|shown| shown.file) }, commits }
 			Err(Unknown) => { workspace: Unknown, status: NoStatus, changes: { scope, fingerprint: WorkspaceGit.fingerprint(scope, []), files: [] }, commits: [] }
 		}
+
+	file_hunks : Str, Try(Found, [Unknown]) -> FileHunks
+	file_hunks = |path, found| { path, hunks: found.map_ok(|{ diff, .. }| diff.find_first(|shown| shown.file.path == path).map_ok(|shown| shown.hunks) ?? []) ?? [] }
 
 	polled : Poll, Found -> Polled
 	polled = |poll, { workspace, status, fingerprint, diff, commits }| {
@@ -149,4 +161,10 @@ expect {
 	session : Try(WorkspaceGit.ContextPoll, _)
 	session = Json.parse("{\"file\":\"NoFile\",\"known\":\"\",\"scope\":\"Uncommitted\",\"session_id\":\"s1\"}")
 	decoded == Ok({ context: Workspace("w1"), scope: Uncommitted, known: "", file: NoFile }) and session.is_err()
+}
+
+expect {
+	workspace = { id: "/work", provider: "mock", name: "work", directory: "/work", repository_root: "/work", kind: Checkout }
+	found = { workspace, status: NoStatus, fingerprint: "", diff: [readme], commits: [] }
+	WorkspaceGit.file_hunks("README.md", Ok(found)).hunks == readme.hunks and WorkspaceGit.file_hunks("a.roc", Ok(found)).hunks == [] and WorkspaceGit.file_hunks("README.md", Err(Unknown)).hunks == []
 }
