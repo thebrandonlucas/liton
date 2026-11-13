@@ -155,5 +155,5 @@ The order after the MVP: the Paseo provider (`chat`), then `workspace.git`, then
 - Paseo's daemon API: how stable it is, how auth works, and how it maps onto `chat`, `terminal` and `workspace.git`.
 - Capability schema format: Roc types as the source of truth, with JSON Schema generated for the wire?
 - Room sync between daemons: Nostr relays or direct daemon-to-daemon.
-- How the `environment` capability fits tee8z's Voltage sandbox work.
+- How the `environment` capability fits sandboxes where a remote daemon reads code and sandboxed agents make the changes.
 - Snapshot format versioning and migrations.
