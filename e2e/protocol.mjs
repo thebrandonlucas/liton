@@ -101,6 +101,9 @@ try {
     assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
   });
+  await step("the old /api endpoints are gone", async () => {
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/manifest`)).status, 404);
+  });
   await step("the liton CLI prints the manifest and answers, and exits 1 on an error", async () => {
     assert.deepEqual(JSON.parse((await liton(["manifest"])).stdout), manifest);
     const listed = await liton(["call", "chat.v1", '"ListSessions"']);

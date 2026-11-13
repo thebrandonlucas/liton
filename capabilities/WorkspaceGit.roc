@@ -2,10 +2,8 @@
 ## workspace is: its branch and how far it is from its base and upstream, the
 ## files that changed (uncommitted, against the base, or in one commit) and the
 ## branch's commits.
-## The UI polls it with the fingerprint of the changes it has, so unchanged
-## changes don't travel again, and gets the hunks of the one file it shows.
-import Context
-
+## A client follows a scope's changes and the hunks of the file it shows as
+## topics (docs/protocol.md).
 WorkspaceGit := [].{
 
 	## `id` is the directory, `name` the repository's folder.
@@ -36,29 +34,14 @@ WorkspaceGit := [].{
 
 	Commit : { sha : Str, short_sha : Str, subject : Str, author : Str, date : Str, pushed : Bool, on_base : Bool, files : List(File) }
 
-	## `known` is the fingerprint of the changes the client has ("" for none).
-	## A `Poll` is of a session's workspace, a `ContextPoll` of a session's or a
-	## workspace's.
-	Poll : { session_id : Str, scope : Scope, known : Str, file : [Selected(Str), NoFile] }
-
-	ContextPoll : { context : Context.Id, scope : Scope, known : Str, file : [Selected(Str), NoFile] }
-
 	## What a client asks of a workspace: a scope, and a file of it whose hunks
 	## it shows.
 	Asked : { scope : Scope, file : [Selected(Str), NoFile] }
 
-	Polled : {
-		workspace : [Known(Workspace), Unknown],
-		status : [Status(Status), NoStatus],
-		changes : [Unchanged, Changed(Changes)],
-		file : [Hunks({ path : Str, hunks : List(Hunk) }), NoFile],
-		commits : List(Commit),
-	}
-
-	## What a provider has of a session's workspace, to answer a poll from.
-	## `diff` holds the poll's scope's files, for a commit with only the
-	## selected file's hunks, and `fingerprint` is theirs (see `fingerprint`),
-	## kept with them so a poll doesn't hash them again.
+	## What a provider has of a workspace, to answer what is `Asked` from.
+	## `diff` holds the scope's files, for a commit with only the selected
+	## file's hunks, and `fingerprint` is theirs (see `fingerprint`), kept
+	## with them so a poll doesn't hash them again.
 	Found : { workspace : Workspace, status : [Status(Status), NoStatus], fingerprint : Str, diff : List(FileDiff), commits : List(Commit) }
 
 	## The one event of a `changes/<context>/<scope>` topic: the workspace, its
@@ -81,21 +64,6 @@ WorkspaceGit := [].{
 
 	file_hunks : Str, Try(Found, [Unknown]) -> FileHunks
 	file_hunks = |path, found| { path, hunks: found.map_ok(|{ diff, .. }| diff.find_first(|shown| shown.file.path == path).map_ok(|shown| shown.hunks) ?? []) ?? [] }
-
-	polled : Poll, Found -> Polled
-	polled = |poll, { workspace, status, fingerprint, diff, commits }| {
-		file =
-			match poll.file {
-				Selected(path) => diff.find_first(|shown| shown.file.path == path).map_ok(|shown| Hunks({ path, hunks: shown.hunks })) ?? NoFile
-				NoFile => NoFile
-			}
-		{ workspace: Known(workspace), status, changes: changes(poll, fingerprint, diff), file, commits }
-	}
-
-	## The answer when the workspace can't be read, such as when its provider
-	## can't be reached.
-	unknown : Poll -> Polled
-	unknown = |poll| { workspace: Unknown, status: NoStatus, changes: changes(poll, WorkspaceGit.fingerprint(poll.scope, []), []), file: NoFile, commits: [] }
 
 	## A hunk of `lines`, numbered from the hunk's starts.
 	hunk : { old_start : U32, old_count : U32, new_start : U32, new_count : U32 }, List({ kind : LineKind, text : Str }) -> Hunk
@@ -124,10 +92,6 @@ WorkspaceGit := [].{
 	}
 }
 
-changes : WorkspaceGit.Poll, Str, List(WorkspaceGit.FileDiff) -> [Unchanged, Changed(WorkspaceGit.Changes)]
-changes = |poll, fingerprint, diff|
-	if (fingerprint == poll.known) Unchanged else Changed({ scope: poll.scope, fingerprint, files: diff.map(|shown| shown.file) })
-
 readme : WorkspaceGit.FileDiff
 readme = {
 	file: { path: "README.md", change: Modified, additions: 1, deletions: 1, body: Text },
@@ -142,26 +106,6 @@ expect {
 }
 
 expect WorkspaceGit.fingerprint(Commit("c1"), [readme]) == WorkspaceGit.fingerprint(Commit("c1"), [{ ..readme, hunks: [] }])
-
-expect {
-	workspace = { id: "/work", provider: "mock", name: "work", directory: "/work", repository_root: "/work", kind: Checkout }
-	poll = { session_id: "s1", scope: Uncommitted, known: "", file: Selected("README.md") }
-	found = { workspace, status: NoStatus, fingerprint: WorkspaceGit.fingerprint(Uncommitted, [readme]), diff: [readme], commits: [] }
-	first = WorkspaceGit.polled(poll, found)
-	again = match first.changes {
-		Changed(shown) => WorkspaceGit.polled({ ..poll, known: shown.fingerprint, file: NoFile }, found)
-		Unchanged => first
-	}
-	first.file == Hunks({ path: "README.md", hunks: readme.hunks }) and again.changes == Unchanged and again.file == NoFile
-}
-
-expect {
-	decoded : Try(WorkspaceGit.ContextPoll, _)
-	decoded = Json.parse("{\"context\":{\"Workspace\":\"w1\"},\"file\":\"NoFile\",\"known\":\"\",\"scope\":\"Uncommitted\"}")
-	session : Try(WorkspaceGit.ContextPoll, _)
-	session = Json.parse("{\"file\":\"NoFile\",\"known\":\"\",\"scope\":\"Uncommitted\",\"session_id\":\"s1\"}")
-	decoded == Ok({ context: Workspace("w1"), scope: Uncommitted, known: "", file: NoFile }) and session.is_err()
-}
 
 expect {
 	workspace = { id: "/work", provider: "mock", name: "work", directory: "/work", repository_root: "/work", kind: Checkout }

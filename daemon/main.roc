@@ -1,15 +1,13 @@
-## liton's daemon: advertises its providers' capabilities and serves chat.v1,
-## workspace.git.v1 and workspaces.v1 over HTTP, from what it keeps in SQLite,
-## and serves the UI. /liton/v1 speaks the capability protocol
-## (docs/protocol.md); /api/... are the UI's earlier forms of it.
+## liton's daemon: offers its providers' capabilities, chat.v1,
+## workspace.git.v1 and workspaces.v1, and attention.v1 derived from chat.v1,
+## at /liton/v1 in the capability protocol (docs/protocol.md), from what it
+## keeps in SQLite, and serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
 ## LITON_MOCK=off leaves out the mock provider. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
-## GET /api/paseo/importable lists, read only, the sessions Paseo's providers
-## keep that Paseo doesn't run, such as sandboxed agents'.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -81,33 +79,12 @@ respond! = |request, context| {
 		match (request.method(), request.target()) {
 			(GET, Resource({ raw_path: "/", .. })) =>
 				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
-			(GET, Resource({ raw_path: "/api/manifest", .. })) =>
-				{
-					providers = offered(context).providers
-					Ok(json(Json.to_str({ protocol: Manifest.protocol, providers: if (providers.is_empty()) [] else providers.append(liton_provider) })))
-				}
 			(GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
 				Ok(json(Json.to_str(offered(context))))
 			(POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
 				call!(context, request)
 			(POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
 				polled_topics!(context, request)
-			(POST, Resource({ raw_path: "/api/chat", .. })) =>
-				chat!(context, request)
-			(POST, Resource({ raw_path: "/api/chat/poll", .. })) =>
-				poll!(context, request)
-			(POST, Resource({ raw_path: "/api/git/poll", .. })) =>
-				git_poll!(context, request)
-			(GET, Resource({ raw_path: "/api/attention", .. })) =>
-				attention_items!(context).map_ok(|items| json(Json.to_str(items)))
-			(POST, Resource({ raw_path: "/api/attention", .. })) =>
-				attention!(context, request)
-			(GET, Resource({ raw_path: "/api/workspaces", .. })) =>
-				workspaces!(context).map_ok(|listed| json(Json.to_str(listed)))
-			(POST, Resource({ raw_path: "/api/workspaces", .. })) =>
-				workspaces_request!(context, request)
-			(GET, Resource({ raw_path: "/api/paseo/importable", .. })) =>
-				importable_listed!(context)
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -235,8 +212,8 @@ polled_topics! = |context, request| {
 	}
 }
 
-## Notes that a poll watches a topic's subject, as the old endpoints do, so
-## the next cycle asks Paseo about it.
+## Notes that a poll watches a topic's subject, so the next cycle asks Paseo
+## about it.
 interested! : Context, Protocol.Subject => Try({}, _)
 interested! = |context, subject| {
 	db = context.db
@@ -282,23 +259,6 @@ update! = |context, wanted, subject|
 		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
 		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
 	}
-
-chat! : Context, Server.Request => Try(Response, _)
-chat! = |context, request| {
-	decoded : Try(Chat.Request, _)
-	decoded = Json.parse(read_json!(request)?)
-	answer : Chat.Response
-	answer =
-		match decoded {
-			Err(_) => Rejected("expected a chat.v1 request")
-			Ok(asked) =>
-				match chat_call!(context, Err(Missing), asked)? {
-					Ok(response) => response
-					Err({ message, .. }) => Rejected(message)
-				}
-		}
-	Ok(json(Json.to_str(answer)))
-}
 
 ## Answers a chat.v1 request, of `provider`'s sessions alone if it names one.
 chat_call! : Context, Try(Str, [Missing]), Chat.Request => Try(Protocol.Answer(Chat.Response), _)
@@ -363,51 +323,6 @@ routed_provider! = |context, provider, session_id| {
 		NoSession => ""
 	}
 	Ok(if (Protocol.serves(provider, owner)) found else NoSession)
-}
-
-poll! : Context, Server.Request => Try(Response, _)
-poll! = |context, request| {
-	decoded : Try(Chat.Poll, _)
-	decoded = Json.parse(read_json!(request)?)
-	match decoded {
-		Err(_) => Ok(text(400, "expected a chat.v1 poll"))
-		Ok({ watches }) => {
-			sessions = sessions!(context)?
-			polled : Chat.Polled
-			polled = { sessions, timelines: timelines!(context, watches)? }
-			Ok(json(Json.to_str(polled)))
-		}
-	}
-}
-
-## Answers a workspace.git.v1 poll, of a context or, as the UI sends it, of a
-## session. A workspace that can't be read is `Unknown`, never an error.
-git_poll! : Context, Server.Request => Try(Response, _)
-git_poll! = |context, request| {
-	body = read_json!(request)?
-	of_context : Try(WorkspaceGit.ContextPoll, _)
-	of_context = Json.parse(body)
-	of_session : Try(WorkspaceGit.Poll, _)
-	of_session = Json.parse(body)
-	# `polled` and `unknown` read only the poll's scope, known and file.
-	asked =
-		match (of_context, of_session) {
-			(Ok({ context: focus, scope, known, file }), _) => Ok({ focus, poll: { session_id: "", scope, known, file } })
-			(_, Ok(poll)) => Ok({ focus: Session(poll.session_id), poll })
-			_ => Err(NotAPoll)
-		}
-	match asked {
-		Err(NotAPoll) => Ok(text(400, "expected a workspace.git.v1 poll"))
-		Ok({ focus, poll }) => {
-			polled : WorkspaceGit.Polled
-			polled =
-				match git_found!(context, focus, { scope: poll.scope, file: poll.file })? {
-					Ok(found) => WorkspaceGit.polled(poll, found)
-					Err(Unknown) => WorkspaceGit.unknown(poll)
-				}
-			Ok(json(Json.to_str(polled)))
-		}
-	}
 }
 
 ## What a provider has of a context's workspace for what is asked, `Unknown`
@@ -519,11 +434,7 @@ selected_commit_file = |poll|
 		_ => Err(NoFile)
 	}
 
-## The built-in provider of what the daemon derives from the others' chat.v1.
-liton_provider : Manifest.Provider
-liton_provider = { id: "liton", name: "liton", capabilities: [Capability.attention_v1] }
-
-## The same, as /liton/v1/manifest offers it.
+## What the daemon derives from the providers' chat.v1.
 attention_transformer : Manifest.Transformer
 attention_transformer = { id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }
 
@@ -543,23 +454,6 @@ attention_items! = |context| {
 		Sqlite.execute!({ db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: aside.session_id } })?
 	}
 	Ok(Attention.ranked($items, asides, now))
-}
-
-attention! : Context, Server.Request => Try(Response, _)
-attention! = |context, request| {
-	decoded : Try(Attention.Request, _)
-	decoded = Json.parse(read_json!(request)?)
-	answer : Attention.Response
-	answer =
-		match decoded {
-			Err(_) => Rejected("expected an attention.v1 request")
-			Ok(asked) =>
-				match attention_call!(context, asked)? {
-					Ok(response) => response
-					Err({ message, .. }) => Rejected(message)
-				}
-		}
-	Ok(json(Json.to_str(answer)))
 }
 
 attention_call! : Context, Attention.Request => Try(Protocol.Answer(Attention.Response), _)
@@ -600,19 +494,6 @@ workspaces! = |context| {
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	paseo_workspaces = from_paseo.workspaces.map(|shown| { ..shown, session_ids: placed.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id) })
 	Ok({ projects: from_mock.projects.concat(from_paseo.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(items, shown.session_ids) }) })
-}
-
-workspaces_request! : Context, Server.Request => Try(Response, _)
-workspaces_request! = |context, request| {
-	decoded : Try(Workspaces.Request, _)
-	decoded = Json.parse(read_json!(request)?)
-	answer : Workspaces.Response
-	answer =
-		match decoded {
-			Ok(ListWorkspaces) => Listed(workspaces!(context)?)
-			Err(_) => Rejected("expected a workspaces.v1 request")
-		}
-	Ok(json(Json.to_str(answer)))
 }
 
 ## Paseo's projects and workspaces as the cycle last listed them, none before.
@@ -1037,14 +918,6 @@ listed_importable! = |db, connection, request_id|
 		listed = Paseo.importable_answer(exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
 		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('importable', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
 	}
-
-## GET /api/paseo/importable: the importable sessions, once a cycle asked.
-importable_listed! : Context => Try(Response, _)
-importable_listed! = |context| {
-	interested!(context, Importable)?
-	paseo_cycle!(context)?
-	Ok(json(Json.to_str(importable!(context)?)))
-}
 
 ## The sessions Paseo's providers keep that Paseo doesn't run, as the cycle
 ## last listed them (none before).

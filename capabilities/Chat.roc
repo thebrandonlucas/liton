@@ -35,13 +35,6 @@ Chat := [].{
 	## read only, and the directory it worked in.
 	Importable : { session : Session, directory : Str }
 
-	## For clients that cannot hold a stream open: one request lists the
-	## sessions and fetches several timelines, each after the last sequence
-	## number the client has.
-	Poll : { watches : List({ session_id : Str, after : U64 }) }
-
-	Polled : { sessions : List(Session), timelines : List({ session_id : Str, entries : List(Entry) }) }
-
 	## The permission requests in a timeline that no answer follows.
 	pending_permissions : List(Entry) -> List(Str)
 	pending_permissions = |timeline|

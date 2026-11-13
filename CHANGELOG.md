@@ -40,3 +40,7 @@ All notable changes to liton are documented in this file. The format is based on
 ### Fixed
 
 - Sending a message by pressing Enter clears the message box, so the next message no longer starts with the text of the last.
+
+### Removed
+
+- **Breaking:** the daemon's `/api` endpoints are gone; use `/liton/v1` (docs/protocol.md).

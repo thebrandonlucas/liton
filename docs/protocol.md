@@ -1,9 +1,8 @@
 # liton's capability protocol
 
 The narrow waist between liton's daemon and everything that uses it or feeds it
-([design.md](design.md), Architecture). A draft, which the daemon serves at `/liton/v1` (the Wire section); its earlier
-endpoints (`/api/chat`, `/api/chat/poll`, `/api/git/poll`, `/api/attention`,
-`/api/workspaces`) remain until the UI moves onto it.
+([design.md](design.md), Architecture). A draft, which the daemon serves at `/liton/v1` (the Wire section),
+and the UI speaks.
 
 ## Capabilities
 
@@ -30,8 +29,7 @@ JSON over HTTP, under one prefix, `/liton/v1`. Field names and tag encodings are
 those of Roc's `Json` codec for the types in `capabilities/Protocol.roc` and the
 capability's own: a tag without a payload is a string (`"ListSessions"`), one
 with a payload an object of one field (`{"SendMessage": {…}}`), and an optional
-field is left out when absent. The daemon's older `/api/…` endpoints stay until
-the UI moves onto these.
+field is left out when absent.
 
 ### Manifest
 

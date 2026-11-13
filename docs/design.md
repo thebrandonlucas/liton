@@ -130,7 +130,7 @@ A snapshot is a deterministic JSON file. It contains:
 | topic | decision |
 |---|---|
 | plugin model | compile-time Roc packages |
-| UI ↔ daemon | JSON-RPC over HTTP. Timelines are polled (`chat.v1`'s `Poll`) until roc-signals has an SSE subscription; SSE streams then, possibly WebSocket later, behind the same capability types |
+| UI ↔ daemon | JSON-RPC over HTTP. Topics are polled (`POST /liton/v1/poll`, docs/protocol.md) until roc-signals has an SSE subscription; SSE streams then, possibly WebSocket later, behind the same capability types |
 | daemon language | Roc, on roc-lang/basic-webserver (HTTP server, SSE, HTTP client). It has no WebSocket and no pty |
 | first provider | Paseo, via its daemon API |
 | first CI | GitHub Actions |
