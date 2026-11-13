@@ -1,9 +1,9 @@
 # liton's capability protocol
 
 The narrow waist between liton's daemon and everything that uses it or feeds it
-([design.md](design.md), Architecture). A draft: the daemon's current endpoints
-(`/api/chat`, `/api/chat/poll`, `/api/git/poll`, `/api/attention`,
-`/api/workspaces`) are early, ad-hoc forms of it and move onto it.
+([design.md](design.md), Architecture). A draft, which the daemon serves at `/liton/v1` (the Wire section); its earlier
+endpoints (`/api/chat`, `/api/chat/poll`, `/api/git/poll`, `/api/attention`,
+`/api/workspaces`) remain until the UI moves onto it.
 
 ## Capabilities
 
@@ -27,27 +27,36 @@ return carries its `provider`, and a call that targets one provider names it.
 ## Wire
 
 JSON over HTTP, under one prefix, `/liton/v1`. Field names and tag encodings are
-those of Roc's `Json` codec for the capability's types.
+those of Roc's `Json` codec for the types in `capabilities/Protocol.roc` and the
+capability's own: a tag without a payload is a string (`"ListSessions"`), one
+with a payload an object of one field (`{"SendMessage": {…}}`), and an optional
+field is left out when absent. The daemon's older `/api/…` endpoints stay until
+the UI moves onto these.
 
 ### Manifest
 
-`GET /liton/v1/manifest` lists what the daemon offers:
+`GET /liton/v1/manifest` lists what the daemon offers, and the topics of each
+capability as patterns:
 
 ```json
 {
   "protocol": 1,
-  "daemon": { "id": "…", "name": "…" },
+  "daemon": { "id": "liton", "name": "liton" },
   "providers": [
     { "id": "paseo", "name": "Paseo", "capabilities": [{ "name": "chat", "version": 1 }, …] }
   ],
   "transformers": [
-    { "id": "attention", "offers": { "name": "attention", "version": 1 }, "uses": [{ "name": "chat", "version": 1 }] }
+    { "id": "attention", "name": "Attention", "offers": { "name": "attention", "version": 1 }, "uses": [{ "name": "chat", "version": 1 }] }
+  ],
+  "topics": [
+    { "capability": { "name": "chat", "version": 1 }, "patterns": ["sessions", "timeline/<session_id>"] }, …
   ]
 }
 ```
 
-A client binds to capabilities, never to providers; it uses the manifest to show
-what is missing and who could supply it.
+A capability is offered when a provider supplies it or a transformer derives
+it. A client binds to capabilities, never to providers; it uses the manifest to
+show what is missing and who could supply it.
 
 ### Call
 
@@ -58,44 +67,80 @@ what is missing and who could supply it.
 ```
 
 `provider` is optional; without it the daemon asks every provider of the
-capability and merges the answers. The answer is the capability's `Response`:
+capability and merges the answers, each item tagged with its `provider`. With
+it, only that provider's items and sessions are reached. The answer is the
+capability's `Response`, or an error:
 
 ```json
-{ "Ok": { "Accepted": {} } }
-{ "Err": { "code": "NotFound", "message": "no session …" } }
+{ "Ok": "Accepted" }
+{ "Err": { "code": "NotFound", "message": "no session fix-auth" } }
 ```
 
-Error codes are a closed set shared by all capabilities: `BadRequest`,
-`NotFound`, `Unavailable` (the provider can't be reached), `Refused` (it said
-no), `Unsupported` (version or operation), `Overloaded` (try later).
+Error codes are a closed set shared by all capabilities:
+
+| code | when |
+|---|---|
+| `BadRequest` | the body isn't a call, the capability's name is malformed, or the request isn't one of the capability's requests |
+| `NotFound` | no such session or pending permission request, or the named provider doesn't offer the capability |
+| `Unavailable` | the provider can't be reached |
+| `Refused` | the provider said no, such as to liton's password |
+| `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`) |
+| `Overloaded` | try later (not used yet) |
+
+The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage` and
+`AnswerPermission`; `attention.v1`'s `ListItems`, `Settle`, `Snooze` and
+`Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
 
 ### Subscribe
 
-`POST /liton/v1/poll` follows any number of topics at once:
+`POST /liton/v1/poll` follows any number of topics at once, each after the
+cursor the client has (`""` for none):
 
 ```json
 { "topics": [
   { "capability": "chat.v1", "topic": "sessions", "after": "" },
   { "capability": "chat.v1", "topic": "timeline/fix-auth", "after": "41" },
-  { "capability": "workspace.git.v1", "topic": "changes/fix-auth/Uncommitted", "after": "fp:9c1e…" }
+  { "capability": "workspace.git.v1", "topic": "changes/fix-auth/Uncommitted", "after": "9618…" }
 ] }
 ```
 
-The answer gives each topic its new events and its new cursor, or nothing when
-nothing changed:
+The answer gives each topic, in order, its new events and its new cursor, or no
+events when nothing changed:
 
 ```json
 { "topics": [
-  { "capability": "chat.v1", "topic": "timeline/fix-auth", "cursor": "43", "events": [ … ] },
-  { "capability": "workspace.git.v1", "topic": "changes/fix-auth/Uncommitted", "cursor": "fp:9c1e…", "events": [] }
+  { "capability": "chat.v1", "topic": "sessions", "cursor": "1433…", "events": [{ "Sessions": [ … ] }] },
+  { "capability": "chat.v1", "topic": "timeline/fix-auth", "cursor": "43", "events": [{ "Entry": { "sequence": 42, "event": … } }, …] },
+  { "capability": "workspace.git.v1", "topic": "changes/fix-auth/Uncommitted", "cursor": "9618…", "events": [] }
 ] }
 ```
 
-A cursor is opaque to the client: a sequence number for an append-only topic, a
-fingerprint for a snapshot topic (whose one event is the whole new value). A
-client asks again with the cursors it was given. Polling a topic also tells the
-daemon someone wants it, which is what drives the daemon's own budgeted work
-upstream (see design.md, Paseo load).
+| capability | topic | kind | event |
+|---|---|---|---|
+| `chat.v1` | `sessions` | snapshot | `{"Sessions": [Session]}` |
+| `chat.v1` | `timeline/<session_id>` | append-only | `{"Entry": {"sequence", "event"}}`, one per entry |
+| `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, ranked |
+| `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
+| `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
+
+A `changes` context is a session id, or `workspace:<id>`; its scope is
+`Uncommitted`, `AgainstBase` or `Commit:<sha>`. Its event holds the workspace
+(`Unknown` while it can't be read), its status, the scope's changed files with
+their `fingerprint`, and the branch's commits; a file's hunks are not on the
+protocol yet.
+
+A cursor is opaque to the client: for an append-only topic the last sequence
+number, for a snapshot topic a fingerprint of its value, whose one event is the
+whole new value. A client asks again with the cursors it was given. A topic the
+daemon can't follow keeps its cursor, has no events and says why, without
+failing the others: `"error": {"code": "NotFound", "message": "chat.v1 has no topic …"}`
+(`Unsupported` for a capability it doesn't offer, `BadRequest` for a cursor that
+isn't the topic's). A body that isn't a poll is answered `400`.
+
+Polling a topic also tells the daemon someone wants it, which is what drives the
+daemon's own budgeted work upstream (see design.md, Paseo load). The daemon
+notes what all of a poll's topics want before asking upstream, so one poll costs
+at most one round of upstream work.
 
 The same topics will also stream: `GET /liton/v1/stream?topic=…` as server-sent
 events with the cursor as the event id, so a reconnect resumes with
@@ -138,7 +183,7 @@ liton manifest
 liton call chat.v1 '"ListSessions"'
 liton call chat.v1 '{"SendMessage":{"session_id":"fix-auth","text":"Try again"}}'
 liton watch chat.v1 timeline/fix-auth      # one event per line, until interrupted
-liton watch chat.v1 timeline/fix-auth | jq -r '.AgentMessage.text // empty'
+liton watch chat.v1 timeline/fix-auth | jq -r '.Entry.event.AgentMessage.text // empty'
 ```
 
 It finds the daemon from `LITON_URL` (default `http://127.0.0.1:8095`).
@@ -150,7 +195,6 @@ resources, so an agent works with the same capabilities as a person.
 
 ## Open questions
 
-- Whether a call to several providers merges answers or returns them per provider.
 - Authentication between a client and a daemon that isn't on the same machine.
-- How a client learns which topics a capability has: listed in the manifest, or
-  part of the capability's types.
+- Whether a capability's operations should be listed like its topics, so that
+  an unknown one is `Unsupported` rather than `BadRequest`.

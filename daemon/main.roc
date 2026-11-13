@@ -1,6 +1,7 @@
 ## liton's daemon: advertises its providers' capabilities and serves chat.v1,
 ## workspace.git.v1 and workspaces.v1 over HTTP, from what it keeps in SQLite,
-## and serves the UI.
+## and serves the UI. /liton/v1 speaks the capability protocol
+## (docs/protocol.md); /api/... are the UI's earlier forms of it.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
@@ -30,6 +31,7 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
+import cap.Protocol
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
@@ -81,9 +83,15 @@ respond! = |request, context| {
 				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
 			(GET, Resource({ raw_path: "/api/manifest", .. })) =>
 				{
-					chat_providers = (if (context.mock_enabled) [Mock.provider] else []).concat(if (context.paseo.is_ok()) [Paseo.provider] else [])
-					Ok(json(Json.to_str({ protocol: Manifest.protocol, providers: if (chat_providers.is_empty()) [] else chat_providers.append(liton_provider) })))
+					providers = offered(context).providers
+					Ok(json(Json.to_str({ protocol: Manifest.protocol, providers: if (providers.is_empty()) [] else providers.append(liton_provider) })))
 				}
+			(GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
+				Ok(json(Json.to_str(offered(context))))
+			(POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
+				call!(context, request)
+			(POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
+				polled_topics!(context, request)
 			(POST, Resource({ raw_path: "/api/chat", .. })) =>
 				chat!(context, request)
 			(POST, Resource({ raw_path: "/api/chat/poll", .. })) =>
@@ -126,54 +134,227 @@ read_json! = |request| {
 	Str.from_utf8(body)
 }
 
+## What /liton/v1/manifest answers: the enabled providers, and attention
+## once one of them supplies chat.v1.
+offered : Context -> Manifest.Offered
+offered = |{ mock_enabled, paseo, .. }| {
+	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else [])
+	transformers = if (providers.any(|provider| provider.capabilities.contains(Capability.chat_v1))) [attention_transformer] else []
+	manifest = { protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers, topics: [] }
+	{ ..manifest, topics: Protocol.topics.keep_if(|topics| Manifest.offered(manifest).contains(topics.capability)) }
+}
+
+## Answers a /liton/v1/call by its capability (see docs/protocol.md).
+call! : Context, Server.Request => Try(Response, _)
+call! = |context, request| {
+	body = read_json!(request)?
+	addressed : Try(Protocol.Addressed, _)
+	addressed = Json.parse(body)
+	routed =
+		match addressed {
+			Ok(asked) => Protocol.routed(offered(context), asked).map_ok(|id| (Capability.to_str(id), asked.provider))
+			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
+		}
+	unanswered : Str -> Protocol.Error
+	unanswered = |capability| { code: BadRequest, message: "expected a ${capability} request" }
+	answered =
+		match routed {
+			Ok(("chat.v1", provider)) => {
+				decoded : Try(Protocol.Call(Chat.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Chat.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => chat_call!(context, provider, asked)?
+					Err(_) => Err(unanswered("chat.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("attention.v1", _)) => {
+				decoded : Try(Protocol.Call(Attention.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Attention.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => attention_call!(context, asked)?
+					Err(_) => Err(unanswered("attention.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("workspaces.v1", provider)) => {
+				decoded : Try(Protocol.Call(Workspaces.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Workspaces.Response)
+				answer = match decoded {
+					Ok({ request: ListWorkspaces, .. }) => {
+						listed = workspaces!(context)?
+						Ok(Listed({ projects: listed.projects.keep_if(|project| Protocol.serves(provider, project.provider)), workspaces: listed.workspaces.keep_if(|workspace| Protocol.serves(provider, workspace.provider)) }))
+					}
+					Err(_) => Err(unanswered("workspaces.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok((capability, _)) => Json.to_str(call_failed({ code: Unsupported, message: "${capability} has no calls; poll its topics" }))
+			Err(error) => Json.to_str(call_failed(error))
+		}
+	Ok(json(answered))
+}
+
+call_failed : Protocol.Error -> Protocol.Answer({})
+call_failed = |error| Err(error)
+
+## Answers a /liton/v1/poll: notes what all its topics watch, so that one
+## Paseo cycle asks about them all, then answers each, a topic it can't
+## follow with why.
+polled_topics! : Context, Server.Request => Try(Response, _)
+polled_topics! = |context, request| {
+	decoded : Try(Protocol.Poll, _)
+	decoded = Json.parse(read_json!(request)?)
+	match decoded {
+		Err(_) => Ok(text(400, "expected a poll, such as {\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"after\":\"\"}]}"))
+		Ok({ topics }) => {
+			manifest = offered(context)
+			for wanted in topics {
+				match Protocol.subject(manifest, wanted) {
+					Ok(subject) => interested!(context, subject)?
+					Err(_) => {}
+				}
+			}
+			paseo_cycle!(context)?
+			var $updates = []
+			for wanted in topics {
+				$updates = $updates.append(
+					match Protocol.subject(manifest, wanted) {
+						Ok(subject) => update!(context, wanted, subject)?
+						Err(error) => Protocol.failed(wanted, error)
+					},
+				)
+			}
+			polled : Protocol.Polled
+			polled = { topics: $updates }
+			Ok(json(Json.to_str(polled)))
+		}
+	}
+}
+
+## Notes that a poll watches a topic's subject, as the old endpoints do, so
+## the next cycle asks Paseo about it.
+interested! : Context, Protocol.Subject => Try({}, _)
+interested! = |context, subject| {
+	db = context.db
+	match subject {
+		Timeline(session_id) =>
+			match provider!(context, session_id)? {
+				PaseoSession(_) => wanted!(db, "timeline", session_id)
+				_ => Ok({})
+			}
+		Changes({ context: focus, scope }) =>
+			match located!(context, focus)? {
+				PaseoDirectory(directory) => git_wanted!(db, directory, { session_id: "", scope, known: "", file: NoFile })
+				_ => Ok({})
+			}
+		WorkspaceList if context.paseo.is_ok() => {
+			wanted!(db, "agent_list", "")?
+			wanted!(db, "workspace_list", "")
+		}
+		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
+	}
+}
+
+## A topic's update: a timeline's entries after its cursor, or a snapshot of
+## anything else.
+update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
+update! = |context, wanted, subject|
+	match subject {
+		Sessions => Ok(Protocol.snapshot(wanted, Sessions(sessions!(context)?)))
+		Timeline(session_id) =>
+			match Protocol.sequence(wanted) {
+				Ok(after) => Ok(Protocol.appended(wanted, visible!(context.db, session_id, after)?))
+				Err(error) => Ok(Protocol.failed(wanted, error))
+			}
+		Items => Ok(Protocol.snapshot(wanted, Items(attention_items!(context)?)))
+		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
+		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { session_id: "", scope, known: "", file: NoFile })?))))
+	}
+
 chat! : Context, Server.Request => Try(Response, _)
 chat! = |context, request| {
-	db = context.db
 	decoded : Try(Chat.Request, _)
 	decoded = Json.parse(read_json!(request)?)
 	answer : Chat.Response
 	answer =
 		match decoded {
 			Err(_) => Rejected("expected a chat.v1 request")
-			Ok(ListSessions) => Sessions(sessions!(context)?)
-			Ok(WatchSession({ session_id, after })) => Entries(timelines!(context, [{ session_id, after }])?.first().map_ok(|timeline| timeline.entries) ?? [])
-			Ok(SendMessage({ session_id, text: message })) =>
-				match provider!(context, session_id)? {
-					MockSession => {
-						schedule!(db, session_id, |next| Mock.on_message(message, next))?
-						Accepted
-					}
-					PaseoSession(daemon) => {
-						request_id = "liton-send-${now_ms!().to_str()}"
-						outcome = written!(daemon, Paseo.send_request(session_id, message, request_id), request_id, Paseo.sent)
-						forget_check!(db, "cycle")?
-						paseo_answer(outcome)
-					}
-					NoSession => Rejected("no session ${session_id}")
-				}
-			Ok(AnswerPermission({ session_id, request_id, allowed })) =>
-				if !Chat.pending_permissions(visible!(db, session_id, 0)?).contains(request_id) {
-					Rejected("no pending permission request ${request_id}")
-				} else {
-					match provider!(context, session_id)? {
-						MockSession => {
-							schedule!(db, session_id, |next| Mock.on_answer(request_id, allowed, next))?
-							Accepted
-						}
-						PaseoSession(daemon) => {
-							outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed), request_id, Paseo.resolved)
-							if outcome.is_ok() {
-								known = state_of!(db, session_id)?
-								store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
-							}
-							forget_check!(db, "cycle")?
-							paseo_answer(outcome)
-						}
-						NoSession => Rejected("no session ${session_id}")
-					}
+			Ok(asked) =>
+				match chat_call!(context, Err(Missing), asked)? {
+					Ok(response) => response
+					Err({ message, .. }) => Rejected(message)
 				}
 		}
 	Ok(json(Json.to_str(answer)))
+}
+
+## Answers a chat.v1 request, of `provider`'s sessions alone if it names one.
+chat_call! : Context, Try(Str, [Missing]), Chat.Request => Try(Protocol.Answer(Chat.Response), _)
+chat_call! = |context, provider, asked| {
+	db = context.db
+	match asked {
+		ListSessions => Ok(Ok(Sessions(sessions!(context)?.keep_if(|session| Protocol.serves(provider, session.provider)))))
+		WatchSession({ session_id, after }) =>
+			match routed_provider!(context, provider, session_id)? {
+				NoSession => Ok(no_session(session_id))
+				_ => Ok(Ok(Entries(timelines!(context, [{ session_id, after }])?.first().map_ok(|timeline| timeline.entries) ?? [])))
+			}
+		SendMessage({ session_id, text: message }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					schedule!(db, session_id, |next| Mock.on_message(message, next))?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-send-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.send_request(session_id, message, request_id), request_id, Paseo.sent)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
+			}
+		AnswerPermission({ session_id, request_id, allowed }) =>
+			if !Chat.pending_permissions(visible!(db, session_id, 0)?).contains(request_id) {
+				Ok(Err({ code: NotFound, message: "no pending permission request ${request_id}" }))
+			} else {
+				match routed_provider!(context, provider, session_id)? {
+					MockSession => {
+						schedule!(db, session_id, |next| Mock.on_answer(request_id, allowed, next))?
+						Ok(Ok(Accepted))
+					}
+					PaseoSession(daemon) => {
+						outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed), request_id, Paseo.resolved)
+						if outcome.is_ok() {
+							known = state_of!(db, session_id)?
+							store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
+						}
+						forget_check!(db, "cycle")?
+						Ok(paseo_answer(outcome))
+					}
+					NoSession => Ok(no_session(session_id))
+				}
+			}
+	}
+}
+
+no_session : Str -> Protocol.Answer(a)
+no_session = |session_id| Err({ code: NotFound, message: "no session ${session_id}" })
+
+## The enabled provider a session belongs to, or `NoSession` when the call
+## names another.
+routed_provider! : Context, Try(Str, [Missing]), Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSession], _)
+routed_provider! = |context, provider, session_id| {
+	found = provider!(context, session_id)?
+	owner = match found {
+		MockSession => Mock.provider.id
+		PaseoSession(_) => Paseo.provider.id
+		NoSession => ""
+	}
+	Ok(if (Protocol.serves(provider, owner)) found else NoSession)
 }
 
 poll! : Context, Server.Request => Try(Response, _)
@@ -212,23 +393,32 @@ git_poll! = |context, request| {
 		Ok({ focus, poll }) => {
 			polled : WorkspaceGit.Polled
 			polled =
-				match located!(context, focus)? {
-					MockWorkspace(workspace_id) => WorkspaceGit.polled(poll, Mock.git(workspace_id, poll.scope, poll.file))
-					PaseoDirectory(directory) =>
-						match paseo_git!(context, directory, poll) {
-							Ok(Ok(found)) => WorkspaceGit.polled(poll, found)
-							Ok(Err(NothingCached)) => WorkspaceGit.unknown(poll)
-							Err(err) => {
-								logged!("Paseo: answering a git poll of ${directory} failed: ${Str.inspect(err)}")
-								WorkspaceGit.unknown(poll)
-							}
-						}
-					Nowhere => WorkspaceGit.unknown(poll)
+				match git_found!(context, focus, poll)? {
+					Ok(found) => WorkspaceGit.polled(poll, found)
+					Err(Unknown) => WorkspaceGit.unknown(poll)
 				}
 			Ok(json(Json.to_str(polled)))
 		}
 	}
 }
+
+## What a provider has of a context's workspace for a poll, `Unknown` when
+## the workspace can't be read.
+git_found! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [Unknown]), _)
+git_found! = |context, focus, poll|
+	match located!(context, focus)? {
+		MockWorkspace(workspace_id) => Ok(Ok(Mock.git(workspace_id, poll.scope, poll.file)))
+		PaseoDirectory(directory) =>
+			match paseo_git!(context, directory, poll) {
+				Ok(Ok(found)) => Ok(Ok(found))
+				Ok(Err(NothingCached)) => Ok(Err(Unknown))
+				Err(err) => {
+					logged!("Paseo: answering a git poll of ${directory} failed: ${Str.inspect(err)}")
+					Ok(Err(Unknown))
+				}
+			}
+		Nowhere => Ok(Err(Unknown))
+	}
 
 ## Where a context's workspace is: a mock workspace, or a Paseo directory. A
 ## session's is the one it works in.
@@ -265,18 +455,8 @@ paseo_directory = |directory| if (directory == "" or directory == "/") Nowhere e
 paseo_git! : Context, Str, WorkspaceGit.Poll => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
 paseo_git! = |context, directory, poll| {
 	db = context.db
-	wanted!(db, "workspace", directory)?
-	selected =
-		match (poll.scope, poll.file) {
-			(Commit(sha), Selected(path)) => Ok({ sha, path, what: "commit ${sha} ${path}" })
-			_ => Err(NoFile)
-		}
-	match (poll.scope, selected) {
-		(Uncommitted, _) => wanted!(db, "uncommitted", directory)?
-		(AgainstBase, _) => wanted!(db, "base", directory)?
-		(_, Ok({ sha, path, what })) => if (cached!(db, directory, what)?.is_err()) wanted!(db, "commit_file", Json.to_str({ directory, sha, path }))? else {}
-		_ => {}
-	}
+	git_wanted!(db, directory, poll)?
+	selected = selected_commit_file(poll)
 	paseo_cycle!(context)?
 	known : Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, _)
 	known = Json.parse(cached!(db, directory, "workspace")?.map_ok(|row| row.value) ?? "")
@@ -310,9 +490,34 @@ paseo_git! = |context, directory, poll| {
 	Ok(known.map_ok(|{ workspace, status }| { workspace, status, fingerprint, diff, commits: commits ?? [] }).map_err(|_| NothingCached))
 }
 
+## Notes that a poll watches a Paseo directory's workspace, the poll's scope
+## and, of a commit, the selected file not cached yet.
+git_wanted! : Sqlite.Db, Str, WorkspaceGit.Poll => Try({}, _)
+git_wanted! = |db, directory, poll| {
+	wanted!(db, "workspace", directory)?
+	match (poll.scope, selected_commit_file(poll)) {
+		(Uncommitted, _) => wanted!(db, "uncommitted", directory)
+		(AgainstBase, _) => wanted!(db, "base", directory)
+		(_, Ok({ sha, path, what })) => if (cached!(db, directory, what)?.is_err()) wanted!(db, "commit_file", Json.to_str({ directory, sha, path })) else Ok({})
+		_ => Ok({})
+	}
+}
+
+## The file a poll of a commit selects, and what the git cache holds it as.
+selected_commit_file : WorkspaceGit.Poll -> Try({ sha : Str, path : Str, what : Str }, [NoFile])
+selected_commit_file = |poll|
+	match (poll.scope, poll.file) {
+		(Commit(sha), Selected(path)) => Ok({ sha, path, what: "commit ${sha} ${path}" })
+		_ => Err(NoFile)
+	}
+
 ## The built-in provider of what the daemon derives from the others' chat.v1.
 liton_provider : Manifest.Provider
 liton_provider = { id: "liton", name: "liton", capabilities: [Capability.attention_v1] }
+
+## The same, as /liton/v1/manifest offers it.
+attention_transformer : Manifest.Transformer
+attention_transformer = { id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }
 
 ## Every session's attention item, ranked. Forgets the settles and snoozes
 ## that no longer hold, so an item that came back stays back.
@@ -340,24 +545,34 @@ attention! = |context, request| {
 	answer =
 		match decoded {
 			Err(_) => Rejected("expected an attention.v1 request")
-			Ok(ListItems) => Items(attention_items!(context)?)
-			Ok(Settle({ session_id, signature })) => set_aside!(context, { session_id, signature, snoozed_until: 0 })?
-			Ok(Snooze({ session_id, signature, minutes })) => set_aside!(context, { session_id, signature, snoozed_until: now_ms!() + minutes.to_i64() * 60_000 })?
-			Ok(Unsettle({ session_id })) => {
-				Sqlite.execute!({ db: context.db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: session_id } })?
-				Accepted
-			}
+			Ok(asked) =>
+				match attention_call!(context, asked)? {
+					Ok(response) => response
+					Err({ message, .. }) => Rejected(message)
+				}
 		}
 	Ok(json(Json.to_str(answer)))
 }
 
-set_aside! : Context, Attention.Aside => Try(Attention.Response, _)
+attention_call! : Context, Attention.Request => Try(Protocol.Answer(Attention.Response), _)
+attention_call! = |context, asked|
+	match asked {
+		ListItems => Ok(Ok(Items(attention_items!(context)?)))
+		Settle({ session_id, signature }) => set_aside!(context, { session_id, signature, snoozed_until: 0 })
+		Snooze({ session_id, signature, minutes }) => set_aside!(context, { session_id, signature, snoozed_until: now_ms!() + minutes.to_i64() * 60_000 })
+		Unsettle({ session_id }) => {
+			Sqlite.execute!({ db: context.db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: session_id } })?
+			Ok(Ok(Accepted))
+		}
+	}
+
+set_aside! : Context, Attention.Aside => Try(Protocol.Answer(Attention.Response), _)
 set_aside! = |context, { session_id, signature, snoozed_until }|
 	match provider!(context, session_id)? {
-		NoSession => Ok(Rejected("no session ${session_id}"))
+		NoSession => Ok(no_session(session_id))
 		_ => {
 			Sqlite.execute!({ db: context.db, query: "INSERT INTO attention_asides (session_id, signature, snoozed_until) VALUES (:session_id, :signature, :snoozed_until) ON CONFLICT (session_id) DO UPDATE SET signature = excluded.signature, snoozed_until = excluded.snoozed_until;", params: { session_id, signature, snoozed_until } })?
-			Ok(Accepted)
+			Ok(Ok(Accepted))
 		}
 	}
 
@@ -484,10 +699,7 @@ provider! = |{ db, mock_enabled, paseo }, session_id| {
 timelines! : Context, List({ session_id : Str, after : U64 }) => Try(List({ session_id : Str, entries : List(Chat.Entry) }), _)
 timelines! = |context, watches| {
 	for { session_id, .. } in watches {
-		match provider!(context, session_id)? {
-			PaseoSession(_) => wanted!(context.db, "timeline", session_id)?
-			_ => {}
-		}
+		interested!(context, Timeline(session_id))?
 	}
 	paseo_cycle!(context)?
 	var $timelines = []
@@ -621,13 +833,15 @@ written! = |daemon, request, request_id, answer| {
 	answer(answered?, request_id)
 }
 
-paseo_answer : Try({}, _) -> Chat.Response
+## Paseo refusing a request or liton's password is `Refused`; any other
+## failure, such as not reaching Paseo, `Unavailable`.
+paseo_answer : Try({}, _) -> Protocol.Answer(Chat.Response)
 paseo_answer = |outcome|
 	match outcome {
-		Ok({}) => Accepted
-		Err(Refused(reason)) => Rejected(reason)
-		Err(HelloRejected(reason)) => Rejected(Paseo.refusal(reason))
-		Err(err) => Rejected("Paseo: ${Str.inspect(err)}")
+		Ok({}) => Ok(Accepted)
+		Err(Refused(reason)) => Err({ code: Refused, message: reason })
+		Err(HelloRejected(reason)) => Err({ code: Refused, message: Paseo.refusal(reason) })
+		Err(err) => Err({ code: Unavailable, message: "Paseo: ${Str.inspect(err)}" })
 	}
 
 ## How long the daemon waits after Paseo refused its password before asking
