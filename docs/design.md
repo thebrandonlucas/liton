@@ -17,16 +17,31 @@ Every agent UI picks one kind of user. buzz picks non-programmers in rooms, but 
 
 ## Architecture
 
+liton is a protocol and a set of parts more than an app. Its narrow waist is the capability protocol ([protocol.md](protocol.md)): typed, versioned capabilities that sources provide and clients use. Everything above and below the waist is replaceable, the way anything can sit at either end of a Unix pipe.
+
 ```
- UI (roc-signals: web, native, TUI)
-   │  JSON-RPC over HTTP POST (queries, commands) + SSE (event streams)
- liton daemon (Roc, on basic-webserver)
-   ├─ capability registry  (typed, versioned interfaces)
-   ├─ context graph        (workspace ↔ agent ↔ room ↔ ticket ↔ PR ↔ sandbox)
-   ├─ providers (compile-time Roc packages)
-   │    paseo · github · nostr · sandbox · acp · radicle · buzz …
-   └─ MCP server: the same capabilities exposed to agents
+ clients:   web UI (Workbench, Inbox, review, ...) · liton CLI · TUI · bots · agents over MCP
+                         ▲  the same capabilities, the same wire  ▲
+ ──────────── capability protocol: manifest · call · subscribe, versioned ────────────
+                         ▼                                         ▼
+ liton daemon (Roc)
+   ├─ capability registry   what is offered, by whom, at which versions
+   ├─ transformers          capabilities derived from others (attention from chat, ...)
+   ├─ context graph         workspace ↔ agent ↔ room ↔ ticket ↔ PR ↔ sandbox
+   └─ providers             in the daemon (Roc packages) or out of it (any language,
+                            over the provider protocol): Paseo, ACP agents, GitHub,
+                            Nostr rooms, other liton daemons ...
 ```
+
+How the parts grow without the core growing:
+
+- **Sources plug in from any language.** A provider compiled into the daemon is a pure Roc state machine; a provider outside it speaks the provider protocol over stdio or a WebSocket, as language servers do. A remote liton daemon is a provider like any other, which is how daemons federate.
+- **Transformers are pipes.** A transformer consumes capabilities and offers another: the inbox is attention derived from chat, a room's agent is chat routed by mentions. Users compose them in configuration.
+- **Every client is equal.** The web UI is one client; the `liton` CLI speaks the same protocol as JSON lines, so `liton watch` piped into `jq` into `liton call` works, and agents use the same capabilities through an MCP face. Nothing is reachable only from the GUI.
+- **A setup is a program that evaluates to data.** A `Litonfile.roc`, as a Kaifile is for kai, declares the daemons to connect, the transformers, presets, options and keys. It is pure Roc, so it does only what it declares; another setup imports it and overrides parts, pinned by a lockfile. A snapshot is an evaluated Litonfile.
+- **Change is additive.** Capabilities version side by side and clients negotiate; a missing capability leaves a placeholder, not an error; parts describe themselves (capabilities, options, slots) so tools adapt to them. Each provider and transformer runs isolated, so one failing degrades only what depends on it.
+
+What stays out: no plugin API into liton's internals (a part sees only the protocol), no untyped or Turing-complete configuration, and nothing in the core that could be a capability, a transformer or a client.
 
 ### Providers
 
