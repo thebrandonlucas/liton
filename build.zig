@@ -36,6 +36,24 @@ fn isRocRoot(path: []const u8, contents: []const u8) bool {
     return false;
 }
 
+// The Roc target for a native binary on the machine running the build, from
+// the native targets roc-signals's platform has: x64musl, arm64mac, x64mac.
+fn nativeRocTarget(b: *std.Build) []const u8 {
+    const host = b.graph.host.result;
+    return switch (host.os.tag) {
+        .linux => switch (host.cpu.arch) {
+            .x86_64 => "x64musl",
+            else => @panic("roc-signals has no native spec runner for this Linux architecture"),
+        },
+        .macos => switch (host.cpu.arch) {
+            .aarch64 => "arm64mac",
+            .x86_64 => "x64mac",
+            else => @panic("roc-signals has no native spec runner for this macOS architecture"),
+        },
+        else => @panic("roc-signals has no native spec runner for this OS"),
+    };
+}
+
 fn sortPaths(paths: [][]const u8) void {
     std.mem.sort([]const u8, paths, {}, struct {
         fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -175,16 +193,17 @@ pub fn build(b: *std.Build) void {
     }
 
     // The UI's .scm specs, in the native runner roc-signals's release builds
-    // the UI into for x64musl.
+    // the UI into for the machine running the build.
     const spec_step = b.step("spec", "Run the UI's specs natively");
     const run_specs = b.addSystemCommand(&.{
-        "sh", "-c",
+        "sh",               "-c",
         \\set -e
         \\mkdir -p zig-out/bin
-        \\"$1" build --target=x64musl ui/main.roc --output=zig-out/bin/liton-specs
+        \\"$1" build --target="$2" ui/main.roc --output=zig-out/bin/liton-specs
         \\zig-out/bin/liton-specs ui/specs/*.scm
         ,
-        "sh", roc_ui,
+        "sh",               roc_ui,
+        nativeRocTarget(b),
     });
     run_specs.has_side_effects = true;
     spec_step.dependOn(&run_specs.step);
