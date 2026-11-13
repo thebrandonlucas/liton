@@ -13,3 +13,5 @@ docs/roc-isms/
 /vendor/
 *.db
 *.db-*
+# What bench/bench.mjs measures.
+bench/results/
