@@ -16,8 +16,9 @@ Paseo := [].{
 	page_limit = 200
 
 	## Declared before `Loose`, whose parser uses it: declared after, its
-	## derived parser_for "does not exist" (Roc nightly-2026-11-07; repro in
-	## roc-issues BUG-026, not filed yet).
+	## derived parser_for "does not exist" (Roc nightly-2026-11-07;
+	## https://github.com/roc-lang/roc/issues/12994, repro in roc-issues
+	## archive/BUG-028-derived-parser-for-before-declaration).
 	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
 		parser_for : _
 	}
