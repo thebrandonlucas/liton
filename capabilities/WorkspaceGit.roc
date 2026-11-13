@@ -57,6 +57,19 @@ WorkspaceGit := [].{
 	## kept with them so a poll doesn't hash them again.
 	Found : { workspace : Workspace, status : [Status(Status), NoStatus], fingerprint : Str, diff : List(FileDiff), commits : List(Commit) }
 
+	## The one event of a `changes/<context>/<scope>` topic: the workspace, its
+	## status, the scope's changed files and the branch's commits.
+	Snapshot : { workspace : [Known(Workspace), Unknown], status : [Status(Status), NoStatus], changes : Changes, commits : List(Commit) }
+
+	## A workspace's snapshot of `scope`, or the one of a workspace that can't
+	## be read.
+	snapshot : Scope, Try(Found, [Unknown]) -> Snapshot
+	snapshot = |scope, found|
+		match found {
+			Ok({ workspace, status, fingerprint, diff, commits }) => { workspace: Known(workspace), status, changes: { scope, fingerprint, files: diff.map(|shown| shown.file) }, commits }
+			Err(Unknown) => { workspace: Unknown, status: NoStatus, changes: { scope, fingerprint: WorkspaceGit.fingerprint(scope, []), files: [] }, commits: [] }
+		}
+
 	polled : Poll, Found -> Polled
 	polled = |poll, { workspace, status, fingerprint, diff, commits }| {
 		file =
