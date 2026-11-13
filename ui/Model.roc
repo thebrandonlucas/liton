@@ -64,6 +64,10 @@ Model := [].{
 		## Counts on the numbers ending pane and column ids, so each is new.
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
+
+		## How many times each chat pane's composer was cleared by sending its
+		## draft, which builds it anew (see `Liton.chat`).
+		cleared : List({ pane : Str, count : U64 }),
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
 		attention : List(Attention.Item),
@@ -152,6 +156,7 @@ Model := [].{
 				jump: { serial: 0, panel: "" },
 				next_id: 1,
 				drafts: [],
+				cleared: [],
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],
@@ -616,15 +621,17 @@ Model := [].{
 	set_draft : State, Str, Str -> State
 	set_draft = |state, pane_id, text| { ..state, drafts: state.drafts.drop_if(|found| found.pane == pane_id).append({ pane: pane_id, text }) }
 
-	## Sends a pane's draft to the session the pane shows.
+	## Sends a pane's draft to the session the pane shows, and clears its
+	## composer.
 	submit : State, Str -> State
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		count = (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) + 1
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send(Model.set_draft(state, pane_id, ""), SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), cleared: state.cleared.drop_if(|composer| composer.pane == pane_id).append({ pane: pane_id, count }) }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer

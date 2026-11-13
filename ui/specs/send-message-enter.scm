@@ -1,0 +1,22 @@
+(test "Liton — sending with Enter empties the composer, so what is typed next is a message of its own"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
+    (run-effect 3)
+    (fill (label "Message") "Find the TODOs")
+    ; Enter submits the form, the box still focused.
+    (submit (label "Send a message"))
+    (expect-text (test-id "sent-status") "Sending…")
+    (expect-value (label "Message") "")
+    (fill (label "Message") "Then the FIXMEs")
+    (expect-value (label "Message") "Then the FIXMEs")
+    (submit (label "Send a message"))
+    (expect-value (label "Message") "")
+    (expect-visible (text "Find the TODOs"))
+    (expect-visible (text "Then the FIXMEs"))
+    (expect-pending-effects 2)
+  )
+)

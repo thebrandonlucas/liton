@@ -36,3 +36,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Layouts saved by an earlier version, in the browser or as a snapshot, load in Tiling, the oldest with one column per pane. One that is just the old default of Sessions, Chat and Capabilities loads as the new Developer workbench instead.
 - Switching sessions, picking a file or a scope in Changes, or showing a pane brings what it shows faster: the UI asks the daemon at once instead of on its next once-a-second update, which now asks for everything on screen in one request.
 - Without an Inbox in the layout, the browser tab's title counts the sessions waiting for you.
+
+### Fixed
+
+- Sending a message by pressing Enter clears the message box, so the next message no longer starts with the text of the last.

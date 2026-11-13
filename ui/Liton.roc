@@ -125,6 +125,8 @@ Liton := [].{
 			),
 		),
 		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
+		# A composer cleared by sending is built anew, out of focus: focus it.
+		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
 			|text| [StorageSet(Liton.snapshot_key, text)],
@@ -677,13 +679,24 @@ Liton := [].{
 					"Send a message",
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model0.update_by(id, Model.submit))],
 					[
-						Html.text_input(Engine.const("Message"), "text", id.map2(model0.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent")], model0.set_value_by(id, Model.set_draft)),
+						# roc-signals 0.5.0 writes a new value into a focused text box only
+						# once it loses focus, so a draft cleared by pressing Enter would
+						# stay in the box. Sending builds the box anew instead, which
+						# `Liton.effects` focuses. No upstream issue yet.
+						Engine.when(
+							id.map2(model0.signal(), |pane_id, state| (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) % 2 == 0),
+							|| Liton.composer_input(model0, id),
+							|| Liton.composer_input(model0, id),
+						),
 						Html.submit_button("Send", []),
 					],
 				),
 			],
 		)
 	}
+
+	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	composer_input = |model, id| Html.text_input(Engine.const("Message"), "text", id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent"), Engine.ref("composer")], model.set_value_by(id, Model.set_draft))
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls

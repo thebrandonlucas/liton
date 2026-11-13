@@ -109,12 +109,17 @@ try {
     await click("Chat", "div.permission button", "Allow");
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
   });
-  await step("a message sent to Scratch appears", async () => {
+  await step("a message sent to Scratch with Enter appears, and leaves the composer empty and focused", async () => {
     await click("Sessions", ".session button", "Scratch");
     await see("Chat", ".pane-context", "following Scratch");
-    await (await page.$('section[aria-label="Chat"] input[aria-label="Message"]')).type("Find the TODOs");
-    await click("Chat", ".composer button", "Send");
+    const composer = 'section[aria-label="Chat"] input[aria-label="Message"]';
+    await (await page.$(composer)).type("Find the TODOs");
+    await page.keyboard.press("Enter");
     await see("Chat", ".entry.user", "Find the TODOs");
+    const typed = () => page.evaluate((composer) => document.activeElement === document.querySelector(composer) && document.querySelector(composer).value, composer);
+    await until("an empty, focused composer", async () => (await typed()) === "");
+    await page.keyboard.type("Next");
+    await until("only the new text in the composer", async () => (await typed()) === "Next");
   });
   await step("its tool card runs, then is done", async () => {
     await see("Chat", '.tool-card.running [data-testid="tool-state"]', "running", 8000);
