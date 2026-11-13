@@ -1,0 +1,14 @@
+# Paseo's relay, as its Cloudflare adapter, for `wrangler dev --local` only:
+# no account_id, routes or PASEO_RELAY_UPSTREAM, which would forward to
+# Paseo's hosted relay.
+name = "paseo-relay-local"
+main = "node_modules/@getpaseo/relay/dist/cloudflare-adapter.js"
+compatibility_date = "2024-12-01"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDurableObject"]

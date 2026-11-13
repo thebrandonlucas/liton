@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Paseo's relay, run locally in workerd",
+  "dependencies": {
+    "@getpaseo/relay": "0.15.3",
+    "wrangler": "4.161.0"
+  }
+}
