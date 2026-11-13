@@ -14,6 +14,7 @@ const excluded_source_dirs = [_][]const u8{
     ".zig-cache",
     "vendor",
     "zig-out",
+    "zig-pkg",
 };
 
 fn isExcludedSourceDir(name: []const u8) bool {
@@ -114,48 +115,78 @@ fn addFilesCommand(
     step.dependOn(&b.addSystemCommand(args.items).step);
 }
 
+// The UI's sources, which the UI's Roc compiler owns.
+fn isUi(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "ui/");
+}
+
+// Checks root with roc, and tests it after all checks.
+fn addRocRoot(
+    b: *std.Build,
+    check_step: *std.Build.Step,
+    test_step: *std.Build.Step,
+    roc: []const u8,
+    root: []const u8,
+) void {
+    check_step.dependOn(&b.addSystemCommand(&.{ roc, "check", root }).step);
+    const test_roc = b.addSystemCommand(&.{ roc, "test", root });
+    test_roc.step.dependOn(check_step);
+    test_step.dependOn(&test_roc.step);
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
-    // The UI's platform, roc-signals, has no release: check it out at the
-    // commit .roc-signals pins and build its browser host.
-    const vendor = b.addSystemCommand(&.{"scripts/vendor-roc-signals.sh"});
-    vendor.has_side_effects = true;
+    // The UI's Roc compiler and the daemon's, as Kaifile.roc provides them.
+    // With one compiler again, roc-ui's default becomes "roc".
+    const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
+    const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse "roc-ui";
+
+    var roc_files = std.ArrayList([]const u8).empty;
+    var ui_roc_files = std.ArrayList([]const u8).empty;
+    for (sources.roc_files) |path| {
+        const files = if (isUi(path)) &ui_roc_files else &roc_files;
+        files.append(b.allocator, path) catch @panic("out of memory");
+    }
+
+    // The UI's platform's release bundle, the one ui/main.roc names, for the
+    // runtime.mjs and worker.mjs the page loads.
+    const roc_signals = b.dependency("roc_signals_platform", .{});
 
     const check_step = b.step("check", "Run formatting and static checks");
-    addFilesCommand(b, check_step, &.{ "roc", "fmt", "--check" }, sources.roc_files);
+    addFilesCommand(b, check_step, &.{ roc, "fmt", "--check" }, roc_files.items);
+    addFilesCommand(b, check_step, &.{ roc_ui, "fmt", "--check" }, ui_roc_files.items);
     addFilesCommand(b, check_step, &.{ "zig", "fmt", "--check" }, sources.zig_files);
-    for (sources.roc_roots) |root| {
-        const check_roc = b.addSystemCommand(&.{ "roc", "check", root });
-        check_roc.step.dependOn(&vendor.step);
-        check_step.dependOn(&check_roc.step);
-    }
 
     // Mutating format step for devs without editor support for Roc and Zig.
     const fmt_step = b.step("fmt", "Format all source code files");
-    addFilesCommand(b, fmt_step, &.{ "roc", "fmt" }, sources.roc_files);
+    addFilesCommand(b, fmt_step, &.{ roc, "fmt" }, roc_files.items);
+    addFilesCommand(b, fmt_step, &.{ roc_ui, "fmt" }, ui_roc_files.items);
     addFilesCommand(b, fmt_step, &.{ "zig", "fmt" }, sources.zig_files);
 
+    // The capabilities package is imported by the UI and the daemon, so both
+    // compilers check and test it.
     const test_step = b.step("test", "Run checks and Roc tests");
     test_step.dependOn(check_step);
     for (sources.roc_roots) |root| {
-        const test_roc = b.addSystemCommand(&.{ "roc", "test", root });
-        test_roc.step.dependOn(check_step);
-        test_step.dependOn(&test_roc.step);
+        const shared = std.mem.startsWith(u8, root, "capabilities/");
+        if (shared or !isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
+        if (shared or isUi(root)) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
 
-    // The UI's .scm specs, in the native runner roc-signals builds the UI into
-    // for x64musl.
+    // The UI's .scm specs, in the native runner roc-signals's release builds
+    // the UI into for x64musl.
     const spec_step = b.step("spec", "Run the UI's specs natively");
     const run_specs = b.addSystemCommand(&.{
         "sh", "-c",
         \\set -e
         \\mkdir -p zig-out/bin
-        \\roc build --target=x64musl ui/main.roc --output=zig-out/bin/liton-specs
+        \\"$1" build --target=x64musl ui/main.roc --output=zig-out/bin/liton-specs
         \\zig-out/bin/liton-specs ui/specs/*.scm
+        ,
+        "sh", roc_ui,
     });
     run_specs.has_side_effects = true;
-    run_specs.step.dependOn(&vendor.step);
     spec_step.dependOn(&run_specs.step);
     test_step.dependOn(&run_specs.step);
 
@@ -165,15 +196,18 @@ pub fn build(b: *std.Build) void {
         "sh", "-c",
         \\set -e
         \\mkdir -p zig-out/www
-        \\roc build --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
-        \\cp ui/index.html ui/style.css vendor/roc-signals/platform/runtime.mjs zig-out/www/
+        \\"$1" build --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
+        \\cp ui/index.html ui/style.css "$2" "$3" zig-out/www/
+        ,
+        "sh", roc_ui,
     });
+    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
+    build_ui.addFileArg(roc_signals.path("worker.mjs"));
     build_ui.has_side_effects = true;
-    build_ui.step.dependOn(&vendor.step);
     ui_step.dependOn(&build_ui.step);
 
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
-    const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && roc build daemon/main.roc --output=zig-out/bin/liton-daemon" });
+    const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build daemon/main.roc --output=zig-out/bin/liton-daemon", "sh", roc });
     build_daemon.has_side_effects = true;
     daemon_step.dependOn(&build_daemon.step);
 
@@ -187,9 +221,11 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_daemon.step);
 
     // Drives the UI in headless Chrome (CHROME, or chromium on PATH) against
-    // a daemon of its own serving the mock provider.
+    // a daemon of its own serving the mock provider, through the DevTools
+    // client in roc-signals's source, which its release bundle leaves out.
     const e2e_step = b.step("e2e", "Drive the UI in headless Chrome against the daemon");
     const run_e2e = b.addSystemCommand(&.{ "node", "e2e/journey.mjs" });
+    run_e2e.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
     run_e2e.has_side_effects = true;
     run_e2e.step.dependOn(&build_ui.step);
     run_e2e.step.dependOn(&build_daemon.step);

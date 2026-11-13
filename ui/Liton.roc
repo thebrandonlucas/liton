@@ -1,6 +1,6 @@
 ## liton's UI: columns of panes, each a widget bound to a capability the
 ## daemon advertises, and the effects that keep them current.
-import pf.Engine exposing [Elem, Handler, In, Root, Row, RowRef, State, Val]
+import pf.Engine exposing [Elem, Handler, In, Root, Row, RowRef, Signal, State]
 import pf.Html
 import cap.Attention
 import cap.Capability
@@ -41,23 +41,23 @@ Liton := [].{
 							"column-tabs",
 							[
 								Engine.each(
-									model.val().map(|state| state.columns),
+									model.signal().map(|state| state.columns),
 									|column| column.id,
 									|row|
-										Html.button_v(
-											row.field(|column| column).map2(model.val().lift_row(), |column, state| Str.join_with(column.panes.map(|pane| Liton.label(state, pane)), " · ")),
+										Html.button_s(
+											row.field(|column| column).map2(model.signal().lift_row(), |column, state| Str.join_with(column.panes.map(|pane| Liton.label(state, pane)), " · ")),
 											[
-												Html.flag("aria-pressed", row.key().map2(model.val().lift_row(), |key, state| key == state.active_column)),
-												Engine.test_id_v(row.key().map2(model.val().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
+												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_column)),
+												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
 											],
 											model.lift_row().update_by(row.key(), Model.show_column),
 										),
 								),
 							],
 						),
-						Html.div_v(
-							model.val().map(|state| if (state.shell == Workbench) "columns workbench" else "columns tiling"),
-							[Engine.each(model.val().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))],
+						Html.div_s(
+							model.signal().map(|state| if (state.shell == Workbench) "columns workbench" else "columns tiling"),
+							[Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))],
 						),
 						Liton.settings(model),
 					],
@@ -83,7 +83,7 @@ Liton := [].{
 		),
 		Engine.watch(Engine.const({}), |_| [Interval(1000)], model.on_result(|state, _, _| { ..state, ticks: state.ticks + 1 })),
 		Engine.watch(
-			model.val().map(|state| { ticks: state.ticks, watches: Model.watches(state) }),
+			model.signal().map(|state| { ticks: state.ticks, watches: Model.watches(state) }),
 			|asked| [Http({ method: "POST", url: "/api/chat/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ watches: asked.watches }), timeout_ms: 5000 })],
 			model.on_result(
 				|state, _, res| {
@@ -97,7 +97,7 @@ Liton := [].{
 			),
 		),
 		Engine.watch(
-			model.val().map(|state| { ticks: state.ticks, advertised: state.capabilities.contains(Capability.attention_v1) }),
+			model.signal().map(|state| { ticks: state.ticks, advertised: state.capabilities.contains(Capability.attention_v1) }),
 			|asked| if (asked.advertised) [Http({ method: "GET", url: "/api/attention", headers: [], body: "", timeout_ms: 5000 })] else [],
 			model.on_result(
 				|state, asked, res| {
@@ -110,8 +110,8 @@ Liton := [].{
 				},
 			),
 		),
-		Engine.on_change(
-			model.val().map(|state| state.attention_outbox),
+		Engine.watch_changes(
+			model.signal().map(|state| state.attention_outbox),
 			|outbox| [Http({ method: "POST", url: "/api/attention", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
 			model.on_result(
 				|state, outbox, res| {
@@ -121,9 +121,9 @@ Liton := [].{
 				},
 			),
 		),
-		Engine.watch(model.val().map(Model.needs_you), |count| [Title(if (count == 0) "liton" else "(${count.to_str()}) liton")], Engine.ignore({})),
-		Engine.on_change(
-			model.val().map(|state| state.outbox),
+		Engine.watch(model.signal().map(Model.needs_you), |count| [Title(if (count == 0) "liton" else "(${count.to_str()}) liton")], Engine.ignore({})),
+		Engine.watch_changes(
+			model.signal().map(|state| state.outbox),
 			|outbox| [Http({ method: "POST", url: "/api/chat", headers: [("Content-Type", "application/json")], body: Json.to_str(outbox.request), timeout_ms: 5000 })],
 			model.on_result(
 				|state, outbox, res| {
@@ -138,9 +138,9 @@ Liton := [].{
 				},
 			),
 		),
-		Engine.watch(model.val().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
-		Engine.on_change(
-			model.val().map(|state| Json.to_str(Model.snapshot(state))),
+		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
+		Engine.watch_changes(
+			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
 			|text| [StorageSet(Liton.snapshot_key, text)],
 			Engine.ignore({}),
 		),
@@ -151,20 +151,20 @@ Liton := [].{
 		Html.div(
 			"toolbar",
 			[
-				Html.span_v(Engine.const("liton"), [Engine.class("brand")]),
+				Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
 				Engine.when(
-					model.val().map(|state| state.shell == Workbench),
+					model.signal().map(|state| state.shell == Workbench),
 					|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "◧", "Left drawer"), Liton.drawer_toggle(model, Right, "◨", "Right drawer")]),
 					|| Engine.text(""),
 				),
-				Html.button("Settings", [Engine.class("settings-toggle"), Html.flag("aria-expanded", model.val().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
-				Html.span_v(model.val().map(|state| state.notice), [Engine.class("notice")]),
+				Html.button("Settings", [Engine.class("settings-toggle"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
+				Html.span_s(model.signal().map(|state| state.notice), [Engine.class("notice")]),
 			],
 		)
 
 	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str, Str -> Elem(Ctx)
 	drawer_toggle = |model, drawer, glyph, name|
-		Html.button(glyph, [Html.aria_label(name), Html.flag("aria-expanded", model.val().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+		Html.button(glyph, [Html.aria_label(name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
 	## to move, remove or set the options of, adds widgets, and shows the
@@ -172,7 +172,7 @@ Liton := [].{
 	settings : State(Ctx, Model.State) -> Elem(Ctx)
 	settings = |model|
 		Engine.when(
-			model.val().map(|state| state.show_settings),
+			model.signal().map(|state| state.show_settings),
 			||
 				Html.section(
 					"Settings",
@@ -183,24 +183,24 @@ Liton := [].{
 						Html.div(
 							"choices",
 							[
-								Html.button("Developer preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Workbench and !Liton.inbox_preset(state)))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
-								Html.button("Inbox preset", [Html.flag("aria-pressed", model.val().map(Liton.inbox_preset))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.inbox)))),
-								Html.button("Tiling preset", [Html.flag("aria-pressed", model.val().map(|state| state.shell == Tiling))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.tiling)))),
+								Html.button("Developer preset", [Html.flag("aria-pressed", model.signal().map(|state| state.shell == Workbench and !Liton.inbox_preset(state)))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
+								Html.button("Inbox preset", [Html.flag("aria-pressed", model.signal().map(Liton.inbox_preset))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.inbox)))),
+								Html.button("Tiling preset", [Html.flag("aria-pressed", model.signal().map(|state| state.shell == Tiling))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.tiling)))),
 							],
 						),
 						Html.h3("Layout", ""),
-						Engine.each(model.val().map(|state| state.columns), |column| column.id, |row| Liton.settings_column(model, row)),
+						Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.settings_column(model, row)),
 						Html.h3("Add a widget", ""),
 						Html.div(
 							"choices",
 							[
 								# A Workbench adds to its main area; Tiling takes any widget.
 								Engine.each(
-									model.val().map(|state| Widgets.all.keep_if(|widget| Widgets.fits(widget, if (state.shell == Workbench) Main else Free))),
+									model.signal().map(|state| Widgets.all.keep_if(|widget| Widgets.fits(widget, if (state.shell == Workbench) Main else Free))),
 									|widget| widget.id,
 									|row|
-										Html.button_v(
-											row.field(|widget| widget).map2(model.val().lift_row(), |widget, state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
+										Html.button_s(
+											row.field(|widget| widget).map2(model.signal().lift_row(), |widget, state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
 											[],
 											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text(Model.add_pane(state, widget))),
 										),
@@ -209,7 +209,7 @@ Liton := [].{
 						),
 						Html.h3("Snapshot", ""),
 						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
-						Html.textarea(Engine.const("Snapshot"), model.val().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
+						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
 						Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 					],
 				),
@@ -220,11 +220,11 @@ Liton := [].{
 	settings_column : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)
 	settings_column = |model0, row| {
 		model = model0.lift_row()
-		slot = row.key().map2(model.val(), |column_id, state| Model.slot_of(state, column_id))
+		slot = row.key().map2(model.signal(), |column_id, state| Model.slot_of(state, column_id))
 		Html.div(
 			"settings-column",
 			[
-				Html.span_v(slot.map(Liton.slot_title), [Engine.class("settings-slot")]),
+				Html.span_s(slot.map(Liton.slot_title), [Engine.class("settings-slot")]),
 				Engine.each(row.field(|column| column.panes), |pane| pane.id, |pane_row| Liton.settings_pane(model, slot, pane_row)),
 			],
 		)
@@ -241,7 +241,7 @@ Liton := [].{
 
 	## A pane in settings: in a Workbench, the slots its widget fits to move it
 	## to; Remove; and, folded, a form of its widget's options.
-	settings_pane : State(ColumnCtx, Model.State), Val(ColumnCtx, Model.Slot), RowRef(ColumnCtx, Model.Pane) -> Elem(PaneCtx)
+	settings_pane : State(ColumnCtx, Model.State), Signal(ColumnCtx, Model.Slot), RowRef(ColumnCtx, Model.Pane) -> Elem(PaneCtx)
 	settings_pane = |model0, slot, row| {
 		model = model0.lift_row()
 		id = row.key()
@@ -255,20 +255,20 @@ Liton := [].{
 					"summary",
 					[],
 					[
-						Html.span_v(title, [Engine.class("settings-pane-title")]),
+						Html.span_s(title, [Engine.class("settings-pane-title")]),
 						Engine.when(
-							model.val().map(|state| state.shell == Workbench),
+							model.signal().map(|state| state.shell == Workbench),
 							||
 								Html.select(
 									title.map(|name| "Move ${name} to"),
 									slot.lift_row().map(Model.slot_name),
 									[],
-									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.attr_v("value", choice.key())], [Engine.text_v(choice.field(Liton.slot_title))]))],
+									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.attr_s("value", choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
 									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text(Model.move_to_slot(state, pane_id, Model.slot_named(name)))),
 								),
 							|| Engine.text(""),
 						),
-						Html.button("Remove", [Html.aria_label_v(title.map(|name| "Remove ${name}"))], model.update_by(id, |state, pane_id| Model.with_snapshot_text(Model.close_pane(state, pane_id)))),
+						Html.button("Remove", [Html.aria_label_s(title.map(|name| "Remove ${name}"))], model.update_by(id, |state, pane_id| Model.with_snapshot_text(Model.close_pane(state, pane_id)))),
 					],
 				),
 				Engine.each(row.field(|shown| Widgets.find(shown.widget).options), |option| option.key, |option_row| Liton.option_control(model, pane, option_row)),
@@ -278,7 +278,7 @@ Liton := [].{
 
 	## A control for one of a pane's options, from its kind: a checkbox, or a
 	## drop-down of its choices.
-	option_control : State(PaneCtx, Model.State), Val(PaneCtx, Model.Pane), RowRef(PaneCtx, Widgets.Option) -> Elem(Row(PaneCtx, Widgets.Option))
+	option_control : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Widgets.Option) -> Elem(Row(PaneCtx, Widgets.Option))
 	option_control = |model0, pane0, row| {
 		model = model0.lift_row()
 		pane = pane0.lift_row()
@@ -304,10 +304,10 @@ Liton := [].{
 			[
 				Engine.when(
 					checkbox,
-					|| Engine.element("label", [], [Html.checkbox(label, value.map(|shown| shown == "true"), [], set), Engine.text_v(label)]),
-					|| Engine.element("label", [], [Engine.text_v(label), Html.select(label, value, [], [Engine.each(choices, |choice| choice, |choice| Html.option_v(choice.key()))], set)]),
+					|| Engine.element("label", [], [Html.checkbox(label, value.map(|shown| shown == "true"), [], set), Engine.text_s(label)]),
+					|| Engine.element("label", [], [Engine.text_s(label), Html.select(label, value, [], [Engine.each(choices, |choice| choice, |choice| Html.option_s(choice.key()))], set)]),
 				),
-				Html.p_v(row.field(|option| option.help), [Engine.class("help")]),
+				Html.p_s(row.field(|option| option.help), [Engine.class("help")]),
 			],
 		)
 	}
@@ -319,15 +319,15 @@ Liton := [].{
 		model = model0.lift_row()
 		id = row.key()
 		column = row.field(|shown| shown)
-		slot = id.map2(model.val(), |column_id, state| Model.slot_of(state, column_id))
-		tiling = model.val().map(|state| state.shell == Tiling)
-		classes = column.map2(model.val(), |shown, state| Liton.column_class(state, shown))
+		slot = id.map2(model.signal(), |column_id, state| Model.slot_of(state, column_id))
+		tiling = model.signal().map(|state| state.shell == Tiling)
+		classes = column.map2(model.signal(), |shown, state| Liton.column_class(state, shown))
 		Engine.element(
 			"div",
 			[
-				Engine.class_v(classes),
-				Engine.test_id_v(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
-				Engine.attr_v("style", column.map2(model.val(), |shown, state| if (state.shell == Tiling) "flex-grow: ${shown.size.to_str()}; --minimum-width: ${shown.panes.fold(0, |widest, pane| U32.max(widest, Widgets.find(pane.widget).minimum_width)).to_str()}px" else "")),
+				Engine.class_s(classes),
+				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
+				Engine.attr_s("style", column.map2(model.signal(), |shown, state| if (state.shell == Tiling) "flex-grow: ${shown.size.to_str()}; --minimum-width: ${shown.panes.fold(0, |widest, pane| U32.max(widest, Widgets.find(pane.widget).minimum_width)).to_str()}px" else "")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.update_by(id, |state, column_id| { ..state, active_column: column_id })),
 			],
@@ -344,8 +344,8 @@ Liton := [].{
 							row.field(|shown| shown.panes),
 							|pane| pane.id,
 							|tab|
-								Html.button_v(
-									tab.field(|pane| pane).map2(model.val().lift_row(), |pane, state| Liton.label(state, pane)),
+								Html.button_s(
+									tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
 									[Engine.class("tab"), Html.flag("aria-pressed", tab.key().map2(column.lift_row(), |key, shown| key == shown.active))],
 									model.lift_row().update_by(tab.key(), Model.activate_tab),
 								),
@@ -356,7 +356,7 @@ Liton := [].{
 								Html.div(
 									"column-controls",
 									[
-										Html.button_v(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [], model.update_by(id, Model.toggle_tabs)),
+										Html.button_s(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [], model.update_by(id, Model.toggle_tabs)),
 										Html.icon_button("−", Engine.const("Make column narrower"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Narrower))),
 										Html.icon_button("+", Engine.const("Make column wider"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Wider))),
 									],
@@ -370,33 +370,33 @@ Liton := [].{
 		)
 	}
 
-	pane_view : State(ColumnCtx, Model.State), Val(ColumnCtx, Model.Column), RowRef(ColumnCtx, Model.Pane) -> Elem(PaneCtx)
+	pane_view : State(ColumnCtx, Model.State), Signal(ColumnCtx, Model.Column), RowRef(ColumnCtx, Model.Pane) -> Elem(PaneCtx)
 	pane_view = |model0, column, row| {
 		model = model0.lift_row()
 		id = row.key()
 		title = row.field(|pane| Widgets.find(pane.widget).title)
-		shown = row.field(|pane| pane).map2(model.val(), |pane, state| { pane: pane, state: state })
+		shown = row.field(|pane| pane).map2(model.signal(), |pane, state| { pane: pane, state: state })
 		Engine.element(
 			"section",
-			[Html.aria_label_v(title), Engine.class_v(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane"))],
+			[Html.aria_label_s(title), Engine.class_s(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane"))],
 			[
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
 					[
-						Html.span_v(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
-						Html.span_v(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
+						Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
+						Html.span_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
 							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission and (Model.loading(state, Model.session_of(state, pane)) or Model.pending(state, pane.id).is_ok())),
-							|| Html.span_v(Engine.const("waiting for you"), [Engine.class("badge waiting"), Engine.test_id("session-status")]),
+							|| Html.span_s(Engine.const("waiting for you"), [Engine.class("badge waiting"), Engine.test_id("session-status")]),
 							|| Engine.text(""),
 						),
 						Engine.when(
 							row.field(|pane| Widgets.find(pane.widget).follows_session),
-							|| Html.button_v(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
+							|| Html.button_s(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
 							|| Engine.text(""),
 						),
 						Engine.when(
-							model.val().map(|state| state.shell == Tiling),
+							model.signal().map(|state| state.shell == Tiling),
 							||
 								Html.div(
 									"moves",
@@ -422,7 +422,7 @@ Liton := [].{
 							Capabilities => Liton.capabilities(model)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
-								Html.p_v(
+								Html.p_s(
 									shown.map(|{ pane, state }| "This widget needs ${Model.missing(state, pane)}, which no connected provider supplies. Connect one that does, and it fills in here."),
 									[Engine.class("missing")],
 								)
@@ -457,30 +457,30 @@ Liton := [].{
 
 	## What needs you, then what failed, is done or working, then what you set
 	## aside, folded away.
-	inbox : State(PaneCtx, Model.State), Val(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	inbox : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	inbox = |model, pane|
 		Html.div(
 			"inbox",
 			[
-				Liton.inbox_section(model, pane, "Needs you", model.val().map(|state| Model.waiting(state, NeedsYou))),
-				Liton.inbox_section(model, pane, "Failed", model.val().map(|state| Model.waiting(state, Failed))),
-				Liton.inbox_section(model, pane, "Done", model.val().map(|state| Model.waiting(state, Done))),
-				Liton.inbox_section(model, pane, "Working", model.val().map(|state| Model.waiting(state, Working))),
-				Liton.inbox_section(model, pane, "Idle", pane.map2(model.val(), |shown, state| if (Model.option(shown, "show_idle") == "true") Model.waiting(state, Idle) else [])),
+				Liton.inbox_section(model, pane, "Needs you", model.signal().map(|state| Model.waiting(state, NeedsYou))),
+				Liton.inbox_section(model, pane, "Failed", model.signal().map(|state| Model.waiting(state, Failed))),
+				Liton.inbox_section(model, pane, "Done", model.signal().map(|state| Model.waiting(state, Done))),
+				Liton.inbox_section(model, pane, "Working", model.signal().map(|state| Model.waiting(state, Working))),
+				Liton.inbox_section(model, pane, "Idle", pane.map2(model.signal(), |shown, state| if (Model.option(shown, "show_idle") == "true") Model.waiting(state, Idle) else [])),
 				Engine.when(
-					model.val().map(|state| !Model.later(state).is_empty()),
+					model.signal().map(|state| !Model.later(state).is_empty()),
 					||
 						Engine.element(
 							"details",
 							[Engine.class("inbox-later"), Engine.test_id("later")],
-							[Engine.element("summary", [], [Engine.text_v(model.val().map(|state| "Later (${Model.later(state).len().to_str()})"))]), Liton.inbox_items(model, pane, model.val().map(Model.later))],
+							[Engine.element("summary", [], [Engine.text_s(model.signal().map(|state| "Later (${Model.later(state).len().to_str()})"))]), Liton.inbox_items(model, pane, model.signal().map(Model.later))],
 						),
 					|| Engine.text(""),
 				),
 			],
 		)
 
-	inbox_section : State(PaneCtx, Model.State), Val(PaneCtx, Model.Pane), Str, Val(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
+	inbox_section : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
 	inbox_section = |model, pane, name, items|
 		Engine.when(
 			items.map(|listed| !listed.is_empty()),
@@ -490,7 +490,7 @@ Liton := [].{
 
 	## Each item: its title, which opens it, its agent, state and summary, the
 	## permission it asks for, and Settle and Snooze, or Bring back once set aside.
-	inbox_items : State(PaneCtx, Model.State), Val(PaneCtx, Model.Pane), Val(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
+	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
 			[Engine.class("inbox-items")],
@@ -502,49 +502,49 @@ Liton := [].{
 						model = model0.lift_row()
 						id = row.key()
 						title = row.field(|item| item.title)
-						permission = id.map2(model.val(), |session_id, state| Model.item_permission(state, session_id))
+						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						Html.li(
-							[Engine.class_v(id.map2(model.val(), |key, state| if (key == state.focus) "inbox-item focused" else "inbox-item")), Engine.attr("data-part", "item")],
+							[Engine.class_s(id.map2(model.signal(), |key, state| if (key == state.focus) "inbox-item focused" else "inbox-item")), Engine.attr("data-part", "item")],
 							[
-								Html.button_v(title, [], model.update_by(id, Model.open_item)),
+								Html.button_s(title, [], model.update_by(id, Model.open_item)),
 								Html.div(
 									"session-meta",
 									[
-										Engine.text_v(row.field(|item| item.agent)),
-										Html.span_v(row.field(|item| Liton.attention_text(item.state)), [Engine.class_v(row.field(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
+										Engine.text_s(row.field(|item| item.agent)),
+										Html.span_s(row.field(|item| Liton.attention_text(item.state)), [Engine.class_s(row.field(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
 									],
 								),
-								Html.p_v(row.field(|item| item.summary), [Engine.class("summary")]),
+								Html.p_s(row.field(|item| item.summary), [Engine.class("summary")]),
 								Engine.when(
 									permission.map(|asked| asked.is_ok()),
 									||
 										Html.div(
 											"permission",
 											[
-												Html.span_v(permission.map(|asked| asked.map_ok(|{ tool, description, .. }| "Allow ${tool}: ${description}?") ?? ""), []),
-												Html.button("Allow", [Engine.class("allow"), Html.aria_label_v(title.map(|name| "Allow ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.True))),
-												Html.button("Deny", [Engine.class("deny"), Html.aria_label_v(title.map(|name| "Deny ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.False))),
+												Html.span_s(permission.map(|asked| asked.map_ok(|{ tool, description, .. }| "Allow ${tool}: ${description}?") ?? ""), []),
+												Html.button("Allow", [Engine.class("allow"), Html.aria_label_s(title.map(|name| "Allow ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.True))),
+												Html.button("Deny", [Engine.class("deny"), Html.aria_label_s(title.map(|name| "Deny ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.False))),
 											],
 										),
 									|| Engine.text(""),
 								),
-								Html.span_v(id.map2(model.val(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
+								Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
 								Engine.when(
 									row.field(|item| item.set_aside == No),
 									||
 										Html.div_attrs(
 											[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
 											[
-												Html.button("Settle", [Html.aria_label_v(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
-												Html.button_v(
+												Html.button("Settle", [Html.aria_label_s(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
+												Html.button_s(
 													snooze_length.map(|length| "Snooze ${length}"),
-													[Html.aria_label_v(title.map(|name| "Snooze ${name}"))],
+													[Html.aria_label_s(title.map(|name| "Snooze ${name}"))],
 													model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes))),
 												),
 											],
 										),
-									|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_v(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
+									|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_s(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
 								),
 							],
 						)
@@ -588,25 +588,25 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	sessions : State(PaneCtx, Model.State), Val(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	sessions : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	sessions = |model0, pane|
 		Html.ul(
 			[Engine.class("sessions"), Engine.attr("data-part", "list")],
 			[
 				Engine.each(
-					model0.val().map(|state| state.sessions),
+					model0.signal().map(|state| state.sessions),
 					|session| session.id,
 					|row| {
 						model = model0.lift_row()
 						Html.li(
-							[Engine.class_v(row.key().map2(model.val(), |key, state| if (key == state.focus) "session focused" else "session")), Engine.attr("data-part", "session")],
+							[Engine.class_s(row.key().map2(model.signal(), |key, state| if (key == state.focus) "session focused" else "session")), Engine.attr("data-part", "session")],
 							[
-								Html.button_v(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: key })),
+								Html.button_s(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: key })),
 								Html.div(
 									"session-meta",
 									[
-										Engine.text_v(row.field(|session| session.agent).map2(pane.lift_row(), |agent, shown| if (Model.option(shown, "show_agent") == "true") agent else "")),
-										Html.span_v(row.field(|session| Liton.status_text(session.status)), [Engine.class_v(row.field(|session| Liton.badge_class(session.status))), Engine.test_id("session-status")]),
+										Engine.text_s(row.field(|session| session.agent).map2(pane.lift_row(), |agent, shown| if (Model.option(shown, "show_agent") == "true") agent else "")),
+										Html.span_s(row.field(|session| Liton.status_text(session.status)), [Engine.class_s(row.field(|session| Liton.badge_class(session.status))), Engine.test_id("session-status")]),
 									],
 								),
 							],
@@ -616,9 +616,9 @@ Liton := [].{
 			],
 		)
 
-	chat : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
-		pending = id.map2(model0.val(), |pane_id, state| Model.pending(state, pane_id))
+		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
 		Html.div(
 			"chat",
 			[
@@ -634,12 +634,12 @@ Liton := [].{
 									|entry| entry.sequence.to_str(),
 									|row|
 										Html.li(
-											[Engine.class_v(row.field(|entry| Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
+											[Engine.class_s(row.field(|entry| Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
 											[
 												Engine.when(
 													row.field(|entry| entry.card.is_ok()),
 													|| Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" })),
-													|| Html.pre_v(row.field(|entry| Liton.describe(entry.event)), []),
+													|| Html.pre_s(row.field(|entry| Liton.describe(entry.event)), []),
 												),
 											],
 										),
@@ -649,10 +649,10 @@ Liton := [].{
 									|sent| sent.serial.to_str(),
 									|row|
 										Html.li(
-											[Engine.class_v(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
+											[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
 											[
-												Html.pre_v(row.field(|sent| Liton.sent_text(sent.request)), []),
-												Html.span_v(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
+												Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
+												Html.span_s(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
 												Engine.when(
 													row.field(|sent| !sent.failed.is_empty()),
 													|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
@@ -676,7 +676,7 @@ Liton := [].{
 						Html.div_attrs(
 							[Engine.class("permission"), Engine.attr("data-part", "permission")],
 							[
-								Html.span_v(pending.map(|waiting| waiting.map_ok(|asked| "Allow ${asked.tool}: ${asked.description}?") ?? ""), []),
+								Html.span_s(pending.map(|waiting| waiting.map_ok(|asked| "Allow ${asked.tool}: ${asked.description}?") ?? ""), []),
 								Html.button("Allow", [Engine.class("allow")], model0.update_by(id, |state, pane_id| Model.answer(state, pane_id, Bool.True))),
 								Html.button("Deny", [Engine.class("deny")], model0.update_by(id, |state, pane_id| Model.answer(state, pane_id, Bool.False))),
 							],
@@ -687,7 +687,7 @@ Liton := [].{
 					"Send a message",
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model0.update_by(id, Model.submit))],
 					[
-						Html.text_input(Engine.const("Message"), "text", id.map2(model0.val(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent")], model0.set_value_by(id, Model.set_draft)),
+						Html.text_input(Engine.const("Message"), "text", id.map2(model0.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent")], model0.set_value_by(id, Model.set_draft)),
 						Html.submit_button("Send", []),
 					],
 				),
@@ -698,17 +698,17 @@ Liton := [].{
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. It polls
 	## only while it is on screen.
-	changes : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	changes : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	changes = |model, id, pane| {
-		shown = pane.map2(model.val(), |pane_shown, state| { pane: pane_shown, state })
+		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
 		git = shown.map(|{ pane: pane_shown, state }| Model.git_of(state, pane_shown))
-		scope = id.map2(model.val(), |pane_id, state| Model.git_pane(state, pane_id).scope)
+		scope = id.map2(model.signal(), |pane_id, state| Model.git_pane(state, pane_id).scope)
 		files = shown.map(|{ pane: pane_shown, state }| Model.git_files(state, pane_shown))
 		hunks = shown.map(|{ pane: pane_shown, state }| Model.git_hunks_of(state, pane_shown))
 		Html.div(
 			"changes",
 			[
-				Engine.when(id.map2(model.val(), |pane_id, state| Model.pane_visible(state, pane_id)), || Liton.git_polls(model, id), || Engine.text("")),
+				Engine.when(id.map2(model.signal(), |pane_id, state| Model.pane_visible(state, pane_id)), || Liton.git_polls(model, id), || Engine.text("")),
 				Engine.switch(
 					shown.map(|{ pane: pane_shown, state }| Model.git_shown(state, pane_shown)),
 					[NoSession, Loading, Unreadable, NotGit, Shown],
@@ -725,9 +725,9 @@ Liton := [].{
 										Html.div_attrs(
 											[Engine.class("git-status"), Engine.attr("data-part", "status")],
 											[
-												Html.span_v(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
-												Html.span_v(git.map(|known| Liton.base_text(known.status)), [Engine.test_id("ahead-behind")]),
-												Html.span_v(git.map(|known| if (Liton.dirty(known.status)) "uncommitted changes" else ""), [Engine.class("badge dirty")]),
+												Html.span_s(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
+												Html.span_s(git.map(|known| Liton.base_text(known.status)), [Engine.test_id("ahead-behind")]),
+												Html.span_s(git.map(|known| if (Liton.dirty(known.status)) "uncommitted changes" else ""), [Engine.class("badge dirty")]),
 											],
 										),
 										Html.div(
@@ -735,10 +735,10 @@ Liton := [].{
 											[
 												Liton.scope_button(model, id, scope, "Uncommitted", Uncommitted),
 												Liton.scope_button(model, id, scope, "Against base", AgainstBase),
-												Html.span_v(scope.map2(git, Liton.commit_text), [Engine.class("badge")]),
+												Html.span_s(scope.map2(git, Liton.commit_text), [Engine.class("badge")]),
 											],
 										),
-										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_v(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
+										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
 										Html.ul(
 											[Engine.class("git-files"), Engine.attr("data-part", "files")],
 											[
@@ -753,7 +753,7 @@ Liton := [].{
 													|file| file.path,
 													|row| {
 														asked = row.key().map2(id.lift_row(), |path, pane_id| { path, pane_id })
-														picked = asked.map2(model.val().lift_row(), |{ path, pane_id }, state| Model.git_pane(state, pane_id).file == Selected(path))
+														picked = asked.map2(model.signal().lift_row(), |{ path, pane_id }, state| Model.git_pane(state, pane_id).file == Selected(path))
 														Liton.git_file(row.field(|file| file), picked, model.lift_row().update_by(asked, |state, { path, pane_id }| Model.show_git(state, pane_id, Model.git_pane(state, pane_id).scope, Selected(path))))
 													},
 												),
@@ -788,24 +788,24 @@ Liton := [].{
 	## Shows a scope's files at once, pressed while shown. Top-level because,
 	## as a closure inside `changes`, it keeps `roc check` (nightly-2026-11-07)
 	## from ever finishing; not reported upstream yet.
-	scope_button : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
+	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
 	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
 
 	## A visible Changes pane's polls: every 2 s, and at once when it shows
 	## another session, scope or file.
-	git_polls : State(PaneCtx, Model.State), Val(PaneCtx, Str) -> Elem(PaneCtx)
+	git_polls : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	git_polls = |model, id|
 		Html.div(
 			"git-polls",
 			[
 				Engine.watch(id, |_| [Interval(2000)], model.on_result(|state, pane_id, _| Model.ask_git(state, pane_id))),
 				Engine.watch(
-					id.map2(model.val(), |pane_id, state| { pane_id, session_id: Model.session_of(state, Model.pane(state, pane_id)), scope: Model.git_pane(state, pane_id).scope, file: Model.git_pane(state, pane_id).file }),
+					id.map2(model.signal(), |pane_id, state| { pane_id, session_id: Model.session_of(state, Model.pane(state, pane_id)), scope: Model.git_pane(state, pane_id).scope, file: Model.git_pane(state, pane_id).file }),
 					|_| [Self],
 					model.on_result(|state, asked, _| Model.ask_git(state, asked.pane_id)),
 				),
-				Engine.on_change(
-					id.map2(model.val(), |pane_id, state| { serial: Model.git_pane(state, pane_id).serial, poll: Model.git_pane(state, pane_id).poll }),
+				Engine.watch_changes(
+					id.map2(model.signal(), |pane_id, state| { serial: Model.git_pane(state, pane_id).serial, poll: Model.git_pane(state, pane_id).poll }),
 					|asked| [Http({ method: "POST", url: "/api/git/poll", headers: [("Content-Type", "application/json")], body: Json.to_str(asked.poll), timeout_ms: 10000 })],
 					model.on_result(
 						|state, asked, res| {
@@ -820,21 +820,21 @@ Liton := [].{
 
 	## A changed file: its path, which picks it, how it changed and by how many
 	## lines.
-	git_file : Val(ctx, WorkspaceGit.File), Val(ctx, Bool), Handler(ctx) -> Elem(ctx)
+	git_file : Signal(ctx, WorkspaceGit.File), Signal(ctx, Bool), Handler(ctx) -> Elem(ctx)
 	git_file = |file, picked, pick|
 		Html.li(
 			[Engine.class("git-file"), Engine.attr("data-part", "file")],
 			[
-				Html.button_v(file.map(Liton.file_label), [Html.flag("aria-pressed", picked)], pick),
-				Html.span_v(file.map(|shown| Liton.change_text(shown.change)), [Engine.class_v(file.map(|shown| "badge change ${Liton.change_text(shown.change)}"))]),
-				Html.span_v(file.map(Liton.file_lines), [Engine.class("lines")]),
+				Html.button_s(file.map(Liton.file_label), [Html.flag("aria-pressed", picked)], pick),
+				Html.span_s(file.map(|shown| Liton.change_text(shown.change)), [Engine.class_s(file.map(|shown| "badge change ${Liton.change_text(shown.change)}"))]),
+				Html.span_s(file.map(Liton.file_lines), [Engine.class("lines")]),
 			],
 		)
 
 	## A file's hunks, in one column or old beside new.
-	git_diff : Val(ctx, Str), Val(ctx, List(WorkspaceGit.Hunk)) -> Elem(ctx)
+	git_diff : Signal(ctx, Str), Signal(ctx, List(WorkspaceGit.Hunk)) -> Elem(ctx)
 	git_diff = |layout, hunks|
-		Html.div_v(
+		Html.div_s(
 			layout.map(|shown| if (shown == "Split") "file-diff split" else "file-diff unified"),
 			[
 				Engine.when(hunks.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
@@ -845,11 +845,11 @@ Liton := [].{
 						Html.div_attrs(
 							[Engine.class("hunk"), Engine.attr("data-part", "hunk")],
 							[
-								Html.div("hunk-header", [Engine.text_v(row.field(|hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"))]),
+								Html.div("hunk-header", [Engine.text_s(row.field(|hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"))]),
 								Engine.each(
 									row.field(|hunk| hunk.lines).map2(layout.lift_row(), |lines, shown| Model.diff_rows(shown, lines)),
 									|line| line.key,
-									|line_row| Html.div_attrs([Engine.class("diff-line"), Engine.attr("data-part", "line")], [Engine.each(line_row.field(|line| line.cells), |cell| cell.key, |cell| Html.span_v(cell.field(|shown| shown.text), [Engine.class_v(cell.field(|shown| shown.class))]))]),
+									|line_row| Html.div_attrs([Engine.class("diff-line"), Engine.attr("data-part", "line")], [Engine.each(line_row.field(|line| line.cells), |cell| cell.key, |cell| Html.span_s(cell.field(|shown| shown.text), [Engine.class_s(cell.field(|shown| shown.class))]))]),
 								),
 							],
 						),
@@ -859,13 +859,13 @@ Liton := [].{
 
 	## The branch's commits, folded away, each with its files, which pick that
 	## commit's diff of them.
-	git_commits : State(PaneCtx, Model.State), Val(PaneCtx, Str), Val(PaneCtx, Model.Git) -> Elem(PaneCtx)
+	git_commits : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Git) -> Elem(PaneCtx)
 	git_commits = |model, id, git|
 		Engine.element(
 			"details",
 			[Engine.class("git-commits"), Engine.attr("data-part", "commits")],
 			[
-				Engine.element("summary", [], [Engine.text_v(git.map(|known| "Commits (${known.commits.len().to_str()})"))]),
+				Engine.element("summary", [], [Engine.text_s(git.map(|known| "Commits (${known.commits.len().to_str()})"))]),
 				Html.ul(
 					[Engine.class("commits")],
 					[
@@ -879,12 +879,12 @@ Liton := [].{
 										Html.div(
 											"commit-line",
 											[
-												Html.span_v(row.field(|commit| commit.short_sha), [Engine.class("sha")]),
-												Html.span_v(row.field(|commit| commit.subject), [Engine.class("subject")]),
-												Html.span_v(row.field(|commit| if (commit.pushed) "pushed" else "not pushed"), [Engine.class("badge")]),
+												Html.span_s(row.field(|commit| commit.short_sha), [Engine.class("sha")]),
+												Html.span_s(row.field(|commit| commit.subject), [Engine.class("subject")]),
+												Html.span_s(row.field(|commit| if (commit.pushed) "pushed" else "not pushed"), [Engine.class("badge")]),
 											],
 										),
-										Html.div("session-meta", [Engine.text_v(row.field(|commit| "${commit.author} · ${commit.date.split_first("T").map_ok(|parts| parts.before) ?? commit.date}"))]),
+										Html.div("session-meta", [Engine.text_s(row.field(|commit| "${commit.author} · ${commit.date.split_first("T").map_ok(|parts| parts.before) ?? commit.date}"))]),
 										Html.ul(
 											[Engine.class("git-files")],
 											[
@@ -893,7 +893,7 @@ Liton := [].{
 													|file| file.path,
 													|file_row| {
 														asked = file_row.key().map2(row.key().lift_row(), |path, sha| { path, sha }).map2(id.lift_row().lift_row(), |{ path, sha }, pane_id| { path, sha, pane_id })
-														picked = asked.map2(model.val().lift_row().lift_row(), |{ path, sha, pane_id }, state| Model.git_pane(state, pane_id).scope == Commit(sha) and Model.git_pane(state, pane_id).file == Selected(path))
+														picked = asked.map2(model.signal().lift_row().lift_row(), |{ path, sha, pane_id }, state| Model.git_pane(state, pane_id).scope == Commit(sha) and Model.git_pane(state, pane_id).file == Selected(path))
 														Liton.git_file(file_row.field(|file| file), picked, model.lift_row().lift_row().update_by(asked, |state, { path, sha, pane_id }| Model.show_git(state, pane_id, Commit(sha), Selected(path))))
 													},
 												),
@@ -982,8 +982,8 @@ Liton := [].{
 
 	capabilities : State(PaneCtx, Model.State) -> Elem(PaneCtx)
 	capabilities = |model|
-		Html.pre_v(
-			model.val().map(
+		Html.pre_s(
+			model.signal().map(
 				|state|
 					Str.join_with(
 						state.providers.map(|provider| "${provider.name} (${provider.id})\n${Str.join_with(provider.capabilities.map(|id| "  ${id.name}.v${id.version.to_str()}"), "\n")}"),
@@ -1013,7 +1013,7 @@ Liton := [].{
 
 	## A tool call's name and state over its input, then its output with all
 	## but the first lines folded away.
-	tool_card : Val(ctx, Model.ToolCard) -> Elem(ctx)
+	tool_card : Signal(ctx, Model.ToolCard) -> Elem(ctx)
 	tool_card = |card| {
 		state = card.map(
 			|shown|
@@ -1024,17 +1024,17 @@ Liton := [].{
 				},
 		)
 		Html.div_attrs(
-			[Engine.class_v(state.map(|name| "tool-card ${name}")), Engine.attr("data-part", "tool-card")],
+			[Engine.class_s(state.map(|name| "tool-card ${name}")), Engine.attr("data-part", "tool-card")],
 			[
 				Html.div(
 					"tool-header",
 					[
-						Html.span_v(card.map(|shown| shown.tool), [Engine.class("tool-name")]),
-						Html.span_v(state, [Engine.class_v(state.map(|name| "badge ${name}")), Engine.test_id("tool-state")]),
+						Html.span_s(card.map(|shown| shown.tool), [Engine.class("tool-name")]),
+						Html.span_s(state, [Engine.class_s(state.map(|name| "badge ${name}")), Engine.test_id("tool-state")]),
 					],
 				),
-				Html.pre_v(card.map(|shown| shown.input), [Engine.class("tool-input")]),
-				Html.pre_v(card.map(|shown| shown.output), [Engine.class("tool-output")]),
+				Html.pre_s(card.map(|shown| shown.input), [Engine.class("tool-input")]),
+				Html.pre_s(card.map(|shown| shown.output), [Engine.class("tool-output")]),
 				Engine.when(
 					card.map(|shown| !shown.folded.is_empty()),
 					||
@@ -1042,8 +1042,8 @@ Liton := [].{
 							"details",
 							[],
 							[
-								Engine.element("summary", [], [Engine.text_v(card.map(|shown| "${shown.folded.split_on("\n").len().to_str()} more lines"))]),
-								Html.pre_v(card.map(|shown| shown.folded), [Engine.class("tool-output")]),
+								Engine.element("summary", [], [Engine.text_s(card.map(|shown| "${shown.folded.split_on("\n").len().to_str()} more lines"))]),
+								Html.pre_s(card.map(|shown| shown.folded), [Engine.class("tool-output")]),
 							],
 						),
 					|| Engine.text(""),

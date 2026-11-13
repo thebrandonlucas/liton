@@ -1,0 +1,17 @@
+.{
+    .name = .liton,
+    .fingerprint = 0xc7592e6357a04ef2,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .roc_signals_platform = .{
+            .url = "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.5.0/2SYUPo9uKFPJDvTyXiwsLEqHvmq7UMgaY4hdgMiSsSEF.tar.zst",
+            .hash = "N-V-__8AAAM9TwA58awEZKUOKQULYSGz-1fJdcWJxKDSWK1r",
+        },
+        .roc_signals_source = .{
+            .url = "https://github.com/lukewilliamboswell/roc-signals/archive/refs/tags/0.5.0.tar.gz",
+            .hash = "N-V-__8AAC7FQgC-rDv7ahPC27o9BRqOQ3RI12sxWvtF8xzb",
+        },
+    },
+    .paths = .{""},
+}

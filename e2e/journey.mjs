@@ -1,13 +1,16 @@
-// node e2e/journey.mjs, after `zig build ui daemon`: headless Chrome drives the
-// UI against a daemon serving the mock provider, on a free port with a fresh
-// database. CHROME names the browser (default `chromium` on PATH).
+// node e2e/journey.mjs CDP, after `zig build ui daemon`: headless Chrome drives
+// the UI against a daemon serving the mock provider, on a free port with a
+// fresh database. CDP is roc-signals's DevTools client (its
+// tests/browser/cdp.mjs), which `zig build e2e` passes. CHROME names the browser
+// (default `chromium` on PATH).
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { launch } from "../vendor/roc-signals/tests/browser/cdp.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const { launch } = await import(pathToFileURL(process.argv[2]).href);
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = await new Promise((resolve) => {

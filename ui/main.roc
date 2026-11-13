@@ -1,6 +1,6 @@
 app [main] {
 	cap: "../capabilities/main.roc",
-	pf: platform "../vendor/roc-signals/platform/main.roc",
+	pf: platform "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.5.0/2SYUPo9uKFPJDvTyXiwsLEqHvmq7UMgaY4hdgMiSsSEF.tar.zst",
 }
 
 import pf.Engine
