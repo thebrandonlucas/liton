@@ -210,12 +210,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_specs.step);
 
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
+    // Built for size: the wasm's download is most of a cold load (bench/).
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
     const build_ui = b.addSystemCommand(&.{
         "sh", "-c",
         \\set -e
         \\mkdir -p zig-out/www
-        \\"$1" build --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
+        \\"$1" build --opt=size --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
         \\cp ui/index.html ui/style.css "$2" "$3" zig-out/www/
         ,
         "sh", roc_ui,
@@ -261,4 +262,14 @@ pub fn build(b: *std.Build) void {
     run_protocol.step.dependOn(&build_daemon.step);
     run_protocol.step.dependOn(&build_cli.step);
     e2e_step.dependOn(&run_protocol.step);
+
+    // Benchmarks liton against Paseo's web client in a private network
+    // namespace, against a throwaway Paseo (bench/README.md).
+    const bench_step = b.step("bench", "Benchmark liton against Paseo's web client");
+    const run_bench = b.addSystemCommand(&.{ "node", "bench/bench.mjs" });
+    run_bench.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_bench.has_side_effects = true;
+    run_bench.step.dependOn(&build_ui.step);
+    run_bench.step.dependOn(&build_daemon.step);
+    bench_step.dependOn(&run_bench.step);
 }
