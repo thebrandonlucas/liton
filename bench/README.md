@@ -114,6 +114,12 @@ Each metric reports median / p95 over the runs (p95 is the nearest rank: with
   phone numbers as relative, between clients and between liton builds.
 - Network emulation applies to HTTP requests; how far it slows WebSocket
   frames depends on the Chromium version.
+- Paseo 0.15.3's web client stays blank under the phone profile's bandwidth
+  limit (Chromium 156): its bundle arrives, but no WebSocket to the daemon
+  stays open and nothing renders within the 240 s timeout. The latency alone,
+  or the CPU slowdown alone, lets it render. Whether a real slow link does the
+  same is not established here. A client whose load times out in a profile
+  is not run again in it, and the table lists the failure.
 - The daemons and the browser share the machine. Other load moves the numbers:
   compare runs from the same machine, and look at p95 as well as the median.
 - Both clients talk to a daemon on loopback, with no TLS or relay.

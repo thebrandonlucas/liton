@@ -332,6 +332,9 @@ for (const profile_name of options.profiles.split(",")) {
   for (let run = 1; run <= profile.runs; run++) {
     // Alternate which client goes first, against drift.
     for (const name of run % 2 ? names : [...names].reverse()) {
+      // A client that never finished loading in this profile won't next time:
+      // the failure is the result, so don't wait out the timeout again.
+      if (results[profile_name][name].some((r) => /waiting for (list|timeline) in the page/.test(r.error ?? ""))) continue;
       say(`${profile_name} run ${run}/${profile.runs}: ${name}`);
       results[profile_name][name].push(await measure(name, profile, run));
     }
@@ -399,6 +402,7 @@ for (const [profile_name, by_client] of Object.entries(results)) {
     const ok = runs.filter((r) => !r.error);
     summary[profile_name][name] = Object.fromEntries(Object.entries(metrics).map(([metric, pick]) => [metric, stats(ok.flatMap(pick))]));
     summary[profile_name][name].failed_runs = runs.length - ok.length;
+    summary[profile_name][name].errors = [...new Set(runs.filter((r) => r.error).map((r) => r.error))];
   }
 }
 
@@ -455,7 +459,7 @@ for (const [profile_name, by_client] of Object.entries(summary)) {
   md += `\n## ${profile_name}${p.cpu > 1 ? ` (CPU ${p.cpu}x slower, ${p.network.latency} ms latency, ${Math.round((p.network.downloadThroughput * 8) / 1024)} kbit/s down)` : ""}, ${p.runs} runs\n\n`;
   md += `| metric | ${names.join(" | ")} |\n|---|${names.map(() => "---|").join("")}\n`;
   for (const metric of Object.keys(metrics)) md += `| ${metric} | ${names.map((n) => fmt(by_client[n]?.[metric])).join(" | ")} |\n`;
-  const failed = names.filter((n) => by_client[n]?.failed_runs).map((n) => `${n}: ${by_client[n].failed_runs}`);
+  const failed = names.filter((n) => by_client[n]?.failed_runs).map((n) => `${n}: ${by_client[n].failed_runs} (${by_client[n].errors.join("; ")})`);
   if (failed.length) md += `\nFailed runs: ${failed.join(", ")}\n`;
 }
 md += `\n## Daemon load, per minute\n\n| traffic | HTTP requests | WS connections | WS messages up | WS messages down | WS KB down |\n|---|---|---|---|---|---|\n`;
