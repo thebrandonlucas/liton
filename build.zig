@@ -230,6 +230,13 @@ pub fn build(b: *std.Build) void {
     build_daemon.has_side_effects = true;
     daemon_step.dependOn(&build_daemon.step);
 
+    // The command line client, whose platform, basic-cli, runs on the
+    // daemon's compiler.
+    const cli_step = b.step("cli", "Build the command line client into zig-out/bin/liton");
+    const build_cli = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build cli/main.roc --output=zig-out/bin/liton", "sh", roc });
+    build_cli.has_side_effects = true;
+    cli_step.dependOn(&build_cli.step);
+
     // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
     // LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
@@ -252,5 +259,6 @@ pub fn build(b: *std.Build) void {
     const run_protocol = b.addSystemCommand(&.{ "node", "e2e/protocol.mjs" });
     run_protocol.has_side_effects = true;
     run_protocol.step.dependOn(&build_daemon.step);
+    run_protocol.step.dependOn(&build_cli.step);
     e2e_step.dependOn(&run_protocol.step);
 }

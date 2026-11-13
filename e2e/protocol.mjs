@@ -1,7 +1,7 @@
-// node e2e/protocol.mjs, after `zig build daemon`: checks /liton/v1 (see
-// docs/protocol.md) against a daemon serving the mock provider, on a free
-// port with a fresh database.
-import { spawn } from "node:child_process";
+// node e2e/protocol.mjs, after `zig build daemon cli`: checks /liton/v1 (see
+// docs/protocol.md), and the liton CLI on it, against a daemon serving the
+// mock provider, on a free port with a fresh database.
+import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
@@ -37,6 +37,14 @@ daemon.on("exit", (code) => fail(`the daemon exited with ${code}`));
 const base = `http://127.0.0.1:${port}/liton/v1`;
 const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", body: JSON.stringify(body) })).json();
 const call = (capability, request, provider) => post("call", { capability, request, ...(provider && { provider }) });
+const cli = path.join(repo, "zig-out/bin/liton");
+const cliOptions = { env: { ...process.env, LITON_URL: `http://127.0.0.1:${port}` } };
+// liton run with args and, if given, input on stdin: its exit code, stdout and stderr.
+const liton = (args, input) =>
+  new Promise((resolve) => {
+    const run = execFile(cli, args, cliOptions, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }));
+    run.stdin.end(input);
+  });
 const step = async (name, run) => {
   check = name;
   await run();
@@ -87,6 +95,28 @@ try {
     const again = (await post("poll", { topics: first.map(({ capability, topic, cursor }) => ({ capability, topic, after: cursor })) })).topics;
     assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
+  });
+  await step("the liton CLI prints the manifest and answers, and exits 1 on an error", async () => {
+    assert.deepEqual(JSON.parse((await liton(["manifest"])).stdout), manifest);
+    const listed = await liton(["call", "chat.v1", '"ListSessions"']);
+    assert.equal(listed.code, 0);
+    assert.ok(JSON.parse(listed.stdout).Ok.Sessions.some((s) => s.id === "flaky-ci"));
+    const refused = await liton(["call", "chat.v1", "-"], '{"SendMessage":{"session_id":"nope","text":"hi"}}');
+    assert.deepEqual([refused.code, JSON.parse(refused.stdout).Err.code, refused.stderr], [1, "NotFound", "liton: NotFound: no session nope\n"]);
+    assert.equal((await liton(["call"])).code, 2);
+  });
+  await step("liton watch prints a timeline's events as lines a filter reads, until interrupted", async () => {
+    const watch = spawn(cli, ["watch", "chat.v1", "timeline/flaky-ci", "--interval", "200"], cliOptions);
+    const filter = spawn("grep", ["StatusChanged"], { stdio: ["pipe", "pipe", "inherit"] });
+    watch.stdout.pipe(filter.stdin);
+    let filtered = "";
+    filter.stdout.on("data", (chunk) => (filtered += chunk));
+    await new Promise((r) => setTimeout(r, 2000));
+    watch.kill("SIGINT");
+    await Promise.all([new Promise((r) => watch.on("exit", r)), new Promise((r) => filter.on("exit", r))]);
+    assert.equal(watch.signalCode, "SIGINT");
+    const lines = filtered.trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(lines.slice(0, 2).map((line) => line.Entry.sequence), [2, 6]);
   });
   console.log("PASS /liton/v1");
   process.exit(0);

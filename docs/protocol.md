@@ -182,11 +182,20 @@ tools:
 liton manifest
 liton call chat.v1 '"ListSessions"'
 liton call chat.v1 '{"SendMessage":{"session_id":"fix-auth","text":"Try again"}}'
+echo '"ListItems"' | liton call attention.v1   # the request from stdin, also as -
 liton watch chat.v1 timeline/fix-auth      # one event per line, until interrupted
+liton watch chat.v1 timeline/fix-auth --after 41 attention.v1 items --interval 500   # several topics
 liton watch chat.v1 timeline/fix-auth | jq -r '.Entry.event.AgentMessage.text // empty'
 ```
 
 It finds the daemon from `LITON_URL` (default `http://127.0.0.1:8095`).
+`call` prints the answer, `{"Ok": …}` or `{"Err": …}`, and exits 1 on an
+error, with its message on stderr. `watch` polls every `--interval`
+milliseconds (default 1000), from `--after`, the cursor of the topic before
+it, if given; following several topics, it wraps each event as
+`{"capability", "topic", "event"}`. It exits 1 when a topic can't be
+followed. Either exits 2 on a usage error or when the daemon can't be
+reached.
 
 ## Agents
 

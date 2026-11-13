@@ -13,3 +13,15 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 ## Running
 
 `zig build run` (in `kai shell`) builds the UI and the daemon and serves both at http://127.0.0.1:8095, with scripted mock agents. `LITON_HOST`, `LITON_PORT` and `LITON_DB` (default `liton.db`) configure the daemon.
+
+## Command line
+
+`zig build cli` builds `zig-out/bin/liton`, a client of the daemon's capability protocol ([docs/protocol.md](docs/protocol.md), The CLI) that prints JSON lines, so it composes with other tools:
+
+```sh
+liton manifest
+liton call chat.v1 '"ListSessions"'
+liton watch chat.v1 timeline/fix-auth | jq -r '.Entry.event.AgentMessage.text // empty'
+```
+
+It finds the daemon at `LITON_URL` (default `http://127.0.0.1:8095`); `liton help` lists its commands.
