@@ -43,6 +43,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A chat pane's header shows the agent it shows: the session's title (in full on hover), a dot and word for its status (pulsing while running, marked while waiting for you, red when it failed), the agent and its model, the workspace's folder and branch, and a Stop button while it works. Stop shows "Stopping…" at once, and if the agent can't be stopped, says why and offers Stop again.
 - "Jump to latest" appears over a chat scrolled up from its newest message, in browsers with scroll-driven CSS animations, such as Chrome and Edge.
 - Start an agent with chat.v1's `Create`, in a workspace, of a kind its provider offers (chat.v1's new `agents` topic lists them), with a model and a first prompt; and make a workspace of a project, a checkout of it or a worktree on a new branch, with workspaces.v1's `Create` (docs/protocol.md). Each answers the new session's or workspace's id. The mock provider and providers outside the daemon take both.
+- Start Paseo's agents and create its workspaces through those calls too, an agent also in any directory of Paseo's.
 
 ### Changed
 

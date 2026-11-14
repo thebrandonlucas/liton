@@ -337,6 +337,7 @@ interested! = |context, subject| {
 		Tree({ context: focus, path }) => files_interested!(context, focus, "tree", path)
 		Contents({ context: focus, path }) => files_interested!(context, focus, "file", path)
 		Importable if context.paseo.is_ok() => wanted!(db, "importable", "")
+		Agents if context.paseo.is_ok() => wanted!(db, "agent_kinds", "")
 		WorkspaceList if context.paseo.is_ok() => {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
@@ -510,12 +511,15 @@ chat_call! = |context, provider, asked| {
 	}
 }
 
-## Starts an agent in a workspace of the provider that has it.
+## Starts an agent in a workspace of the provider that has it, or in a
+## directory of Paseo's, when the call names it.
 started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat.Response), _)
-started! = |context, provider, { place, agent, prompt, .. }| {
+started! = |context, provider, { place, agent, model, prompt }| {
 	db = context.db
-	match place {
-		Workspace(workspace_id) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) and mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) =>
+	mock_listed = if (context.mock_enabled and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
+	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
+	match (place, context.paseo) {
+		(Workspace(workspace_id), _) if mock_listed.any(|shown| shown.id == workspace_id) =>
 			if Mock.agents.any(|kind| kind.agent == agent) {
 				session_id = "${agent}-${now_ms!().to_str()}"
 				title = if (prompt.is_empty()) "New ${agent} agent" else prompt.split_on("\n").first() ?? prompt
@@ -527,8 +531,27 @@ started! = |context, provider, { place, agent, prompt, .. }| {
 			} else {
 				Ok(Ok(Rejected("the mock provider starts no ${agent} agent")))
 			}
-		Workspace(workspace_id) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
-		Directory(_) => Ok(Err({ code: NotFound, message: "no provider named starts agents in a directory" }))
+		(Workspace(workspace_id), Ok(daemon)) if paseo_listed.any(|shown| shown.id == workspace_id) => {
+			cwd = paseo_listed.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? ""
+			paseo_started!(context, daemon, { agent, cwd, workspace_id: Ok(workspace_id), model, prompt })
+		}
+		(Directory(directory), Ok(daemon)) if provider == Ok(Paseo.provider.id) => paseo_started!(context, daemon, { agent, cwd: directory, workspace_id: Err(Missing), model, prompt })
+		(Workspace(workspace_id), _) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
+		(Directory(_), _) => Ok(Err({ code: NotFound, message: "name a provider that starts agents in a directory, such as paseo" }))
+	}
+}
+
+## Starts a Paseo agent, as an id the daemon picks (see `Paseo.create_request`),
+## over a connection of its own, and lets the next poll list it at once.
+paseo_started! : Context, PaseoDaemon, { agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), prompt : Str } => Try(Protocol.Answer(Chat.Response), _)
+paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, prompt }| {
+	request_id = "liton-create-${now_ms!().to_str()}"
+	agent_id = Paseo.uuid("${request_id} ${cwd} ${agent} ${prompt}")
+	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id, model, prompt, request_id }), request_id, Paseo.created)
+	forget_check!(context.db, "cycle")?
+	match outcome {
+		Ok(session_id) => Ok(Ok(Started({ session_id: session_id })))
+		Err(err) => Ok(Err(paseo_error(err)))
 	}
 }
 
@@ -547,9 +570,10 @@ workspaces_call! = |context, provider, asked| {
 				Ok(endpoint) if Remote.serves(endpoint.name, provider) => Ok(forwarded_create!(endpoint, provider, created))
 				_ => Ok(Err({ code: NotFound, message: "no project ${created.project_id}" }))
 			}
-		Create({ project_id, kind, branch }) =>
-			match Mock.projects.find_first(|project| project.id == project_id) {
-				Ok(project) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) => {
+		Create({ project_id, kind, branch }) => {
+			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
+			match (Mock.projects.find_first(|project| project.id == project_id), paseo_projects.find_first(|project| project.id == project_id), context.paseo) {
+				(Ok(project), _, _) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) => {
 					made : { count : I64 }
 					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces;", params: {}, limits: Sqlite.default_query_limits })?
 					number = (made.count + 1).to_str()
@@ -557,8 +581,19 @@ workspaces_call! = |context, provider, asked| {
 					Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value);", params: { id: workspace.id, value: Json.to_str(workspace) } })?
 					Ok(Ok(Created({ workspace_id: workspace.id })))
 				}
+				(_, Ok(project), Ok(daemon)) => {
+					request_id = "liton-workspace-${now_ms!().to_str()}"
+					workspace_id = "wks_${Paseo.hex("${request_id} ${project.directory}")}"
+					outcome = written!(daemon, PaseoWorkspaces.create_request({ workspace_id, project, kind, branch, request_id }), request_id, PaseoWorkspaces.created)
+					forget_check!(db, "cycle")?
+					match outcome {
+						Ok(made_id) => Ok(Ok(Created({ workspace_id: made_id })))
+						Err(err) => Ok(Err(paseo_error(err)))
+					}
+				}
 				_ => Ok(Err({ code: NotFound, message: "no project ${project_id}" }))
 			}
+		}
 	}
 }
 
@@ -572,7 +607,11 @@ agents! = |context| {
 			_ => so_far
 		},
 	)
-	Ok((if (context.mock_enabled) Mock.agents else []).concat(from_remotes))
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
+	from_paseo : Try(List(Chat.Agent), _)
+	from_paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok((if (context.mock_enabled) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
 }
 
 no_session : Str -> Protocol.Answer(a)
@@ -1040,7 +1079,8 @@ importable_interval_ms : I64
 importable_interval_ms = 60_000
 
 ## Notes that a poll watches `subject` as `kind`: "agent_list",
-## "workspace_list" or "importable" (no subject), "timeline" (a session id), "workspace",
+## "workspace_list", "importable" or "agent_kinds" (no subject), "timeline" (a
+## session id), "workspace",
 ## "uncommitted" or "base" (a directory), "commit_file", or "tree" or "file"
 ## (a directory and a path in it). What no poll watched within `interest_ms`
 ## is asked about in a cycle at once.
@@ -1076,7 +1116,7 @@ logged! = |line| {
 
 ## Sends one write, such as a prompt, over a connection of its own, and reads
 ## Paseo's answer to it with `answer`.
-written! : PaseoDaemon, Str, Str, (Str, Str -> Try({}, _)) => Try({}, _)
+written! : PaseoDaemon, Str, Str, (Str, Str -> Try(answer, _)) => Try(answer, _)
 written! = |daemon, request, request_id, answer| {
 	connection = connected!(daemon, "liton-daemon-writes")?
 	answered = exchange!(connection, request, request_id)
@@ -1090,9 +1130,15 @@ paseo_answer : Try({}, _) -> Protocol.Answer(Chat.Response)
 paseo_answer = |outcome|
 	match outcome {
 		Ok({}) => Ok(Accepted)
-		Err(Refused(reason)) => Err({ code: Refused, message: reason })
-		Err(HelloRejected(reason)) => Err({ code: Refused, message: Paseo.refusal(reason) })
-		Err(err) => Err({ code: Unavailable, message: "Paseo: ${Str.inspect(err)}" })
+		Err(err) => Err(paseo_error(err))
+	}
+
+paseo_error : _ -> Protocol.Error
+paseo_error = |err|
+	match err {
+		Refused(reason) => { code: Refused, message: reason }
+		HelloRejected(reason) => { code: Refused, message: Paseo.refusal(reason) }
+		other => { code: Unavailable, message: "Paseo: ${Str.inspect(other)}" }
 	}
 
 ## How long the daemon waits after Paseo refused its password before asking
@@ -1166,7 +1212,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok(connection) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							ordered = ["agent_list", "workspace_list", "importable", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
@@ -1246,6 +1292,7 @@ asked! = |db, connection, { kind, subject }, request_id|
 		"agent_list" => listed_agents!(db, connection, request_id)
 		"workspace_list" => listed_workspaces!(db, connection, request_id)
 		"importable" => listed_importable!(db, connection, request_id)
+		"agent_kinds" => listed_agent_kinds!(db, connection, request_id)
 		"timeline" => fetch!(db, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, connection, subject, request_id)
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
@@ -1284,6 +1331,17 @@ listed_importable! = |db, connection, request_id|
 	} else {
 		listed = Paseo.importable_answer(exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
 		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('importable', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+	}
+
+## Keeps the kinds of agent Paseo can start, every `importable_interval_ms`
+## at most: Paseo checks each provider's command to answer.
+listed_agent_kinds! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
+listed_agent_kinds! = |db, connection, request_id|
+	if recently_checked!(db, "agent_kinds", importable_interval_ms)? {
+		Ok({})
+	} else {
+		listed = Paseo.agent_kinds(exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('agent_kinds', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
 	}
 
 ## The sessions Paseo's providers keep that Paseo doesn't run, as the cycle

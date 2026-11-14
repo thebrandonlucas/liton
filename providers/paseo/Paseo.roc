@@ -140,6 +140,59 @@ Paseo := [].{
 		}
 	}
 
+	## Starts an agent of the kind `agent` in `cwd`, in the workspace
+	## `workspace_id` if any, as `agent_id`: an id liton picks, which makes
+	## the same request sent again start no second agent. Paseo answers once
+	## it made the agent (see `created`).
+	create_request : { agent_id : Str, agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), prompt : Str, request_id : Str } -> Str
+	create_request = |{ agent_id, agent, cwd, workspace_id, model, prompt, request_id }| {
+		initial_prompt : Try(Str, [Missing])
+		initial_prompt = if (prompt.is_empty()) Err(Missing) else Ok(prompt)
+		Json.to_str({ type: "session", message: { type: "agent.create.request", requestId: request_id, agentId: agent_id, idempotencyKey: agent_id, workspaceId: workspace_id, initialPrompt: initial_prompt, config: { provider: agent, cwd, model } } })
+	}
+
+	## The id of the agent an `agent.create.response` says Paseo made.
+	created : Str, Str -> Try(Str, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	created = |text, request_id| {
+		answered : Try({ message : { payload : { agent : Try({ id : Str }, [Null]), error : Try(Str, [Null]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "agent.create.response", request_id)?)
+		payload = answered?.message.payload
+		match payload.agent {
+			Ok({ id }) => Ok(id)
+			Err(Null) => Err(Refused(payload.error ?? "Paseo did not start the agent"))
+		}
+	}
+
+	## The kinds of agent Paseo can start, from its providers that are
+	## available (see `agent_kinds`).
+	agent_kinds_request : Str -> Str
+	agent_kinds_request = |request_id| Json.to_str({ type: "session", message: { type: "list_available_providers_request", requestId: request_id } })
+
+	agent_kinds : Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	agent_kinds = |text, request_id| {
+		answered : Try({ message : { payload : { providers : List({ provider : Str, available : Bool }) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "list_available_providers_response", request_id)?)
+		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| { provider: Paseo.provider.id, agent: listed.provider }))
+	}
+
+	## A version 4 UUID, as Paseo takes for an agent's id, from `seed`.
+	uuid : Str -> Str
+	uuid = |seed| {
+		digits = "${Paseo.hex(seed)}${Paseo.hex("${seed}.")}".to_utf8()
+		at = |from, length| Str.from_utf8(digits.sublist({ start: from, len: length })) ?? ""
+		"${at(0, 8)}-${at(8, 4)}-4${at(13, 3)}-8${at(17, 3)}-${at(20, 12)}"
+	}
+
+	## Sixteen hex digits of a 64-bit FNV-1a hash of `seed`, as Paseo's
+	## workspace ids hold.
+	hex : Str -> Str
+	hex = |seed| {
+		hash = seed.to_utf8().fold(14695981039346656037.U64, |so_far, byte| so_far.bitwise_xor(byte.to_u64()).times_wrap(1099511628211))
+		alphabet = "0123456789abcdef".to_utf8()
+		(_, digits) = Str.repeat("x", 16).to_utf8().fold((hash, []), |(rest, so_far), _| (rest // 16, so_far.prepend(alphabet.get(rest % 16) ?? 48)))
+		Str.from_utf8(digits) ?? ""
+	}
+
 	## Asks for one agent, for its state when a timeline page lacks it.
 	agent_request : Str, Str -> Str
 	agent_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "fetch_agent_request", agentId: agent_id, requestId: request_id } })
@@ -723,3 +776,21 @@ expect {
 	decoded = Json.parse(Json.to_str(first.state))
 	decoded == Ok(first.state)
 }
+
+expect {
+	id = Paseo.uuid("liton-create-1")
+	parts = id.split_on("-").map(|part| part.count_utf8_bytes())
+	parts == [8, 4, 4, 4, 12] and id.split_on("-").get(2).map_ok(|part| part.starts_with("4")) == Ok(Bool.True) and Paseo.uuid("liton-create-1") == id and Paseo.uuid("liton-create-2") != id and Paseo.hex("").count_utf8_bytes() == 16
+}
+
+expect
+	Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Ok("wks_1"), model: Err(Missing), prompt: "", request_id: "r1" })
+		== "{\"message\":{\"agentId\":\"a1\",\"config\":{\"cwd\":\"/src/app\",\"provider\":\"claude\"},\"idempotencyKey\":\"a1\",\"requestId\":\"r1\",\"type\":\"agent.create.request\",\"workspaceId\":\"wks_1\"},\"type\":\"session\"}"
+
+expect {
+	made = "{\"type\":\"session\",\"message\":{\"type\":\"agent.create.response\",\"payload\":{\"requestId\":\"r1\",\"agent\":{\"id\":\"a1\",\"provider\":\"claude\"},\"error\":null}}}"
+	refused = "{\"type\":\"session\",\"message\":{\"type\":\"agent.create.response\",\"payload\":{\"requestId\":\"r1\",\"agent\":null,\"error\":\"Unknown provider\"}}}"
+	Paseo.created(made, "r1") == Ok("a1") and Paseo.created(refused, "r1") == Err(Refused("Unknown provider")) and Paseo.created(made, "r2") == Err(OtherMessage)
+}
+
+expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([{ provider: "paseo", agent: "claude" }])

@@ -127,6 +127,16 @@ answer once the provider made it, before it lists it; a client shows it as
 starting until a listing has it. The mock provider starts its scripted
 agents in its workspaces and makes workspaces of its project.
 
+From Paseo, an agent is its `agent.create.request`, in the workspace's
+directory, with an id the daemon picks, its idempotency key too; a
+workspace is its `workspace.create.request`, a `wks_` id
+picked likewise, a checkout its `directory` source and a worktree its
+`worktree` source branched off the project's directory. Each is one write
+over a connection of its own, and the next poll lists what it made. The
+`agents` it starts are its available providers
+(`list_available_providers_request`), asked in the daemon's cycle at most
+every minute while a poll watches them.
+
 ### Subscribe
 
 `POST /liton/v1/poll` follows any number of topics at once, each after the

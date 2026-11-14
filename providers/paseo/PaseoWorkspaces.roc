@@ -1,9 +1,9 @@
 import cap.Workspaces
 import Paseo
 
-## Paseo's projects and workspaces as workspaces.v1's, from its WebSocket. Only
-## reads: liton calls none of Paseo's workspace writes (create, archive,
-## rename, pin...).
+## Paseo's projects and workspaces as workspaces.v1's, from its WebSocket, and
+## the workspaces liton creates there. Of Paseo's other workspace writes
+## (archive, rename, pin...) liton calls none.
 PaseoWorkspaces := [].{
 
 	## A workspace as `fetch_workspaces_response` describes it. Paseo leaves
@@ -45,6 +45,34 @@ PaseoWorkspaces := [].{
 			|so_far, project| if (so_far.any(|known| known.id == project.project_id)) so_far else so_far.append({ id: project.project_id, provider: "paseo", name: project.project_display_name, directory: project.project_root_path }),
 		)
 		Ok({ projects, workspaces: payload.entries.map(workspace) })
+	}
+
+	## Creates a workspace of `project` as `workspace_id`, an id liton picks
+	## (`wks_` and 16 hex digits), which makes the same request sent again
+	## create no second one: a checkout of the project's directory, or a
+	## worktree branched off it on `branch`, or a branch Paseo names. Paseo
+	## answers once it made it (see `created`).
+	create_request : { workspace_id : Str, project : Workspaces.Project, kind : [Checkout, Worktree], branch : Try(Str, [Missing]), request_id : Str } -> Str
+	create_request = |{ workspace_id, project, kind, branch, request_id }| {
+		source : { kind : Str, path : Try(Str, [Missing]), cwd : Try(Str, [Missing]), projectId : Str, action : Try(Str, [Missing]), branchName : Try(Str, [Missing]) }
+		source =
+			match kind {
+				Checkout => { kind: "directory", path: Ok(project.directory), cwd: Err(Missing), projectId: project.id, action: Err(Missing), branchName: Err(Missing) }
+				Worktree => { kind: "worktree", path: Err(Missing), cwd: Ok(project.directory), projectId: project.id, action: Ok("branch-off"), branchName: branch }
+			}
+		Json.to_str({ type: "session", message: { type: "workspace.create.request", requestId: request_id, workspaceId: workspace_id, idempotencyKey: workspace_id, source } })
+	}
+
+	## The id of the workspace a `workspace.create.response` says Paseo made.
+	created : Str, Str -> Try(Str, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	created = |text, request_id| {
+		answered : Try({ message : { payload : { workspace : Try({ id : Str }, [Null]), error : Try(Str, [Null]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "workspace.create.response", request_id)?)
+		payload = answered?.message.payload
+		match payload.workspace {
+			Ok({ id }) => Ok(id)
+			Err(Null) => Err(Refused(payload.error ?? "Paseo did not create the workspace"))
+		}
 	}
 }
 
@@ -112,3 +140,12 @@ expect {
 }
 
 expect PaseoWorkspaces.answer("{\"type\":\"session\",\"message\":{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"r1\",\"requestType\":\"fetch_workspaces_request\",\"error\":\"boom\"}}}", "r1").map_ok(|_| {}) == Err(OtherMessage)
+
+expect {
+	project = { id: "p1", provider: "paseo", name: "app", directory: "/work/app" }
+	checkout = PaseoWorkspaces.create_request({ workspace_id: "wks_0123456789abcdef", project, kind: Checkout, branch: Err(Missing), request_id: "r1" })
+	worktree = PaseoWorkspaces.create_request({ workspace_id: "wks_0123456789abcdef", project, kind: Worktree, branch: Ok("docs"), request_id: "r1" })
+	checkout.contains("\"source\":{\"kind\":\"directory\",\"path\":\"/work/app\",\"projectId\":\"p1\"}") and worktree.contains("\"source\":{\"action\":\"branch-off\",\"branchName\":\"docs\",\"cwd\":\"/work/app\",\"kind\":\"worktree\",\"projectId\":\"p1\"}")
+}
+
+expect PaseoWorkspaces.created("{\"type\":\"session\",\"message\":{\"type\":\"workspace.create.response\",\"payload\":{\"requestId\":\"r1\",\"workspace\":{\"id\":\"wks_0123456789abcdef\"},\"setupTerminalId\":null,\"error\":null}}}", "r1") == Ok("wks_0123456789abcdef")
