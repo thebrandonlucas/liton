@@ -204,6 +204,8 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .md-rule { border: 0; border-top: 1px solid var(--edge); }
 .md-code { border: 1px solid var(--edge); border-radius: var(--small-radius); background: color-mix(in srgb, var(--text) 4%, var(--glass-deep)); overflow: hidden; }
 .md-code-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 10px; border-bottom: 1px solid var(--edge); font: 11px var(--font-mono); color: var(--muted); }
+.md-code-bar .copy { padding: 0 8px; font: 11px/1.6 var(--font-mono); background: none; border-color: transparent; color: var(--muted); }
+.md-code-bar .copy:hover { color: var(--text); border-color: var(--edge); }
 .entry .md-code pre { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; word-break: normal; font: 12px/1.5 var(--font-mono); tab-size: 2; }
 .md-code .line { display: block; min-height: 1.5em; }
 .tok-keyword { color: var(--accent); }

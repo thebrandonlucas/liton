@@ -11,6 +11,7 @@ import cap.WorkspaceGit
 import setup.Setup
 import Highlight
 import Markdown
+import Ports
 import Themes
 import Model
 import Widgets
@@ -34,7 +35,7 @@ Liton := [].{
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], max_inflight: 32 },
 		|boot| Engine.state({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off") }, Liton.page),
-	)
+	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
 	## stylesheet alone uses. Keys pressed outside a text field reach the root
@@ -154,6 +155,11 @@ Liton := [].{
 		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
 		# A composer cleared by sending is built anew, out of focus: focus it.
 		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
+		Engine.watch_changes(
+			model.signal().map(|state| state.clipboard),
+			|clipboard| [Ports.copy.request(clipboard.text)],
+			model.on_result(|state, clipboard, res| Model.copy_answered(state, clipboard.serial, Ports.copy.result(res) == Ok(Bool.True))),
+		),
 		Engine.watch_changes(
 			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
 			|text| [StorageSet(Liton.snapshot_key, text)],
@@ -747,7 +753,7 @@ Liton := [].{
 													|kind|
 														match kind {
 															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }))
-															Message => Liton.markdown(row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
+															Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
 															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
 														},
 												),
@@ -1156,9 +1162,10 @@ Liton := [].{
 			_ => Err(NotMessage)
 		}
 
-	## Markdown's blocks as elements (ui/Markdown.roc).
-	markdown : Signal(ctx, List(Markdown.Block)) -> Elem(ctx)
-	markdown = |blocks|
+	## Markdown's blocks as elements (ui/Markdown.roc), each code block's
+	## Copy keyed under `key`.
+	markdown : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, List(Markdown.Block)) -> Elem(ctx)
+	markdown = |model0, key0, blocks|
 		Html.div(
 			"markdown",
 			[
@@ -1166,6 +1173,8 @@ Liton := [].{
 					blocks,
 					|block| block.key,
 					|row| {
+						model = model0.lift_row()
+						key = key0.lift_row().map2(row.key(), |entry, index| "${entry}/${index}")
 						attrs = |name| [Engine.class(name)]
 						Html.div_attrs(
 							[Engine.class_s(row.field(|block| if (block.quote > 0) "md-block quoted" else "md-block")), Engine.attr_s("style", row.field(|block| "--indent: ${block.indent.to_str()}"))],
@@ -1178,7 +1187,7 @@ Liton := [].{
 											Paragraph => Engine.element("p", attrs("md-p"), [Liton.spans(row.field(|block| block.spans))])
 											Heading => Engine.element("p", attrs("md-h").concat([Engine.attr("role", "heading"), Engine.attr_s("aria-level", row.field(|block| block.level.to_str()))]), [Liton.spans(row.field(|block| block.spans))])
 											Rule => Engine.element("hr", attrs("md-rule"), [])
-											Code => Liton.code_block(row.field(|block| block.code), attrs("md-code"))
+											Code => Liton.code_block(model, key, row.field(|block| block.code), attrs("md-code"))
 											List =>
 												Engine.element(
 													"ul",
@@ -1221,9 +1230,10 @@ Liton := [].{
 				),
 		)
 
-	## A code block: its language over its highlighted lines.
-	code_block : Signal(ctx, { language : Str, text : Str, lines : List(List(Highlight.Token)) }), List(Engine.Attr(ctx)) -> Elem(ctx)
-	code_block = |code, attrs|
+	## A code block: its language and Copy, which says Copied at once, over
+	## its highlighted lines.
+	code_block : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, { language : Str, text : Str, lines : List(List(Highlight.Token)) }), List(Engine.Attr(ctx)) -> Elem(ctx)
+	code_block = |model, key, code, attrs|
 		Html.div_attrs(
 			attrs,
 			[
@@ -1231,6 +1241,7 @@ Liton := [].{
 					"md-code-bar",
 					[
 						Html.span_s(code.map(|shown| shown.language), [Engine.class("md-language")]),
+						Html.button_s(key.map2(model.signal(), |copying, state| if (state.copied == copying) "Copied" else "Copy"), [Engine.class("copy"), Engine.attr("title", "Copy the code")], model.update_by(key.map2(code, |copying, shown| { key: copying, text: shown.text }), Model.copy)),
 					],
 				),
 				Engine.element(

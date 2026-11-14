@@ -10,10 +10,12 @@
     <div id="app"></div>
     <script type="module">
       import { mountRocEngineApp } from "./runtime.mjs";
+      import ports from "./ports.mjs";
 
       await mountRocEngineApp({
         wasmUrl: "app.wasm",
         root: document.getElementById("app"),
+        ports,
         onFault: (fault) => console.error(`${fault.class}: ${fault.message}`),
       });
     </script>

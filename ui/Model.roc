@@ -112,6 +112,11 @@ Model := [].{
 
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
+
+		## The code block last copied, by its key, and the copy asked of the
+		## clipboard; `copied` is "" again if the clipboard refused it.
+		copied : Str,
+		clipboard : { serial : U64, key : Str, text : Str },
 	}
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
@@ -179,6 +184,8 @@ Model := [].{
 				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
 				glass: Bool.True,
 				focused_pane: "",
+				copied: "",
+				clipboard: { serial: 0, key: "", text: "" },
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -314,6 +321,14 @@ Model := [].{
 	## screen.
 	focus_pane : State, { pane : Str, column : Str } -> State
 	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column }
+
+	## Copies a code block, shown as copied at once.
+	copy : State, { key : Str, text : Str } -> State
+	copy = |state, { key, text }| { ..state, copied: key, clipboard: { serial: state.clipboard.serial + 1, key, text } }
+
+	## Takes the clipboard's answer: refused, the block isn't copied after all.
+	copy_answered : State, U64, Bool -> State
+	copy_answered = |state, serial, copied| if (copied or serial != state.clipboard.serial) state else { ..state, copied: "", notice: "The browser didn't let liton copy that." }
 
 	## How many sessions are running.
 	running : State -> U64

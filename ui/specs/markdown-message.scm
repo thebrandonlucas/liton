@@ -1,4 +1,4 @@
-(test "Liton — an agent's message shows as Markdown"
+(test "Liton — an agent's message shows as Markdown, and Copy says Copied at once"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -10,7 +10,7 @@
     (expect-visible (text "zig build"))
     (expect-visible (text "first"))
     (expect-absent (text "`zig build`"))
-    ; The code block, highlighted, with its language.
+    ; The code block, highlighted, with its language and Copy.
     (expect-visible (text "sh"))
     (expect-visible (text "echo"))
     ; A link opens in a new tab; raw HTML is text, a nested item's own.
@@ -18,5 +18,11 @@
     (expect-attr (role link :name "docs") target "_blank")
     (expect-visible (text "◦"))
     (expect-visible (text "nested <b>raw</b>"))
+    (click (role button :name "Copy"))
+    ; Copied before the clipboard answers.
+    (expect-visible (role button :name "Copied"))
+    (expect-port-call 4 "liton/copy" "\"echo done\"")
+    (answer-port 4 reply "true")
+    (expect-visible (role button :name "Copied"))
   )
 )
