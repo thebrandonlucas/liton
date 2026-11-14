@@ -37,6 +37,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A Glass switch in Settings turns off the blur behind the tiles, which saves work on a slow device's graphics card.
 - Stop a running agent with chat.v1's `Cancel` call (`liton call chat.v1 '{"Cancel":{"session_id":"…"}}'`), for Paseo's agents, the mock's and those of providers outside the daemon.
 - Browse the files of a session's or workspace's directory with the new `files.v1` capability: `/liton/v1/poll` follows a directory's entries (`tree/<context>/<path>`) and a file's text, up to its first 256 KiB, or whether it is binary or too large (`file/<context>/<path>`). Paseo, the mock and providers outside the daemon offer it; the daemon asks Paseo for a directory or file when it is first watched and again at most every 10 s while it is.
+- The daemon transcribes dictation on your own machine: set `LITON_STT=sherpa=ws://127.0.0.1:6006` (Parakeet in sherpa-onnx) or `LITON_STT=whisper=http://127.0.0.1:8178` (whisper.cpp), which `rig/speech/` runs, and it offers `voice.v1`. Clients post the audio in acknowledged 1 s chunks to `/liton/v1/audio/voice.v1/<utterance>/<seq>`, so a dropped link loses nothing, and `Finish` answers the transcript (docs/protocol.md, Audio).
 
 ### Changed
 

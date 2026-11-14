@@ -26,6 +26,11 @@
 ## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
 ## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
 ## items that need you, as needs-you.v1.
+##
+## LITON_STT offers voice.v1, dictation, from a speech engine on the machine
+## (providers/local-speech/, rig/speech/): `sherpa=ws://127.0.0.1:6006` for
+## sherpa-onnx's offline WebSocket server, or `whisper=http://127.0.0.1:8178`
+## for whisper.cpp's whisper-server. Unset, voice.v1 isn't offered.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -34,6 +39,7 @@ app [Context, program] {
 	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.21.0/4viZsnWjdYsyH4Q87ESFAwM5c55Hnc15nAGW1UwzWpFU.tar.zst",
 	remote: "../providers/remote/main.roc",
 	setup: "../setup/main.roc",
+	speech: "../providers/local-speech/main.roc",
 	transformers: "../transformers/main.roc",
 }
 
@@ -52,6 +58,7 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 import cap.Protocol
+import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
@@ -63,11 +70,12 @@ import paseo.WebSocket
 import remote.Remote
 import setup.Default
 import setup.Setup
+import speech.LocalSpeech
 import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -90,6 +98,8 @@ init! = || {
 	}
 	password = env_or!("PASEO_PASSWORD", "")
 	paseo = if (password == "") Err(Disabled) else Ok({ host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
+	stt = env_or!("LITON_STT", "")
+	speech = if (stt == "") Err(Disabled) else Ok(checked!(LocalSpeech.engine(stt))?)
 	setup = checked!(setup!(env_or!("LITON_SETUP", "")))?
 	remotes = checked!(Remote.declared(setup.remotes, env_or!("LITON_PROVIDERS", "")))?
 	remote_interval_ms = I64.from_str(env_or!("LITON_PROVIDERS_INTERVAL_MS", "1000")) ?? 1_000
@@ -100,7 +110,7 @@ init! = || {
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
-	context = { db, mock_enabled, paseo, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	context = { db, mock_enabled, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -159,6 +169,8 @@ respond! = |request, context| {
 				call!(context, request)
 			(POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
 				polled_topics!(context, request)
+			(POST, Resource({ raw_path, .. })) if raw_path.starts_with(audio_route) =>
+				audio_chunk!(context, request, raw_path.drop_prefix(audio_route))
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
@@ -202,8 +214,8 @@ offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far,
 ## and the transformers whose capabilities they offer (see
 ## `Transformer.offered`).
 offered : Context, List(Manifest.Provider) -> Manifest.Offered
-offered = |{ mock_enabled, paseo, transformers, .. }, remote_providers| {
-	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(remote_providers)
+offered = |{ mock_enabled, paseo, speech, transformers, .. }, remote_providers| {
+	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else []).concat(remote_providers)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -254,6 +266,16 @@ call! = |context, request| {
 						Ok(Listed({ projects: listed.projects.keep_if(|project| Protocol.serves(provider, project.provider)), workspaces: listed.workspaces.keep_if(|workspace| Protocol.serves(provider, workspace.provider)) }))
 					}
 					Err(_) => Err(unanswered("workspaces.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("voice.v1", _)) => {
+				decoded : Try(Protocol.Call(Voice.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Voice.Response)
+				answer = match (decoded, context.speech) {
+					(Ok({ request: asked, .. }), Ok(engine)) => voice_call!(context, engine, asked)?
+					_ => Err(unanswered("voice.v1"))
 				}
 				Json.to_str(answer)
 			}
@@ -322,6 +344,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
+		VoiceStatus => Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -383,6 +406,7 @@ update! = |context, wanted, subject| {
 		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
 		Tree({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Tree, focus, path)?))
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
+		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 	}
 }
 
@@ -753,6 +777,9 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_transcripts (utterance_id TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
 	# no directory, workspace or listed status until listed again.
@@ -1554,5 +1581,183 @@ kept! = |db, remote, update| {
 		}
 	Sqlite.execute!({ db, query: "UPDATE remote_topics SET cursor = :cursor, error = :error, event = CASE WHEN :event = '' THEN event ELSE :event END WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic, cursor: update.cursor, error, event: snapshot } })
 }
+
+## Where clients post an utterance's audio, `<utterance_id>/<seq>` after it.
+audio_route : Str
+audio_route = "/liton/v1/audio/voice.v1/"
+
+## The most a chunk of audio may hold: a 1 s chunk is 32,000 bytes.
+chunk_limit_bytes : U64
+chunk_limit_bytes = 64 * 1024
+
+## How long the daemon keeps an utterance's audio and transcript.
+utterance_ms : I64
+utterance_ms = 600_000
+
+## How often, at most, the daemon asks the speech engine whether it is up.
+speech_status_ms : I64
+speech_status_ms = 5_000
+
+## Answers a chunk of an utterance's audio, raw 16 kHz 16-bit mono PCM: keeps
+## it, unless a chunk of its seq is kept already, and acks those kept. One
+## over `chunk_limit_bytes` is answered 413.
+audio_chunk! : Context, Server.Request, Str => Try(Response, _)
+audio_chunk! = |context, request, rest| {
+	answered = |answer| {
+		typed : Protocol.Answer(Voice.Acked)
+		typed = answer
+		json(Json.to_str(typed))
+	}
+	match (context.speech, Voice.chunk(rest)) {
+		(Err(Disabled), _) => Ok(answered(Err({ code: Unsupported, message: "the daemon offers no voice.v1" })))
+		(_, Err(problem)) => Ok(answered(Err({ code: BadRequest, message: problem })))
+		(_, Ok({ utterance_id, seq })) =>
+			match request.body().with_limit(chunk_limit_bytes).read_all!() {
+				Err(RequestBodyErr(TooLarge(_))) => Ok(answered(Err({ code: BadRequest, message: "a chunk holds at most ${chunk_limit_bytes.to_str()} bytes" })).with_status(413))
+				Err(err) => Err(err)
+				Ok(pcm) if pcm.len() % 2 == 1 => Ok(answered(Err({ code: BadRequest, message: "a chunk holds 16-bit samples, an even number of bytes" })))
+				Ok(pcm) => {
+					db = context.db
+					now = now_ms!()
+					expired!(db, now)?
+					Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO voice_chunks (utterance_id, seq, pcm, at) VALUES (:utterance_id, :seq, :pcm, :now);", params: { utterance_id, seq: seq.to_i64_wrap(), pcm: Sqlite.Blob.from_bytes(pcm), now } })?
+					Ok(answered(Ok(Voice.acked(chunks_held!(db, utterance_id)?))))
+				}
+			}
+	}
+}
+
+## Drops the audio and transcripts older than `utterance_ms`.
+expired! : Sqlite.Db, I64 => Try({}, _)
+expired! = |db, now| {
+	Sqlite.execute!({ db, query: "DELETE FROM voice_chunks WHERE at <= :since;", params: { since: now - utterance_ms } })?
+	Sqlite.execute!({ db, query: "DELETE FROM voice_transcripts WHERE at <= :since;", params: { since: now - utterance_ms } })
+}
+
+## The seqs of an utterance's chunks kept, in order.
+chunks_held! : Sqlite.Db, Str => Try(List(U64), _)
+chunks_held! = |db, utterance_id| {
+	rows : List({ seq : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT seq FROM voice_chunks WHERE utterance_id = :utterance_id ORDER BY seq;", params: { utterance_id }, limits: Sqlite.default_query_limits })?
+	Ok(rows.map(|row| row.seq.to_u64_wrap()))
+}
+
+## Answers a voice.v1 request. `Finish` transcribes the chunks from 0 to its
+## `last_seq` once all are kept, then keeps the transcript in place of the
+## audio, so a `Finish` asked again answers the same.
+voice_call! : Context, LocalSpeech.Engine, Voice.Request => Try(Protocol.Answer(Voice.Response), _)
+voice_call! = |context, engine, asked| {
+	db = context.db
+	match asked {
+		Begin(_) =>
+			match speech_status!(context)? {
+				Ready => Ok(Ok(Accepted))
+				Loading => Ok(Err({ code: Unavailable, message: "${LocalSpeech.named(engine)} is loading its model" }))
+				Down(reason) => Ok(Err({ code: Unavailable, message: reason }))
+			}
+		Cancel({ utterance_id }) => {
+			Sqlite.execute!({ db, query: "DELETE FROM voice_chunks WHERE utterance_id = :utterance_id;", params: { utterance_id } })?
+			Ok(Ok(Accepted))
+		}
+		Finish({ last_seq, .. }) if last_seq >= Voice.max_chunks => Ok(Err({ code: BadRequest, message: "an utterance has at most ${Voice.max_chunks.to_str()} chunks" }))
+		Finish({ utterance_id, last_seq }) => {
+			expired!(db, now_ms!())?
+			kept : List({ text : Str })
+			kept = Sqlite.query_many!({ db, query: "SELECT text FROM voice_transcripts WHERE utterance_id = :utterance_id;", params: { utterance_id }, limits: Sqlite.default_query_limits })?
+			count = Voice.contiguous(chunks_held!(db, utterance_id)?)
+			match kept.first() {
+				Ok({ text: transcript }) => Ok(Ok(Transcript({ text: transcript })))
+				Err(_) if count <= last_seq => Ok(Ok(Missing({ from_seq: count })))
+				Err(_) => {
+					rows : List({ pcm : Sqlite.Blob })
+					rows = Sqlite.query_many!({ db, query: "SELECT pcm FROM voice_chunks WHERE utterance_id = :utterance_id AND seq <= :last_seq ORDER BY seq;", params: { utterance_id, last_seq: last_seq.to_i64_wrap() }, limits: { ..Sqlite.default_query_limits, max_bytes: Voice.max_chunks * chunk_limit_bytes } })?
+					match transcribed!(engine, rows.fold([], |pcm, row| pcm.concat(row.pcm.to_bytes()))) {
+						Ok(transcript) => {
+							Sqlite.execute!({ db, query: "INSERT OR REPLACE INTO voice_transcripts (utterance_id, text, at) VALUES (:utterance_id, :text, :now);", params: { utterance_id, text: transcript, now: now_ms!() } })?
+							Sqlite.execute!({ db, query: "DELETE FROM voice_chunks WHERE utterance_id = :utterance_id;", params: { utterance_id } })?
+							Ok(Ok(Transcript({ text: transcript })))
+						}
+						Err(err) => Ok(Err({ code: Unavailable, message: "${LocalSpeech.named(engine)}: ${Str.inspect(err)}" }))
+					}
+				}
+			}
+		}
+	}
+}
+
+## The engine's transcript of an utterance.
+transcribed! : LocalSpeech.Engine, List(U8) => Try(Str, _)
+transcribed! = |engine, pcm|
+	match engine {
+		Sherpa(address) => {
+			connection = sherpa_connected!(address)?
+			connection.write!(WebSocket.frame(Binary, LocalSpeech.samples(pcm), websocket_mask))?
+			answer = message!(connection, [])?
+			_ = connection.write!(WebSocket.text("Done", websocket_mask))
+			_ = connection.write!(WebSocket.close(websocket_mask))
+			LocalSpeech.sherpa_text(answer)
+		}
+		Whisper(url) => {
+			{ content_type, body } = LocalSpeech.inference(pcm)
+			response = Http.send!(Request.from_method(POST).with_uri("${url}/inference").with_body(body).add_header("Content-Type", content_type).with_timeout(TimeoutMilliseconds(60_000)))?
+			if response.status() != 200 {
+				return Err(AnsweredStatus(response.status()))
+			}
+			LocalSpeech.whisper_text(Str.from_utf8(response.body())?)
+		}
+	}
+
+## A WebSocket connection to sherpa-onnx's server.
+sherpa_connected! : { host : Str, port : U16, path : Str } => Try(Tcp.Connection, _)
+sherpa_connected! = |{ host, port, path }| {
+	connection = Tcp.connect!(host, port)?
+	connection.write_utf8!(WebSocket.handshake({ host, port, path, protocol: "liton", key: "bGl0b24tZGFlbW9uLWtleQ==" }))?
+	status_line = connection.read_line!()?
+	if !WebSocket.accepted(status_line) {
+		return Err(HandshakeRefused(status_line.trim()))
+	}
+	skip_headers!(connection)?
+	Ok(connection)
+}
+
+## Whether the speech engine is up, asked at most every `speech_status_ms`.
+speech_status! : Context => Try(Voice.Engine, _)
+speech_status! = |context|
+	match context.speech {
+		Err(Disabled) => Ok(Down("LITON_STT names no speech engine"))
+		Ok(engine) => {
+			named = LocalSpeech.named(engine)
+			now = now_ms!()
+			rows : List({ status : Str })
+			rows = Sqlite.query_many!({ db: context.db, query: "SELECT status FROM voice_status WHERE engine = :named AND checked_at > :since;", params: { named, since: now - speech_status_ms }, limits: Sqlite.default_query_limits })?
+			known : Try(Voice.Engine, _)
+			known = Json.parse(rows.first().map_ok(|row| row.status) ?? "")
+			match known {
+				Ok(status) => Ok(status)
+				Err(_) => {
+					status =
+						match engine {
+							Sherpa(address) =>
+								match sherpa_connected!(address) {
+									Ok(connection) => {
+										_ = connection.write!(WebSocket.close(websocket_mask))
+										Ready
+									}
+									Err(err) => Down("${named} can't be reached: ${Str.inspect(err)}")
+								}
+							Whisper(url) =>
+								match Http.send!(Request.from_method(GET).with_uri("${url}/health").with_timeout(TimeoutMilliseconds(2_000))) {
+									Ok(response) if response.status() == 200 => Ready
+									Ok(response) if response.status() == 503 => Loading
+									Ok(response) => Down("${named} answered ${response.status().to_str()}")
+									Err(err) => Down("${named} can't be reached: ${Str.inspect(err)}")
+								}
+						}
+					Sqlite.execute!({ db: context.db, query: "INSERT OR REPLACE INTO voice_status (engine, status, checked_at) VALUES (:named, :status, :now);", params: { named, status: Json.to_str(status), now } })?
+					Ok(status)
+				}
+			}
+		}
+	}
 
 expect transformers_named(["needs-you", " attention", ""]).map_ok(|parts| parts.map(|part| part.id)) == Ok(["attention", "needs-you"]) and transformers_named(["attention", "nope"]).is_err()

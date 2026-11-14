@@ -8,6 +8,7 @@ import Chat
 import Context
 import Files
 import Manifest
+import Voice
 import WorkspaceGit
 import Workspaces
 
@@ -36,7 +37,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -57,6 +58,7 @@ Protocol := [].{
 		File({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str }),
 		Tree({ context : Context.Id, path : Str }),
 		Contents({ context : Context.Id, path : Str }),
+		VoiceStatus,
 	]
 
 	## The topics of each capability providers offer, as the manifest lists
@@ -67,6 +69,7 @@ Protocol := [].{
 		{ capability: Capability.workspaces_v1, patterns: ["list"] },
 		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
+		{ capability: Capability.voice_v1, patterns: ["status"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -103,6 +106,7 @@ Protocol := [].{
 				"workspace.git.v1" if topic.starts_with("file/") => file_subject(topic.drop_prefix("file/"))
 				"files.v1" if topic.starts_with("tree/") => placed_path(topic.drop_prefix("tree/")).map_ok(|placed| Tree(placed))
 				"files.v1" if topic.starts_with("file/") => placed_path(topic.drop_prefix("file/")).map_ok(|placed| Contents(placed))
+				"voice.v1" if topic == "status" => Ok(VoiceStatus)
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -117,6 +121,7 @@ Protocol := [].{
 			Importable => { capability: "chat.v1", topic: "importable" }
 			Items => { capability: "attention.v1", topic: "items" }
 			WorkspaceList => { capability: "workspaces.v1", topic: "list" }
+			VoiceStatus => { capability: "voice.v1", topic: "status" }
 			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
 			File({ context, scope, path }) => { capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped(path)}" }
 			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${context_name(context)}/${escaped(path)}" }

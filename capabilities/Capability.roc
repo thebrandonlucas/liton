@@ -17,6 +17,8 @@ Capability := [].{
 
 	files_v1 : Id
 	files_v1 = { name: "files", version: 1 }
+	voice_v1 : Id
+	voice_v1 = { name: "voice", version: 1 }
 
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
