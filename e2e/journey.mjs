@@ -80,15 +80,17 @@ try {
   };
 
   await step("the three preset panes render, with Capabilities left to Settings", async () => {
-    for (const pane of ["Sessions", "Chat", "Changes"]) await see(pane, ".pane-header", "⋯");
+    for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header", "⋯");
     await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
-  await step("the seeded sessions appear in Sessions", async () => {
-    for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Sessions", ".session button", title);
+  await step("the mock's project, its workspaces and their seeded sessions appear in Workspaces", async () => {
+    await see("Workspaces", ".tree-group button", "liton");
+    for (const name of ["fix-auth", "main"]) await see("Workspaces", ".tree-workspace button", name);
+    for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Workspaces", ".tree-session button", title);
   });
   await step("the flaky CI session is waiting for you", () =>
     until("its status", () => page.evaluate(() =>
-      [...document.querySelectorAll(".session")].some((s) => s.textContent.includes("Find the flaky CI test") && s.querySelector('[data-testid="session-status"]')?.textContent === "waiting for you"))));
+      [...document.querySelectorAll(".tree-session")].some((s) => s.textContent.includes("Find the flaky CI test") && s.querySelector('[data-testid="row-status"]')?.textContent === "waiting for you"))));
   await step("the Inbox preset lists it under Needs you, and the title counts it", async () => {
     await page.click(".settings-toggle");
     await click("Settings", "button", "Inbox preset");
@@ -105,8 +107,14 @@ try {
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });
+  await step("clicking a workspace shows its session that needs you in Chat, and its git in Changes", async () => {
+    await click("Workspaces", ".tree-workspace button", "main");
+    await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
+    await see("Changes", ".git-status", "main");
+    await see("Changes", ".missing", "Working tree clean");
+  });
   await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
-    await click("Sessions", ".session button", "Fix the login redirect");
+    await click("Workspaces", ".tree-session button", "Fix the login redirect");
     await see("Changes", ".git-status", "fix-auth");
     await click("Changes", ".git-file button", "src/Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
@@ -116,7 +124,7 @@ try {
     await see("Chat", ".md-item", "Logging in now returns you where you were.");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
-    await click("Sessions", ".session button", "Find the flaky CI test");
+    await click("Workspaces", ".tree-session button", "Find the flaky CI test");
     await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
     await see("Chat", '.tool-card.failed [data-testid="tool-state"]', "failed");
     await see("Chat", ".tool-card.failed .tool-output", "FAIL (expected 3, got 2)");
@@ -128,7 +136,7 @@ try {
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
   });
   await step("a message sent to Scratch with Enter appears, and leaves the composer empty and focused", async () => {
-    await click("Sessions", ".session button", "Scratch");
+    await click("Workspaces", ".tree-session button", "Scratch");
     await see("Chat", ".pane-header .pane-title", "Scratch");
     const composer = 'section[aria-label="Chat"] input[aria-label="Message"]';
     await (await page.$(composer)).type("Find the TODOs");
@@ -151,7 +159,7 @@ try {
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
     await see("Chat", '.pane-header [data-testid="session-status"]', "idle");
   });
-  await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the sessions", async () => {
+  await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the workspaces", async () => {
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: true });
     await page.goto(`${base}/`);
     const in_view = (pane) => page.evaluate((pane) => {
@@ -160,7 +168,7 @@ try {
     }, pane);
     await until("the chat panel in view", () => in_view("Chat"));
     await page.click('[data-testid="show-left"]');
-    await until("the sessions panel in view", () => in_view("Sessions"));
+    await until("the workspaces panel in view", () => in_view("Workspaces"));
   });
   await step("the page threw no errors", async () => {
     if (page.errors.length) throw new Error(page.errors.join("; "));

@@ -12,10 +12,10 @@
     (expect-attr (role region :name "CI runs") class "pane")
     (expect-attr (role region :name "Chat") class "pane hidden")
     (expect-visible (text "This widget needs ci.v1, which no connected provider supplies. Connect one that does, and it fills in here."))
-    ; The first pane's close button is the Sessions pane's. Its drawer stays.
-    (click (role button :name "Sessions menu"))
+    ; The first pane's close button is the Workspaces pane's. Its drawer stays.
+    (click (role button :name "Workspaces menu"))
     (click (role button :name "Close pane"))
-    (expect-absent (role region :name "Sessions"))
+    (expect-absent (role region :name "Workspaces"))
     (expect-text (test-id "show-left") "")
     (expect-visible (role region :name "CI runs"))
   )

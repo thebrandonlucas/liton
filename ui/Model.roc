@@ -1169,7 +1169,7 @@ Model := [].{
 # A Changes pane's git is followed only while it is on screen.
 expect {
 	state = { ..Model.initial(""), focus: Session("a") }
-	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted })] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items]
+	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
@@ -1301,7 +1301,7 @@ expect {
 	placed = |id, status| { ..Chat.session({ id, provider: "mock", agent: "claude", title: id, status }), workspace: Ok({ id: Ok("w1"), directory: "/w" }) }
 	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
 	pinned = Model.toggle_pin(state, "pane-3")
-	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted })] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
+	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
 }
 
 ## What a workspace or a session in `rank` is doing, as a row of the

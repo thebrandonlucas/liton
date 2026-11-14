@@ -1,8 +1,8 @@
-(test "Liton — the Developer preset is a Workbench: sessions, the chat, then changes, in drawers that collapse"
+(test "Liton — the Developer preset is a Workbench: workspaces, the chat, then changes, in drawers that collapse"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
-    (expect-text (test-id "show-left") "Sessions")
+    (expect-text (test-id "show-left") "Workspaces")
     (expect-text (test-id "show-main") "Chat")
     (expect-text (test-id "show-right") "Changes")
     (expect-attr (test-id "slot-main") class "column slot slot-main tabbed shown")

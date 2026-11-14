@@ -7,8 +7,8 @@ import Setup
 
 Default := [].{
 
-	## A Workbench of sessions, the chat following the focus, and the focused
-	## session's changes.
+	## A Workbench of workspaces and their sessions, the chat following the
+	## focus, and the changes of the workspace or session focused.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -16,7 +16,7 @@ Default := [].{
 			version: Setup.snapshot_version,
 			shell: Workbench,
 			columns: [
-				{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
+				{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
 				{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
 				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }] },
 			],

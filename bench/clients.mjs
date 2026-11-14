@@ -13,7 +13,7 @@ export const clients = {
     load_path: () => "/",
     user_messages: 'section[aria-label="Chat"] .entry.user',
     answers: 'section[aria-label="Chat"] .entry',
-    session_rows: 'section[aria-label="Sessions"] .session button',
+    session_rows: 'section[aria-label="Workspaces"] .tree-session button',
     row_text: (k) => `Bench agent ${k}`,
     composer: 'section[aria-label="Chat"] input[aria-label="Message"]',
   },
