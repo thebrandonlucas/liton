@@ -153,9 +153,57 @@ events with the cursor as the event id, so a reconnect resumes with
 
 ## Providers outside the daemon
 
-A provider in any language speaks the same model over a stream of JSON lines, on
-its stdin and stdout when the daemon starts it, or on a WebSocket when it runs on
-its own. Messages, one per line:
+A provider outside the daemon speaks the protocol clients do: it serves
+`/liton/v1` over HTTP (Wire, above), so it can be a small HTTP server in any
+language, and a liton daemon is one already, which is how daemons federate.
+The daemon is its client. `examples/provider-echo/` is the smallest one, in
+Roc: chat.v1 for two scripted sessions.
+
+The contract is the manifest's `protocol` and `providers` (a provider outside
+the daemon may leave out the rest), `call` for the capabilities they list,
+and `poll` for their topics. A daemon is given its providers outside it, until
+a Litonfile declares them, in `LITON_PROVIDERS`, comma-separated:
+
+```sh
+LITON_PROVIDERS="echo=http://127.0.0.1:8096,team=https://liton.example"
+```
+
+A name is letters, digits, `-` and `_`. Then:
+
+- **Names.** All a remote offers is named under its name, `<name>/<its id>`:
+  its providers (`echo/echo`, `team/paseo`), sessions (`team/fix-auth`),
+  projects and workspaces (and the sessions each lists). That is the
+  provenance, and it keeps ids unique however many remotes there are: a
+  local id never starts with a name and a `/` (Paseo's ids with a `/` start
+  with `import:`). Federated again, the names nest: `home/team/fix-auth`.
+- **Manifest.** The daemon asks each remote for its manifest at start, then
+  every minute, and adds its providers with the capabilities the daemon routes
+  (`chat.v1`, `workspaces.v1`, `workspace.git.v1`). A remote's transformers
+  are left out: the daemon derives `attention.v1` from every provider's chat.
+- **Calls.** A call to a remote's session (`SendMessage`, `WatchSession`,
+  `AnswerPermission`) is forwarded to it with the session and provider as it
+  names them, and its answer returned as given. Lists (`ListSessions`,
+  `ListWorkspaces`) merge the remotes' with the daemon's own.
+- **Topics.** A topic of a remote's session or workspace
+  (`timeline/team/fix-auth`, `changes/team/fix-auth/Uncommitted`) follows the
+  remote's own (`timeline/fix-auth`); `sessions`, `importable` and `list`
+  merge each remote's. A client's poll notes what it wants of each remote;
+  the daemon asks a remote at most every `LITON_PROVIDERS_INTERVAL_MS`
+  (default 1000), in one poll of all that clients watched of it within the
+  last 10 s, after the cursors it has, and answers every client from what it
+  kept. However many clients poll, a remote sees one poll per interval at most.
+- **Failures.** A remote that can't be reached, or answers anything but a
+  manifest or a poll, is down: one line on stderr, its providers left out of
+  the manifest and its sessions out of the lists, its topics and calls
+  `Unavailable`, and the rest of each poll answered as before. It is asked
+  again after a second, then two, doubling up to a minute, and its coming back
+  is logged too.
+
+Later, when the daemon's platform can hold connections
+([research/own-platform-design.md](research/own-platform-design.md)), a
+provider can instead keep one open: a stream of JSON lines on its stdin and
+stdout when the daemon starts it, or a WebSocket when it runs on its own. The
+same model, pushed rather than polled:
 
 | From | Message | Meaning |
 |---|---|---|
@@ -165,10 +213,10 @@ its own. Messages, one per line:
 | daemon | `{"want": {"capability", "topic", "after"}}` / `{"drop": {...}}` | start or stop following a topic |
 | provider | `{"events": {"capability", "topic", "cursor", "events"}}` | new events on a followed topic |
 
-The daemon owns caching and fan-out to clients, so a provider sees each topic
-wanted once however many clients follow it, and keeps its own upstream within
-budget. A provider compiled into the daemon implements the same exchange as a
-pure state machine; a remote liton daemon can be one too.
+The daemon owns caching and fan-out to clients either way, so a provider sees
+each topic wanted once however many clients follow it, and keeps its own
+upstream within budget. A provider compiled into the daemon implements the
+same exchange as a pure state machine.
 
 ## Transformers
 

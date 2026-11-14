@@ -8,15 +8,24 @@
 ## LITON_MOCK=off leaves out the mock provider. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
+##
+## LITON_PROVIDERS adds providers outside the daemon, each a server of
+## /liton/v1 such as another liton daemon, comma-separated as
+## `name=http://host:port` (or https://), until a Litonfile declares them.
+## Their providers, sessions and workspaces are named `<name>/<their id>`.
+## The daemon asks each at most every LITON_PROVIDERS_INTERVAL_MS (default
+## 1000) for all that polls watch of it, in one poll of its own.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	mock: "../providers/mock/main.roc",
 	paseo: "../providers/paseo/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.21.0/4viZsnWjdYsyH4Q87ESFAwM5c55Hnc15nAGW1UwzWpFU.tar.zst",
+	remote: "../providers/remote/main.roc",
 }
 
 import pf.Env
+import pf.Http
 import pf.OsStr
 import pf.Path
 import pf.Server
@@ -24,6 +33,7 @@ import pf.Sqlite
 import pf.Stderr
 import pf.Tcp
 import pf.UnixTime
+import http.Request
 import http.Response
 import cap.Attention
 import cap.Capability
@@ -37,8 +47,9 @@ import paseo.Paseo
 import paseo.PaseoGit
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
+import remote.Remote
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]) }
+Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64 }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -61,13 +72,29 @@ init! = || {
 	}
 	password = env_or!("PASEO_PASSWORD", "")
 	paseo = if (password == "") Err(Disabled) else Ok({ host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
+	remotes =
+		match Remote.parsed(env_or!("LITON_PROVIDERS", "")) {
+			Ok(parsed) => parsed
+			Err(problem) => {
+				logged!(problem)
+				return Err(Exit(5))
+			}
+		}
+	remote_interval_ms = I64.from_str(env_or!("LITON_PROVIDERS_INTERVAL_MS", "1000")) ?? 1_000
 	ui = Server.file_root({ id: "ui", path: Path.utf8(env_or!("LITON_UI", "zig-out/www")) })
 	config =
 		Server.default_config
 			.with_listen({ host, port })
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
-	Ok({ config, context: { db, mock_enabled, paseo } })
+	context = { db, mock_enabled, paseo, remotes, remote_interval_ms }
+	# Each remote starts unasked, and its manifest is asked for at once.
+	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
+	for endpoint in remotes {
+		Sqlite.execute!({ db, query: "INSERT INTO remotes (name) VALUES (:name);", params: { name: endpoint.name } }) ? |_| Exit(3)
+		remote_cycle!(context, endpoint) ? |_| Exit(3)
+	}
+	Ok({ config, context })
 }
 
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
@@ -80,7 +107,7 @@ respond! = |request, context| {
 			(GET, Resource({ raw_path: "/", .. })) =>
 				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
 			(GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
-				Ok(json(Json.to_str(offered(context))))
+				manifest!(context)
 			(POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
 				call!(context, request)
 			(POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
@@ -111,11 +138,22 @@ read_json! = |request| {
 	Str.from_utf8(body)
 }
 
-## What /liton/v1/manifest answers: the enabled providers, and attention
-## once one of them supplies chat.v1.
-offered : Context -> Manifest.Offered
-offered = |{ mock_enabled, paseo, .. }| {
-	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else [])
+## Answers /liton/v1/manifest, once the remotes due are asked.
+manifest! : Context => Try(Response, _)
+manifest! = |context| {
+	remotes_cycle!(context)?
+	Ok(json(Json.to_str(offered!(context)?)))
+}
+
+## What the daemon offers, with the providers of the remotes that are up.
+offered! : Context => Try(Manifest.Offered, _)
+offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far, up| so_far.concat(Remote.providers(up.name, up.advertised)))))
+
+## What /liton/v1/manifest answers: the enabled providers, then the remotes',
+## and attention once one of them supplies chat.v1.
+offered : Context, List(Manifest.Provider) -> Manifest.Offered
+offered = |{ mock_enabled, paseo, .. }, remote_providers| {
+	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(remote_providers)
 	transformers = if (providers.any(|provider| provider.capabilities.contains(Capability.chat_v1))) [attention_transformer] else []
 	manifest = { protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers, topics: [] }
 	{ ..manifest, topics: Protocol.topics.keep_if(|topics| Manifest.offered(manifest).contains(topics.capability)) }
@@ -129,7 +167,7 @@ call! = |context, request| {
 	addressed = Json.parse(body)
 	routed =
 		match addressed {
-			Ok(asked) => Protocol.routed(offered(context), asked).map_ok(|id| (Capability.to_str(id), asked.provider))
+			Ok(asked) => Protocol.routed(offered!(context)?, asked).map_ok(|id| (Capability.to_str(id), asked.provider))
 			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
 		}
 	unanswered : Str -> Protocol.Error
@@ -188,7 +226,7 @@ polled_topics! = |context, request| {
 	match decoded {
 		Err(_) => Ok(text(400, "expected a poll, such as {\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"after\":\"\"}]}"))
 		Ok({ topics }) => {
-			manifest = offered(context)
+			manifest = offered!(context)?
 			for wanted in topics {
 				match Protocol.subject(manifest, wanted) {
 					Ok(subject) => interested!(context, subject)?
@@ -196,6 +234,7 @@ polled_topics! = |context, request| {
 				}
 			}
 			paseo_cycle!(context)?
+			remotes_cycle!(context)?
 			var $updates = []
 			for wanted in topics {
 				$updates = $updates.append(
@@ -217,6 +256,15 @@ polled_topics! = |context, request| {
 interested! : Context, Protocol.Subject => Try({}, _)
 interested! = |context, subject| {
 	db = context.db
+	match Remote.routed(context.remotes, subject) {
+		Ok({ endpoint, subject: theirs }) => return remote_wanted!(db, endpoint.name, theirs)
+		Err(Merged) =>
+			for endpoint in context.remotes {
+				for needed in Remote.merged(subject) {
+					remote_wanted!(db, endpoint.name, needed)?
+				}
+			}
+	}
 	match subject {
 		Timeline(session_id) =>
 			match provider!(context, session_id)? {
@@ -245,7 +293,11 @@ git_interested! = |context, focus, asked|
 ## A topic's update: a timeline's entries after its cursor, or a snapshot of
 ## anything else.
 update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
-update! = |context, wanted, subject|
+update! = |context, wanted, subject| {
+	match Remote.routed(context.remotes, subject) {
+		Ok({ endpoint, subject: theirs }) => return remote_update!(context, wanted, endpoint, theirs)
+		Err(Merged) => {}
+	}
 	match subject {
 		Sessions => Ok(Protocol.snapshot(wanted, Sessions(sessions!(context)?)))
 		Timeline(session_id) =>
@@ -259,11 +311,48 @@ update! = |context, wanted, subject|
 		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
 		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
 	}
+}
+
+## A topic of a remote's session or workspace, from what the remote last
+## answered: a timeline's entries kept as the session's, or the last
+## snapshot; no events before the remote answered. A remote that is down
+## fails the topic `Unavailable`, and one that offers no such capability
+## `Unsupported`.
+remote_update! : Context, Protocol.Wanted, Remote.Endpoint, Protocol.Subject => Try(Protocol.Update, _)
+remote_update! = |context, wanted, endpoint, theirs| {
+	named = Protocol.named(theirs)
+	offers = remotes_up!(context)?.find_first(|up| up.name == endpoint.name).map_ok(|up| Manifest.capabilities(up.advertised))
+	rows : List({ event : Str, error : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT event, error FROM remote_topics WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote: endpoint.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
+	failure : Try(Protocol.Error, _)
+	failure = Json.parse(rows.first().map_ok(|row| row.error) ?? "")
+	event : Try(Protocol.Event, _)
+	event = Json.parse(rows.first().map_ok(|row| row.event) ?? "")
+	match (offers, failure, theirs) {
+		(Err(_), _, _) => Ok(Protocol.failed(wanted, { code: Unavailable, message: "the provider ${endpoint.name} can't be reached" }))
+		(Ok(capabilities), _, _) if !capabilities.contains(Capability.from_str(named.capability) ?? Capability.chat_v1) => Ok(Protocol.failed(wanted, { code: Unsupported, message: "the provider ${endpoint.name} offers no ${named.capability}" }))
+		(_, Ok(error), _) => Ok(Protocol.failed(wanted, error))
+		(_, _, Timeline(session_id)) =>
+			match Protocol.sequence(wanted) {
+				Ok(after) => Ok(Protocol.appended(wanted, visible!(context.db, Remote.prefixed(endpoint.name, session_id), after)?))
+				Err(error) => Ok(Protocol.failed(wanted, error))
+			}
+		_ =>
+			match event {
+				Ok(answered) => Ok(Protocol.snapshot(wanted, Remote.event(endpoint.name, answered)))
+				Err(_) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing) })
+			}
+	}
+}
 
 ## Answers a chat.v1 request, of `provider`'s sessions alone if it names one.
 chat_call! : Context, Try(Str, [Missing]), Chat.Request => Try(Protocol.Answer(Chat.Response), _)
 chat_call! = |context, provider, asked| {
 	db = context.db
+	match Remote.chat_owner(context.remotes, asked) {
+		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded!(endpoint, provider, asked))
+		_ => {}
+	}
 	match asked {
 		ListSessions => Ok(Ok(Sessions(sessions!(context)?.keep_if(|session| Protocol.serves(provider, session.provider)))))
 		WatchSession({ session_id, after }) =>
@@ -471,7 +560,7 @@ attention_call! = |context, asked|
 set_aside! : Context, Attention.Aside => Try(Protocol.Answer(Attention.Response), _)
 set_aside! = |context, { session_id, signature, snoozed_until }|
 	match provider!(context, session_id)? {
-		NoSession => Ok(no_session(session_id))
+		NoSession if Remote.owner(context.remotes, session_id).is_err() => Ok(no_session(session_id))
 		_ => {
 			Sqlite.execute!({ db: context.db, query: "INSERT INTO attention_asides (session_id, signature, snoozed_until) VALUES (:session_id, :signature, :snoozed_until) ON CONFLICT (session_id) DO UPDATE SET signature = excluded.signature, snoozed_until = excluded.snoozed_until;", params: { session_id, signature, snoozed_until } })?
 			Ok(Ok(Accepted))
@@ -493,7 +582,15 @@ workspaces! = |context| {
 	placed : List({ id : Str, workspace_id : Str })
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	paseo_workspaces = from_paseo.workspaces.map(|shown| { ..shown, session_ids: placed.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id) })
-	Ok({ projects: from_mock.projects.concat(from_paseo.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(items, shown.session_ids) }) })
+	# A remote's workspaces come with the state it counted.
+	from_remotes = merged_events!(context, WorkspaceList)?.fold(
+		{ projects: [], workspaces: [] },
+		|so_far, event| match event {
+			Listed(listed) => { projects: so_far.projects.concat(listed.projects), workspaces: so_far.workspaces.concat(listed.workspaces) }
+			_ => so_far
+		},
+	)
+	Ok({ projects: from_mock.projects.concat(from_paseo.projects).concat(from_remotes.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(items, shown.session_ids) }).concat(from_remotes.workspaces) })
 }
 
 ## Paseo's projects and workspaces as the cycle last listed them, none before.
@@ -519,6 +616,8 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
 	# no directory, workspace or listed status until listed again.
@@ -571,7 +670,7 @@ schedule! = |db, session_id, plan| {
 
 ## The enabled provider a session belongs to.
 provider! : Context, Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSession], _)
-provider! = |{ db, mock_enabled, paseo }, session_id| {
+provider! = |{ db, mock_enabled, paseo, .. }, session_id| {
 	rows : List({ provider : Str })
 	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
@@ -616,9 +715,10 @@ visible! = |db, session_id, after| {
 	)
 }
 
-## The mock sessions, then Paseo's.
+## The mock sessions, then Paseo's, then each remote's.
 sessions! : Context => Try(List(Chat.Session), _)
-sessions! = |{ db, mock_enabled, paseo }| {
+sessions! = |context| {
+	{ db, mock_enabled, paseo, .. } = context
 	rows : List({ id : Str, agent : Str, title : Str })
 	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	var $sessions = []
@@ -627,12 +727,18 @@ sessions! = |{ db, mock_enabled, paseo }| {
 	}
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?
-		paseo_cycle!({ db, mock_enabled, paseo })?
+		paseo_cycle!(context)?
 		refused = refusal!(db)?.map_ok(|{ reason, .. }| [Paseo.refused_session(reason)]) ?? []
-		Ok($sessions.concat(refused).concat(registered!(db)?))
-	} else {
-		Ok($sessions)
+		$sessions = $sessions.concat(refused).concat(registered!(db)?)
 	}
+	remote_sessions = merged_events!(context, Sessions)?.fold(
+		[],
+		|so_far, event| match event {
+			Sessions(listed) => so_far.concat(listed)
+			_ => so_far
+		},
+	)
+	Ok($sessions.concat(remote_sessions))
 }
 
 ## The Paseo agents the cycle last listed, with the status they were listed
@@ -920,14 +1026,21 @@ listed_importable! = |db, connection, request_id|
 	}
 
 ## The sessions Paseo's providers keep that Paseo doesn't run, as the cycle
-## last listed them (none before).
+## last listed them (none before), then the remotes' importable sessions.
 importable! : Context => Try(List(Chat.Importable), _)
 importable! = |context| {
 	rows : List({ value : Str })
 	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'importable';", params: {}, limits: Sqlite.default_query_limits })?
 	listed : Try(List(Chat.Importable), _)
 	listed = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
-	Ok(if (context.paseo.is_ok()) listed ?? [] else [])
+	from_remotes = merged_events!(context, Importable)?.fold(
+		[],
+		|so_far, event| match event {
+			Importable(kept) => so_far.concat(kept)
+			_ => so_far
+		},
+	)
+	Ok((if (context.paseo.is_ok()) listed ?? [] else []).concat(from_remotes))
 }
 
 ## Sends a request, and answers the message that answers it, skipping
@@ -1071,3 +1184,195 @@ message! = |connection, received| {
 read_bytes! : Tcp.Connection, U64 => Try(List(U8), _)
 read_bytes! = |connection, count|
 	if (count <= 8_388_608) connection.read_exactly!(count) else Ok(connection.read_exactly!(8_388_608)?.concat(read_bytes!(connection, count - 8_388_608)?))
+
+## How long the daemon waits for a remote's answer, and how long a remote's
+## cycle may run before another can start.
+remote_timeout_ms : I64
+remote_timeout_ms = 5_000
+
+## How often, at most, the daemon asks a remote for its manifest again.
+remote_manifest_ms : I64
+remote_manifest_ms = 60_000
+
+## Notes that a poll watches a remote's topic, as the remote names it.
+remote_wanted! : Sqlite.Db, Str, Protocol.Subject => Try({}, _)
+remote_wanted! = |db, remote, subject| {
+	named = Protocol.named(subject)
+	Sqlite.execute!({ db, query: "INSERT INTO remote_topics (remote, capability, topic, wanted_at) VALUES (:remote, :capability, :topic, :now) ON CONFLICT (remote, capability, topic) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { remote, capability: named.capability, topic: named.topic, now: now_ms!() } })
+}
+
+## The remotes that answered when last asked, in LITON_PROVIDERS's order,
+## with what they offer.
+remotes_up! : Context => Try(List({ name : Str, advertised : Manifest.Advertised }), _)
+remotes_up! = |context| {
+	rows : List({ name : Str, manifest : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT name, manifest FROM remotes WHERE failures = 0 AND manifest != '';", params: {}, limits: Sqlite.default_query_limits })?
+	var $up = []
+	for endpoint in context.remotes {
+		advertised : Try(Manifest.Advertised, _)
+		advertised = Json.parse(rows.find_first(|row| row.name == endpoint.name).map_ok(|row| row.manifest) ?? "")
+		match advertised {
+			Ok(parsed) => {
+				$up = $up.append({ name: endpoint.name, advertised: parsed })
+			}
+			Err(_) => {}
+		}
+	}
+	Ok($up)
+}
+
+## What each remote that is up last answered of `subject`, a list liton
+## merges, its ids under the remote's name. Notes that the remotes' lists are
+## watched, and asks the remotes when due.
+merged_events! : Context, Protocol.Subject => Try(List(Protocol.Event), _)
+merged_events! = |context, subject| {
+	for endpoint in context.remotes {
+		for needed in Remote.merged(subject) {
+			remote_wanted!(context.db, endpoint.name, needed)?
+		}
+	}
+	remotes_cycle!(context)?
+	named = Protocol.named(subject)
+	var $events = []
+	for up in remotes_up!(context)? {
+		rows : List({ event : Str })
+		rows = Sqlite.query_many!({ db: context.db, query: "SELECT event FROM remote_topics WHERE remote = :remote AND capability = :capability AND topic = :topic AND error = '';", params: { remote: up.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
+		event : Try(Protocol.Event, _)
+		event = Json.parse(rows.first().map_ok(|row| row.event) ?? "")
+		match event {
+			Ok(answered) => {
+				$events = $events.append(Remote.event(up.name, answered))
+			}
+			Err(_) => {}
+		}
+	}
+	Ok($events)
+}
+
+## Forwards a chat.v1 call to the remote whose session it names. A remote
+## that can't be reached, or answers what isn't an answer, is `Unavailable`.
+forwarded! : Remote.Endpoint, Try(Str, [Missing]), Chat.Request => Protocol.Answer(Chat.Response)
+forwarded! = |endpoint, provider, asked| {
+	unavailable = |problem| Err({ code: Unavailable, message: "the provider ${endpoint.name}: ${problem}" })
+	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.call(endpoint.name, provider, asked))) {
+		Ok(body) => {
+			answer : Try(Protocol.Answer(Chat.Response), _)
+			answer = Json.parse(body)
+			answer ?? unavailable("its answer isn't a chat.v1 answer")
+		}
+		Err(err) => unavailable(Str.inspect(err))
+	}
+}
+
+## The body of a remote's 200 answer to `what` under its /liton/v1, within
+## `remote_timeout_ms`.
+remote_asked! : Remote.Endpoint, [GET, POST], Str, Str => Try(Str, _)
+remote_asked! = |endpoint, method, what, body| {
+	asked = Request.from_method(if (method == GET) GET else POST).with_uri("${endpoint.url}/liton/v1/${what}").with_body(body.to_utf8()).with_timeout(TimeoutMilliseconds(remote_timeout_ms.to_u64_wrap()))
+	response = Http.send!(if (method == GET) asked else asked.add_header("Content-Type", "application/json"))?
+	if response.status() != 200 {
+		return Err(AnsweredStatus(response.status()))
+	}
+	Str.from_utf8(response.body())
+}
+
+## Runs each remote's cycle that is due.
+remotes_cycle! : Context => Try({}, _)
+remotes_cycle! = |context| {
+	for endpoint in context.remotes {
+		remote_cycle!(context, endpoint)?
+	}
+	Ok({})
+}
+
+## Asks a remote, at most every `remote_interval_ms`, in one poll of its
+## /liton/v1, about all that polls watched of it within `interest_ms`, and
+## keeps its answers for every client; first its manifest, when the daemon has
+## none, it is `remote_manifest_ms` old or the remote was down. Nothing
+## watched, no poll. A remote that fails is down: left out of the manifest
+## and the lists, its topics `Unavailable`, and asked again after
+## `Remote.backoff_ms`. Going down and coming back are logged once.
+remote_cycle! : Context, Remote.Endpoint => Try({}, _)
+remote_cycle! = |context, endpoint| {
+	db = context.db
+	now = now_ms!()
+	claimed : List({ manifest : Str, manifest_at : I64, failures : I64 })
+	claimed = Sqlite.query_many!({ db, query: "UPDATE remotes SET checked_at = :until WHERE name = :name AND checked_at <= :since RETURNING manifest, manifest_at, failures;", params: { name: endpoint.name, until: now + remote_timeout_ms, since: now - context.remote_interval_ms }, limits: Sqlite.default_query_limits })?
+	match claimed.first() {
+		Err(_) => Ok({})
+		Ok(remote) =>
+			match asked_remote!(context, endpoint, remote) {
+				Ok({}) => {
+					if remote.failures > 0 {
+						logged!("liton: the provider ${endpoint.name} answers again")
+					}
+					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :now, failures = 0 WHERE name = :name;", params: { name: endpoint.name, now: now_ms!() } })
+				}
+				Err(err) => {
+					failures = remote.failures + 1
+					if remote.failures == 0 {
+						logged!("liton: the provider ${endpoint.name} at ${endpoint.url} can't be reached, asking again with backoff: ${Str.inspect(err)}")
+					}
+					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :at, failures = :failures WHERE name = :name;", params: { name: endpoint.name, failures, at: now_ms!() + Remote.backoff_ms(failures) - context.remote_interval_ms } })
+				}
+			}
+	}
+}
+
+## One cycle's asking of a remote (see `remote_cycle!`).
+asked_remote! : Context, Remote.Endpoint, { manifest : Str, manifest_at : I64, failures : I64 } => Try({}, _)
+asked_remote! = |context, endpoint, remote| {
+	db = context.db
+	now = now_ms!()
+	manifest =
+		if remote.manifest == "" or remote.manifest_at <= now - remote_manifest_ms or remote.failures > 0 {
+			fetched : Try(Manifest.Advertised, _)
+			fetched = Json.parse(remote_asked!(endpoint, GET, "manifest", "")?)
+			kept = Json.to_str(fetched.map_err(|_| NotAManifest)?)
+			Sqlite.execute!({ db, query: "UPDATE remotes SET manifest = :manifest, manifest_at = :now WHERE name = :name;", params: { name: endpoint.name, manifest: kept, now } })?
+			kept
+		} else {
+			remote.manifest
+		}
+	advertised : Try(Manifest.Advertised, _)
+	advertised = Json.parse(manifest)
+	offers = Manifest.capabilities(advertised.map_err(|_| NotAManifest)?)
+	wanted : List(Protocol.Wanted)
+	wanted = Sqlite.query_many!({ db, query: "SELECT capability, topic, cursor AS after FROM remote_topics WHERE remote = :name AND wanted_at > :since;", params: { name: endpoint.name, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
+	poll : Protocol.Poll
+	poll = { topics: wanted.keep_if(|topic| Capability.from_str(topic.capability).map_ok(|id| offers.contains(id)) ?? Bool.False) }
+	if poll.topics.is_empty() {
+		return Ok({})
+	}
+	polled : Try(Protocol.Polled, _)
+	polled = Json.parse(remote_asked!(endpoint, POST, "poll", Json.to_str(poll))?)
+	for update in polled.map_err(|_| NotAPoll)?.topics {
+		kept!(db, endpoint.name, update)?
+	}
+	Ok({})
+}
+
+## Keeps a remote's update of a topic: a timeline's entries as its session's
+## in liton, any other topic's last event, and the cursor to ask after next,
+## or why the topic can't be followed.
+kept! : Sqlite.Db, Str, Protocol.Update => Try({}, _)
+kept! = |db, remote, update| {
+	now = now_ms!()
+	for event in update.events {
+		match event {
+			Entry(entry) => Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO entries (session_id, sequence, visible_at, event) VALUES (:session_id, :sequence, :now, :event);", params: { session_id: Remote.prefixed(remote, update.topic.drop_prefix("timeline/")), sequence: entry.sequence.to_i64_wrap(), now, event: Json.to_str(entry.event) } })?
+			_ => {}
+		}
+	}
+	snapshot =
+		match update.events.last() {
+			Ok(Entry(_)) | Err(_) => ""
+			Ok(event) => Json.to_str(event)
+		}
+	error =
+		match update.error {
+			Ok(failed) => Json.to_str(failed)
+			Err(Missing) => ""
+		}
+	Sqlite.execute!({ db, query: "UPDATE remote_topics SET cursor = :cursor, error = :error, event = CASE WHEN :event = '' THEN event ELSE :event END WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic, cursor: update.cursor, error, event: snapshot } })
+}

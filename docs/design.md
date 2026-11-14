@@ -35,7 +35,7 @@ liton is a protocol and a set of parts more than an app. Its narrow waist is the
 
 How the parts grow without the core growing:
 
-- **Sources plug in from any language.** A provider compiled into the daemon is a pure Roc state machine; a provider outside it speaks the provider protocol over stdio or a WebSocket, as language servers do. A remote liton daemon is a provider like any other, which is how daemons federate.
+- **Sources plug in from any language.** A provider compiled into the daemon is a pure Roc state machine; a provider outside it serves the same capability protocol clients use, `/liton/v1` over HTTP, with the daemon as its client, and later, once the daemon can hold connections, over stdio or a WebSocket, as language servers do. A remote liton daemon is a provider like any other, which is how daemons federate.
 - **Transformers are pipes.** A transformer consumes capabilities and offers another: the inbox is attention derived from chat, a room's agent is chat routed by mentions. Users compose them in configuration.
 - **Every client is equal.** The web UI is one client; the `liton` CLI speaks the same protocol as JSON lines, so `liton watch` piped into `jq` into `liton call` works, and agents use the same capabilities through an MCP face. Nothing is reachable only from the GUI.
 - **A setup is a program that evaluates to data.** A `Litonfile.roc`, as a Kaifile is for kai, declares the daemons to connect, the transformers, presets, options and keys. It is pure Roc, so it does only what it declares; another setup imports it and overrides parts, pinned by a lockfile. A snapshot is an evaluated Litonfile.
