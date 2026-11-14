@@ -79,9 +79,9 @@ try {
     await run();
   };
 
-  await step("the three preset panes render", async () => {
-    for (const pane of ["Sessions", "Chat", "Capabilities"]) await see(pane, ".pane-header", "⋯");
-    await see("Capabilities", ".manifest", "Mock agents (mock)");
+  await step("the three preset panes render, with Capabilities left to Settings", async () => {
+    for (const pane of ["Sessions", "Chat", "Changes"]) await see(pane, ".pane-header", "⋯");
+    await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
   await step("the seeded sessions appear in Sessions", async () => {
     for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Sessions", ".session button", title);

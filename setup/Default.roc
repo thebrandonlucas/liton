@@ -8,7 +8,7 @@ import Setup
 Default := [].{
 
 	## A Workbench of sessions, the chat following the focus, and the focused
-	## session's changes beside what the daemon advertises.
+	## session's changes.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -18,7 +18,7 @@ Default := [].{
 			columns: [
 				{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
 				{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "capabilities", pinned: "", options: [] }] },
+				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }] },
 			],
 			collapsed: [],
 			theme: "",

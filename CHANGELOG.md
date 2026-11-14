@@ -52,6 +52,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Without an Inbox in the layout, the browser tab's title counts the sessions waiting for you.
 - Layouts saved before themes existed show the setup's default theme. A `liton.setup.json` evaluated before then still loads, and offers no themes of its own.
 - Each pane's header shows what the pane shows. What it follows or is pinned to, Pin, the moves in Tiling and Close pane are in its ⋯ menu.
+- The Developer and Inbox presets' right drawer holds Changes alone. Capabilities is still in Tiling, and Settings → Add a widget adds it.
 
 ### Fixed
 

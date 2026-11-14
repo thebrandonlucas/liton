@@ -1121,8 +1121,8 @@ expect {
 }
 
 expect {
-	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-4", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-4"], ["pane-2"], ["pane-3"]] and moved.columns.map(|column| column.active) == ["pane-4", "pane-2", "pane-3"] and moved.collapsed == []
+	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], []] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", ""] and moved.collapsed == []
 }
 
 expect {
@@ -1138,7 +1138,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "capabilities"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes"]] and state.active_column == "column-2"
 }
 
 expect {
