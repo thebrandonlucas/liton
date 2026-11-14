@@ -261,10 +261,7 @@ call! = |context, request| {
 				decoded = Json.parse(body)
 				answer : Protocol.Answer(Workspaces.Response)
 				answer = match decoded {
-					Ok({ request: ListWorkspaces, .. }) => {
-						listed = workspaces!(context)?
-						Ok(Listed({ projects: listed.projects.keep_if(|project| Protocol.serves(provider, project.provider)), workspaces: listed.workspaces.keep_if(|workspace| Protocol.serves(provider, workspace.provider)) }))
-					}
+					Ok({ request: asked, .. }) => workspaces_call!(context, provider, asked)?
 					Err(_) => Err(unanswered("workspaces.v1"))
 				}
 				Json.to_str(answer)
@@ -402,6 +399,7 @@ update! = |context, wanted, subject| {
 		Items => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
 		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
 		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
+		Agents => Ok(Protocol.snapshot(wanted, Agents(agents!(context)?)))
 		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
 		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
 		Tree({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Tree, focus, path)?))
@@ -508,7 +506,73 @@ chat_call! = |context, provider, asked| {
 				}
 				NoSession => Ok(no_session(session_id))
 			}
+		Create(asked_create) => started!(context, provider, asked_create)
 	}
+}
+
+## Starts an agent in a workspace of the provider that has it.
+started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat.Response), _)
+started! = |context, provider, { place, agent, prompt, .. }| {
+	db = context.db
+	match place {
+		Workspace(workspace_id) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) and mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) =>
+			if Mock.agents.any(|kind| kind.agent == agent) {
+				session_id = "${agent}-${now_ms!().to_str()}"
+				title = if (prompt.is_empty()) "New ${agent} agent" else prompt.split_on("\n").first() ?? prompt
+				next : { position : I64 }
+				next = Sqlite.query!({ db, query: "SELECT coalesce(max(position), -1) + 1 AS position FROM sessions WHERE provider = 'mock';", params: {}, limits: Sqlite.default_query_limits })?
+				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, workspace_id) VALUES (:id, 'mock', :agent, :title, :position, :workspace_id);", params: { id: session_id, agent, title, position: next.position, workspace_id } })?
+				insert_events!(db, session_id, 1, Mock.on_create(prompt), now_ms!())?
+				Ok(Ok(Started({ session_id: session_id })))
+			} else {
+				Ok(Ok(Rejected("the mock provider starts no ${agent} agent")))
+			}
+		Workspace(workspace_id) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
+		Directory(_) => Ok(Err({ code: NotFound, message: "no provider named starts agents in a directory" }))
+	}
+}
+
+## Answers a workspaces.v1 request, of `provider`'s projects alone if it
+## names one.
+workspaces_call! : Context, Try(Str, [Missing]), Workspaces.Request => Try(Protocol.Answer(Workspaces.Response), _)
+workspaces_call! = |context, provider, asked| {
+	db = context.db
+	match asked {
+		ListWorkspaces => {
+			listed = workspaces!(context)?
+			Ok(Ok(Listed({ projects: listed.projects.keep_if(|project| Protocol.serves(provider, project.provider)), workspaces: listed.workspaces.keep_if(|workspace| Protocol.serves(provider, workspace.provider)) })))
+		}
+		Create(created) if Remote.owner(context.remotes, created.project_id).is_ok() =>
+			match Remote.owner(context.remotes, created.project_id) {
+				Ok(endpoint) if Remote.serves(endpoint.name, provider) => Ok(forwarded_create!(endpoint, provider, created))
+				_ => Ok(Err({ code: NotFound, message: "no project ${created.project_id}" }))
+			}
+		Create({ project_id, kind, branch }) =>
+			match Mock.projects.find_first(|project| project.id == project_id) {
+				Ok(project) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) => {
+					made : { count : I64 }
+					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces;", params: {}, limits: Sqlite.default_query_limits })?
+					number = (made.count + 1).to_str()
+					workspace = Mock.made_workspace(project, "workspace-${number}", kind, branch ?? "work-${number}")
+					Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value);", params: { id: workspace.id, value: Json.to_str(workspace) } })?
+					Ok(Ok(Created({ workspace_id: workspace.id })))
+				}
+				_ => Ok(Err({ code: NotFound, message: "no project ${project_id}" }))
+			}
+	}
+}
+
+## The kinds of agent each provider starts.
+agents! : Context => Try(List(Chat.Agent), _)
+agents! = |context| {
+	from_remotes = merged_events!(context, Agents)?.fold(
+		[],
+		|so_far, event| match event {
+			Agents(listed) => so_far.concat(listed)
+			_ => so_far
+		},
+	)
+	Ok((if (context.mock_enabled) Mock.agents else []).concat(from_remotes))
 }
 
 no_session : Str -> Protocol.Answer(a)
@@ -552,7 +616,7 @@ located! = |context, focus|
 	match focus {
 		Session(session_id) =>
 			match provider!(context, session_id)? {
-				MockSession => Ok(Mock.workspaces.find_first(|shown| shown.session_ids.contains(session_id)).map_ok(|shown| MockWorkspace(shown.id)) ?? Nowhere)
+				MockSession => Ok(mock_workspaces!(context.db)?.find_first(|shown| shown.session_ids.contains(session_id)).map_ok(|shown| MockWorkspace(shown.id)) ?? Nowhere)
 				PaseoSession(_) => {
 					rows : List({ directory : Str })
 					rows = Sqlite.query_many!({ db: context.db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
@@ -561,7 +625,7 @@ located! = |context, focus|
 				NoSession => Ok(Nowhere)
 			}
 		Workspace(workspace_id) =>
-			if context.mock_enabled and Mock.workspaces.any(|shown| shown.id == workspace_id) {
+			if context.mock_enabled and mock_workspaces!(context.db)?.any(|shown| shown.id == workspace_id) {
 				Ok(MockWorkspace(workspace_id))
 			} else if context.paseo.is_ok() {
 				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(shown.directory)) ?? Nowhere)
@@ -728,7 +792,7 @@ workspaces! = |context| {
 		wanted!(db, "workspace_list", "")?
 	}
 	sessions = sessions!(context)?
-	from_mock = if (context.mock_enabled) { projects: Mock.projects, workspaces: Mock.workspaces } else { projects: [], workspaces: [] }
+	from_mock = if (context.mock_enabled) { projects: Mock.projects, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
 	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
 	placed : List({ id : Str, workspace_id : Str })
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
@@ -742,6 +806,24 @@ workspaces! = |context| {
 		},
 	)
 	Ok({ projects: from_mock.projects.concat(from_paseo.projects).concat(from_remotes.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(sessions, shown.session_ids) }).concat(from_remotes.workspaces) })
+}
+
+## The mock provider's workspaces, then those made since, each listing the
+## sessions started in it too.
+mock_workspaces! : Sqlite.Db => Try(List(Workspaces.Workspace), _)
+mock_workspaces! = |db| {
+	made : List({ value : Str })
+	made = Sqlite.query_many!({ db, query: "SELECT value FROM mock_workspaces ORDER BY rowid;", params: {}, limits: Sqlite.default_query_limits })?
+	started : List({ id : Str, workspace_id : Str })
+	started = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'mock' AND workspace_id != '' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	parsed = made.keep_oks(
+		|row| {
+			workspace : Try(Workspaces.Workspace, _)
+			workspace = Json.parse(row.value)
+			workspace
+		},
+	)
+	Ok(Mock.workspaces.concat(parsed).map(|shown| { ..shown, session_ids: shown.session_ids.concat(started.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id)) }))
 }
 
 ## Paseo's projects and workspaces as the cycle last listed them, none before.
@@ -774,6 +856,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
@@ -883,6 +966,7 @@ sessions! = |context| {
 	{ db, mock_enabled, paseo, .. } = context
 	rows : List({ id : Str, agent : Str, title : Str })
 	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	mock_listed = if (mock_enabled) mock_workspaces!(db)? else []
 	var $sessions = []
 	for row in if (mock_enabled) rows else [] {
 		timed : List({ visible_at : I64, event : Str })
@@ -894,7 +978,7 @@ sessions! = |context| {
 				parsed.map_ok(|known| { visible_at, event: known })
 			},
 		)?
-		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, events))
+		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, mock_listed, events))
 	}
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?
@@ -1472,7 +1556,22 @@ forwarded! = |endpoint, provider, asked| {
 		Ok(body) => {
 			answer : Try(Protocol.Answer(Chat.Response), _)
 			answer = Json.parse(body)
-			answer ?? unavailable("its answer isn't a chat.v1 answer")
+			answer.map_ok(|answered| Remote.chat_answer(endpoint.name, answered)) ?? unavailable("its answer isn't a chat.v1 answer")
+		}
+		Err(err) => unavailable(Str.inspect(err))
+	}
+}
+
+## Forwards a workspaces.v1 Create to the remote whose project it names,
+## as `forwarded!` does a chat.v1 call.
+forwarded_create! : Remote.Endpoint, Try(Str, [Missing]), Workspaces.Create => Protocol.Answer(Workspaces.Response)
+forwarded_create! = |endpoint, provider, created| {
+	unavailable = |problem| Err({ code: Unavailable, message: "the provider ${endpoint.name}: ${problem}" })
+	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.workspaces_call(endpoint.name, provider, created))) {
+		Ok(body) => {
+			answer : Try(Protocol.Answer(Workspaces.Response), _)
+			answer = Json.parse(body)
+			answer.map_ok(|answered| Remote.workspaces_answer(endpoint.name, answered)) ?? unavailable("its answer isn't a workspaces.v1 answer")
 		}
 		Err(err) => unavailable(Str.inspect(err))
 	}

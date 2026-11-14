@@ -37,16 +37,25 @@ Chat := [].{
 	Entry : { sequence : U64, event : Event }
 
 	## `WatchSession` answers with a stream of `Entry`, those after `after`
-	## first; the others answer with one `Response`.
+	## first; the others answer with one `Response`. `Create` starts an agent
+	## of a kind its provider offers (`Agent`) in a workspace, or in a
+	## directory of the provider the call names, with a model and a first
+	## prompt ("" for none), and answers `Started` with its session's id.
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
 		SendMessage({ session_id : Str, text : Str }),
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool }),
 		Cancel({ session_id : Str }),
+		Create(Create),
 	]
 
-	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str)]
+	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), prompt : Str }
+
+	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str), Started({ session_id : Str })]
+
+	## A kind of agent a provider can start, such as `claude`.
+	Agent : { provider : Str, agent : Str }
 
 	## A session a provider keeps but doesn't run, such as a sandboxed agent's,
 	## read only, and the directory it worked in.

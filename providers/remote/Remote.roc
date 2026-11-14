@@ -66,6 +66,8 @@ Remote := [].{
 			SendMessage({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			AnswerPermission({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			Cancel({ session_id }) => Remote.owner(endpoints, session_id)
+			Create({ place: Workspace(workspace_id), .. }) => Remote.owner(endpoints, workspace_id)
+			Create({ place: Directory(_), .. }) => Err(Local)
 		}
 
 	## The topics of each remote a merged list needs: workspaces are counted
@@ -75,6 +77,7 @@ Remote := [].{
 		match subject {
 			Sessions => [Sessions]
 			Importable => [Importable]
+			Agents => [Agents]
 			WorkspaceList => [WorkspaceList, Sessions]
 			_ => []
 		}
@@ -104,9 +107,40 @@ Remote := [].{
 				SendMessage(message) => SendMessage({ ..message, session_id: their_id(message.session_id) })
 				AnswerPermission(answer) => AnswerPermission({ ..answer, session_id: their_id(answer.session_id) })
 				Cancel({ session_id }) => Cancel({ session_id: their_id(session_id) })
+				Create(created) =>
+					match created.place {
+						Workspace(workspace_id) => Create({ ..created, place: Workspace(their_id(workspace_id)) })
+						Directory(_) => Create(created)
+					}
 			}
 		{ capability: "chat.v1", provider: provider.map_ok(their_id), request }
 	}
+
+	## A workspaces.v1 Create to the remote `name`, its project and provider
+	## as the remote names them.
+	workspaces_call : Str, Try(Str, [Missing]), Workspaces.Create -> Protocol.Call(Workspaces.Request)
+	workspaces_call = |name, provider, created| {
+		their_id = |id| id.drop_prefix("${name}/")
+		{ capability: "workspaces.v1", provider: provider.map_ok(their_id), request: Create({ ..created, project_id: their_id(created.project_id) }) }
+	}
+
+	## A remote's answer to a chat.v1 call, a session it started named under
+	## its name.
+	chat_answer : Str, Protocol.Answer(Chat.Response) -> Protocol.Answer(Chat.Response)
+	chat_answer = |name, answer|
+		match answer {
+			Ok(Started({ session_id })) => Ok(Started({ session_id: Remote.prefixed(name, session_id) }))
+			_ => answer
+		}
+
+	## A remote's answer to a workspaces.v1 call, a workspace it created named
+	## under its name.
+	workspaces_answer : Str, Protocol.Answer(Workspaces.Response) -> Protocol.Answer(Workspaces.Response)
+	workspaces_answer = |name, answer|
+		match answer {
+			Ok(Created({ workspace_id })) => Ok(Created({ workspace_id: Remote.prefixed(name, workspace_id) }))
+			_ => answer
+		}
 
 	## An event of the remote `name`'s topic as liton serves it, its ids under
 	## the remote's name.
@@ -115,6 +149,7 @@ Remote := [].{
 		match given {
 			Sessions(sessions) => Sessions(sessions.map(|shown| session(name, shown)))
 			Importable(listed) => Importable(listed.map(|kept| { ..kept, session: session(name, kept.session) }))
+			Agents(listed) => Agents(listed.map(|kind| { ..kind, provider: Remote.prefixed(name, kind.provider) }))
 			Listed({ projects, workspaces }) =>
 				Listed({
 					projects: projects.map(|project| { ..project, id: Remote.prefixed(name, project.id), provider: Remote.prefixed(name, project.provider) }),
@@ -237,3 +272,11 @@ expect {
 
 expect Remote.event("peer", Entry({ sequence: 1, event: AgentMessage({ text: "Hi" }) })) == Entry({ sequence: 1, event: AgentMessage({ text: "Hi" }) })
 expect [1, 2, 3, 6, 9].map(Remote.backoff_ms) == [1_000, 2_000, 4_000, 60_000, 60_000]
+
+# A remote's workspace or project a Create names reaches it as it names it,
+# and what it made comes back under its name.
+expect {
+	created = { place: Workspace("peer/w1"), agent: "claude", model: Err(Missing), prompt: "Hi" }
+	Remote.chat_owner([echo, peer], Create(created)) == Ok(peer) and Remote.call("peer", Err(Missing), Create(created)).request == Create({ ..created, place: Workspace("w1") }) and Remote.chat_answer("peer", Ok(Started({ session_id: "s9" }))) == Ok(Started({ session_id: "peer/s9" }))
+}
+expect Remote.workspaces_call("peer", Ok("peer/mock"), { project_id: "peer/p1", kind: Worktree, branch: Err(Missing) }) == { capability: "workspaces.v1", provider: Ok("mock"), request: Create({ project_id: "p1", kind: Worktree, branch: Err(Missing) }) } and Remote.workspaces_answer("peer", Ok(Created({ workspace_id: "w2" }))) == Ok(Created({ workspace_id: "peer/w2" }))

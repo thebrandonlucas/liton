@@ -71,7 +71,7 @@ try {
     assert.equal(manifest.protocol, 1);
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock"]);
     assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
-    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable"]);
+    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
   });
   await step("each capability answers a call", async () => {
@@ -196,6 +196,18 @@ try {
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
     assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Review"], "Review"]);
+  });
+  await step("Create makes a workspace of the mock's project and starts an agent in it, which its listing has", async () => {
+    const made = (await call("workspaces.v1", { Create: { project_id: "liton", kind: "Worktree", branch: "docs" } })).Ok.Created.workspace_id;
+    const started = (await call("chat.v1", { Create: { place: { Workspace: made }, agent: "codex", prompt: "Write the docs" } })).Ok.Started.session_id;
+    const listed = (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed.workspaces.find((w) => w.id === made);
+    assert.deepEqual([listed.branch, listed.session_ids], [{ Branch: "docs" }, [started]]);
+    const session = (await call("chat.v1", "ListSessions")).Ok.Sessions.find((s) => s.id === started);
+    assert.deepEqual([session.title, session.status, session.workspace.id], ["Write the docs", "Running", made]);
+    assert.equal((await call("chat.v1", { Create: { place: { Workspace: made }, agent: "gemini", prompt: "" } })).Ok.Rejected, "the mock provider starts no gemini agent");
+    assert.equal((await call("workspaces.v1", { Create: { project_id: "nope", kind: "Checkout" } })).Err.code, "NotFound");
+    const [agents] = (await post("poll", { topics: [{ capability: "chat.v1", topic: "agents", after: "" }] })).topics;
+    assert.deepEqual(agents.events[0].Agents.map((a) => a.agent), ["claude", "codex"]);
   });
   console.log("PASS /liton/v1");
   process.exit(0);

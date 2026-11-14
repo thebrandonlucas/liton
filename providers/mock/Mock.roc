@@ -96,14 +96,33 @@ Mock := [].{
 			[]
 		}
 
+	## What follows starting an agent with a first prompt: it runs at once,
+	## as `on_message` goes on. Without a prompt it waits, idle.
+	on_create : Str -> List(Scheduled)
+	on_create = |prompt|
+		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(|scheduled| if (scheduled.event == StatusChanged(Running)) { ..scheduled, delay_ms: 0 } else scheduled)
+
+	## The kinds of agent the mock provider starts.
+	agents : List(Chat.Agent)
+	agents = [{ provider: "mock", agent: "claude" }, { provider: "mock", agent: "codex" }]
+
+	## A workspace made of a project: a checkout of its directory, on main, or
+	## a worktree beside it on `branch`.
+	made_workspace : Workspaces.Project, Str, [Checkout, Worktree], Str -> Workspaces.Workspace
+	made_workspace = |project, id, made_kind, branch| {
+		worktree = made_kind == Worktree
+		directory = if (worktree) "${project.directory}-${branch}" else project.directory
+		{ id, provider: "mock", project_id: project.id, name: if (worktree) branch else "${project.name} checkout", directory, kind: if (worktree) Worktree else Checkout, branch: Branch(if (worktree) branch else "main"), state: Idle, dirty: Bool.False, changes: Counted({ additions: 0, deletions: 0 }), pinned: Bool.False, labels: [], session_ids: [] }
+	}
+
 	## A session from its timeline's visible events, each with when it became
 	## visible (ms since the epoch): its status, its agent's model, the
-	## workspace it works in and its branch, when its running turn started and
-	## when it last changed.
-	session : { id : Str, agent : Str, title : Str }, List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
-	session = |{ id, agent, title }, timed| {
+	## workspace of `workspaces` it works in and its branch, when its running
+	## turn started and when it last changed.
+	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
+	session = |{ id, agent, title }, workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
-		placed = Mock.workspaces.find_first(|shown| shown.session_ids.contains(id))
+		placed = workspaces.find_first(|shown| shown.session_ids.contains(id))
 		last_status = timed.keep_if(
 			|shown| match shown.event {
 				StatusChanged(_) => Bool.True
@@ -265,13 +284,13 @@ timestamp = |ms| {
 expect [0, 951_782_400_000, 1_767_258_000_123, 1_709_210_096_789].map(timestamp) == ["1970-01-01T00:00:00.000Z", "2000-02-29T00:00:00.000Z", "2026-01-01T09:00:00.123Z", "2024-02-29T12:34:56.789Z"]
 
 expect {
-	running = Mock.session({ id: "flaky-ci", agent: "codex", title: "CI" }, [{ visible_at: 0, event: StatusChanged(Idle) }, { visible_at: 1_767_258_000_000, event: StatusChanged(Running) }, { visible_at: 1_767_258_060_000, event: AgentMessage({ text: "x" }) }])
+	running = Mock.session({ id: "flaky-ci", agent: "codex", title: "CI" }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }, { visible_at: 1_767_258_000_000, event: StatusChanged(Running) }, { visible_at: 1_767_258_060_000, event: AgentMessage({ text: "x" }) }])
 	running.status == Running
 		and running.workspace == Ok({ id: Ok("main"), directory: "/mock/liton" })
 		and running.branch == Ok("main")
 		and running.running_since == Ok("2026-01-01T09:00:00.000Z")
 		and running.updated == Ok("2026-01-01T09:01:00.000Z")
-		and Mock.session({ id: "notes", agent: "claude", title: "" }, [{ visible_at: 0, event: StatusChanged(Idle) }]).running_since == Err(Missing)
+		and Mock.session({ id: "notes", agent: "claude", title: "" }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }]).running_since == Err(Missing)
 }
 
 expect Mock.on_message("hi", 7).len() == 7
@@ -310,4 +329,10 @@ expect {
 			_ => Bool.False
 		}
 	cut_short and read("AGENTS.md") == read("README.md") and read("assets/logo.png") == Binary({ size: 4_096, modified: changed_at }) and read("src") == Unreadable("no file src")
+}
+
+expect Mock.on_create("").map(|scheduled| scheduled.event) == [StatusChanged(Idle)] and Mock.on_create("Hi").take_first(2) == [{ delay_ms: 0, event: UserMessage({ text: "Hi" }) }, { delay_ms: 0, event: StatusChanged(Running) }]
+expect {
+	project = Mock.projects.first() ?? { id: "", provider: "", name: "", directory: "" }
+	(Mock.made_workspace(project, "w1", Worktree, "docs").directory, Mock.made_workspace(project, "w2", Checkout, "docs").branch) == ("/mock/liton-docs", Branch("main"))
 }

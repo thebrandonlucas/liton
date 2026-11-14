@@ -37,7 +37,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -52,6 +52,7 @@ Protocol := [].{
 		Sessions,
 		Timeline(Str),
 		Importable,
+		Agents,
 		Items,
 		WorkspaceList,
 		Changes({ context : Context.Id, scope : WorkspaceGit.Scope }),
@@ -65,7 +66,7 @@ Protocol := [].{
 	## them. A transformer declares those of the capability it offers.
 	topics : List(Manifest.Topics)
 	topics = [
-		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>", "importable"] },
+		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>", "importable", "agents"] },
 		{ capability: Capability.workspaces_v1, patterns: ["list"] },
 		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
@@ -100,6 +101,7 @@ Protocol := [].{
 				"chat.v1" if topic == "sessions" => Ok(Sessions)
 				"chat.v1" if topic.starts_with("timeline/") and topic != "timeline/" => Ok(Timeline(topic.drop_prefix("timeline/")))
 				"chat.v1" if topic == "importable" => Ok(Importable)
+				"chat.v1" if topic == "agents" => Ok(Agents)
 				"attention.v1" if topic == "items" => Ok(Items)
 				"workspaces.v1" if topic == "list" => Ok(WorkspaceList)
 				"workspace.git.v1" if topic.starts_with("changes/") => changes_subject(topic.drop_prefix("changes/"))
@@ -119,6 +121,7 @@ Protocol := [].{
 			Sessions => { capability: "chat.v1", topic: "sessions" }
 			Timeline(session_id) => { capability: "chat.v1", topic: "timeline/${session_id}" }
 			Importable => { capability: "chat.v1", topic: "importable" }
+			Agents => { capability: "chat.v1", topic: "agents" }
 			Items => { capability: "attention.v1", topic: "items" }
 			WorkspaceList => { capability: "workspaces.v1", topic: "list" }
 			VoiceStatus => { capability: "voice.v1", topic: "status" }
@@ -247,7 +250,7 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Importable, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" })]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" })]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 

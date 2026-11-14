@@ -99,14 +99,33 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission` and `Cancel`; `attention.v1`'s `ListItems`, `Settle`,
-`Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces`; `voice.v1`'s
-`Begin`, `Finish` and `Cancel` (Audio, below).
+`AnswerPermission`, `Cancel` and `Create`; `attention.v1`'s `ListItems`,
+`Settle`, `Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces` and
+`Create`; `voice.v1`'s `Begin`, `Finish` and `Cancel` (Audio, below).
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
 Paseo, its `cancel_agent_request`). A session that isn't running is left as
 it is, and accepted too.
+
+`Create` starts an agent, and creates a workspace:
+
+```json
+{ "capability": "chat.v1", "request": { "Create": { "place": { "Workspace": "main" }, "agent": "claude", "model": "claude-opus-4", "prompt": "Find the TODOs" } } }
+{ "Ok": { "Started": { "session_id": "claude-1767258000000" } } }
+{ "capability": "workspaces.v1", "request": { "Create": { "project_id": "liton", "kind": "Worktree", "branch": "docs" } } }
+{ "Ok": { "Created": { "workspace_id": "workspace-1" } } }
+```
+
+An agent starts in a workspace, `{"Workspace": id}`, of the provider that
+lists it, or in a directory, `{"Directory": path}`, of the provider the call
+names. Its `agent` is a kind its provider offers (the `agents` topic); `model`
+is left out for the provider's default, and `prompt` is `""` for none. A
+workspace is a `Checkout` of its project's directory, or a `Worktree` on a
+new branch, `branch` or one the provider names when it is left out. Both
+answer once the provider made it, before it lists it; a client shows it as
+starting until a listing has it. The mock provider starts its scripted
+agents in its workspaces and makes workspaces of its project.
 
 ### Subscribe
 
@@ -137,6 +156,7 @@ events when nothing changed:
 | `chat.v1` | `sessions` | snapshot | `{"Sessions": [Session]}` |
 | `chat.v1` | `timeline/<session_id>` | append-only | `{"Entry": {"sequence", "event"}}`, one per entry |
 | `chat.v1` | `importable` | snapshot | `{"Importable": [{"session", "directory"}]}` |
+| `chat.v1` | `agents` | snapshot | `{"Agents": [{"provider", "agent"}]}`, the kinds of agent each provider starts |
 | `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, ranked |
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
@@ -269,13 +289,15 @@ A name is letters, digits, `-` and `_`. Then:
   (`chat.v1`, `workspaces.v1`, `workspace.git.v1`, `files.v1`). A remote's transformers
   are left out: the daemon's own derive from every provider (Transformers).
 - **Calls.** A call to a remote's session (`SendMessage`, `WatchSession`,
-  `AnswerPermission`, `Cancel`) is forwarded to it with the session and provider as it
-  names them, and its answer returned as given. Lists (`ListSessions`,
+  `AnswerPermission`, `Cancel`), or a `Create` in its workspace or project, is
+  forwarded to it with the session, workspace or project and provider as it
+  names them, and its answer returned as given, what it made named under its
+  name. Lists (`ListSessions`,
   `ListWorkspaces`) merge the remotes' with the daemon's own.
 - **Topics.** A topic of a remote's session or workspace
   (`timeline/team/fix-auth`, `changes/team/fix-auth/Uncommitted`,
   `tree/team/fix-auth/.`) follows the remote's own (`timeline/fix-auth`);
-  `sessions`, `importable` and `list` merge each remote's. A client's poll
+  `sessions`, `importable`, `agents` and `list` merge each remote's. A client's poll
   notes what it wants of each remote; the daemon asks a remote at most every
   `LITON_PROVIDERS_INTERVAL_MS` (default 1000), in one poll of all that
   clients watched of it within the last 10 s, after the cursors it has, and
