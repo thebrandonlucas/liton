@@ -170,7 +170,7 @@ their_context = |endpoints, context|
 	}
 
 session : Str, Chat.Session -> Chat.Session
-session = |name, shown| { ..shown, id: Remote.prefixed(name, shown.id), provider: Remote.prefixed(name, shown.provider) }
+session = |name, shown| { ..shown, id: Remote.prefixed(name, shown.id), provider: Remote.prefixed(name, shown.provider), workspace: shown.workspace.map_ok(|placed| { ..placed, id: placed.id.map_ok(|id| Remote.prefixed(name, id)) }) }
 
 workspace : Str, Workspaces.Workspace -> Workspaces.Workspace
 workspace = |name, shown| {
@@ -217,8 +217,8 @@ expect Remote.call("peer", Err(Missing), Cancel({ session_id: "peer/s1" })).requ
 
 # Sessions, and the projects and workspaces that list them, are named under the remote.
 expect {
-	shown = { id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Idle }
-	Remote.event("peer", Sessions([shown])) == Sessions([{ ..shown, id: "peer/s1", provider: "peer/mock" }])
+	shown = { ..Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Idle }), model: Ok("opus"), workspace: Ok({ id: Ok("w1"), directory: "/src/liton" }) }
+	Remote.event("peer", Sessions([shown])) == Sessions([{ ..shown, id: "peer/s1", provider: "peer/mock", workspace: Ok({ id: Ok("peer/w1"), directory: "/src/liton" }) }])
 }
 
 expect {

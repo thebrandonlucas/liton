@@ -19,7 +19,7 @@ Fixtures := [].{
 
 	responses : List(Chat.Response)
 	responses = [
-		Sessions([{ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission }]),
+		Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission })]),
 		Accepted,
 		Rejected("no session s2"),
 	]

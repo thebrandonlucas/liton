@@ -782,8 +782,8 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
-	# no directory, workspace or listed status until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("status", "TEXT NOT NULL DEFAULT ''")] {
+	# no directory, workspace or listing until listed again.
+	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''")] {
 		existing : List({ name : Str })
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
@@ -801,7 +801,7 @@ seed! = |db| {
 	if count.count == 0 {
 		for (seed, position) in Mock.seeds.map_with_index(|seed, position| (seed, position)) {
 			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'mock', :agent, :title, :position);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap() } })?
-			insert_events!(db, seed.id, 1, seed.events.map(|event| { delay_ms: 0, event }), 0)?
+			insert_events!(db, seed.id, 1, seed.events.map(|event| { delay_ms: 0, event }), now_ms!())?
 		}
 	}
 	Ok({})
@@ -885,7 +885,16 @@ sessions! = |context| {
 	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	var $sessions = []
 	for row in if (mock_enabled) rows else [] {
-		$sessions = $sessions.append({ id: row.id, provider: Mock.provider.id, agent: row.agent, title: row.title, status: Mock.status(visible!(db, row.id, 0)?) })
+		timed : List({ visible_at : I64, event : Str })
+		timed = Sqlite.query_many!({ db, query: "SELECT visible_at, event FROM entries WHERE session_id = :session_id AND visible_at <= :now ORDER BY sequence;", params: { session_id: row.id, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+		events = timed.map_try(
+			|{ visible_at, event }| {
+				parsed : Try(Chat.Event, _)
+				parsed = Json.parse(event)
+				parsed.map_ok(|known| { visible_at, event: known })
+			},
+		)?
+		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, events))
 	}
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?
@@ -903,22 +912,22 @@ sessions! = |context| {
 	Ok($sessions.concat(remote_sessions))
 }
 
-## The Paseo agents the cycle last listed, with the status they were listed
-## with, or, listed before it was kept, their last synced status.
+## The Paseo agents the cycle last listed, as they were listed, or, listed
+## before that was kept, with their last synced status.
 registered! : Sqlite.Db => Try(List(Chat.Session), _)
 registered! = |db| {
-	rows : List({ id : Str, agent : Str, title : Str, status : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, status FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows : List({ id : Str, agent : Str, title : Str, listed : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, listed FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	var $sessions = []
 	for row in rows {
-		listed : Try(Chat.Status, _)
-		listed = Json.parse(row.status)
-		status =
+		listed : Try(Chat.Session, _)
+		listed = Json.parse(row.listed)
+		session =
 			match listed {
 				Ok(known) => known
-				Err(_) => state_of!(db, row.id)?.state.status
+				Err(_) => Chat.session({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
 			}
-		$sessions = $sessions.append({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status })
+		$sessions = $sessions.append(session)
 	}
 	Ok($sessions)
 }
@@ -1170,7 +1179,7 @@ listed_agents! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
 listed_agents! = |db, connection, request_id| {
 	listed = Paseo.agents_answer(exchange!(connection, Paseo.agents_request(request_id), request_id)?, request_id)?
 	for ({ session, directory, workspace_id }, position) in listed.map_with_index(|agent, position| (agent, position)) {
-		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, status) VALUES (:id, 'paseo', :agent, :title, :position, :directory, :workspace_id, :status) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, status = excluded.status;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, status: Json.to_str(session.status) } })?
+		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, listed) VALUES (:id, 'paseo', :agent, :title, :position, :directory, :workspace_id, :listed) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, listed = excluded.listed;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, listed: Json.to_str(session) } })?
 	}
 	Sqlite.execute!({ db, query: "DELETE FROM sessions WHERE provider = 'paseo' AND id NOT IN (SELECT value FROM json_each(:ids));", params: { ids: Json.to_str(listed.map(|{ session, .. }| session.id)) } })
 }

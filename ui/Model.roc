@@ -469,7 +469,7 @@ Model := [].{
 
 	## A known session, or one named by its id until the daemon lists it.
 	session : State, Str -> Chat.Session
-	session = |state, session_id| state.sessions.find_first(|known| known.id == session_id) ?? { id: session_id, provider: "", agent: "", title: session_id, status: Idle }
+	session = |state, session_id| state.sessions.find_first(|known| known.id == session_id) ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle })
 
 	## A tool call and the result with its `call_id`, once one arrives. Output
 	## past its first 4 lines is `folded`.

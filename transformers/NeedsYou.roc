@@ -2,6 +2,7 @@
 ## compose: the items that need you. The daemon offers it only when
 ## LITON_TRANSFORMERS names it.
 import cap.Attention
+import cap.Chat
 import cap.Protocol
 import AttentionTransformer
 import Transformer
@@ -40,7 +41,7 @@ needing = |inputs|
 
 # needs-you.v1 composes with attention.v1: its items are attention's that need you.
 expect {
-	sessions = [{ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: AwaitingPermission }, { id: "s2", provider: "mock", agent: "claude", title: "Done", status: Finished }]
+	sessions = [Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: AwaitingPermission }), Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Done", status: Finished })]
 	attention = (AttentionTransformer.part.derive)([{ capability: "chat.v1", topic: "sessions", events: [Sessions(sessions)] }], "", 0).topics.map(|derived| { capability: "attention.v1", topic: derived.topic, events: derived.events })
 	match (NeedsYou.part.derive)(attention, "", 0).topics {
 		[{ topic: "items", events: [Items([item])] }] => item.session_id == "s1" and (NeedsYou.part.call)(attention, "", "{\"capability\":\"needs-you.v1\",\"request\":\"ListItems\"}", 0).answer.contains("\"session_id\":\"s1\"")

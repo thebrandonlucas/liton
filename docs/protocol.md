@@ -148,6 +148,15 @@ events when nothing changed:
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
 
+Besides its `id`, `provider`, `agent`, `title` and `status`, a session tells
+what its provider knows, each field left out otherwise: `model`, the
+`workspace` it works in (`{"directory", "id"}`, `id` left out when the
+provider has no such workspace), the `branch` checked out there, and when its
+running turn started (`running_since`) and it last changed (`updated`), as
+times such as `2026-01-01T09:00:00.000Z`. Paseo's come from its agent list
+(the model, `activeTurn.startedAt`, `updatedAt`, and the branch it placed the
+agent on), so they cost no request of their own.
+
 A `changes` or `file` context is a session id, or `workspace:<id>`; its scope
 is `Uncommitted`, `AgainstBase` or `Commit:<sha>`. A `changes` event holds the
 workspace (`Unknown` while it can't be read), its status, the scope's changed

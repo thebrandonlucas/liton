@@ -193,7 +193,7 @@ Paseo := [].{
 			answered?.message.payload.entries.map(
 				|entry| {
 					title = entry.title ?? (entry.first_prompt_preview ?? entry.provider_handle_id)
-					{ session: { id: "import:${entry.provider_id}:${entry.provider_handle_id}", provider: "paseo", agent: entry.provider_label, title, status: Idle }, directory: entry.cwd }
+					{ session: Chat.session({ id: "import:${entry.provider_id}:${entry.provider_handle_id}", provider: "paseo", agent: entry.provider_label, title, status: Idle }), directory: entry.cwd }
 				},
 			),
 		)
@@ -207,7 +207,9 @@ Paseo := [].{
 		cwd : Str,
 		workspace_id : Try(Str, [Missing]),
 		title : Try(Str, [Null]),
+		model : Try(Str, [Null]),
 		status : Str,
+		active_turn : Try(Try({ started_at : Try(Str, [Null]) }, [Null]), [Missing]),
 		pending_permissions : List(Permission),
 		last_error : Try(Str, [Missing]),
 		attention_reason : Try(Try(Str, [Null]), [Missing]),
@@ -227,17 +229,28 @@ Paseo := [].{
 	## the workspace it works in ("" for none). An agent whose attention Paseo
 	## wants for a permission awaits it, and an idle one whose attention it
 	## wants because it finished, until you look, is finished. An untitled one
-	## goes by its id's first 7 characters, as Paseo's short id. They are in
-	## the order of Paseo's MCP `list_agents` (see `listed_order`).
+	## goes by its id's first 7 characters, as Paseo's short id. Each session
+	## tells its model, workspace, the branch Paseo placed it on, when its
+	## running turn started and when it last changed, as far as Paseo does.
+	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
 	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
 	agents_answer = |text, request_id| {
-		answered : Try({ message : { payload : { entries : List({ agent : ListedAgent }) } } }, _)
+		answered : Try({ message : { payload : { entries : List({ agent : ListedAgent, project : Try({ checkout : { current_branch : Try(Try(Str, [Null]), [Missing]) } }, [Missing]) }) } } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_agents_response", request_id)?)
 		Ok(
-			answered?.message.payload.entries.map(|{ agent }| agent).sort_with(listed_order).map(
-				|agent| {
+			answered?.message.payload.entries.sort_with(|left, right| listed_order(left.agent, right.agent)).map(
+				|{ agent, project }| {
 					title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
-					{ session: { id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
+					optional = |value| value.map_err(|_| Missing)
+					session = {
+						..Chat.session({ id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }),
+						model: optional(agent.model),
+						workspace: Ok({ id: agent.workspace_id, directory: agent.cwd }),
+						branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
+						running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
+						updated: Ok(agent.updated_at),
+					}
+					{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
 				},
 			),
 		)
@@ -323,7 +336,7 @@ Paseo := [].{
 	## A session that stands for Paseo refusing liton, listed first so the
 	## refusal shows where Paseo's sessions do.
 	refused_session : Str -> Chat.Session
-	refused_session = |reason| { id: "paseo-refused", provider: "paseo", agent: "paseo", title: Paseo.refusal(reason), status: Failed(Paseo.refusal(reason)) }
+	refused_session = |reason| Chat.session({ id: "paseo-refused", provider: "paseo", agent: "paseo", title: Paseo.refusal(reason), status: Failed(Paseo.refusal(reason)) })
 
 	## Fetches the entries after the state's cursor, or the last `page_limit`
 	## on a session's first fetch.
@@ -621,18 +634,20 @@ expect !Paseo.answers_request("{\"type\":\"session\",\"message\":{\"type\":\"sta
 expect !Paseo.answers_request("{\"type\":\"pong\"}", "r1")
 
 expect {
-	agent = |fields| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"model\":null,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"currentModeId\":null,\"availableModes\":[],\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null,\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null}}}"
+	not_git = "\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null,\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"
+	agent = |fields, checkout| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"currentModeId\":null,\"availableModes\":[],\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{${checkout}}}}"
 	entries = [
-		agent("\"id\":\"a1b2c3d4e5\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]"),
-		agent("\"id\":\"a3\",\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\""),
-		agent("\"id\":\"a4\",\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]"),
+		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
+		agent("\"id\":\"a3\",\"model\":null,\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
+		agent("\"id\":\"a4\",\"model\":null,\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]", not_git),
 	]
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
+	listed = |id, title, status, workspace_id, updated| { ..Chat.session({ id, provider: "paseo", agent: "claude", title, status }), workspace: Ok({ id: workspace_id, directory: "/work" }), updated: Ok(updated) }
 	Paseo.agents_answer(text, "r1")
 		== Ok([
-			{ session: { id: "a3", provider: "paseo", agent: "claude", title: "Done", status: Finished }, directory: "/work", workspace_id: "w1" },
-			{ session: { id: "a4", provider: "paseo", agent: "claude", title: "Asks", status: AwaitingPermission }, directory: "/work", workspace_id: "" },
-			{ session: { id: "a1b2c3d4e5", provider: "paseo", agent: "claude", title: "a1b2c3d", status: Running }, directory: "/work", workspace_id: "w1" },
+			{ session: listed("a3", "Done", Finished, Ok("w1"), "2026-01-01T00:00:00.000Z"), directory: "/work", workspace_id: "w1" },
+			{ session: listed("a4", "Asks", AwaitingPermission, Err(Missing), "2026-01-02T00:00:00.000Z"), directory: "/work", workspace_id: "" },
+			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z") }, directory: "/work", workspace_id: "w1" },
 		])
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
@@ -696,8 +711,8 @@ expect {
 	text = session("{\"type\":\"fetch_recent_provider_sessions_response\",\"payload\":{\"requestId\":\"i1\",\"entries\":[${entry_of("\"providerHandleId\":\"h1\",\"title\":\"Fix the build\",\"firstPromptPreview\":\"Fix it\"")},${entry_of("\"providerHandleId\":\"h2\",\"title\":null,\"firstPromptPreview\":null")}],\"providerErrors\":[{\"provider\":\"claude\",\"message\":\"disabled\"}]}}")
 	Paseo.importable_answer(text, "i1")
 		== Ok([
-			{ session: { id: "import:sandbox:h1", provider: "paseo", agent: "Sandbox", title: "Fix the build", status: Idle }, directory: "/" },
-			{ session: { id: "import:sandbox:h2", provider: "paseo", agent: "Sandbox", title: "h2", status: Idle }, directory: "/" },
+			{ session: Chat.session({ id: "import:sandbox:h1", provider: "paseo", agent: "Sandbox", title: "Fix the build", status: Idle }), directory: "/" },
+			{ session: Chat.session({ id: "import:sandbox:h2", provider: "paseo", agent: "Sandbox", title: "h2", status: Idle }), directory: "/" },
 		])
 }
 

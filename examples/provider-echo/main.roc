@@ -138,7 +138,7 @@ known : Str -> Bool
 known = |session_id| session_id == "echo" or session_id == "hello"
 
 sessions : List(Chat.Session)
-sessions = [{ id: "echo", provider: "echo", agent: "echo", title: "Echo what you send", status: Idle }, { id: "hello", provider: "echo", agent: "echo", title: "Say hello", status: Finished }]
+sessions = [Chat.session({ id: "echo", provider: "echo", agent: "echo", title: "Echo what you send", status: Idle }), Chat.session({ id: "hello", provider: "echo", agent: "echo", title: "Say hello", status: Finished })]
 
 entries! : Sqlite.Db, Str, U64 => Try(List(Chat.Entry), _)
 entries! = |db, session_id, after| {

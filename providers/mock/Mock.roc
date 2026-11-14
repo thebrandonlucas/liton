@@ -96,6 +96,35 @@ Mock := [].{
 			[]
 		}
 
+	## A session from its timeline's visible events, each with when it became
+	## visible (ms since the epoch): its status, its agent's model, the
+	## workspace it works in and its branch, when its running turn started and
+	## when it last changed.
+	session : { id : Str, agent : Str, title : Str }, List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
+	session = |{ id, agent, title }, timed| {
+		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
+		placed = Mock.workspaces.find_first(|shown| shown.session_ids.contains(id))
+		last_status = timed.keep_if(
+			|shown| match shown.event {
+				StatusChanged(_) => Bool.True
+				_ => Bool.False
+			},
+		).last()
+		{
+			..Chat.session({ id, provider: "mock", agent, title, status: current }),
+			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),
+			workspace: placed.map_ok(|shown| { id: Ok(shown.id), directory: shown.directory }).map_err(|_| Missing),
+			branch: placed.map_ok(
+				|shown| match shown.branch {
+					Branch(name) => Ok(name)
+					_ => Err(Missing)
+				},
+			) ?? Err(Missing),
+			running_since: if (current == Running) last_status.map_ok(|shown| timestamp(shown.visible_at)).map_err(|_| Missing) else Err(Missing),
+			updated: timed.last().map_ok(|shown| timestamp(shown.visible_at)).map_err(|_| Missing),
+		}
+	}
+
 	## A session's status: the last status its timeline reports.
 	status : List(Chat.Entry) -> Chat.Status
 	status = |timeline|
@@ -211,6 +240,38 @@ login_test : WorkspaceGit.FileDiff
 login_test = {
 	file: { path: "tests/Auth.roc", change: Added, additions: 3, deletions: 0, body: Text },
 	hunks: [WorkspaceGit.hunk({ old_start: 0, old_count: 0, new_start: 1, new_count: 3 }, [{ kind: Added, text: "import Auth" }, { kind: Added, text: "" }, { kind: Added, text: "expect Auth.login({ came_from: \"/inbox\" }).redirect_to == \"/inbox\"" }])],
+}
+
+## Milliseconds since the epoch as a time such as 2026-01-01T09:00:00.000Z,
+## by the days-to-civil-date algorithm of Howard Hinnant's chrono notes.
+timestamp : I64 -> Str
+timestamp = |ms| {
+	days = ms // 86_400_000 + 719_468
+	era = days // 146_097
+	day_of_era = days - era * 146_097
+	year_of_era = (day_of_era - day_of_era // 1_460 + day_of_era // 36_524 - day_of_era // 146_096) // 365
+	day_of_year = day_of_era - (365 * year_of_era + year_of_era // 4 - year_of_era // 100)
+	month_index = (5 * day_of_year + 2) // 153
+	month = if (month_index < 10) month_index + 3 else month_index - 9
+	year = year_of_era + era * 400 + (if (month <= 2) 1 else 0)
+	padded = |number, width| {
+		digits = number.to_str()
+		"${Str.repeat("0", width - digits.count_utf8_bytes())}${digits}"
+	}
+	of_day = ms % 86_400_000
+	"${year.to_str()}-${padded(month, 2)}-${padded(day_of_year - (153 * month_index + 2) // 5 + 1, 2)}T${padded(of_day // 3_600_000, 2)}:${padded(of_day // 60_000 % 60, 2)}:${padded(of_day // 1_000 % 60, 2)}.${padded(of_day % 1_000, 3)}Z"
+}
+
+expect [0, 951_782_400_000, 1_767_258_000_123, 1_709_210_096_789].map(timestamp) == ["1970-01-01T00:00:00.000Z", "2000-02-29T00:00:00.000Z", "2026-01-01T09:00:00.123Z", "2024-02-29T12:34:56.789Z"]
+
+expect {
+	running = Mock.session({ id: "flaky-ci", agent: "codex", title: "CI" }, [{ visible_at: 0, event: StatusChanged(Idle) }, { visible_at: 1_767_258_000_000, event: StatusChanged(Running) }, { visible_at: 1_767_258_060_000, event: AgentMessage({ text: "x" }) }])
+	running.status == Running
+		and running.workspace == Ok({ id: Ok("main"), directory: "/mock/liton" })
+		and running.branch == Ok("main")
+		and running.running_since == Ok("2026-01-01T09:00:00.000Z")
+		and running.updated == Ok("2026-01-01T09:01:00.000Z")
+		and Mock.session({ id: "notes", agent: "claude", title: "" }, [{ visible_at: 0, event: StatusChanged(Idle) }]).running_since == Err(Missing)
 }
 
 expect Mock.on_message("hi", 7).len() == 7

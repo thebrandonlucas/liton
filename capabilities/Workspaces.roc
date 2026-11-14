@@ -42,7 +42,7 @@ Workspaces := [].{
 }
 
 with_status : Str, Chat.Status -> Chat.Session
-with_status = |id, status| { id, provider: "mock", agent: "claude", title: "", status }
+with_status = |id, status| Chat.session({ id, provider: "mock", agent: "claude", title: "", status })
 
 expect Workspaces.state([with_status("s1", Finished), with_status("s2", Failed("")), with_status("s3", AwaitingPermission)], ["s1", "s2"]) == Failed
 expect Workspaces.state([with_status("s1", Finished)], []) == Idle

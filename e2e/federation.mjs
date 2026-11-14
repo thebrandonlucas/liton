@@ -93,7 +93,7 @@ try {
       return listed.some((s) => s.id === "echo/echo") && listed.some((s) => s.id === "peer/flaky-ci") && listed;
     });
     assert.ok(sessions.some((s) => s.id === "flaky-ci" && s.provider === "mock"));
-    assert.ok(sessions.some((s) => s.id === "peer/flaky-ci" && s.provider === "peer/mock"));
+    assert.ok(sessions.some((s) => s.id === "peer/flaky-ci" && s.provider === "peer/mock" && s.workspace.id === "peer/main" && s.model === "gpt-5-codex"));
     assert.ok(sessions.some((s) => s.id === "echo/hello" && s.provider === "echo/echo"));
     assert.equal(new Set(sessions.map((s) => s.id)).size, sessions.length);
     assert.ok((await call("chat.v1", "ListSessions", "peer/mock")).Ok.Sessions.every((s) => s.provider === "peer/mock"));

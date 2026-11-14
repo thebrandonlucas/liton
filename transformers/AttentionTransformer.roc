@@ -80,7 +80,7 @@ call = |inputs, stored, body, now| {
 
 fixture : List(Transformer.Input)
 fixture = [
-	{ capability: "chat.v1", topic: "sessions", events: [Sessions([{ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: AwaitingPermission }, { id: "s2", provider: "mock", agent: "claude", title: "Done", status: Finished }])] },
+	{ capability: "chat.v1", topic: "sessions", events: [Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: AwaitingPermission }), Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Done", status: Finished })])] },
 	{ capability: "chat.v1", topic: "timeline/s1", events: [Entry({ sequence: 1, event: PermissionRequested({ request_id: "p1", tool: "bash", description: "rm -rf build" }) })] },
 ]
 

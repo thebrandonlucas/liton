@@ -106,7 +106,7 @@ Attention := [].{
 }
 
 session : Chat.Status -> Chat.Session
-session = |status| { id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status }
+session = |status| Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status })
 
 asked : Chat.Entry
 asked = { sequence: 3, event: PermissionRequested({ request_id: "p1", tool: "bash", description: "rm -rf build" }) }

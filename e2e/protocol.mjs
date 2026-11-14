@@ -75,7 +75,8 @@ try {
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
   });
   await step("each capability answers a call", async () => {
-    assert.ok((await call("chat.v1", "ListSessions")).Ok.Sessions.some((s) => s.id === "flaky-ci"));
+    const flaky = (await call("chat.v1", "ListSessions")).Ok.Sessions.find((s) => s.id === "flaky-ci");
+    assert.deepEqual([flaky.model, flaky.workspace, flaky.branch, typeof flaky.updated], ["gpt-5-codex", { id: "main", directory: "/mock/liton" }, "main", "string"]);
     assert.equal((await call("chat.v1", "ListSessions", "mock")).Ok.Sessions.length, 3);
     assert.ok((await call("attention.v1", "ListItems")).Ok.Items.length > 0);
     assert.ok((await call("workspaces.v1", "ListWorkspaces")).Ok.Listed.workspaces.length > 0);

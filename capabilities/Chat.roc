@@ -4,7 +4,23 @@
 Chat := [].{
 	Status : [Idle, Running, AwaitingPermission, Finished, Failed(Str)]
 
-	Session : { id : Str, provider : Str, agent : Str, title : Str, status : Status }
+	## Beyond its status, what a provider tells of a session, each left out
+	## when it doesn't: the model it runs, the directory it works in (with its
+	## workspace's id when the provider has one) and the branch checked out
+	## there, when its running turn started and when it last changed, as times
+	## such as 2026-01-01T09:00:00.000Z.
+	Session : {
+		id : Str,
+		provider : Str,
+		agent : Str,
+		title : Str,
+		status : Status,
+		model : Try(Str, [Missing]),
+		workspace : Try({ id : Try(Str, [Missing]), directory : Str }, [Missing]),
+		branch : Try(Str, [Missing]),
+		running_since : Try(Str, [Missing]),
+		updated : Try(Str, [Missing]),
+	}
 
 	Event : [
 		UserMessage({ text : Str }),
@@ -35,6 +51,10 @@ Chat := [].{
 	## A session a provider keeps but doesn't run, such as a sandboxed agent's,
 	## read only, and the directory it worked in.
 	Importable : { session : Session, directory : Str }
+
+	## A session the provider tells nothing more of.
+	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
+	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing) }
 
 	## The permission requests in a timeline that no answer follows.
 	pending_permissions : List(Entry) -> List(Str)
