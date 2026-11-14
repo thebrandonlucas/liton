@@ -9,7 +9,7 @@ import cap.Manifest
 ## snake_case fields below; liton reads only these fields.
 Paseo := [].{
 	provider : Manifest.Provider
-	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
+	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1] }
 
 	## How many timeline entries a fetch asks for: a session's first fetch
 	## takes its last ones, later fetches follow on while a page `has_newer`.

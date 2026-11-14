@@ -32,6 +32,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The daemon starts from `liton.setup.json`, or the setup `LITON_SETUP` names: its remotes and transformers, with `LITON_PROVIDERS` and `LITON_TRANSFORMERS` added over them, and its presets in the manifest.
 - Settings offers the presets of the daemon's setup, and a browser with no layout of its own starts with the setup's default. Change it from there, and the browser keeps your layout. A preset shows as picked while the layout is still its own.
 - Stop a running agent with chat.v1's `Cancel` call (`liton call chat.v1 '{"Cancel":{"session_id":"…"}}'`), for Paseo's agents, the mock's and those of providers outside the daemon.
+- Browse the files of a session's or workspace's directory with the new `files.v1` capability: `/liton/v1/poll` follows a directory's entries (`tree/<context>/<path>`) and a file's text, up to its first 256 KiB, or whether it is binary or too large (`file/<context>/<path>`). Paseo, the mock and providers outside the daemon offer it; the daemon asks Paseo for a directory or file when it is first watched and again at most every 10 s while it is.
 
 ### Changed
 

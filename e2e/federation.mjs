@@ -123,6 +123,12 @@ try {
     assert.equal(changes.events[0].Changes.workspace.Known.provider, "peer/mock");
     assert.ok(list.events[0].Listed.workspaces.find((w) => w.id === "peer/fix-auth").session_ids.includes("peer/fix-auth"));
     assert.equal((await poll([{ capability: "workspace.git.v1", topic: "changes/echo/echo/Uncommitted", after: "" }]))[0].error.code, "Unsupported");
+    const [tree] = await until("the peer's files", async () => {
+      const topics = await poll([{ capability: "files.v1", topic: "tree/workspace:peer/fix-auth/.", after: "" }]);
+      return topics[0].events.length && topics;
+    });
+    assert.ok(tree.events[0].Tree.listing.Listed.some((e) => e.name === "README.md"));
+    assert.equal((await poll([{ capability: "files.v1", topic: "file/echo/echo/README.md", after: "" }]))[0].error.code, "Unsupported");
     assert.ok((await call("attention.v1", "ListItems")).Ok.Items.some((item) => item.session_id === "echo/echo"));
   });
   await step("a transformer uses another's output: needs-you.v1 from attention.v1, across remotes", async () => {

@@ -112,6 +112,24 @@ try {
     assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
   });
+  await step("files.v1 lists a workspace's directories and reads its files, by session or workspace", async () => {
+    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "files").patterns, ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"]);
+    assert.ok(manifest.providers[0].capabilities.some((c) => c.name === "files"));
+    const files = (topic) => ({ capability: "files.v1", topic, after: "" });
+    const topics = [files("tree/fix-auth/."), files("tree/workspace:main/src"), files("file/fix-auth/src%2FGenerated.roc"), files("file/workspace:main/assets%2Flogo.png"), files("file/fix-auth/AGENTS.md"), files("file/fix-auth/nope"), files("tree/nobody/."), files("tree/fix-auth")];
+    const [root, src, long, logo, link, missing, nobody, nameless] = (await post("poll", { topics })).topics;
+    assert.deepEqual(root.events[0].Tree.listing.Listed.map((e) => [e.name, e.kind]), [["README.md", "File"], ["AGENTS.md", "Symlink"], ["src", "Directory"], ["assets", "Directory"]]);
+    assert.deepEqual(src.events[0].Tree.listing.Listed.map((e) => e.name), ["Auth.roc", "Generated.roc"]);
+    const text = long.events[0].Contents.read.Text;
+    assert.deepEqual([text.truncated, new TextEncoder().encode(text.text).length, text.size > 262144], [true, 262144, true]);
+    assert.equal(logo.events[0].Contents.read.Binary.size, 4096);
+    assert.ok(link.events[0].Contents.read.Text.text.startsWith("# liton"));
+    assert.equal(missing.events[0].Contents.read.Unreadable, "no file nope");
+    assert.equal(nobody.events[0].Tree.listing, "Unknown");
+    assert.equal(nameless.error.code, "NotFound");
+    const again = (await post("poll", { topics: [root, long].map(({ capability, topic, cursor }) => ({ capability, topic, after: cursor })) })).topics;
+    assert.deepEqual(again.map((t) => t.events.length), [0, 0]);
+  });
   await step("attention.v1's transformer sets an item aside until unsettled, and keeps it", async () => {
     const item = async () => (await call("attention.v1", "ListItems")).Ok.Items.find((i) => i.session_id === "fix-auth");
     const { signature } = await item();

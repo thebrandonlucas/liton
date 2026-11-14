@@ -15,6 +15,9 @@ Capability := [].{
 	workspaces_v1 : Id
 	workspaces_v1 = { name: "workspaces", version: 1 }
 
+	files_v1 : Id
+	files_v1 = { name: "files", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"
