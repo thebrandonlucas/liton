@@ -440,8 +440,8 @@ Model := [].{
 	last_sequence = |state, session_id| Model.entries(state, session_id).last().map_ok(|entry| entry.sequence) ?? 0
 
 	## The topics the panes follow: the sessions; the timeline of each session
-	## a chat pane shows; the attention items while the layout has an inbox;
-	## and, of each Changes pane on screen, its scope's changes and the hunks
+	## a chat pane shows; the attention items, which the title counts; and,
+	## of each Changes pane on screen, its scope's changes and the hunks
 	## of the file it shows. Until the manifest arrives, every capability
 	## counts as offered.
 	subjects : State -> List(Protocol.Subject)
@@ -449,7 +449,7 @@ Model := [].{
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
 		laid_out = Model.panes(state)
 		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty()).map(|session_id| Timeline(session_id))
-		items = if (offered(Capability.attention_v1) and laid_out.any(|shown| shown.widget == "inbox")) [Items] else []
+		items = if (offered(Capability.attention_v1)) [Items] else []
 		git = |shown| {
 			context = Session(Model.session_of(state, shown))
 			{ scope, file, .. } = Model.git_pane(state, shown.id)
@@ -682,14 +682,9 @@ Model := [].{
 	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
 
 	## How many items need you, as the document title and the inbox's tab
-	## show. Without an inbox, whose items the UI follows, the sessions that
-	## wait for you.
+	## show.
 	needs_you : State -> U64
-	needs_you = |state|
-		if (Model.panes(state).any(|shown| shown.widget == "inbox"))
-			Model.waiting(state, NeedsYou).len()
-		else
-			state.sessions.keep_if(|listed| listed.status == AwaitingPermission).len()
+	needs_you = |state| Model.waiting(state, NeedsYou).len()
 
 	## Takes the items the poll numbered `asked` answered.
 	attention_fetched : State, U64, List(Attention.Item) -> State
@@ -903,7 +898,7 @@ Model := [].{
 # A Changes pane's git is followed only while it is on screen.
 expect {
 	state = { ..Model.initial(""), focus: "a" }
-	Model.subjects(state) == [Sessions, Timeline("a"), Changes({ context: Session("a"), scope: Uncommitted })] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a")]
+	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted })] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
