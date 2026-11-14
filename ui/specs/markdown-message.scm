@@ -10,9 +10,9 @@
     (expect-visible (text "zig build"))
     (expect-visible (text "first"))
     (expect-absent (text "`zig build`"))
-    ; The code block, with its language.
+    ; The code block, highlighted, with its language.
     (expect-visible (text "sh"))
-    (expect-visible (text "echo done"))
+    (expect-visible (text "echo"))
     ; A link opens in a new tab; raw HTML is text, a nested item's own.
     (expect-attr (role link :name "docs") href "https://example.org")
     (expect-attr (role link :name "docs") target "_blank")

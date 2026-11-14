@@ -206,6 +206,15 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .md-code-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 10px; border-bottom: 1px solid var(--edge); font: 11px var(--font-mono); color: var(--muted); }
 .entry .md-code pre { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; word-break: normal; font: 12px/1.5 var(--font-mono); tab-size: 2; }
 .md-code .line { display: block; min-height: 1.5em; }
+.tok-keyword { color: var(--accent); }
+.tok-string { color: var(--ok); }
+.tok-comment { color: var(--muted); font-style: italic; }
+.tok-number, .tok-interp { color: var(--warn-strong); }
+.tok-type { color: color-mix(in srgb, var(--accent) 55%, var(--text)); }
+.tok-call { color: var(--text); font-weight: 600; }
+.tok-added { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.tok-removed { color: var(--fail); background: color-mix(in srgb, var(--fail) 12%, transparent); }
+.tok-meta { color: var(--muted); }
 .manifest { margin: 0; padding: 12px; font: 12px var(--font-mono); white-space: pre-wrap; color: var(--muted); }
 
 .changes { flex: 1; min-height: 0; overflow-y: auto; }

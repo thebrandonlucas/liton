@@ -112,6 +112,7 @@ try {
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
     await see("Changes", ".diff-line .added", "redirect_to = request.came_from");
     await see("Chat", ".markdown .code", "/login");
+    await see("Chat", ".md-code .tok-comment", "# src/Auth.roc");
     await see("Chat", ".md-item", "Logging in now returns you where you were.");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
