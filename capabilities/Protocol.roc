@@ -124,8 +124,8 @@ Protocol := [].{
 			VoiceStatus => { capability: "voice.v1", topic: "status" }
 			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
 			File({ context, scope, path }) => { capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped(path)}" }
-			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${context_name(context)}/${escaped(path)}" }
-			Contents({ context, path }) => { capability: "files.v1", topic: "file/${context_name(context)}/${escaped(path)}" }
+			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${Context.to_str(context)}/${escaped(path)}" }
+			Contents({ context, path }) => { capability: "files.v1", topic: "file/${Context.to_str(context)}/${escaped(path)}" }
 		}
 
 	## A snapshot topic's update: its value, cursored by its fingerprint,
@@ -195,21 +195,7 @@ placed_path = |rest| {
 
 ## A topic's context from its name: a session id, or `workspace:<id>`.
 context_of : Str -> Try(Context.Id, [NoTopic])
-context_of = |focus|
-	if focus == "" or focus == "workspace:" {
-		Err(NoTopic)
-	} else if focus.starts_with("workspace:") {
-		Ok(Workspace(focus.drop_prefix("workspace:")))
-	} else {
-		Ok(Session(focus))
-	}
-
-context_name : Context.Id -> Str
-context_name = |context|
-	match context {
-		Session(session_id) => session_id
-		Workspace(workspace_id) => "workspace:${workspace_id}"
-	}
+context_of = |name| Context.from_str(name).map_err(|_| NoTopic)
 
 ## A context and scope as changes/ and file/ topics name them.
 scoped_name : { context : Context.Id, scope : WorkspaceGit.Scope } -> Str
@@ -219,7 +205,7 @@ scoped_name = |{ context, scope }| {
 		AgainstBase => "AgainstBase"
 		Commit(sha) => "Commit:${sha}"
 	}
-	"${context_name(context)}/${scope_name}"
+	"${Context.to_str(context)}/${scope_name}"
 }
 
 ## A path as a topic names it, its `%` as `%25` and its `/` as `%2F`.
