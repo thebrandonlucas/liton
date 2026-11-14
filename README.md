@@ -16,6 +16,14 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 
 `LITON_PROVIDERS` adds providers outside the daemon, each a server of the same protocol such as another liton daemon, as `name=url` pairs separated by commas: `LITON_PROVIDERS="echo=http://127.0.0.1:8096,team=https://liton.example"`. What each offers is named under its name (`echo/echo`, `team/fix-auth`), and the daemon asks each at most once every `LITON_PROVIDERS_INTERVAL_MS` (default 1000) however many clients poll. `zig build example-provider` builds `zig-out/bin/provider-echo`, the smallest such provider (`examples/provider-echo/`).
 
+## Setups
+
+A setup declares the providers outside the daemon to connect, the transformers it hosts and the presets Settings offers ([docs/design.md](docs/design.md), Setups). It is a `Litonfile.roc`, a Roc program that prints it: liton's own is at the root, and `examples/litonfile-team/` builds on it. `liton setup [path]` (by default `./Litonfile.roc`) evaluates one to `liton.setup.json`, the same bytes each time:
+
+```sh
+liton setup examples/litonfile-team
+```
+
 ## Command line
 
 `zig build cli` builds `zig-out/bin/liton`, a client of the daemon's capability protocol ([docs/protocol.md](docs/protocol.md), The CLI) that prints JSON lines, so it composes with other tools:

@@ -6,7 +6,7 @@ Cli := [].{
 
 	## What the arguments ask for. A call given no request, or `-`, reads it
 	## from stdin.
-	Command : [Help, Usage(Str), Manifest, Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
+	Command : [Help, Usage(Str), Manifest, Setup(Str), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
 
 	usage : Str
 	usage =
@@ -14,6 +14,7 @@ Cli := [].{
 		\\  liton manifest
 		\\  liton call <capability> [<request JSON>|-]
 		\\  liton watch <capability> <topic> [--after <cursor>] [<capability> <topic> ...] [--interval <ms>]
+		\\  liton setup [<Litonfile.roc or its directory>]
 		\\  liton help
 		\\
 		\\Speaks liton's capability protocol to the daemon at LITON_URL (default
@@ -21,13 +22,17 @@ Cli := [].{
 		\\its request from stdin when given none or `-`, and exits 1 when the
 		\\answer is an error. `watch` polls its topics every --interval
 		\\milliseconds (default 1000) and prints each new event, wrapped with its
-		\\capability and topic when it follows several, until interrupted.
+		\\capability and topic when it follows several, until interrupted. `setup`
+		\\runs a Litonfile (default ./Litonfile.roc) with roc and writes the setup it
+		\\prints to liton.setup.json.
 
 	parse : List(Str) -> Command
 	parse = |arguments|
 		match arguments {
 			["help"] | ["--help"] | ["-h"] => Help
 			["manifest"] => Manifest
+			["setup"] => Setup("Litonfile.roc")
+			["setup", path] => Setup(if (path.ends_with(".roc")) path else "${path.drop_suffix("/")}/Litonfile.roc")
 			["call", capability] | ["call", capability, "-"] => Call({ capability, request: Stdin })
 			["call", capability, request] => Call({ capability, request: Given(request) })
 			["watch", .. as rest] => watched(rest, { topics: [], interval: 1000 })
@@ -101,6 +106,8 @@ expect {
 	parsed = Cli.parse(["watch", "chat.v1", "timeline/s1", "--after", "41", "attention.v1", "items", "--interval", "250"])
 	parsed == Watch({ topics: [{ capability: "chat.v1", topic: "timeline/s1", after: "41" }, { capability: "attention.v1", topic: "items", after: "" }], interval: 250 })
 }
+
+expect Cli.parse(["setup"]) == Setup("Litonfile.roc") and Cli.parse(["setup", "team/"]) == Setup("team/Litonfile.roc") and Cli.parse(["setup", "team/Mine.roc"]) == Setup("team/Mine.roc")
 
 expect Cli.call_body("chat.v1", "\"ListSessions\"") == "{\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}"
 expect Cli.failure("{\"Err\":{\"code\":\"NotFound\",\"message\":\"no session s2\"}}") == Ok("NotFound: no session s2")

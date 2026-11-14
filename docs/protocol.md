@@ -291,6 +291,12 @@ it, if given; following several topics, it wraps each event as
 followed. Either exits 2 on a usage error or when the daemon can't be
 reached.
 
+`liton setup [path]` speaks no protocol: it runs a Litonfile (by default
+`./Litonfile.roc`, or the one in a directory given) with `roc`, and writes the
+setup it prints to `liton.setup.json` (design.md, Setups). It exits 1 when
+the Litonfile fails or prints something other than a setup, and 2 when `roc`
+can't be run.
+
 ## Agents
 
 The daemon's MCP face offers each capability's calls as tools and its topics as

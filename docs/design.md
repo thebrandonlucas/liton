@@ -43,6 +43,15 @@ How the parts grow without the core growing:
 
 What stays out: no plugin API into liton's internals (a part sees only the protocol), no untyped or Turing-complete configuration, and nothing in the core that could be a capability, a transformer or a client.
 
+### Setups
+
+A setup is what a daemon and its clients start from: the remotes to connect, the transformers to host, and the presets Settings offers, with the one a new browser starts with. Its types are the `setup` package (`setup/Setup.roc`), which the daemon, the UI and the CLI share as they do `capabilities/`. Keys, options and themes are still to come.
+
+- **Declared in Roc.** A `Litonfile.roc` is an app on basic-cli whose `main!` prints a `Setup.Declared` as JSON; apart from that print it is pure, so it does only what it declares. liton's own setup is `setup/Default.roc`: no remotes, attention, and the Developer, Inbox and Tiling presets, Developer first. The `Litonfile.roc` at the root prints it as it is.
+- **Built on another.** A setup imports another as a package and changes it with `Setup.with_remote`, `without_remote`, `with_transformer`, `without_transformer`, `with_preset`, `without_preset`, `with_default_preset` and `merge`, which adds a second setup's remotes and presets over the first's by name. `examples/litonfile-team/` builds on liton's. An app can't be imported, so what a setup shares is a module of a package, as `Default` is, with a Litonfile beside it that only prints it.
+- **Evaluated once.** `liton setup [path]` runs a Litonfile with `roc`, reads back what it prints and writes it to `liton.setup.json`, its fields in order, so the same Litonfile gives the same bytes. That file is the setup evaluated.
+- **Pinned.** A setup imported by URL is pinned by the hash in its URL, as every Roc package is, so a Litonfile's imports are its lockfile for now. A lockfile of its own waits on setups that pin what Roc doesn't, such as widget packages.
+
 ### Providers
 
 A provider is a Roc package compiled into the daemon. It connects to a backend and implements one or more capabilities.

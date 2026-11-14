@@ -1,6 +1,7 @@
 // node e2e/protocol.mjs, after `zig build daemon cli`: checks /liton/v1 (see
 // docs/protocol.md), and the liton CLI on it, against a daemon serving the
-// mock provider, on a free port with a fresh database.
+// mock provider, on a free port with a fresh database, and `liton setup` on
+// liton's Litonfile (roc on PATH).
 import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -16,12 +17,24 @@ const port = await new Promise((resolve) => {
     probe.close(() => resolve(port));
   });
 });
-let check = "the daemon answers";
+let check = "liton setup evaluates liton's Litonfile";
 const fail = (error) => {
   console.log(`FAIL ${check}: ${String(error?.message ?? error).split("\n")[0]}`);
   process.exit(1);
 };
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "liton-protocol-"));
+process.on("exit", () => fs.rmSync(scratch, { recursive: true, force: true }));
+const cli = path.join(repo, "zig-out/bin/liton");
+// The setup `liton setup` writes of a Litonfile, from a directory of its own: its text.
+const evaluated = (litonfile, directory) =>
+  new Promise((resolve, reject) => {
+    fs.mkdirSync(directory);
+    execFile(cli, ["setup", litonfile], { cwd: directory }, (error, _, stderr) =>
+      error ? reject(new Error(`liton setup ${litonfile}: ${stderr}`)) : resolve(fs.readFileSync(path.join(directory, "liton.setup.json"), "utf8")),
+    );
+  });
+const own = await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "own")).catch(fail);
+check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
   stdio: ["ignore", "ignore", "inherit"],
@@ -29,7 +42,6 @@ const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
 });
 process.on("exit", () => {
   if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");
-  fs.rmSync(scratch, { recursive: true, force: true });
 });
 daemon.on("error", fail);
 daemon.on("exit", (code) => fail(`the daemon exited with ${code}`));
@@ -37,7 +49,6 @@ daemon.on("exit", (code) => fail(`the daemon exited with ${code}`));
 const base = `http://127.0.0.1:${port}/liton/v1`;
 const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", body: JSON.stringify(body) })).json();
 const call = (capability, request, provider) => post("call", { capability, request, ...(provider && { provider }) });
-const cli = path.join(repo, "zig-out/bin/liton");
 const cliOptions = { env: { ...process.env, LITON_URL: `http://127.0.0.1:${port}` } };
 // liton run with args and, if given, input on stdin: its exit code, stdout and stderr.
 const liton = (args, input) =>
@@ -139,6 +150,15 @@ try {
     assert.equal(watch.signalCode, "SIGINT");
     const lines = filtered.trim().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(lines.slice(0, 2).map((line) => line.Entry.sequence), [2, 6]);
+  });
+  await step("liton setup evaluates a Litonfile to the same JSON each time", async () => {
+    assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
+    const setup = JSON.parse(own);
+    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling"], "Developer"]);
+  });
+  await step("a Litonfile that imports liton's changes parts of it", async () => {
+    const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
+    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Review"], "Review"]);
   });
   console.log("PASS /liton/v1");
   process.exit(0);

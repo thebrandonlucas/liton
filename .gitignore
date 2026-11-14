@@ -13,5 +13,7 @@ docs/roc-isms/
 /vendor/
 *.db
 *.db-*
+# What `liton setup` evaluates a Litonfile to.
+liton.setup.json
 # What bench/bench.mjs measures.
 bench/results/
