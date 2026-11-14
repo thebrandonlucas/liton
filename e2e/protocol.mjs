@@ -1,7 +1,7 @@
 // node e2e/protocol.mjs, after `zig build daemon cli`: checks /liton/v1 (see
 // docs/protocol.md), and the liton CLI on it, against a daemon serving the
-// mock provider, on a free port with a fresh database, and `liton setup` on
-// liton's Litonfile (roc on PATH).
+// mock provider, on a free port with a fresh database, and the setup `liton
+// setup` evaluates of liton's Litonfile (roc on PATH).
 import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -38,7 +38,7 @@ check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
   stdio: ["ignore", "ignore", "inherit"],
-  env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db") },
+  env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db"), LITON_SETUP: path.join(scratch, "own/liton.setup.json") },
 });
 process.on("exit", () => {
   if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");
@@ -151,10 +151,11 @@ try {
     const lines = filtered.trim().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(lines.slice(0, 2).map((line) => line.Entry.sequence), [2, 6]);
   });
-  await step("liton setup evaluates a Litonfile to the same JSON each time", async () => {
+  await step("liton setup evaluates a Litonfile to the same JSON each time, which the manifest offers", async () => {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
     assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling"], "Developer"]);
+    assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets });
   });
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));

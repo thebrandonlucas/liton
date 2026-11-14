@@ -1,8 +1,9 @@
 // node e2e/federation.mjs, after `zig build daemon example-provider`: checks
 // providers outside the daemon (docs/protocol.md, Providers outside the
-// daemon). A daemon is pointed through LITON_PROVIDERS at the example echo
-// provider, at a second daemon serving the mock provider, and at a port
-// nothing listens on, each on a free port with a fresh database.
+// daemon). A daemon's setup (LITON_SETUP) points it at the example echo
+// provider, and LITON_PROVIDERS at a second daemon serving the mock provider
+// and at a port nothing listens on, each on a free port with a fresh
+// database.
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -50,17 +51,23 @@ const until = async (what, find, ms = 10000) => {
 };
 
 const echo = start("provider-echo", { ECHO_PORT: String(echoPort), ECHO_DB: path.join(scratch, "echo.db") });
-start("liton-daemon", { LITON_PORT: String(peerPort), LITON_DB: path.join(scratch, "peer.db") });
+// The peer's setup is its own, not one liton.setup.json may hold.
+fs.writeFileSync(path.join(scratch, "peer.setup.json"), JSON.stringify({ remotes: [], transformers: ["attention"], presets: [], default_preset: "" }));
+start("liton-daemon", { LITON_PORT: String(peerPort), LITON_DB: path.join(scratch, "peer.db"), LITON_SETUP: path.join(scratch, "peer.setup.json") });
 const answering = (port) => until(`answer on ${port}`, () => fetch(`http://127.0.0.1:${port}/liton/v1/manifest`).then((r) => r.ok));
 await answering(echoPort);
 await answering(peerPort);
 const interval = 1000;
+// A setup as `liton setup` writes one, with a preset of its own.
+const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "chat", pinned: "", options: [] }] }] } };
+const setup = { remotes: [{ name: "echo", url: `http://127.0.0.1:${echoPort}` }], transformers: ["attention", "needs-you"], presets: [review], default_preset: "Review" };
+fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify(setup));
 const main = start("liton-daemon", {
   LITON_PORT: String(mainPort),
   LITON_DB: path.join(scratch, "main.db"),
-  LITON_PROVIDERS: `echo=http://127.0.0.1:${echoPort},peer=http://127.0.0.1:${peerPort}/,down=http://127.0.0.1:${downPort}`,
+  LITON_SETUP: path.join(scratch, "liton.setup.json"),
+  LITON_PROVIDERS: `peer=http://127.0.0.1:${peerPort}/,down=http://127.0.0.1:${downPort}`,
   LITON_PROVIDERS_INTERVAL_MS: String(interval),
-  LITON_TRANSFORMERS: "needs-you",
 });
 
 const base = `http://127.0.0.1:${mainPort}/liton/v1`;
@@ -79,6 +86,7 @@ try {
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "echo/echo", "peer/mock"]);
     assert.deepEqual(manifest.providers[1].capabilities, [{ name: "chat", version: 1 }]);
   });
+  await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [review] }));
   await step("ListSessions merges every provider's sessions, named under their remotes", async () => {
     const sessions = await until("remote sessions", async () => {
       const listed = (await call("chat.v1", "ListSessions")).Ok.Sessions;

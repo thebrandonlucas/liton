@@ -5,10 +5,11 @@ import cap.Protocol
 import cap.Workspaces
 
 ## Providers outside the daemon (docs/protocol.md, Providers outside the
-## daemon), each named in LITON_PROVIDERS and serving /liton/v1 at its URL. All
-## a remote offers is named under its name, `<name>/<its id>`: its providers,
-## sessions, projects and workspaces, so they never collide with the daemon's
-## own, and a call or topic of one of them reaches the remote as it names it.
+## daemon), each named in the setup or LITON_PROVIDERS and serving /liton/v1 at
+## its URL. All a remote offers is named under its name, `<name>/<its id>`:
+## its providers, sessions, projects and workspaces, so they never collide
+## with the daemon's own, and a call or topic of one of them reaches the
+## remote as it names it.
 Remote := [].{
 	Endpoint : { name : Str, url : Str }
 
@@ -17,12 +18,21 @@ Remote := [].{
 	## (Paseo's own ids with a `/` start with `import:`).
 	parsed : Str -> Try(List(Endpoint), Str)
 	parsed = |text| {
-		endpoints = text.split_on(",").map(|entry| entry.trim()).drop_if(|entry| entry == "").map_try(endpoint_of)?
+		endpoints = text.split_on(",").map(|entry| entry.trim()).drop_if(|entry| entry == "").map_try(endpoint_of).map_err(|problem| "LITON_PROVIDERS: ${problem}")?
 		names = endpoints.map(|listed| listed.name)
 		match names.find_first(|name| names.keep_if(|other| other == name).len() > 1) {
 			Ok(name) => Err("LITON_PROVIDERS names ${name} twice")
 			Err(_) => Ok(endpoints)
 		}
+	}
+
+	## The remotes a setup declares, with those LITON_PROVIDERS lists in place
+	## of any of the same name, and after them otherwise.
+	declared : List(Endpoint), Str -> Try(List(Endpoint), Str)
+	declared = |from_setup, listed| {
+		overrides = Remote.parsed(listed)?
+		checked = from_setup.map_try(|{ name, url }| endpoint_of("${name}=${url}")).map_err(|problem| "the setup's remote ${problem}")?
+		Ok(checked.map(|remote| overrides.find_first(|over| over.name == remote.name) ?? remote).concat(overrides.drop_if(|over| checked.any(|remote| remote.name == over.name))))
 	}
 
 	## `id` as liton names it, under the remote `name`.
@@ -132,9 +142,9 @@ endpoint_of = |entry| {
 	url = Str.join_with(parts.drop_first(1), "=").trim().drop_suffix("/")
 	allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".to_utf8()
 	if name == "" or !name.to_utf8().all(|byte| allowed.contains(byte)) {
-		Err("LITON_PROVIDERS: ${entry} needs a name of letters, digits, - and _, as in name=http://127.0.0.1:8096")
+		Err("${entry} needs a name of letters, digits, - and _, as in name=http://127.0.0.1:8096")
 	} else if !(url.starts_with("http://") or url.starts_with("https://")) {
-		Err("LITON_PROVIDERS: ${name} needs an http:// or https:// URL")
+		Err("${name} needs an http:// or https:// URL")
 	} else {
 		Ok({ name, url })
 	}
@@ -175,6 +185,8 @@ peer = { name: "peer", url: "https://peer.example/base" }
 
 expect Remote.parsed(" echo=http://127.0.0.1:8096/ , peer=https://peer.example/base,") == Ok([echo, peer])
 expect Remote.parsed("") == Ok([])
+expect Remote.declared([echo, peer], "peer=http://127.0.0.1:9000,team=https://liton.example") == Ok([echo, { name: "peer", url: "http://127.0.0.1:9000" }, { name: "team", url: "https://liton.example" }])
+expect Remote.declared([{ name: "a/b", url: "http://a" }], "").is_err() and Remote.declared([echo], "echo").is_err()
 expect ["echo", "=http://a", "a/b=http://a", "a=ftp://a", "a=http://x,a=http://y"].all(|text| Remote.parsed(text).is_err())
 
 # A remote's session, workspace and git topics reach it as it names them;

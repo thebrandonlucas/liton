@@ -29,6 +29,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The `liton` command line (`zig build cli`) speaks that protocol and prints JSON lines: `liton manifest`, `liton call chat.v1 '"ListSessions"'` (the request also from stdin; exits 1 on an error), and `liton watch chat.v1 timeline/<session>`, one event per line until interrupted, for piping into `jq` and other tools. It finds the daemon at `LITON_URL` (default http://127.0.0.1:8095).
 - Add providers outside the daemon, written in any language, or other liton daemons, with `LITON_PROVIDERS="name=http://host:port,…"`: each serves the same `/liton/v1` protocol, and its sessions, workspaces and timelines show up beside your own, named `<name>/…`, and take your messages. The daemon asks each at most once a second (`LITON_PROVIDERS_INTERVAL_MS`) however many clients poll, and one that is down leaves out only its own sessions until it answers again. `examples/provider-echo/` is the smallest such provider.
 - Describe a setup in a `Litonfile.roc`, a Roc program: the providers outside the daemon to connect, the transformers it runs and the presets Settings offers. It builds on liton's own, or on another setup it imports, and changes what it needs (`examples/litonfile-team/`). `liton setup [path]` evaluates it to `liton.setup.json`, the same file every time.
+- The daemon starts from `liton.setup.json`, or the setup `LITON_SETUP` names: its remotes and transformers, with `LITON_PROVIDERS` and `LITON_TRANSFORMERS` added over them, and its presets in the manifest.
 
 ### Changed
 

@@ -48,13 +48,23 @@ capability as patterns:
   ],
   "topics": [
     { "capability": { "name": "chat", "version": 1 }, "patterns": ["sessions", "timeline/<session_id>"] }, …
-  ]
+  ],
+  "setup": {
+    "default_preset": "Developer",
+    "presets": [{ "name": "Developer", "snapshot": { "version": 4, "shell": "Workbench", "columns": […], "collapsed": [] } }, …]
+  }
 }
 ```
 
 A capability is offered when a provider supplies it or a transformer derives
 it. A client binds to capabilities, never to providers; it uses the manifest to
 show what is missing and who could supply it.
+
+`setup` holds what the daemon's setup (design.md, Setups) offers its
+clients: its presets, each a layout as a client saves it, a snapshot, with a
+name, and the one a client starts with. Its types are `Setup.Offered` and
+`Setup.Preset` in the `setup` package. A daemon may leave it out, and a
+client then offers presets of its own.
 
 ### Call
 
@@ -161,8 +171,9 @@ Roc: chat.v1 for two scripted sessions.
 
 The contract is the manifest's `protocol` and `providers` (a provider outside
 the daemon may leave out the rest), `call` for the capabilities they list,
-and `poll` for their topics. A daemon is given its providers outside it, until
-a Litonfile declares them, in `LITON_PROVIDERS`, comma-separated:
+and `poll` for their topics. A daemon is given its providers outside it by its
+setup's remotes (design.md, Setups), and by `LITON_PROVIDERS`, comma-separated,
+whose remotes take the place of the setup's of the same name:
 
 ```sh
 LITON_PROVIDERS="echo=http://127.0.0.1:8096,team=https://liton.example"
@@ -261,9 +272,10 @@ The daemon hosts every transformer the same way, knowing none of them:
   a call that loses is asked again. Attention's state is the settles and
   snoozes that still hold.
 
-`attention.v1` is always registered. `needs-you.v1`, attention's items that need
-you, is offered when `LITON_TRANSFORMERS` names it (`LITON_TRANSFORMERS=needs-you`),
-to show and check composition; a Litonfile will declare a setup's transformers.
+A setup names the transformers the daemon hosts by id, and `LITON_TRANSFORMERS`
+adds to them, comma-separated. There are two: `attention`, which liton's own
+setup names, and `needs-you`, attention's items that need you as `needs-you.v1`,
+to show and check composition (`LITON_TRANSFORMERS=needs-you`).
 A remote's transformers are not routed: the daemon derives its own from every
 provider, local or remote.
 

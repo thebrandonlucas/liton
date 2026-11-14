@@ -10,15 +10,22 @@
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
 ##
-## LITON_PROVIDERS adds providers outside the daemon, each a server of
-## /liton/v1 such as another liton daemon, comma-separated as
-## `name=http://host:port` (or https://), until a Litonfile declares them.
-## Their providers, sessions and workspaces are named `<name>/<their id>`.
-## The daemon asks each at most every LITON_PROVIDERS_INTERVAL_MS (default
-## 1000) for all that polls watch of it, in one poll of its own.
+## LITON_SETUP names the setup a Litonfile evaluates to (`liton setup`), by
+## default liton.setup.json if there is one, or else liton's own
+## (setup/Default.roc). It declares the remotes, the transformers and the
+## presets the manifest offers clients.
 ##
-## LITON_TRANSFORMERS adds the optional transformers it names, comma-separated:
-## `needs-you`, attention.v1's items that need you, as needs-you.v1.
+## LITON_PROVIDERS adds providers outside the daemon to the setup's remotes,
+## in place of those of the same name, each a server of /liton/v1 such as
+## another liton daemon, comma-separated as `name=http://host:port` (or
+## https://). Their providers, sessions and workspaces are named
+## `<name>/<their id>`. The daemon asks each at most every
+## LITON_PROVIDERS_INTERVAL_MS (default 1000) for all that polls watch of it,
+## in one poll of its own.
+##
+## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
+## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
+## items that need you, as needs-you.v1.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -26,6 +33,7 @@ app [Context, program] {
 	paseo: "../providers/paseo/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.21.0/4viZsnWjdYsyH4Q87ESFAwM5c55Hnc15nAGW1UwzWpFU.tar.zst",
 	remote: "../providers/remote/main.roc",
+	setup: "../setup/main.roc",
 	transformers: "../transformers/main.roc",
 }
 
@@ -52,11 +60,13 @@ import paseo.PaseoGit
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
+import setup.Default
+import setup.Setup
 import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part) }
+Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -79,14 +89,8 @@ init! = || {
 	}
 	password = env_or!("PASEO_PASSWORD", "")
 	paseo = if (password == "") Err(Disabled) else Ok({ host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
-	remotes =
-		match Remote.parsed(env_or!("LITON_PROVIDERS", "")) {
-			Ok(parsed) => parsed
-			Err(problem) => {
-				logged!(problem)
-				return Err(Exit(5))
-			}
-		}
+	setup = checked!(setup!(env_or!("LITON_SETUP", "")))?
+	remotes = checked!(Remote.declared(setup.remotes, env_or!("LITON_PROVIDERS", "")))?
 	remote_interval_ms = I64.from_str(env_or!("LITON_PROVIDERS_INTERVAL_MS", "1000")) ?? 1_000
 	ui = Server.file_root({ id: "ui", path: Path.utf8(env_or!("LITON_UI", "zig-out/www")) })
 	config =
@@ -94,9 +98,8 @@ init! = || {
 			.with_listen({ host, port })
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
-	named_transformers = env_or!("LITON_TRANSFORMERS", "").split_on(",").map(|name| name.trim())
-	transformers = [AttentionTransformer.part].concat([NeedsYou.part].keep_if(|part| named_transformers.contains(part.id)))
-	context = { db, mock_enabled, paseo, remotes, remote_interval_ms, transformers }
+	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
+	context = { db, mock_enabled, paseo, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -105,6 +108,40 @@ init! = || {
 	}
 	Ok({ config, context })
 }
+
+## The setup at `named`, or at liton.setup.json if `named` is "" and there
+## is one, or else liton's own.
+setup! : Str => Try(Setup.Declared, Str)
+setup! = |named| {
+	path = if (named == "") "liton.setup.json" else named
+	match Path.read_utf8!(Path.utf8(path)) {
+		Ok(text) => Setup.from_json(text).map_err(|_| "${path} is not a setup, as `liton setup` writes from a Litonfile")
+		Err(_) if named == "" => Ok(Default.setup)
+		Err(problem) => Err("can't read the setup ${path}: ${Str.inspect(problem)}")
+	}
+}
+
+## The transformers `named`, in the order each may use the one before.
+transformers_named : List(Str) -> Try(List(Transformer.Part), Str)
+transformers_named = |named| {
+	ids = named.map(|id| id.trim()).drop_if(|id| id == "")
+	known = [AttentionTransformer.part, NeedsYou.part]
+	match ids.find_first(|id| !known.any(|part| part.id == id)) {
+		Ok(unknown) => Err("no transformer is called ${unknown}; there are ${Str.join_with(known.map(|part| part.id), ", ")}")
+		Err(NotFound) => Ok(known.keep_if(|part| ids.contains(part.id)))
+	}
+}
+
+## What `given` holds, or else its problem on stderr and the daemon stopped.
+checked! : Try(a, Str) => Try(a, [Exit(I64)])
+checked! = |given|
+	match given {
+		Ok(value) => Ok(value)
+		Err(problem) => {
+			logged!(problem)
+			Err(Exit(5))
+		}
+	}
 
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
 shutdown! = |_reason, _context| Ok({})
@@ -147,11 +184,13 @@ read_json! = |request| {
 	Str.from_utf8(body)
 }
 
-## Answers /liton/v1/manifest, once the remotes due are asked.
+## Answers /liton/v1/manifest, once the remotes due are asked, with the
+## presets the setup offers clients.
 manifest! : Context => Try(Response, _)
 manifest! = |context| {
 	remotes_cycle!(context)?
-	Ok(json(Json.to_str(offered!(context)?)))
+	{ protocol, daemon, providers, transformers, topics } = offered!(context)?
+	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: context.setup })))
 }
 
 ## What the daemon offers, with the providers of the remotes that are up.
@@ -1424,3 +1463,5 @@ kept! = |db, remote, update| {
 		}
 	Sqlite.execute!({ db, query: "UPDATE remote_topics SET cursor = :cursor, error = :error, event = CASE WHEN :event = '' THEN event ELSE :event END WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic, cursor: update.cursor, error, event: snapshot } })
 }
+
+expect transformers_named(["needs-you", " attention", ""]).map_ok(|parts| parts.map(|part| part.id)) == Ok(["attention", "needs-you"]) and transformers_named(["attention", "nope"]).is_err()

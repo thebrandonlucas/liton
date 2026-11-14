@@ -18,11 +18,14 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 
 ## Setups
 
-A setup declares the providers outside the daemon to connect, the transformers it hosts and the presets Settings offers ([docs/design.md](docs/design.md), Setups). It is a `Litonfile.roc`, a Roc program that prints it: liton's own is at the root, and `examples/litonfile-team/` builds on it. `liton setup [path]` (by default `./Litonfile.roc`) evaluates one to `liton.setup.json`, the same bytes each time:
+A setup declares the providers outside the daemon to connect, the transformers it hosts and the presets Settings offers ([docs/design.md](docs/design.md), Setups). It is a `Litonfile.roc`, a Roc program that prints it: liton's own is at the root, and `examples/litonfile-team/` builds on it. `liton setup [path]` (by default `./Litonfile.roc`) evaluates one to `liton.setup.json`, the same bytes each time, and the daemon reads that file at start, or the one `LITON_SETUP` names:
 
 ```sh
 liton setup examples/litonfile-team
+zig build run
 ```
+
+`LITON_PROVIDERS` and `LITON_TRANSFORMERS` still add to the setup, the former's remotes in place of the setup's of the same name.
 
 ## Command line
 
