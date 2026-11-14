@@ -8,6 +8,8 @@ const SourceTree = struct {
 };
 
 const excluded_source_dirs = [_][]const u8{
+    // Claude Code's local state, which holds its agents' worktrees.
+    ".claude",
     ".direnv",
     ".git",
     ".kai",
