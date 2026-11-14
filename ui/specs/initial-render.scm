@@ -13,7 +13,7 @@
     (expect-visible (role button :name "Fix tests"))
     (expect-visible (role button :name "Write docs"))
     (expect-text (test-id "session-status") "running")
-    (expect-visible (text "following Fix tests"))
+    (expect-text (test-id "session-title") "Fix tests")
     (expect-visible (text "Mock (mock)\n  chat.v1"))
     (expect-absent (text "Connecting to the daemon…"))
   )

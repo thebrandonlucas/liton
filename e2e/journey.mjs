@@ -80,7 +80,7 @@ try {
   };
 
   await step("the three preset panes render", async () => {
-    for (const pane of ["Sessions", "Chat", "Capabilities"]) await see(pane, ".pane-title", pane);
+    for (const pane of ["Sessions", "Chat", "Capabilities"]) await see(pane, ".pane-header", "");
     await see("Capabilities", ".manifest", "Mock agents (mock)");
   });
   await step("the seeded sessions appear in Sessions", async () => {
@@ -117,7 +117,7 @@ try {
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Sessions", ".session button", "Find the flaky CI test");
-    await see("Chat", ".pane-context", "following Find the flaky CI test");
+    await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
     await see("Chat", '.tool-card.failed [data-testid="tool-state"]', "failed");
     await see("Chat", ".tool-card.failed .tool-output", "FAIL (expected 3, got 2)");
     await see("Chat", "div.permission", "Allow edit: Sort entries by sequence in tests/timeline.roc?");
@@ -129,7 +129,7 @@ try {
   });
   await step("a message sent to Scratch with Enter appears, and leaves the composer empty and focused", async () => {
     await click("Sessions", ".session button", "Scratch");
-    await see("Chat", ".pane-context", "following Scratch");
+    await see("Chat", ".pane-header .pane-title", "Scratch");
     const composer = 'section[aria-label="Chat"] input[aria-label="Message"]';
     await (await page.$(composer)).type("Find the TODOs");
     await page.keyboard.press("Enter");
@@ -145,6 +145,12 @@ try {
     await see("Chat", ".tool-card.done .tool-output", "TODO handle the empty case");
   });
   await step("a new permission prompt asks to edit", () => see("Chat", "div.permission", "Allow edit: Edit src/Main.roc to handle the empty case?", 8000));
+  await step("Stop ends the turn: the prompt goes, and the agent says it stopped", async () => {
+    await click("Chat", ".pane-header button", "Stop");
+    await see("Chat", ".markdown", "Stopped.", 8000);
+    await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
+    await see("Chat", '.pane-header [data-testid="session-status"]', "idle");
+  });
   await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the sessions", async () => {
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: true });
     await page.goto(`${base}/`);

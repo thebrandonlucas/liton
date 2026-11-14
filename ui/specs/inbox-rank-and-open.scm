@@ -13,7 +13,7 @@
     (expect-text (test-id "slot-left") "Inbox (1)Inbox (1)×Needs youFix testsclaudeneeds youCan I?SettleSnooze 1 hourWorkingRefactorcodexworkingSettleSnooze 1 hour")
     (click (test-id "show-left"))
     (click (role button :name "Fix tests"))
-    (expect-visible (text "following Fix tests"))
+    (expect-text (test-id "session-title") "Fix tests")
     (expect-attr (test-id "show-main") aria-pressed "true")
   )
 )

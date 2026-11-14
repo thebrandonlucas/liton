@@ -1,0 +1,15 @@
+(test "Liton — a Stop the daemon refuses comes back, with why"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}]}]}]}")
+    (run-effect 2)
+    (click (role button :name "Stop"))
+    (expect-text (test-id "stop-status") "Stopping…")
+    (stub-http "stop" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Rejected\":\"the agent can't be stopped\"}}")
+    (run-effect 4)
+    (expect-text (test-id "stop-failed") "Not stopped: the agent can't be stopped")
+    (expect-absent (test-id "stop-status"))
+    (expect-visible (role button :name "Stop"))
+  )
+)

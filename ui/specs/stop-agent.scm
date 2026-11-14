@@ -1,0 +1,25 @@
+(test "Liton — a chat pane's header names the agent and its place, and Stop shows Stopping at once until it stops"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\",\"model\":\"claude-opus-4\",\"workspace\":{\"directory\":\"/src/liton\"},\"branch\":\"main\"}]}]}]}")
+    (run-effect 2)
+    (expect-text (test-id "session-title") "Fix tests")
+    (expect-visible (text "claude · opus-4"))
+    (expect-visible (text "liton · main"))
+    (click (role button :name "Stop"))
+    ; Shown before the daemon answers.
+    (expect-absent (role button :name "Stop"))
+    (expect-text (test-id "stop-status") "Stopping…")
+    (stub-http "stop" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
+    (run-effect 4)
+    (expect-text (test-id "stop-status") "Stopping…")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
+    (run-effect 3)
+    ; Accepted, it polls again once the poll on its way answers.
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
+    (run-effect 5)
+    (expect-absent (test-id "stop-status"))
+    (expect-absent (role button :name "Stop"))
+  )
+)

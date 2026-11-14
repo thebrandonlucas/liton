@@ -661,6 +661,7 @@ Model := [].{
 		match sent.request {
 			SendMessage({ text, .. }) => timeline.any(|entry| entry.sequence > sent.after and entry.event == UserMessage({ text: text }))
 			AnswerPermission({ request_id, .. }) => !Chat.pending_permissions(timeline).contains(request_id) and !state.attention.any(|item| item.permissions.any(|asked| asked.request_id == request_id))
+			Cancel({ session_id }) => !Model.busy(Model.session(state, session_id).status)
 			_ => Bool.True
 		}
 	}
@@ -673,14 +674,44 @@ Model := [].{
 		session_id = match request {
 			SendMessage(message) => message.session_id
 			AnswerPermission(answered) => answered.session_id
+			Cancel(stopped) => stopped.session_id
 			_ => ""
 		}
 		sent = { serial, session_id, request, after: Model.last_sequence(state, session_id), failed: "" }
 		{ ..state, outbox: { serial, request }, sent: state.sent.append(sent), notice: "" }
 	}
 
-	## Takes the daemon's refusal of a request: a message stays, failed with
-	## `reason`, and a permission request's prompt comes back.
+	## Whether a session's agent is in a turn, which Stop ends.
+	busy : Chat.Status -> Bool
+	busy = |status| status == Running or status == AwaitingPermission
+
+	## Whether a request stops a session.
+	stops : Chat.Request, Str -> Bool
+	stops = |request, session_id|
+		match request {
+			Cancel(stopped) => stopped.session_id == session_id
+			_ => Bool.False
+		}
+
+	## Stops the agent of the session a pane shows, shown as stopping at once
+	## until its status changes. A stop refused before is asked again.
+	stop : State, Str -> State
+	stop = |state, pane_id| {
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id }))
+	}
+
+	## Whether a session is being stopped, or why it wasn't.
+	stopping : State, Str -> [NotStopping, Stopping, NotStopped(Str)]
+	stopping = |state, session_id|
+		match state.sent.find_last(|sent| Model.stops(sent.request, session_id)) {
+			Ok({ failed, .. }) if failed.is_empty() => Stopping
+			Ok({ failed, .. }) => NotStopped(failed)
+			Err(NotFound) => NotStopping
+		}
+
+	## Takes the daemon's refusal of a request: a message or stop stays,
+	## failed with `reason`, and a permission request's prompt comes back.
 	refused : State, U64, Str -> State
 	refused = |state, serial, reason| {
 		answer = |sent|
@@ -710,9 +741,10 @@ Model := [].{
 			Err(NotFound) => state
 		}
 
-	## What was sent to a session that its timeline does not show yet.
+	## The messages and answers sent to a session that its timeline does not
+	## show yet.
 	unconfirmed : State, Str -> List(Sent)
-	unconfirmed = |state, session_id| state.sent.keep_if(|sent| sent.session_id == session_id)
+	unconfirmed = |state, session_id| state.sent.keep_if(|sent| sent.session_id == session_id and !Model.stops(sent.request, session_id))
 
 	## Whether a chat pane shows a session whose timeline has not arrived yet.
 	loading : State, Str -> Bool

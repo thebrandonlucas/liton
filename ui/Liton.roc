@@ -497,12 +497,17 @@ Liton := [].{
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
 					[
-						Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
-						Html.span_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 						Engine.when(
-							shown.map(|{ pane, state }| Widgets.find(pane.widget).follows_session and Model.session(state, Model.session_of(state, pane)).status == AwaitingPermission and (Model.loading(state, Model.session_of(state, pane)) or Model.pending(state, pane.id).is_ok())),
-							|| Html.span_s(Engine.const("waiting for you"), [Engine.class("badge waiting"), Engine.test_id("session-status")]),
-							|| Engine.text(""),
+							shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
+							|| Liton.agent_header(model, id, shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
+							||
+								Html.div(
+									"pane-heading",
+									[
+										Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
+										Html.span_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
+									],
+								),
 						),
 						Engine.when(
 							row.field(|pane| Widgets.find(pane.widget).follows_session),
@@ -565,6 +570,75 @@ Liton := [].{
 		count = Model.needs_you(state)
 		if (pane.widget == "inbox" and count > 0) "${title} (${count.to_str()})" else title
 	}
+
+	## What a chat pane's header tells of its session's agent: its status as a
+	## dot and a word, its kind and model, where it works, and whether Stop
+	## shows, is on its way or was refused (`not_stopped`).
+	Agent : { title : Str, status : Str, dot : Str, reason : Str, kind : Str, place : Str, stop : [Hidden, Stop, Stopping], not_stopped : Str }
+
+	agent_of : Model.State, Model.Pane -> Agent
+	agent_of = |state, pane| {
+		session = Model.session(state, Model.session_of(state, pane))
+		# Waiting for you only while there is a prompt to answer.
+		asking = Model.loading(state, session.id) or Model.pending(state, pane.id).is_ok()
+		(status, dot) = match session.status {
+			Running => ("running", "running")
+			AwaitingPermission if asking => ("waiting for you", "waiting")
+			AwaitingPermission => ("running", "running")
+			Failed(_) => ("failed", "failed")
+			other => (Liton.status_text(other), "idle")
+		}
+		model = session.model.map_ok(|name| name.drop_prefix("${session.agent}-")) ?? ""
+		directory = session.workspace.map_ok(|workspace| workspace.directory.drop_suffix("/").split_last("/").map_ok(|parts| parts.after) ?? workspace.directory) ?? ""
+		(stop, not_stopped) = match Model.stopping(state, session.id) {
+			Stopping => (Stopping, "")
+			NotStopped(reason) if Model.busy(session.status) => (Stop, "Not stopped: ${reason}")
+			_ => (if (Model.busy(session.status)) Stop else Hidden, "")
+		}
+		{
+			title: session.title,
+			status,
+			dot,
+			reason: match session.status {
+				Failed(reason) => reason
+				_ => ""
+			},
+			kind: Str.join_with([session.agent, model].drop_if(Str.is_empty), " · "),
+			place: Str.join_with([directory, session.branch ?? ""].drop_if(Str.is_empty), " · "),
+			stop,
+			not_stopped,
+		}
+	}
+
+	## A chat pane's header: its session's title and status, Stop while its
+	## agent works, and under them the agent and where it works.
+	agent_header : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Agent) -> Elem(PaneCtx)
+	agent_header = |model, id, agent|
+		Html.div(
+			"agent-header",
+			[
+				Html.div(
+					"agent-line",
+					[
+						Html.span_s(Engine.const(""), [Engine.class_s(agent.map(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+						Html.span_s(agent.map(|shown| shown.title), [Engine.class("pane-title"), Engine.attr_s("title", agent.map(|shown| shown.title)), Engine.test_id("session-title")]),
+						Html.span_s(agent.map(|shown| shown.status), [Engine.class_s(agent.map(|shown| "status-word ${shown.dot}")), Engine.attr_s("title", agent.map(|shown| shown.reason)), Engine.test_id("session-status")]),
+						Html.span_s(agent.map(|shown| shown.not_stopped), [Engine.class("stop-status failed"), Engine.test_id("stop-failed")]),
+						Engine.switch(
+							agent.map(|shown| shown.stop),
+							[Hidden, Stop, Stopping],
+							|stop|
+								match stop {
+									Hidden => Engine.text("")
+									Stop => Html.button("Stop", [Engine.class("stop"), Engine.attr("title", "Stop the agent")], model.update_by(id, Model.stop))
+									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("stop-status"), Engine.test_id("stop-status")])
+								},
+						),
+					],
+				),
+				Html.div("agent-meta", [Html.span_s(agent.map(|shown| shown.kind), [Engine.class("agent-kind")]), Html.span_s(agent.map(|shown| shown.place), [Engine.class("agent-place")])]),
+			],
+		)
 
 	## What needs you, then what failed, is done or working, then what you set
 	## aside, folded away.

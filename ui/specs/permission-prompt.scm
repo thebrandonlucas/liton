@@ -10,7 +10,7 @@
     ; Selecting the session makes the chat follow it, and polls for its
     ; timeline once the poll on its way, of the first session's, answers.
     (click (role button :name "Fix tests"))
-    (expect-visible (text "following Fix tests"))
+    (expect-text (test-id "session-title") "Fix tests")
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
     (run-effect 3)
