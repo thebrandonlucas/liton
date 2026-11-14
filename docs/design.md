@@ -51,7 +51,7 @@ A setup is what a daemon and its clients start from: the remotes to connect, the
 - **Built on another.** A setup imports another as a package and changes it with `Setup.with_remote`, `without_remote`, `with_transformer`, `without_transformer`, `with_preset`, `without_preset`, `with_default_preset` and `merge`, which adds a second setup's remotes and presets over the first's by name. `examples/litonfile-team/` builds on liton's. An app can't be imported, so what a setup shares is a module of a package, as `Default` is, with a Litonfile beside it that only prints it.
 - **Evaluated once.** `liton setup [path]` runs a Litonfile with `roc`, reads back what it prints and writes it to `liton.setup.json`, its fields in order, so the same Litonfile gives the same bytes. That file is the setup evaluated.
 - **Read by the daemon.** At start the daemon reads the setup `LITON_SETUP` names, by default `liton.setup.json` if there is one, and otherwise liton's own. The environment still overrides it: `LITON_PROVIDERS`'s remotes take the place of the setup's of the same name and add the rest, and `LITON_TRANSFORMERS` adds transformers. A setup that can't be read, or that names a transformer the daemon doesn't have or a malformed remote, stops the daemon with why.
-- **Offered to clients.** The manifest's `setup` (protocol.md) holds the presets and the default, each preset a snapshot with a name.
+- **Offered to clients.** The manifest's `setup` (protocol.md) holds the presets and the default. The UI's preset picker shows them in place of liton's own, which it keeps while the daemon offers none, and a browser with no layout of its own starts with the default. A preset is a snapshot with a name, so loading one is loading a snapshot: the user changes it from there, and the browser keeps their layout.
 - **Pinned.** A setup imported by URL is pinned by the hash in its URL, as every Roc package is, so a Litonfile's imports are its lockfile for now. A lockfile of its own waits on setups that pin what Roc doesn't, such as widget packages.
 
 ### Providers
@@ -114,7 +114,7 @@ The UI is four layers. [docs/research/agent-ui-survey.md](research/agent-ui-surv
   - *Room*: people and agents together, with code panes following the room's focus;
   - *Tiling*: free splits and tabs, Hyprland-like.
 - **Widget:** one view bound to capabilities. A widget declares, as data apart from its code, the capabilities it needs, the slots it fits and its minimum size, when it is relevant (a small expression over the focus), its typed **options** from a closed set (Bool, Enum, Text, Int, CapabilityRef, ContextRef, ThemeToken) and its styleable **parts**.
-- **Preset:** a shell, the widgets in its slots, their options and a theme. A snapshot holds presets; shipped ones are Developer (Workbench, the default), Inbox and Team (Room).
+- **Preset:** a shell, the widgets in its slots, their options and a theme. A snapshot holds presets; shipped ones are Developer (Workbench, the default), Inbox and Team (Room). A daemon's setup declares the presets its clients offer (Setups).
 - **Escape hatches**, each a rung further from the presets: theme tokens; CSS per widget instance, targeting only its declared parts; a declarative widget loaded at runtime, which composes built-in pieces (list, card, text, badge, button, split, timeline) with capability queries and commands, and is safe to share in a snapshot because it does nothing beyond them; and a full Roc widget, compiled in.
 
 Using it:

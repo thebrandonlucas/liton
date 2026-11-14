@@ -1,0 +1,16 @@
+(test "Liton — the daemon's setup offers its presets in place of liton's own, and starts with its default"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[],\"setup\":{\"default_preset\":\"Review\",\"presets\":[{\"name\":\"Developer\",\"snapshot\":{\"version\":4,\"shell\":\"Workbench\",\"collapsed\":[],\"columns\":[{\"id\":\"column-1\",\"size\":1,\"tabbed\":true,\"active\":\"pane-1\",\"panes\":[{\"id\":\"pane-1\",\"widget\":\"sessions\",\"pinned\":\"\",\"options\":[]}]},{\"id\":\"column-2\",\"size\":1,\"tabbed\":true,\"active\":\"pane-2\",\"panes\":[{\"id\":\"pane-2\",\"widget\":\"chat\",\"pinned\":\"\",\"options\":[]}]},{\"id\":\"column-3\",\"size\":1,\"tabbed\":true,\"active\":\"pane-3\",\"panes\":[{\"id\":\"pane-3\",\"widget\":\"capabilities\",\"pinned\":\"\",\"options\":[]}]}]}},{\"name\":\"Review\",\"snapshot\":{\"version\":4,\"shell\":\"Tiling\",\"collapsed\":[],\"columns\":[{\"id\":\"column-1\",\"size\":1,\"tabbed\":false,\"active\":\"pane-1\",\"panes\":[{\"id\":\"pane-1\",\"widget\":\"chat\",\"pinned\":\"\",\"options\":[{\"key\":\"show_status\",\"value\":\"false\"}]}]}]}}]}}")
+    (run-effect 1)
+    (expect-visible (role region :name "Chat"))
+    (expect-absent (role region :name "Sessions"))
+    (click (role button :name "Settings"))
+    (expect-attr (role button :name "Review preset") aria-pressed "true")
+    (expect-attr (role button :name "Developer preset") aria-pressed "false")
+    (expect-absent (role button :name "Inbox preset"))
+    (click (role button :name "Developer preset"))
+    (expect-attr (role button :name "Developer preset") aria-pressed "true")
+    (expect-attr (role button :name "Review preset") aria-pressed "false")
+    (expect-visible (role region :name "Sessions"))
+  )
+)

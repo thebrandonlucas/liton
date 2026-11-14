@@ -8,6 +8,7 @@ import cap.Chat
 import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
+import setup.Setup
 import Model
 import Widgets
 
@@ -76,10 +77,14 @@ Liton := [].{
 			|_| [Http({ method: "GET", url: "/liton/v1/manifest", headers: [], body: "", timeout_ms: 5000 })],
 			model.on_result(
 				|state, _, res| {
+					text = Engine.http_text(res) ?? ""
 					decoded : Try(Manifest.Offered, _)
-					decoded = Json.parse(Engine.http_text(res) ?? "")
+					decoded = Json.parse(text)
+					# The setup's presets, which a daemon may leave out.
+					set_up : Try({ setup : Setup.Offered }, _)
+					set_up = Json.parse(text)
 					match decoded {
-						Ok(offered) => Model.advertise(state, offered)
+						Ok(offered) => Model.set_up(Model.advertise(state, offered), set_up.map_ok(|manifest| manifest.setup) ?? { presets: [], default_preset: "" })
 						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
@@ -175,9 +180,16 @@ Liton := [].{
 						Html.div(
 							"choices",
 							[
-								Html.button("Developer preset", [Html.flag("aria-pressed", model.signal().map(|state| state.shell == Workbench and !Liton.inbox_preset(state)))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.developer)))),
-								Html.button("Inbox preset", [Html.flag("aria-pressed", model.signal().map(Liton.inbox_preset))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.inbox)))),
-								Html.button("Tiling preset", [Html.flag("aria-pressed", model.signal().map(|state| state.shell == Tiling))], model.update(|state| Model.with_snapshot_text(Model.layout(state, Model.tiling)))),
+								Engine.each(
+									model.signal().map(|state| state.presets),
+									|preset| preset.name,
+									|row|
+										Html.button_s(
+											row.key().map(|name| "${name} preset"),
+											[Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |name, state| Model.preset_shown(state, name)))],
+											model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name))),
+										),
+								),
 							],
 						),
 						Html.h3("Layout", ""),
@@ -443,9 +455,6 @@ Liton := [].{
 		count = Model.needs_you(state)
 		if (pane.widget == "inbox" and count > 0) "${title} (${count.to_str()})" else title
 	}
-
-	inbox_preset : Model.State -> Bool
-	inbox_preset = |state| state.shell == Workbench and (state.columns.first().map_ok(|column| column.panes.any(|pane| pane.widget == "inbox")) ?? Bool.False)
 
 	## What needs you, then what failed, is done or working, then what you set
 	## aside, folded away.

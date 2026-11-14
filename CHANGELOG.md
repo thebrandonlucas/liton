@@ -30,6 +30,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Add providers outside the daemon, written in any language, or other liton daemons, with `LITON_PROVIDERS="name=http://host:port,…"`: each serves the same `/liton/v1` protocol, and its sessions, workspaces and timelines show up beside your own, named `<name>/…`, and take your messages. The daemon asks each at most once a second (`LITON_PROVIDERS_INTERVAL_MS`) however many clients poll, and one that is down leaves out only its own sessions until it answers again. `examples/provider-echo/` is the smallest such provider.
 - Describe a setup in a `Litonfile.roc`, a Roc program: the providers outside the daemon to connect, the transformers it runs and the presets Settings offers. It builds on liton's own, or on another setup it imports, and changes what it needs (`examples/litonfile-team/`). `liton setup [path]` evaluates it to `liton.setup.json`, the same file every time.
 - The daemon starts from `liton.setup.json`, or the setup `LITON_SETUP` names: its remotes and transformers, with `LITON_PROVIDERS` and `LITON_TRANSFORMERS` added over them, and its presets in the manifest.
+- Settings offers the presets of the daemon's setup, and a browser with no layout of its own starts with the setup's default. Change it from there, and the browser keeps your layout. A preset shows as picked while the layout is still its own.
 
 ### Changed
 

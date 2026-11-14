@@ -1,9 +1,10 @@
-// node e2e/journey.mjs CDP, after `zig build ui daemon`: headless Chrome drives
-// the UI against a daemon serving the mock provider, on a free port with a
-// fresh database. CDP is roc-signals's DevTools client (its
-// tests/browser/cdp.mjs), which `zig build e2e` passes. CHROME names the browser
-// (default `chromium` on PATH).
-import { spawn } from "node:child_process";
+// node e2e/journey.mjs CDP, after `zig build ui daemon cli`: headless Chrome
+// drives the UI against a daemon serving the mock provider, on a free port
+// with a fresh database and the setup liton's Litonfile evaluates to, with a
+// preset added. CDP is roc-signals's DevTools client (its
+// tests/browser/cdp.mjs), which `zig build e2e` passes. CHROME names the
+// browser (default `chromium` on PATH).
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -25,14 +26,21 @@ const fail = (error) => {
   process.exit(1);
 };
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "liton-e2e-"));
+process.on("exit", () => fs.rmSync(scratch, { recursive: true, force: true }));
+// liton's setup as `liton setup` evaluates its Litonfile, with a preset of its own.
+check = "liton setup evaluates liton's Litonfile";
+await new Promise((resolve) => execFile(path.join(repo, "zig-out/bin/liton"), ["setup", path.join(repo, "Litonfile.roc")], { cwd: scratch }, (error, _, stderr) => (error ? fail(stderr) : resolve())));
+const setup = JSON.parse(fs.readFileSync(path.join(scratch, "liton.setup.json"), "utf8"));
+const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } };
+fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, review] }));
+check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
   stdio: ["ignore", "ignore", "inherit"],
-  env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db"), LITON_UI: path.join(repo, "zig-out/www") },
+  env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: path.join(scratch, "liton.db"), LITON_UI: path.join(repo, "zig-out/www"), LITON_SETUP: path.join(scratch, "liton.setup.json") },
 });
 process.on("exit", () => {
   if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");
-  fs.rmSync(scratch, { recursive: true, force: true });
 });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => process.exit(1));
 daemon.on("error", fail);
@@ -90,6 +98,13 @@ try {
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });
+  await step("the preset picker offers the setup's own preset, which loads its layout", async () => {
+    await page.click(".settings-toggle");
+    await click("Settings", "button", "Review preset");
+    await until("only Changes", () => page.evaluate(() => [...document.querySelectorAll("section.pane")].map((s) => s.getAttribute("aria-label")).join() === "Changes"));
+    await click("Settings", "button", "Developer preset");
+    await page.click(".settings-toggle");
+  });
   await step("focusing the login fix shows its changed file in Changes, and picking it shows a hunk", async () => {
     await click("Sessions", ".session button", "Fix the login redirect");
     await see("Changes", ".git-status", "fix-auth");
@@ -142,7 +157,7 @@ try {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });
   await browser.close();
-  console.log("ok   e2e journey: panes, sessions, the inbox, changes, permission prompts and tool cards against the mock daemon");
+  console.log("ok   e2e journey: panes, sessions, the inbox, a setup's preset, changes, permission prompts and tool cards against the mock daemon");
   process.exit(0);
 } catch (error) {
   fail(error);

@@ -263,6 +263,7 @@ pub fn build(b: *std.Build) void {
     run_e2e.has_side_effects = true;
     run_e2e.step.dependOn(&build_ui.step);
     run_e2e.step.dependOn(&build_daemon.step);
+    run_e2e.step.dependOn(&build_cli.step);
     e2e_step.dependOn(&run_e2e.step);
     const run_protocol = b.addSystemCommand(&.{ "node", "e2e/protocol.mjs" });
     run_protocol.has_side_effects = true;

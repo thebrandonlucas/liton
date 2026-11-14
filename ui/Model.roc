@@ -84,6 +84,12 @@ Model := [].{
 		show_settings : Bool,
 		snapshot_text : Str,
 
+		## The presets settings offer: the daemon's setup's, or liton's own until
+		## it offers some. `kept_layout` is whether the layout shown is the one
+		## the browser kept, which a setup's starting preset doesn't replace.
+		presets : List(Setup.Preset),
+		kept_layout : Bool,
+
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
@@ -119,7 +125,8 @@ Model := [].{
 	tiling = Model.layout_of(Default.tiling.snapshot)
 
 	initial : Str -> State
-	initial = |saved|
+	initial = |saved| {
+		restored = Model.restore(saved)
 		Model.layout(
 			{
 				capabilities: [],
@@ -148,13 +155,16 @@ Model := [].{
 				notice: "",
 				show_settings: Bool.False,
 				snapshot_text: "",
+				presets: Default.setup.presets,
+				kept_layout: restored.is_ok(),
 				git: [],
 				git_changes: [],
 				git_hunks: [],
 				git_panes: [],
 			},
-			Model.restore(saved) ?? Model.developer,
+			restored ?? Model.developer,
 		)
+	}
 
 	## Shows a layout, counting ids on from the numbers ending theirs. A
 	## Workbench shows its main area first.
@@ -213,6 +223,27 @@ Model := [].{
 
 	advertise : State, Manifest.Offered -> State
 	advertise = |state, offered| { ..state, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
+
+	## Offers the presets the daemon's setup offers, if any, and shows the
+	## one it starts with, unless the layout is the one the browser kept.
+	set_up : State, Setup.Offered -> State
+	set_up = |state, offered|
+		match Setup.starting(offered) {
+			Err(NoPresets) => state
+			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
+			Ok(starting) => { ..Model.layout(state, Model.layout_of(starting.snapshot)), presets: offered.presets, kept_layout: Bool.True }
+		}
+
+	use_preset : State, Str -> State
+	use_preset = |state, name|
+		match state.presets.find_first(|preset| preset.name == name) {
+			Ok(preset) => Model.layout(state, Model.layout_of(preset.snapshot))
+			Err(NotFound) => state
+		}
+
+	## Whether the layout is the preset's, as it was loaded.
+	preset_shown : State, Str -> Bool
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed })
 
 	## Every pane, column by column.
 	panes : State -> List(Pane)
@@ -913,6 +944,17 @@ expect {
 	saved = Json.to_str(Model.snapshot(Model.layout(Model.initial(""), Model.tiling)))
 	Json.to_str(Model.snapshot(Model.initial(saved))) == saved
 }
+
+# A setup's presets replace liton's own, and its starting one shows unless
+# the browser kept a layout; a preset is shown until the layout changes.
+expect {
+	review = { name: "Review", snapshot: { ..Default.tiling.snapshot, columns: Default.tiling.snapshot.columns.drop_first(1) } }
+	fresh = Model.set_up(Model.initial(""), { presets: [Default.developer, review], default_preset: "Review" })
+	kept = Model.set_up(Model.initial(Json.to_str(Model.snapshot(Model.initial("")))), { presets: [review], default_preset: "Review" })
+	fresh.presets.map(|preset| preset.name) == ["Developer", "Review"] and Model.preset_shown(fresh, "Review") and !Model.preset_shown(Model.use_preset(fresh, "Developer"), "Review") and kept.shell == Workbench and kept.presets == [review] and !Model.preset_shown(Model.close_pane(fresh, "pane-2"), "Review")
+}
+
+expect Model.set_up(Model.initial(""), { presets: [], default_preset: "" }).presets == Default.setup.presets
 
 expect {
 	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
