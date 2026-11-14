@@ -7,6 +7,7 @@ import Capability
 import Chat
 import Context
 import Manifest
+import Voice
 import WorkspaceGit
 import Workspaces
 
@@ -35,7 +36,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Status(Voice.Status)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -46,7 +47,7 @@ Protocol := [].{
 	## What a topic follows. A `Changes` or `File` scope is named
 	## `Uncommitted`, `AgainstBase` or `Commit:<sha>`, and a `File` path is
 	## written with its `%` as `%25` and its `/` as `%2F`.
-	Subject : [Sessions, Timeline(Str), Importable, Items, WorkspaceList, Changes({ context : Context.Id, scope : WorkspaceGit.Scope }), File({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str })]
+	Subject : [Sessions, Timeline(Str), Importable, Items, WorkspaceList, Changes({ context : Context.Id, scope : WorkspaceGit.Scope }), File({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str }), VoiceStatus]
 
 	## The topics of each capability providers offer, as the manifest lists
 	## them. A transformer declares those of the capability it offers.
@@ -55,6 +56,7 @@ Protocol := [].{
 		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>", "importable"] },
 		{ capability: Capability.workspaces_v1, patterns: ["list"] },
 		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
+		{ capability: Capability.voice_v1, patterns: ["status"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -89,6 +91,7 @@ Protocol := [].{
 				"workspaces.v1" if topic == "list" => Ok(WorkspaceList)
 				"workspace.git.v1" if topic.starts_with("changes/") => changes_subject(topic.drop_prefix("changes/"))
 				"workspace.git.v1" if topic.starts_with("file/") => file_subject(topic.drop_prefix("file/"))
+				"voice.v1" if topic == "status" => Ok(VoiceStatus)
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -103,6 +106,7 @@ Protocol := [].{
 			Importable => { capability: "chat.v1", topic: "importable" }
 			Items => { capability: "attention.v1", topic: "items" }
 			WorkspaceList => { capability: "workspaces.v1", topic: "list" }
+			VoiceStatus => { capability: "voice.v1", topic: "status" }
 			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
 			File({ context, scope, path }) => {
 				escaped = Str.join_with(path.split_on("%").map(|part| Str.join_with(part.split_on("/"), "%2F")), "%25")

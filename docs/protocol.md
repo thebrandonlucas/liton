@@ -97,7 +97,8 @@ Error codes are a closed set shared by all capabilities:
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage` and
 `AnswerPermission`; `attention.v1`'s `ListItems`, `Settle`, `Snooze` and
-`Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
+`Unsettle`; `workspaces.v1`'s `ListWorkspaces`; `voice.v1`'s `Begin`, `Finish`
+and `Cancel` (Audio, below).
 
 ### Subscribe
 
@@ -132,6 +133,7 @@ events when nothing changed:
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
 | `workspace.git.v1` | `file/<context>/<scope>/<path>` | snapshot | `{"File": {"path", "hunks"}}` |
+| `voice.v1` | `status` | snapshot | `{"Status": {"stt": "Ready"}}`, or `"Loading"`, or `{"Down": reason}` |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -160,6 +162,47 @@ at most one round of upstream work.
 The same topics will also stream: `GET /liton/v1/stream?topic=…` as server-sent
 events with the cursor as the event id, so a reconnect resumes with
 `Last-Event-ID`. Polling stays as the fallback.
+
+### Audio
+
+`voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
+Its audio travels outside JSON, in numbered chunks the daemon acknowledges, so
+a dropped link loses nothing:
+
+```
+POST /liton/v1/audio/voice.v1/<utterance_id>/<seq>    body: audio/L16;rate=16000;channels=1
+{"Ok": {"acked": 4}}
+```
+
+A chunk is raw 16 kHz 16-bit mono PCM, little-endian, best 1 s (32,000
+bytes), at most 64 KiB (a bigger one is answered `413`). The client names the utterance, 1 to 64
+letters, digits, `-` and `_`, and numbers its chunks from 0, at most 300 (5
+minutes). The answer acks the highest seq the daemon holds with every one
+before it, and leaves `acked` out until it holds chunk 0. A chunk sent again is
+acked again and kept once, so a client resends until acked. Errors are a
+call's: `BadRequest` for a bad address or an odd number of bytes,
+`Unsupported` when the daemon offers no `voice.v1`.
+
+```json
+{ "capability": "voice.v1", "request": { "Begin": { "utterance_id": "u1", "purpose": "Dictation" } } }
+{ "capability": "voice.v1", "request": { "Finish": { "utterance_id": "u1", "last_seq": 4 } } }
+{ "capability": "voice.v1", "request": { "Cancel": { "utterance_id": "u1" } } }
+```
+
+`Begin` answers `Accepted` when the engine is up, else `Unavailable`, so a
+client can say so before recording; its `purpose` is `Dictation` or
+`{"Conversation": {"session_id"}}`. `Finish` transcribes chunks 0 to
+`last_seq` once the daemon holds them all, `{"Transcript": {"text"}}`, or
+answers `{"Missing": {"from_seq"}}`, the first it lacks, for the client to
+send before finishing again. It keeps the transcript in place of the audio, so
+a `Finish` asked again answers the same. An engine that can't be reached is
+`Unavailable`. `Cancel` drops the audio held. The daemon keeps an utterance's
+audio and transcript 10 minutes at most.
+
+The daemon's `local-speech` provider offers `voice.v1` when `LITON_STT` names
+a speech engine on its machine: `sherpa=ws://127.0.0.1:6006`,
+sherpa-onnx's offline WebSocket server, or `whisper=http://127.0.0.1:8178`,
+whisper.cpp's whisper-server (`rig/speech/` runs either).
 
 ## Providers outside the daemon
 
