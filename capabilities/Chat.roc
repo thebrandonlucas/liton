@@ -1,6 +1,6 @@
 ## `chat.v1`: agent sessions as a timeline of events. The UI lists sessions,
-## watches one session's timeline from a sequence number on, sends messages
-## and answers the agent's permission requests.
+## watches one session's timeline from a sequence number on, sends messages,
+## answers the agent's permission requests, and stops a running agent.
 Chat := [].{
 	Status : [Idle, Running, AwaitingPermission, Finished, Failed(Str)]
 
@@ -27,6 +27,7 @@ Chat := [].{
 		WatchSession({ session_id : Str, after : U64 }),
 		SendMessage({ session_id : Str, text : Str }),
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool }),
+		Cancel({ session_id : Str }),
 	]
 
 	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str)]

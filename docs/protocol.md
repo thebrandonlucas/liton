@@ -95,9 +95,14 @@ Error codes are a closed set shared by all capabilities:
 | `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`) |
 | `Overloaded` | try later (not used yet) |
 
-The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage` and
-`AnswerPermission`; `attention.v1`'s `ListItems`, `Settle`, `Snooze` and
-`Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
+The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
+`AnswerPermission` and `Cancel`; `attention.v1`'s `ListItems`, `Settle`,
+`Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
+
+`{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
+own stop button does, and is `Accepted` once the provider stopped it (from
+Paseo, its `cancel_agent_request`). A session that isn't running is left as
+it is, and accepted too.
 
 ### Subscribe
 
@@ -192,7 +197,7 @@ A name is letters, digits, `-` and `_`. Then:
   (`chat.v1`, `workspaces.v1`, `workspace.git.v1`). A remote's transformers
   are left out: the daemon's own derive from every provider (Transformers).
 - **Calls.** A call to a remote's session (`SendMessage`, `WatchSession`,
-  `AnswerPermission`) is forwarded to it with the session and provider as it
+  `AnswerPermission`, `Cancel`) is forwarded to it with the session and provider as it
   names them, and its answer returned as given. Lists (`ListSessions`,
   `ListWorkspaces`) merge the remotes' with the daemon's own.
 - **Topics.** A topic of a remote's session or workspace

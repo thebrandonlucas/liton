@@ -63,6 +63,7 @@ Remote := [].{
 			WatchSession({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			SendMessage({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			AnswerPermission({ session_id, .. }) => Remote.owner(endpoints, session_id)
+			Cancel({ session_id }) => Remote.owner(endpoints, session_id)
 		}
 
 	## The topics of each remote a merged list needs: workspaces are counted
@@ -100,6 +101,7 @@ Remote := [].{
 				WatchSession(watch) => WatchSession({ ..watch, session_id: their_id(watch.session_id) })
 				SendMessage(message) => SendMessage({ ..message, session_id: their_id(message.session_id) })
 				AnswerPermission(answer) => AnswerPermission({ ..answer, session_id: their_id(answer.session_id) })
+				Cancel({ session_id }) => Cancel({ session_id: their_id(session_id) })
 			}
 		{ capability: "chat.v1", provider: provider.map_ok(their_id), request }
 	}
@@ -208,6 +210,7 @@ expect Remote.serves("peer", Err(Missing)) and Remote.serves("peer", Ok("peer/mo
 
 expect Remote.call("peer", Ok("peer/c/mock"), SendMessage({ session_id: "peer/c/s1", text: "Hi" })) == { capability: "chat.v1", provider: Ok("c/mock"), request: SendMessage({ session_id: "c/s1", text: "Hi" }) }
 expect Remote.call("peer", Err(Missing), AnswerPermission({ session_id: "peer/s1", request_id: "r1", allowed: Bool.True })).request == AnswerPermission({ session_id: "s1", request_id: "r1", allowed: Bool.True })
+expect Remote.call("peer", Err(Missing), Cancel({ session_id: "peer/s1" })).request == Cancel({ session_id: "s1" }) and Remote.chat_owner([echo, peer], Cancel({ session_id: "peer/s1" })) == Ok(peer)
 
 # Sessions, and the projects and workspaces that list them, are named under the remote.
 expect {

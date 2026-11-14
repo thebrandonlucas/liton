@@ -437,6 +437,22 @@ chat_call! = |context, provider, asked| {
 					NoSession => Ok(no_session(session_id))
 				}
 			}
+		Cancel({ session_id }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "DELETE FROM entries WHERE session_id = :session_id AND visible_at > :now;", params: { session_id, now: now_ms!() } })?
+					timeline = visible!(db, session_id, 0)?
+					schedule!(db, session_id, |_| Mock.on_cancel(timeline))?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-cancel-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.cancel_request(session_id, request_id), request_id, Paseo.canceled)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
+			}
 	}
 }
 

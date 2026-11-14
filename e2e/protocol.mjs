@@ -126,6 +126,22 @@ try {
     assert.equal((await call("attention.v1", { Settle: { session_id: "nope", signature } })).Err.code, "NotFound");
     assert.equal((await call("attention.v1", { Settle: {} })).Err.code, "BadRequest");
   });
+  await step("Cancel stops a running session's turn, and leaves one that isn't running be", async () => {
+    const events = async () => (await call("chat.v1", { WatchSession: { session_id: "fix-auth", after: 0 } })).Ok.Entries.map((e) => e.event);
+    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "Take your time" } }), { Ok: "Accepted" });
+    for (const start = Date.now(); (await events()).at(-1).StatusChanged !== "Running"; await pause(100)) {
+      if (Date.now() - start > 3000) throw new Error("fix-auth isn't running after 3 s");
+    }
+    assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "fix-auth" } }), { Ok: "Accepted" });
+    const stopped = await events();
+    assert.deepEqual(stopped.slice(-2), [{ AgentMessage: { text: "Stopped." } }, { StatusChanged: "Idle" }]);
+    await pause(4200);
+    assert.equal((await events()).length, stopped.length);
+    assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "fix-auth" } }), { Ok: "Accepted" });
+    assert.equal((await events()).length, stopped.length);
+    assert.equal((await call("chat.v1", { Cancel: { session_id: "nope" } })).Err.code, "NotFound");
+  });
   await step("the old /api endpoints are gone", async () => {
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/manifest`)).status, 404);
   });

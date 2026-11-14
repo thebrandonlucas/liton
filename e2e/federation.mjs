@@ -101,6 +101,7 @@ try {
   await step("calls to a remote's session reach it, as it names it", async () => {
     assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "echo/echo", text: "hi" } }), { Ok: "Accepted" });
     assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "peer/notes", text: "hi peer" } }, "peer/mock"), { Ok: "Accepted" });
+    assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "peer/notes" } }), { Ok: "Accepted" });
     assert.equal((await call("chat.v1", { SendMessage: { session_id: "echo/hello", text: "hi" } })).Err.code, "Refused");
     assert.equal((await call("chat.v1", { SendMessage: { session_id: "echo/echo", text: "hi" } }, "mock")).Err.code, "NotFound");
     assert.equal((await call("chat.v1", { WatchSession: { session_id: "echo/echo", after: 0 } })).Ok.Entries[0].sequence, 1);

@@ -31,6 +31,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Describe a setup in a `Litonfile.roc`, a Roc program: the providers outside the daemon to connect, the transformers it runs and the presets Settings offers. It builds on liton's own, or on another setup it imports, and changes what it needs (`examples/litonfile-team/`). `liton setup [path]` evaluates it to `liton.setup.json`, the same file every time.
 - The daemon starts from `liton.setup.json`, or the setup `LITON_SETUP` names: its remotes and transformers, with `LITON_PROVIDERS` and `LITON_TRANSFORMERS` added over them, and its presets in the manifest.
 - Settings offers the presets of the daemon's setup, and a browser with no layout of its own starts with the setup's default. Change it from there, and the browser keeps your layout. A preset shows as picked while the layout is still its own.
+- Stop a running agent with chat.v1's `Cancel` call (`liton call chat.v1 '{"Cancel":{"session_id":"…"}}'`), for Paseo's agents, the mock's and those of providers outside the daemon.
 
 ### Changed
 

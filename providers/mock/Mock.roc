@@ -84,6 +84,17 @@ Mock := [].{
 		}
 	}
 
+	## What follows stopping a session whose timeline so far is `timeline`,
+	## once the rest of its script is dropped: its pending requests denied,
+	## and it idle. Nothing when it isn't running.
+	on_cancel : List(Chat.Entry) -> List(Scheduled)
+	on_cancel = |timeline|
+		if [Running, AwaitingPermission].contains(Mock.status(timeline)) {
+			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
+		} else {
+			[]
+		}
+
 	## A session's status: the last status its timeline reports.
 	status : List(Chat.Entry) -> Chat.Status
 	status = |timeline|
@@ -146,6 +157,12 @@ expect Mock.on_message("hi", 7).len() == 7
 expect Mock.on_answer("p", Bool.False, 3).len() == 3
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
+
+expect {
+	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested({ request_id: "p1", tool: "edit", description: "" }) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
+	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
+		and Mock.on_cancel([{ sequence: 1, event: StatusChanged(Idle) }]) == []
+}
 expect Mock.git("main", Uncommitted, NoFile).diff == []
 expect Mock.git("fix-auth", Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), Selected("tests/Auth.roc")).diff.map(|shown| shown.hunks.len()) == [1]
 
