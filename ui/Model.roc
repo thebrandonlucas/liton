@@ -120,6 +120,9 @@ Model := [].{
 		## clipboard; `copied` is "" again if the clipboard refused it.
 		copied : Str,
 		clipboard : { serial : U64, key : Str, text : Str },
+
+		## How many times each chat pane jumped to its latest entry.
+		jumps : List({ pane : Str, count : U64 }),
 	}
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
@@ -190,6 +193,7 @@ Model := [].{
 				menu: "",
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
+				jumps: [],
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -336,6 +340,13 @@ Model := [].{
 	## Takes the clipboard's answer: refused, the block isn't copied after all.
 	copy_answered : State, U64, Bool -> State
 	copy_answered = |state, serial, copied| if (copied or serial != state.clipboard.serial) state else { ..state, copied: "", notice: "The browser didn't let liton copy that." }
+
+	jumps_of : State, Str -> U64
+	jumps_of = |state, pane_id| state.jumps.find_first(|jumped| jumped.pane == pane_id).map_ok(|jumped| jumped.count) ?? 0
+
+	## Scrolls a chat pane's timeline to its latest entry.
+	jump_to_latest : State, Str -> State
+	jump_to_latest = |state, pane_id| { ..state, jumps: state.jumps.drop_if(|jumped| jumped.pane == pane_id).append({ pane: pane_id, count: Model.jumps_of(state, pane_id) + 1 }) }
 
 	## How many sessions are running.
 	running : State -> U64

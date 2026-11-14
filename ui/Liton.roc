@@ -157,6 +157,7 @@ Liton := [].{
 		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
 		# A composer cleared by sending is built anew, out of focus: focus it.
 		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Focus("latest")], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
 			|clipboard| [Ports.copy.request(clipboard.text)],
@@ -850,6 +851,11 @@ Liton := [].{
 				Html.div(
 					"timeline-scroll",
 					[
+						# Shown by CSS once scrolled up from the newest entry, where
+						# browsers can (animation-timeline). Jumping builds this pane's
+						# anchor anew, so it is the one `Liton.effects` focuses.
+						Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model0.update_by(id, Model.jump_to_latest))]),
+						Engine.remount_on(id.map2(model0.signal(), |pane_id, state| Model.jumps_of(state, pane_id)), || Engine.element("span", [Engine.ref("latest"), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
 						Html.ul(
 							[Engine.class("timeline"), Engine.attr("data-part", "timeline")],
 							[

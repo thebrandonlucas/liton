@@ -41,6 +41,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The daemon transcribes dictation on your own machine: set `LITON_STT=sherpa=ws://127.0.0.1:6006` (Parakeet in sherpa-onnx) or `LITON_STT=whisper=http://127.0.0.1:8178` (whisper.cpp), which `rig/speech/` runs, and it offers `voice.v1`. Clients post the audio in acknowledged 1 s chunks to `/liton/v1/audio/voice.v1/<utterance>/<seq>`, so a dropped link loses nothing, and `Finish` answers the transcript (docs/protocol.md, Audio).
 - Messages in the chat show as Markdown: headings, bold, italic and struck-through text, inline code, lists (nested too), quotes and links, which open in a new tab; a table shows as its text, in a code block. Code blocks are highlighted for Roc, shell, JSON, TypeScript and JavaScript, Rust, Zig, Go and C-like languages, Python, Nix, YAML and diffs, and have a Copy button that says "Copied" as you press it. Only links to the web or to email addresses work, and any HTML in a message shows as text.
 - A chat pane's header shows the agent it shows: the session's title (in full on hover), a dot and word for its status (pulsing while running, marked while waiting for you, red when it failed), the agent and its model, the workspace's folder and branch, and a Stop button while it works. Stop shows "Stopping…" at once, and if the agent can't be stopped, says why and offers Stop again.
+- "Jump to latest" appears over a chat scrolled up from its newest message, in browsers with scroll-driven CSS animations, such as Chrome and Edge.
 
 ### Changed
 
