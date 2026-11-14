@@ -3,9 +3,11 @@
 import cap.Attention
 import cap.Capability
 import cap.Chat
+import cap.Context
 import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
+import cap.Workspaces
 import setup.Default
 import setup.Setup
 import Widgets
@@ -45,7 +47,12 @@ Model := [].{
 		transformers : List(Manifest.Transformer),
 		sessions : List(Chat.Session),
 		timelines : List(Timeline),
-		focus : Str,
+
+		## What panes that follow the focus show, `Session("")` for nothing.
+		focus : Context.Id,
+
+		## The projects and workspaces the daemon lists.
+		workspaces : Workspaces.Listed,
 		shell : Shell,
 		columns : List(Column),
 		collapsed : List(Slot),
@@ -94,8 +101,8 @@ Model := [].{
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
 		git : List(Git),
-		git_changes : List({ session_id : Str, changes : WorkspaceGit.Changes }),
-		git_hunks : List({ session_id : Str, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk) }),
+		git_changes : List({ context : Context.Id, changes : WorkspaceGit.Changes }),
+		git_hunks : List({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk) }),
 
 		## What each Changes pane shows.
 		git_panes : List(GitPane),
@@ -129,7 +136,7 @@ Model := [].{
 	## cursors the UI had.
 	Poll : { serial : U64, subjects : List(Protocol.Subject), topics : List(Protocol.Wanted) }
 
-	Git : { session_id : Str, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
+	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
 	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
 
@@ -158,7 +165,8 @@ Model := [].{
 				transformers: [],
 				sessions: [],
 				timelines: [],
-				focus: "",
+				focus: Session(""),
+				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
 				columns: [],
 				collapsed: [],
@@ -483,18 +491,48 @@ Model := [].{
 	activate_tab : State, Str -> State
 	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|pane| pane.id == id)) { ..column, active: id } else column) }
 
-	## Pins a following pane to the focused session, or lets a pinned one follow.
+	## Pins a following pane to the focused context, or lets a pinned one follow.
 	toggle_pin : State, Str -> State
 	toggle_pin = |state, id| {
-		pin = |pane| if (pane.id != id) pane else if (pane.pinned.is_empty()) { ..pane, pinned: state.focus } else { ..pane, pinned: "" }
+		pin = |pane| if (pane.id != id) pane else if (pane.pinned.is_empty()) { ..pane, pinned: Context.to_str(state.focus) } else { ..pane, pinned: "" }
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(pin) }) }
 	}
 
 	pane : State, Str -> Pane
 	pane = |state, id| Model.panes(state).find_first(|candidate| candidate.id == id) ?? { id, widget: "", pinned: "", options: [] }
 
+	## The context a pane shows: the one it is pinned to, as `Context.to_str`
+	## names it, or else the focus.
+	context_of : State, Pane -> Context.Id
+	context_of = |state, shown| if (shown.pinned.is_empty()) state.focus else Context.from_str(shown.pinned) ?? state.focus
+
+	## The session a pane shows: its context's, or its workspace's that needs
+	## you most (see `Attention.ranks`), "" for none.
 	session_of : State, Pane -> Str
-	session_of = |state, shown| if (shown.pinned.is_empty()) state.focus else shown.pinned
+	session_of = |state, shown|
+		match Model.context_of(state, shown) {
+			Session(session_id) => session_id
+			Workspace(workspace_id) => {
+				placed = Model.workspace_sessions(state, workspace_id).map(|session| (session.id, Attention.item(session, []).state))
+				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
+			}
+		}
+
+	## The sessions that work in a workspace, as they say or its listing does.
+	workspace_sessions : State, Str -> List(Chat.Session)
+	workspace_sessions = |state, workspace_id| {
+		listed = state.workspaces.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.session_ids) ?? []
+		state.sessions.keep_if(|session| listed.contains(session.id) or (session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
+	}
+
+	## What a pane's context is called: its session's title, or its
+	## workspace's name.
+	context_title : State, Pane -> Str
+	context_title = |state, shown|
+		match Model.context_of(state, shown) {
+			Session(session_id) => Model.session(state, session_id).title
+			Workspace(workspace_id) => state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| listed.name) ?? workspace_id
+		}
 
 	entries : State, Str -> List(Chat.Entry)
 	entries = |state, session_id|
@@ -572,14 +610,14 @@ Model := [].{
 		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty()).map(|session_id| Timeline(session_id))
 		items = if (offered(Capability.attention_v1)) [Items] else []
 		git = |shown| {
-			context = Session(Model.session_of(state, shown))
+			context = Model.context_of(state, shown)
 			{ scope, file, .. } = Model.git_pane(state, shown.id)
 			match file {
 				Selected(path) => [Changes({ context, scope }), File({ context, scope, path })]
 				NoFile => [Changes({ context, scope })]
 			}
 		}
-		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and !Model.session_of(state, shown).is_empty()).join_map(git) else []
+		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("")).join_map(git) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -624,7 +662,7 @@ Model := [].{
 					_ => so_far
 				},
 		)
-		focus = if (applied.focus.is_empty()) (applied.sessions.first().map_ok(|first| first.id) ?? "") else applied.focus
+		focus = if (applied.focus == Session("")) Session(applied.sessions.first().map_ok(|first| first.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -661,14 +699,15 @@ Model := [].{
 				else
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
-			(Changes({ context: Session(session_id), .. }), Changes({ workspace, status, changes, commits })) =>
+			(_, Listed(listed)) => { ..state, workspaces: listed }
+			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
 					..state,
-					git: state.git.drop_if(|known| known.session_id == session_id).append({ session_id, workspace, status, commits }),
-					git_changes: state.git_changes.drop_if(|known| known.session_id == session_id and known.changes.scope == changes.scope).append({ session_id, changes }),
+					git: state.git.drop_if(|known| known.context == context).append({ context, workspace, status, commits }),
+					git_changes: state.git_changes.drop_if(|known| known.context == context and known.changes.scope == changes.scope).append({ context, changes }),
 				}
-			(File({ context: Session(session_id), scope, .. }), File({ path, hunks })) =>
-				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.session_id == session_id and known.scope == scope and known.path == path).append({ session_id, scope, path, hunks }) }
+			(File({ context, scope, .. }), File({ path, hunks })) =>
+				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks }) }
 			_ => state
 		}
 
@@ -904,11 +943,11 @@ Model := [].{
 			Err(NoneWaiting) => state
 		}
 
-	## Focuses an item's session, so chat panes follow it, and shows the first
-	## chat's column, which on a narrow screen is a jump to it.
-	open_item : State, Str -> State
-	open_item = |state, session_id| {
-		focused = { ..state, focus: session_id }
+	## Focuses a context, so panes that follow the focus show it, and shows
+	## the first chat's column, which on a narrow screen is a jump to it.
+	open : State, Context.Id -> State
+	open = |state, context| {
+		focused = { ..state, focus: context }
 		match state.columns.find_first(|column| column.panes.any(|shown| shown.widget == "chat")) {
 			Ok(column) => Model.show_column(focused, column.id)
 			Err(NotFound) => focused
@@ -936,22 +975,22 @@ Model := [].{
 	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
 	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
 
-	git_changes_of : State, Str, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
-	git_changes_of = |state, session_id, scope| state.git_changes.find_first(|known| known.session_id == session_id and known.changes.scope == scope).map_ok(|known| known.changes)
+	git_changes_of : State, Context.Id, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
+	git_changes_of = |state, context, scope| state.git_changes.find_first(|known| known.context == context and known.changes.scope == scope).map_ok(|known| known.changes)
 
-	## What polls answered of the session a pane shows.
+	## What polls answered of the context a pane shows.
 	git_of : State, Pane -> Git
 	git_of = |state, shown| {
-		session_id = Model.session_of(state, shown)
-		state.git.find_first(|known| known.session_id == session_id) ?? { session_id, workspace: Unknown, status: NoStatus, commits: [] }
+		context = Model.context_of(state, shown)
+		state.git.find_first(|known| known.context == context) ?? { context, workspace: Unknown, status: NoStatus, commits: [] }
 	}
 
-	## What a Changes pane shows: its session's git, or why it can't yet.
+	## What a Changes pane shows: its context's git, or why it can't yet.
 	git_shown : State, Pane -> [NoSession, Loading, Unreadable, NotGit, Shown]
 	git_shown = |state, shown|
-		if (Model.session_of(state, shown).is_empty())
+		if (Model.context_of(state, shown) == Session(""))
 			NoSession
-		else if (!state.git.any(|known| known.session_id == Model.session_of(state, shown)))
+		else if (!state.git.any(|known| known.context == Model.context_of(state, shown)))
 			Loading
 		else
 			match Model.git_of(state, shown).workspace {
@@ -962,17 +1001,17 @@ Model := [].{
 
 	## The files of the scope a Changes pane shows, until its poll answers.
 	git_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
-	git_files = |state, shown| Model.git_changes_of(state, Model.session_of(state, shown), Model.git_pane(state, shown.id).scope).map_ok(|changes| Files(changes.files)) ?? Loading
+	git_files = |state, shown| Model.git_changes_of(state, Model.context_of(state, shown), Model.git_pane(state, shown.id).scope).map_ok(|changes| Files(changes.files)) ?? Loading
 
 	## The hunks of the file a Changes pane shows, until its poll answers, if
 	## its scope has that file.
 	git_hunks_of : State, Pane -> [Hunks(List(WorkspaceGit.Hunk)), Loading, NoFile]
 	git_hunks_of = |state, shown| {
-		session_id = Model.session_of(state, shown)
+		context = Model.context_of(state, shown)
 		{ scope, file, .. } = Model.git_pane(state, shown.id)
 		match (file, Model.git_files(state, shown)) {
 			(Selected(_), Loading) => Loading
-			(Selected(path), Files(listed)) if listed.any(|listed_file| listed_file.path == path) => state.git_hunks.find_first(|known| known.session_id == session_id and known.scope == scope and known.path == path).map_ok(|known| Hunks(known.hunks)) ?? Loading
+			(Selected(path), Files(listed)) if listed.any(|listed_file| listed_file.path == path) => state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == path).map_ok(|known| Hunks(known.hunks)) ?? Loading
 			_ => NoFile
 		}
 	}
@@ -1050,13 +1089,13 @@ Model := [].{
 
 # A Changes pane's git is followed only while it is on screen.
 expect {
-	state = { ..Model.initial(""), focus: "a" }
+	state = { ..Model.initial(""), focus: Session("a") }
 	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted })] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
 expect {
-	sent = Model.poll({ ..Model.initial(""), focus: "a" })
+	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
 	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
 	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
 	answered = Model.polled(sent, sent.poll, answer)
@@ -1066,16 +1105,16 @@ expect {
 
 # One poll at a time: what is asked meanwhile is sent once it answers.
 expect {
-	sent = Model.poll({ ..Model.initial(""), focus: "a" })
-	meanwhile = Model.follow({ ..sent, focus: "b" })
+	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
+	meanwhile = Model.follow({ ..sent, focus: Session("b") })
 	answered = Model.polled(meanwhile, sent.poll, [])
 	Model.tick(sent).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
 }
 
 expect {
-	state = { ..Model.initial(""), focus: "a" }
+	state = { ..Model.initial(""), focus: Session("a") }
 	pinned = Model.toggle_pin(state, "pane-2")
-	Model.session_of({ ..pinned, focus: "b" }, Model.pane(pinned, "pane-2")) == "a"
+	Model.session_of({ ..pinned, focus: Session("b") }, Model.pane(pinned, "pane-2")) == "a"
 }
 
 expect {
@@ -1175,4 +1214,13 @@ expect {
 expect {
 	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
 	Model.workspace_shown(state) == "Tiling" and Model.workspace_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡")) == "Developer" and Model.pressed(state, "7") == state
+}
+
+# Focused on a workspace, Changes follows its git, and the chat its session
+# that needs you most; a pane pinned then stays on the workspace.
+expect {
+	placed = |id, status| { ..Chat.session({ id, provider: "mock", agent: "claude", title: id, status }), workspace: Ok({ id: Ok("w1"), directory: "/w" }) }
+	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
+	pinned = Model.toggle_pin(state, "pane-3")
+	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted })] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
 }

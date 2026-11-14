@@ -508,7 +508,7 @@ Liton := [].{
 									"pane-heading",
 									[
 										Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
-										Html.span_s(shown.map(|{ pane, state }| if (Widgets.find(pane.widget).follows_session) Model.session(state, Model.session_of(state, pane)).title else ""), [Engine.class("pane-context")]),
+										Html.span_s(shown.map(|{ pane, state }| if (Widgets.find(pane.widget).follows_session) Model.context_title(state, pane) else ""), [Engine.class("pane-context")]),
 									],
 								),
 						),
@@ -730,9 +730,9 @@ Liton := [].{
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						Html.li(
-							[Engine.class_s(id.map2(model.signal(), |key, state| if (key == state.focus) "inbox-item focused" else "inbox-item")), Engine.attr("data-part", "item")],
+							[Engine.class_s(id.map2(model.signal(), |key, state| if (Session(key) == state.focus) "inbox-item focused" else "inbox-item")), Engine.attr("data-part", "item")],
 							[
-								Html.button_s(title, [], model.update_by(id, Model.open_item)),
+								Html.button_s(title, [], model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))),
 								Html.div(
 									"session-meta",
 									[
@@ -809,7 +809,7 @@ Liton := [].{
 		if (!Widgets.find(pane.widget).follows_session)
 			""
 		else {
-			title = Model.session(state, Model.session_of(state, pane)).title
+			title = Model.context_title(state, pane)
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
@@ -824,9 +824,9 @@ Liton := [].{
 					|row| {
 						model = model0.lift_row()
 						Html.li(
-							[Engine.class_s(row.key().map2(model.signal(), |key, state| if (key == state.focus) "session focused" else "session")), Engine.attr("data-part", "session")],
+							[Engine.class_s(row.key().map2(model.signal(), |key, state| if (Session(key) == state.focus) "session focused" else "session")), Engine.attr("data-part", "session")],
 							[
-								Html.button_s(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: key })),
+								Html.button_s(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: Session(key) })),
 								Html.div(
 									"session-meta",
 									[
