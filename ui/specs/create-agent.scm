@@ -1,0 +1,28 @@
+(test "Liton — New agent in a workspace shows it starting at once, then running once the daemon lists it"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\"],\"state\":\"Idle\"}]}}]},{\"capability\":\"chat.v1\",\"topic\":\"agents\",\"cursor\":\"a1\",\"events\":[{\"Agents\":[{\"agent\":\"claude\",\"provider\":\"mock\"},{\"agent\":\"codex\",\"provider\":\"mock\"}]}]}]}")
+    (run-effect 2)
+    (click (role button :name "New agent in main"))
+    (expect-value (label "Agent") "claude")
+    (select-option (label "Agent") "codex")
+    (fill (label "First prompt") "Write the docs")
+    (click (role button :name "Start"))
+    ; Shown before the daemon answers: the form closes, and the new agent
+    ; is a row of its workspace and the chat's, starting.
+    (expect-absent (role button :name "Start"))
+    (expect-visible (role button :name "Write the docs"))
+    (expect-text (test-id "session-title") "Write the docs")
+    (expect-text (test-id "session-status") "starting…")
+    (stub-http "create" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Started\":{\"session_id\":\"s9\"}}}")
+    (run-effect 4)
+    (expect-text (test-id "session-status") "starting…")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]}]}")
+    (run-effect 3)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}},{\"agent\":\"codex\",\"id\":\"s9\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Write the docs\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s9\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l2\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\",\"s9\"],\"state\":\"Working\"}]}}]}]}")
+    (run-effect 5)
+    (expect-text (test-id "session-status") "running")
+    (expect-absent (text "starting…"))
+  )
+)

@@ -159,6 +159,23 @@ try {
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
     await see("Chat", '.pane-header [data-testid="session-status"]', "idle");
   });
+  await step("New agent in a workspace shows it starting at once, then running", async () => {
+    // The row may start and run within one poll, so watch for it starting.
+    await page.evaluate(() => {
+      window.sawStarting = false;
+      const starting = () => [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.textContent.includes("starting…"));
+      new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent in fix-auth"]');
+    await see("Workspaces", ".create-form", "New agent in fix-auth");
+    await (await page.$('section[aria-label="Workspaces"] input[aria-label="First prompt"]')).type("Write the docs");
+    await click("Workspaces", ".create-form button", "Start");
+    await until("the new agent starting", () => page.evaluate(() => window.sawStarting));
+    await see("Chat", ".pane-header .pane-title", "Write the docs");
+    await until("the new agent running", () => page.evaluate(() =>
+      [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.querySelector('[data-testid="row-status"]')?.textContent === "running")), 8000);
+    await see("Chat", '.pane-header [data-testid="session-status"]', "running");
+  });
   await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the workspaces", async () => {
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: true });
     await page.goto(`${base}/`);
@@ -174,7 +191,7 @@ try {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });
   await browser.close();
-  console.log("ok   e2e journey: panes, sessions, the inbox, a setup's preset, changes, permission prompts and tool cards against the mock daemon");
+  console.log("ok   e2e journey: panes, workspaces and new agents, sessions, the inbox, a setup's preset, changes, permission prompts and tool cards against the mock daemon");
   process.exit(0);
 } catch (error) {
   fail(error);

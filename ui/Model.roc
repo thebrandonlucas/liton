@@ -130,7 +130,32 @@ Model := [].{
 
 		## How many times each chat pane jumped to its latest entry.
 		jumps : List({ pane : Str, count : U64 }),
+
+		## The form a Workspaces pane opened, to start an agent or create a
+		## workspace, and what is typed in it.
+		form : Form,
+
+		## Agents started and workspaces created, shown starting until a listing
+		## has them, and the call asking for the last, its capability as `key`
+		## and its JSON as `text`: the shape of `clipboard`, which spares the
+		## module another instance of the effect that sends it; the kinds of
+		## agent each provider starts.
+		creating : List(Creating),
+		create_outbox : { serial : U64, key : Str, text : Str },
+		agents : List(Chat.Agent),
 	}
+
+	## A Workspaces pane's form: an agent to start in the workspace `place`,
+	## or a workspace to create of the project `place`. `failed` says why the
+	## daemon didn't, "" until it refuses.
+	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
+
+	## An agent started or a workspace created, from `form`, until a listing
+	## has it; `id` is "" until the daemon answers with it.
+	Creating : { serial : U64, form : Form, title : Str, id : Str }
+
+	closed_form : Form
+	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
 	## cursors the UI had.
@@ -202,6 +227,10 @@ Model := [].{
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
+				form: Model.closed_form,
+				creating: [],
+				create_outbox: { serial: 0, key: "", text: "" },
+				agents: [],
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -538,9 +567,14 @@ Model := [].{
 	entries = |state, session_id|
 		state.timelines.find_first(|timeline| timeline.session_id == session_id).map_ok(|timeline| timeline.entries) ?? []
 
-	## A known session, or one named by its id until the daemon lists it.
+	## A known session, one starting, or one named by its id until the daemon
+	## lists it.
 	session : State, Str -> Chat.Session
-	session = |state, session_id| state.sessions.find_first(|known| known.id == session_id) ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle })
+	session = |state, session_id| {
+		known = state.sessions.find_first(|listed| listed.id == session_id)
+		placeholder = state.creating.find_first(|creating| Model.created_id(creating) == session_id).map_ok(|creating| Chat.session({ id: session_id, provider: "", agent: creating.form.agent, title: creating.title, status: Idle }))
+		known ?? (placeholder ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle }))
+	}
 
 	## A tool call and the result with its `call_id`, once one arrives. Output
 	## past its first 4 lines is `folded`.
@@ -607,7 +641,7 @@ Model := [].{
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
 		laid_out = Model.panes(state)
-		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty()).map(|session_id| Timeline(session_id))
+		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty() or session_id.starts_with("starting:")).map(|session_id| Timeline(session_id))
 		items = if (offered(Capability.attention_v1)) [Items] else []
 		git = |shown| {
 			context = Model.context_of(state, shown)
@@ -617,8 +651,8 @@ Model := [].{
 				NoFile => [Changes({ context, scope })]
 			}
 		}
-		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("")).join_map(git) else []
-		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList] else []
+		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:")).join_map(git) else []
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(listing)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -665,7 +699,7 @@ Model := [].{
 		)
 		focus = if (applied.focus == Session("")) Session(applied.sessions.first().map_ok(|first| first.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)) }
+		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -701,6 +735,7 @@ Model := [].{
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
 			(_, Listed(listed)) => { ..state, workspaces: listed }
+			(_, Agents(listed)) => { ..state, agents: listed }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
 					..state,
@@ -711,6 +746,20 @@ Model := [].{
 				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks }) }
 			_ => state
 		}
+
+	## Whether a listing has what a creation made: a workspace the
+	## workspaces list, or an agent its workspace lists, or that the sessions
+	## list when the workspaces don't list its workspace.
+	made_listed : State, Creating -> Bool
+	made_listed = |state, creating| {
+		id = creating.id
+		workspaces = state.workspaces.workspaces
+		match creating.form.kind {
+			_ if id.is_empty() => Bool.False
+			Workspace => workspaces.any(|workspace| workspace.id == id)
+			_ => workspaces.any(|workspace| workspace.session_ids.contains(id)) or (state.sessions.any(|listed_session| listed_session.id == id) and !workspaces.any(|workspace| workspace.id == creating.form.place))
+		}
+	}
 
 	## Whether a sent request's session's timeline shows it.
 	confirmed : State, Sent -> Bool
@@ -1065,34 +1114,43 @@ Model := [].{
 	## A row of a Workspaces pane: a group of workspaces, by project or by
 	## what they need from you, folded or not; a workspace in it; or a
 	## session in that. `key` is the context a workspace or session row
-	## focuses (`Context.to_str`), or `group:` and the group's.
-	Row : { key : Str, kind : [Group, Workspace, Session], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool }
+	## focuses (`Context.to_str`), or `group:` and the group's. A row is
+	## `creatable` when + on it starts an agent there, or creates a workspace
+	## of its project.
+	Row : { key : Str, kind : [Group, Workspace, Session], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool }
 
 	## A Workspaces pane's rows, as its options group and filter them, each
 	## workspace marked as urgent as its most urgent session.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
-		listed = state.workspaces.workspaces.drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle)
+		# Those still starting show where they will be, idle and without git.
+		placeholders = state.creating.keep_if(|creating| creating.form.kind == Workspace).map(|creating| { id: Model.created_id(creating), provider: "", project_id: creating.form.place, name: creating.title, directory: "", kind: Checkout, branch: NotGit, state: Idle, dirty: Bool.False, changes: Uncounted, pinned: Bool.False, labels: [], session_ids: [] })
+		listed = state.workspaces.workspaces.concat(placeholders).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
-				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank) }).drop_if(|group| group.members.is_empty())
+				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
-				state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id) })
+				state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False }
+		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
 		workspace_row = |workspace| {
 			branch = match workspace.branch {
 				Branch(name) if name != workspace.name => name
 				Detached => "detached"
 				_ => ""
 			}
-			{ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot: attention_dot(workspace.state), focused: state.focus == Workspace(workspace.id) }
+			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot: attention_dot(workspace.state), focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+		}
+		sessions_in = |workspace| {
+			agents = state.creating.keep_if(|creating| creating.form.kind == Agent and creating.form.place == workspace.id).map(|creating| Model.session(state, Model.created_id(creating)))
+			state.sessions.keep_if(|listed_session| workspace.session_ids.contains(listed_session.id)).concat(agents.drop_if(|agent| workspace.session_ids.contains(agent.id)))
 		}
 		groups.join_map(
 			|group| {
-				header = { ..blank, key: group.key, title: group.title, counts: group.members.len().to_str(), folded: folded.contains(group.key) }
-				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(state.sessions.keep_if(|listed_session| workspace.session_ids.contains(listed_session.id)).map(|listed_session| Model.session_row(state, listed_session))))
+				header = { ..blank, key: group.key, title: group.title, counts: group.members.len().to_str(), folded: folded.contains(group.key), creatable: group.creatable }
+				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(sessions_in(workspace).map(|listed_session| mark(Model.session_row(state, listed_session)))))
 				if (header.folded) [header] else members.prepend(header)
 			},
 		)
@@ -1102,7 +1160,7 @@ Model := [].{
 	session_row : State, Chat.Session -> Row
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False }
 	}
 
 	## A Sessions pane's rows: every session, with its agent if it shows that.
@@ -1136,8 +1194,86 @@ Model := [].{
 			folded = Model.option(Model.pane(state, pane_id), "folded").split_on("\n").drop_if(Str.is_empty)
 			Model.set_option(state, pane_id, "folded", Str.join_with(if (folded.contains(key)) folded.drop_if(|group| group == key) else folded.append(key), "\n"))
 		} else {
-			Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
+			if (key.starts_with("starting:") or key.starts_with("workspace:starting:")) state else Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
 		}
+
+	## Opens a Workspaces pane's form: from a workspace's row, to start an
+	## agent there of the first kind its provider starts; from a project's,
+	## to create a workspace of it, and from the pane's header (`key` ""), of
+	## the first project. Other rows open none.
+	open_form : State, { pane_id : Str, key : Str } -> State
+	open_form = |state, { pane_id, key }| {
+		project = if (key.is_empty()) state.workspaces.projects.first() else state.workspaces.projects.find_first(|listed| "group:${listed.id}" == key)
+		match (Context.from_str(key), project) {
+			(Ok(Workspace(workspace_id)), _) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Agent, place: workspace_id, agent: Model.agent_kinds(state, workspace_id).first() ?? "" } }
+			(_, Ok(picked)) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Workspace, place: picked.id } }
+			_ => state
+		}
+	}
+
+	## The kinds of agent the provider of a workspace starts.
+	agent_kinds : State, Str -> List(Str)
+	agent_kinds = |state, workspace_id| {
+		provider = state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| listed.provider) ?? ""
+		state.agents.keep_if(|kind| kind.provider == provider).map(|kind| kind.agent)
+	}
+
+	## Starts the agent or creates the workspace the form describes, shown
+	## at once as starting, and closes the form. An agent is focused, so the
+	## chat shows it starting.
+	submit_form : State -> State
+	submit_form = |state| {
+		form = { ..state.form, failed: "" }
+		serial = state.create_outbox.serial + 1
+		optional = |text| if (text.trim().is_empty()) Err(Missing) else Ok(text.trim())
+		prompt = form.prompt.trim()
+		if form.kind == Agent {
+			call : { capability : Str, request : Chat.Request }
+			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), prompt }) }
+			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
+			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), create_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
+			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))
+		} else {
+			call : { capability : Str, request : Workspaces.Request }
+			call = { capability: "workspaces.v1", request: Create({ project_id: form.place, kind: if (form.worktree) Worktree else Checkout, branch: optional(form.branch) }) }
+			title = optional(form.branch) ?? "New workspace"
+			{ ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), create_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
+		}
+	}
+
+	## What a creation is named by until the daemon answers with its id.
+	starting_key : U64 -> Str
+	starting_key = |serial| "starting:${serial.to_str()}"
+
+	created_id : Creating -> Str
+	created_id = |creating| if (creating.id.is_empty()) Model.starting_key(creating.serial) else creating.id
+
+	## Whether `id` names a session or workspace started that no listing has
+	## yet.
+	starting : State, Str -> Bool
+	starting = |state, id| state.creating.any(|creating| Model.created_id(creating) == id) and !state.sessions.any(|listed_session| listed_session.id == id) and !state.workspaces.workspaces.any(|workspace| workspace.id == id)
+
+	## Takes the daemon's answer to a creation: its id, which a focus on it
+	## follows, until a listing has it; refused, it is gone, with why, and
+	## its form back as it was.
+	created : State, U64, Str -> State
+	created = |state, serial, text| {
+		answered : Try(Protocol.Answer([Started({ session_id : Str }), Created({ workspace_id : Str }), Rejected(Str)]), _)
+		answered = Json.parse(text)
+		made = match answered {
+			Ok(Ok(Started({ session_id }))) => Ok(session_id)
+			Ok(Ok(Created({ workspace_id }))) => Ok(workspace_id)
+			Ok(Ok(Rejected(reason))) => Err(reason)
+			Ok(Err({ message, .. })) => Err(message)
+			Err(_) => Err("The daemon did not answer.")
+		}
+		was = Session(Model.starting_key(serial))
+		match (made, state.creating.find_first(|creating| creating.serial == serial)) {
+			(Ok(id), _) => Model.poll({ ..state, creating: state.creating.map(|creating| if (creating.serial == serial) { ..creating, id } else creating), focus: if (state.focus == was) Session(id) else state.focus })
+			(Err(reason), Ok(undone)) => { ..state, creating: state.creating.drop_if(|creating| creating.serial == serial), form: { ..undone.form, failed: reason }, notice: reason, focus: if (state.focus == was) Workspace(undone.form.place) else state.focus }
+			(Err(_), Err(_)) => state
+		}
+	}
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## or a placeholder naming what is missing.
@@ -1169,7 +1305,7 @@ Model := [].{
 # A Changes pane's git is followed only while it is on screen.
 expect {
 	state = { ..Model.initial(""), focus: Session("a") }
-	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList]
+	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList, Agents] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList, Agents]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
@@ -1301,7 +1437,7 @@ expect {
 	placed = |id, status| { ..Chat.session({ id, provider: "mock", agent: "claude", title: id, status }), workspace: Ok({ id: Ok("w1"), directory: "/w" }) }
 	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
 	pinned = Model.toggle_pin(state, "pane-3")
-	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
+	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList, Agents] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
 }
 
 ## What a workspace or a session in `rank` is doing, as a row of the

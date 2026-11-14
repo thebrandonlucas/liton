@@ -192,6 +192,25 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .tree-session .status-word { margin-left: auto; }
 .tree-session .status-word.idle, .tree-session .status-word.done { display: none; }
 .status-dot.done { background: var(--ok); opacity: .45; }
+.workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tree-row .new-agent { flex: none; margin-left: auto; padding: 0 6px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
+.tree-row .counts:not(:empty) ~ .new-agent { margin-left: 0; }
+.tree-row:not(.creatable) .new-agent { display: none; }
+.tree-group .counts:not(:empty) ~ .new-agent { margin-left: auto; }
+.tree-row:hover .new-agent, .tree-row .new-agent:focus-visible, .tree-row.focused .new-agent { opacity: 1; }
+.tree-row .new-agent:hover { color: var(--accent); border-color: var(--edge); }
+@media (hover: none) { .tree-row .new-agent { opacity: 1; } }
+.status-dot.starting { background: var(--accent); opacity: .5; animation: pulse calc(var(--motion) * 1s) ease-in-out infinite; }
+.status-word.starting { color: var(--accent); }
+.pane-header .new-workspace { padding: 0 7px; font-size: 15px; line-height: 1.3; }
+.create-form { display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); animation: menu-in var(--fast) ease-out backwards; }
+.create-form .create-title { margin: 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+.create-form input, .create-form select { padding: 4px 6px; min-width: 0; }
+.create-failed { margin: 0; color: var(--fail); font-size: 12px; }
+.create-failed:empty { display: none; }
+.create-form.for-agent .workspace-field, .create-form.for-workspace .agent-field { display: none; }
+.create-actions { display: flex; gap: 6px; }
+.create-actions button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .inbox { overflow-y: auto; padding: 6px; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .inbox-items { list-style: none; margin: 0; padding: 0; }

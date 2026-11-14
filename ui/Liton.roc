@@ -152,6 +152,12 @@ Liton := [].{
 				},
 			),
 		),
+		# An agent or workspace to create, whose answer may take a provider a while.
+		Engine.watch_changes(
+			model.signal().map(|state| state.create_outbox),
+			|outbox| [Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout_ms: 60000 })],
+			model.on_result(|state, outbox, res| Model.created(state, outbox.serial, Engine.http_text(res) ?? "")),
+		),
 		# Keys reach the root only from inside it.
 		Engine.watch(Engine.const({}), |_| [Focus("app")], Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
@@ -513,6 +519,11 @@ Liton := [].{
 								),
 						),
 						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
+						Engine.when(
+							row.field(|pane| pane.widget == "workspaces"),
+							|| Html.icon_button("+", Engine.const("New workspace"), "new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
+							|| Engine.text(""),
+						),
 						Liton.pane_menu(model, id, title, shown),
 					],
 				),
@@ -522,7 +533,7 @@ Liton := [].{
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)))
-							Workspaces => Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)))
+							Workspaces => Html.div("workspaces-pane", [Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)))])
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -570,6 +581,7 @@ Liton := [].{
 		# Waiting for you only while there is a prompt to answer.
 		asking = Model.loading(state, session.id) or Model.pending(state, pane.id).is_ok()
 		(status, dot) = match session.status {
+			_ if Model.starting(state, session.id) => ("starting…", "starting")
 			Running => ("running", "running")
 			AwaitingPermission if asking => ("waiting for you", "waiting")
 			AwaitingPermission => ("running", "running")
@@ -816,9 +828,11 @@ Liton := [].{
 
 	## Rows of a tree, Workspaces' or Sessions': a dot for each one's state
 	## (a workspace's is its most urgent session's), its title, its branch or
-	## agent, its changes and its status. A group folds; a workspace or a
-	## session is focused. Both widgets share it, as one list of rows, to
-	## keep the module small.
+	## agent, its changes, its status, and +, on a workspace's to start an
+	## agent there and on a project's to create a workspace of it. A group
+	## folds; a workspace or a session is focused. Both widgets share it, as
+	## one list of rows, each with every part the stylesheet hides where it
+	## doesn't apply, to keep the module small.
 	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
 	tree = |model0, id, rows|
 		Html.ul(
@@ -837,23 +851,78 @@ Liton := [].{
 									Session => "session"
 								},
 						)
+						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
 						Html.li(
 							[
-								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}")),
+								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}")),
 								Engine.attr_s("data-part", kind),
 							],
 							[
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
-								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key }), Model.pick_row)),
+								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
 								Html.span_s(row.field(|shown| shown.counts), [Engine.class("counts")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
+								Html.icon_button("+", row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "new-agent", model.update_by(asked, Model.open_form)),
 							],
 						)
 					},
 				),
 			],
 		)
+
+	## A Workspaces pane's form, while open in it: an agent to start in a
+	## workspace, of a kind its provider offers, with a model and a first
+	## prompt; or a workspace to create of a project, a worktree on a new
+	## branch or a checkout. Either shows starting at once. Both are one
+	## form, whose class shows the fields of the one open, to keep the
+	## module small.
+	create_form : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	create_form = |model, id| {
+		form = id.map2(model.signal(), |pane_id, state| if (state.form.pane == pane_id) state.form else Model.closed_form)
+		set = |change| model.set_value(|state, text| { ..state, form: change(state.form, text) })
+		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", form.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part), Liton.keeps_keys(model)], set(change))
+		option = |value, text| Engine.element("option", [Engine.attr("value", value)], [Engine.text(text)])
+		Engine.when(
+			form.map(|shown| shown.kind != Closed),
+			||
+				Html.form(
+					"New agent or workspace",
+					[Engine.class_s(form.map(|shown| if (shown.kind == Agent) "create-form for-agent" else "create-form for-workspace")), Engine.on("submit:prevent", model.update(Model.submit_form))],
+					[
+						Html.p_s(form.map2(model.signal(), |shown, state| if (shown.kind == Agent) "New agent in ${state.workspaces.workspaces.find_first(|listed| listed.id == shown.place).map_ok(|listed| listed.name) ?? shown.place}" else "New workspace"), [Engine.class("create-title")]),
+						Html.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field"), Liton.keeps_keys(model)], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| { ..shown, agent: text })),
+						field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
+						field("First prompt", "agent-field", "First prompt (optional)", |shown| shown.prompt, |shown, text| { ..shown, prompt: text }),
+						Html.select(Engine.const("Project"), form.map(|shown| shown.place), [Engine.class("workspace-field"), Liton.keeps_keys(model)], Liton.choices(model.signal().map(|state| state.workspaces.projects.map(|project| { value: project.id, label: project.name }))), set(|shown, text| { ..shown, place: text })),
+						Html.select(Engine.const("Kind"), form.map(|shown| if (shown.worktree) "Worktree" else "Checkout"), [Engine.class("workspace-field"), Liton.keeps_keys(model)], [option("Worktree", "Worktree on a new branch"), option("Checkout", "Checkout of the project")], set(|shown, text| { ..shown, worktree: text == "Worktree" })),
+						field("Branch", "workspace-field", "Branch (optional)", |shown| shown.branch, |shown, text| { ..shown, branch: text }),
+						Html.p_s(form.map(|shown| shown.failed), [Engine.class("create-failed"), Engine.test_id("create-failed")]),
+						Html.div(
+							"create-actions",
+							[
+								Html.submit_button("Start", [Engine.class("agent-field")]),
+								Html.submit_button("Create", [Engine.class("workspace-field")]),
+								Html.button("Cancel", [], model.update(|state| { ..state, form: Model.closed_form })),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
+
+	## A drop-down's options, each a value and what it says, as twelve
+	## options, those left over hidden: of more, only the first twelve show.
+	## Twelve elements cost the module far less than a list of them would.
+	choices : Signal(ctx, List({ value : Str, label : Str })) -> List(Elem(ctx))
+	choices = |listed| {
+		slot = |index| {
+			choice = listed.map(|shown| shown.get(index) ?? { value: "", label: "" })
+			Engine.element("option", [Engine.attr_s("value", choice.map(|shown| shown.value)), Html.flag_maybe("hidden", choice.map(|shown| shown.value.is_empty()))], [Engine.text_s(choice.map(|shown| shown.label))])
+		}
+		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
+	}
 
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {

@@ -1,0 +1,23 @@
+(test "Liton — New workspace shows it starting at once, and a refusal takes it back and reopens the form with why"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\"],\"state\":\"Idle\"}]}}]},{\"capability\":\"chat.v1\",\"topic\":\"agents\",\"cursor\":\"a1\",\"events\":[{\"Agents\":[{\"agent\":\"claude\",\"provider\":\"mock\"},{\"agent\":\"codex\",\"provider\":\"mock\"}]}]}]}")
+    (run-effect 2)
+    (click (role button :name "New workspace"))
+    (expect-value (label "Project") "p1")
+    (expect-value (label "Kind") "Worktree")
+    (fill (label "Branch") "docs")
+    (click (role button :name "Create"))
+    ; Shown before the daemon answers.
+    (expect-absent (role button :name "Create"))
+    (expect-visible (role button :name "docs"))
+    (expect-visible (text "starting…"))
+    (stub-http "create" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Rejected\":\"docs is checked out already\"}}")
+    (run-effect 4)
+    (expect-absent (role button :name "docs"))
+    (expect-text (test-id "create-failed") "docs is checked out already")
+    (expect-value (label "Branch") "docs")
+    (expect-visible (role button :name "Create"))
+  )
+)
