@@ -48,6 +48,8 @@ Remote := [].{
 			Timeline(session_id) => theirs(endpoints, session_id).map_ok(|(endpoint, id)| { endpoint, subject: Timeline(id) }).map_err(|_| Merged)
 			Changes({ context, scope }) => their_context(endpoints, context).map_ok(|(endpoint, id)| { endpoint, subject: Changes({ context: id, scope }) }).map_err(|_| Merged)
 			File({ context, scope, path }) => their_context(endpoints, context).map_ok(|(endpoint, id)| { endpoint, subject: File({ context: id, scope, path }) }).map_err(|_| Merged)
+			Tree({ context, path }) => their_context(endpoints, context).map_ok(|(endpoint, id)| { endpoint, subject: Tree({ context: id, path }) }).map_err(|_| Merged)
+			Contents({ context, path }) => their_context(endpoints, context).map_ok(|(endpoint, id)| { endpoint, subject: Contents({ context: id, path }) }).map_err(|_| Merged)
 			_ => Err(Merged)
 		}
 
@@ -63,6 +65,7 @@ Remote := [].{
 			WatchSession({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			SendMessage({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			AnswerPermission({ session_id, .. }) => Remote.owner(endpoints, session_id)
+			Cancel({ session_id }) => Remote.owner(endpoints, session_id)
 		}
 
 	## The topics of each remote a merged list needs: workspaces are counted
@@ -100,6 +103,7 @@ Remote := [].{
 				WatchSession(watch) => WatchSession({ ..watch, session_id: their_id(watch.session_id) })
 				SendMessage(message) => SendMessage({ ..message, session_id: their_id(message.session_id) })
 				AnswerPermission(answer) => AnswerPermission({ ..answer, session_id: their_id(answer.session_id) })
+				Cancel({ session_id }) => Cancel({ session_id: their_id(session_id) })
 			}
 		{ capability: "chat.v1", provider: provider.map_ok(their_id), request }
 	}
@@ -133,7 +137,7 @@ Remote := [].{
 ## The capabilities the daemon routes to a remote's sessions and workspaces.
 ## A remote's transformers are left out: the daemon's derive from every provider.
 routable : List(Capability.Id)
-routable = [Capability.chat_v1, Capability.workspaces_v1, Capability.workspace_git_v1]
+routable = [Capability.chat_v1, Capability.workspaces_v1, Capability.workspace_git_v1, Capability.files_v1]
 
 endpoint_of : Str -> Try(Remote.Endpoint, Str)
 endpoint_of = |entry| {
@@ -194,6 +198,7 @@ expect ["echo", "=http://a", "a/b=http://a", "a=ftp://a", "a=http://x,a=http://y
 expect Remote.routed([echo, peer], Timeline("peer/c/fix-auth")) == Ok({ endpoint: peer, subject: Timeline("c/fix-auth") })
 expect Remote.routed([echo, peer], Changes({ context: Workspace("echo/w1"), scope: Uncommitted })) == Ok({ endpoint: echo, subject: Changes({ context: Workspace("w1"), scope: Uncommitted }) })
 expect Remote.routed([echo, peer], File({ context: Session("echo/s1"), scope: AgainstBase, path: "a.roc" })) == Ok({ endpoint: echo, subject: File({ context: Session("s1"), scope: AgainstBase, path: "a.roc" }) })
+expect Remote.routed([echo, peer], Tree({ context: Workspace("peer/w1"), path: "." })) == Ok({ endpoint: peer, subject: Tree({ context: Workspace("w1"), path: "." }) }) and Remote.routed([echo, peer], Contents({ context: Session("echo/s1"), path: "a.roc" })) == Ok({ endpoint: echo, subject: Contents({ context: Session("s1"), path: "a.roc" }) })
 expect [Timeline("fix-auth"), Timeline("import:claude:/home/a"), Timeline("echo/"), Timeline("echoes/s1"), Sessions, Items].all(|subject| Remote.routed([echo, peer], subject) == Err(Merged))
 expect Remote.owner([echo], "echo/s1") == Ok(echo) and Remote.owner([echo], "s1") == Err(Local)
 expect Remote.merged(Sessions) == [Sessions] and Remote.merged(WorkspaceList) == [WorkspaceList, Sessions] and Remote.merged(Timeline("s1")) == []
@@ -208,6 +213,7 @@ expect Remote.serves("peer", Err(Missing)) and Remote.serves("peer", Ok("peer/mo
 
 expect Remote.call("peer", Ok("peer/c/mock"), SendMessage({ session_id: "peer/c/s1", text: "Hi" })) == { capability: "chat.v1", provider: Ok("c/mock"), request: SendMessage({ session_id: "c/s1", text: "Hi" }) }
 expect Remote.call("peer", Err(Missing), AnswerPermission({ session_id: "peer/s1", request_id: "r1", allowed: Bool.True })).request == AnswerPermission({ session_id: "s1", request_id: "r1", allowed: Bool.True })
+expect Remote.call("peer", Err(Missing), Cancel({ session_id: "peer/s1" })).request == Cancel({ session_id: "s1" }) and Remote.chat_owner([echo, peer], Cancel({ session_id: "peer/s1" })) == Ok(peer)
 
 # Sessions, and the projects and workspaces that list them, are named under the remote.
 expect {

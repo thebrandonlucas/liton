@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -95,12 +95,17 @@ Error codes are a closed set shared by all capabilities:
 | `NotFound` | no such session or pending permission request, or the named provider doesn't offer the capability |
 | `Unavailable` | the provider can't be reached |
 | `Refused` | the provider said no, such as to liton's password |
-| `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`) |
+| `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`, `files.v1`) |
 | `Overloaded` | try later (not used yet) |
 
-The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage` and
-`AnswerPermission`; `attention.v1`'s `ListItems`, `Settle`, `Snooze` and
-`Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
+The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
+`AnswerPermission` and `Cancel`; `attention.v1`'s `ListItems`, `Settle`,
+`Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces`.
+
+`{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
+own stop button does, and is `Accepted` once the provider stopped it (from
+Paseo, its `cancel_agent_request`). A session that isn't running is left as
+it is, and accepted too.
 
 ### Subscribe
 
@@ -135,6 +140,8 @@ events when nothing changed:
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
 | `workspace.git.v1` | `file/<context>/<scope>/<path>` | snapshot | `{"File": {"path", "hunks"}}` |
+| `files.v1` | `tree/<context>/<path>` | snapshot | `{"Tree": {"path", "listing"}}` |
+| `files.v1` | `file/<context>/<path>` | snapshot | `{"Contents": {"path", "read"}}` |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -146,6 +153,21 @@ files with their `fingerprint`, and the branch's commits. A `file` event holds
 the hunks of one of those files, none when the scope has no such file; its path
 is written with `%` as `%25` and `/` as `%2F`, so `src/Auth.roc` is
 `file/fix-auth/Uncommitted/src%2FAuth.roc`.
+
+`files.v1` reads the files of the same contexts' workspaces, a path relative
+to the workspace's directory and escaped the same way, `.` for the directory
+itself: `tree/fix-auth/.`, `file/workspace:main/src%2FAuth.roc`. A `tree`
+event's `listing` is `{"Listed": [{"name", "kind", "size", "modified"}]}`,
+each `kind` `File`, `Directory` or `Symlink` (Paseo follows links, and says
+no `Symlink`). A `file` event's `read` is
+`{"Text": {"text", "truncated", "size", "modified"}}`, the text's first
+256 KiB at most (`truncated` if there is more), or `{"Binary": {"size",
+"modified"}}`, or `"TooLarge"` (Paseo sends files up to 1 MiB). Either is
+`"Unknown"` until the provider has read it, or when the context has no
+workspace, and `{"Unreadable": "…"}` with why, such as when there is no such
+path. Paseo answers both from its `file_explorer_request`, asked when a topic
+is first polled and again only while polls watch it and what was read is 10 s
+old, in the daemon's cycle of Paseo requests.
 
 A cursor is opaque to the client: for an append-only topic the last sequence
 number, for a snapshot topic a fingerprint of its value, whose one event is the
@@ -192,20 +214,20 @@ A name is letters, digits, `-` and `_`. Then:
   with `import:`). Federated again, the names nest: `home/team/fix-auth`.
 - **Manifest.** The daemon asks each remote for its manifest at start, then
   every minute, and adds its providers with the capabilities the daemon routes
-  (`chat.v1`, `workspaces.v1`, `workspace.git.v1`). A remote's transformers
+  (`chat.v1`, `workspaces.v1`, `workspace.git.v1`, `files.v1`). A remote's transformers
   are left out: the daemon's own derive from every provider (Transformers).
 - **Calls.** A call to a remote's session (`SendMessage`, `WatchSession`,
-  `AnswerPermission`) is forwarded to it with the session and provider as it
+  `AnswerPermission`, `Cancel`) is forwarded to it with the session and provider as it
   names them, and its answer returned as given. Lists (`ListSessions`,
   `ListWorkspaces`) merge the remotes' with the daemon's own.
 - **Topics.** A topic of a remote's session or workspace
-  (`timeline/team/fix-auth`, `changes/team/fix-auth/Uncommitted`) follows the
-  remote's own (`timeline/fix-auth`); `sessions`, `importable` and `list`
-  merge each remote's. A client's poll notes what it wants of each remote;
-  the daemon asks a remote at most every `LITON_PROVIDERS_INTERVAL_MS`
-  (default 1000), in one poll of all that clients watched of it within the
-  last 10 s, after the cursors it has, and answers every client from what it
-  kept. However many clients poll, a remote sees one poll per interval at most.
+  (`timeline/team/fix-auth`, `changes/team/fix-auth/Uncommitted`,
+  `tree/team/fix-auth/.`) follows the remote's own (`timeline/fix-auth`);
+  `sessions`, `importable` and `list` merge each remote's. A client's poll
+  notes what it wants of each remote; the daemon asks a remote at most every
+  `LITON_PROVIDERS_INTERVAL_MS` (default 1000), in one poll of all that
+  clients watched of it within the last 10 s, after the cursors it has, and
+  answers every client from what it kept. However many clients poll, a remote sees one poll per interval at most.
 - **Failures.** A remote that can't be reached, or answers anything but a
   manifest or a poll, is down: one line on stderr, its providers left out of
   the manifest and its sessions out of the lists, its topics and calls

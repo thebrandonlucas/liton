@@ -1,12 +1,13 @@
 import cap.Capability
 import cap.Chat
+import cap.Files
 import cap.Manifest
 import cap.WorkspaceGit
 import cap.Workspaces
 
 Mock := [].{
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1] }
 
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }
@@ -84,6 +85,17 @@ Mock := [].{
 		}
 	}
 
+	## What follows stopping a session whose timeline so far is `timeline`,
+	## once the rest of its script is dropped: its pending requests denied,
+	## and it idle. Nothing when it isn't running.
+	on_cancel : List(Chat.Entry) -> List(Scheduled)
+	on_cancel = |timeline|
+		if [Running, AwaitingPermission].contains(Mock.status(timeline)) {
+			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
+		} else {
+			[]
+		}
+
 	## A session's status: the last status its timeline reports.
 	status : List(Chat.Entry) -> Chat.Status
 	status = |timeline|
@@ -128,7 +140,66 @@ Mock := [].{
 			{ workspace, status: Status({ ..clean, branch: Branch("fix-auth"), dirty: Bool.True, ahead: 1 }), fingerprint: WorkspaceGit.fingerprint(scope, diff), diff, commits: [commit] }
 		}
 	}
+
+	## The files of each mock workspace: a README and a link to it, the login
+	## code, a generated file longer than a client is sent, and a logo,
+	## binary.
+	files : List({ path : Str, body : [Text(Str), Binary(U64), LinkTo(Str)] })
+	files = [
+		{ path: "README.md", body: Text("# liton\n\nThe mock provider's project, to try liton without a real one.\n") },
+		{ path: "AGENTS.md", body: LinkTo("README.md") },
+		{ path: "src/Auth.roc", body: Text("login = |request|\n\tredirect_to = request.came_from\n\tSession.start(redirect_to)\n") },
+		{ path: "src/Generated.roc", body: Text(Str.repeat("# A generated line, of a file too long to send whole.\n", 6_000)) },
+		{ path: "assets/logo.png", body: Binary(4_096) },
+	]
+
+	## A mock workspace's directory at `path`, "." for its own.
+	tree : Str -> Files.Tree
+	tree = |path| {
+		inside = if (path == ".") "" else "${path}/"
+		entries = Mock.files.keep_if(|file| file.path.starts_with(inside)).fold(
+			[],
+			|so_far, file| {
+				rest = file.path.drop_prefix(inside).split_on("/")
+				name = rest.first() ?? ""
+				kind = match file.body {
+					_ if rest.len() > 1 => Directory
+					LinkTo(_) => Symlink
+					_ => File
+				}
+				if (so_far.any(|known| known.name == name)) so_far else so_far.append({ name, kind, size: if (kind == Directory) 0 else size_of(file.body), modified: changed_at })
+			},
+		)
+		{ path, listing: if (entries.is_empty()) Unreadable("no directory ${path}") else Listed(entries) }
+	}
+
+	## A mock workspace's file at `path`, a link's target's.
+	contents : Str -> Files.Contents
+	contents = |path| {
+		read =
+			match Mock.files.find_first(|file| file.path == path).map_ok(|file| file.body) {
+				Ok(LinkTo(target)) => Mock.contents(target).read
+				Ok(Text(text)) => {
+					capped = Files.capped(text)
+					Text({ text: capped.text, truncated: capped.truncated, size: text.count_utf8_bytes(), modified: changed_at })
+				}
+				Ok(Binary(size)) => Binary({ size, modified: changed_at })
+				Err(_) => Unreadable("no file ${path}")
+			}
+		{ path, read }
+	}
 }
+
+changed_at : Str
+changed_at = "2026-01-01T09:00:00.000Z"
+
+size_of : [Text(Str), Binary(U64), LinkTo(Str)] -> U64
+size_of = |body|
+	match body {
+		Text(text) => text.count_utf8_bytes()
+		Binary(size) => size
+		LinkTo(target) => target.count_utf8_bytes()
+	}
 
 login_fix : WorkspaceGit.FileDiff
 login_fix = {
@@ -146,9 +217,36 @@ expect Mock.on_message("hi", 7).len() == 7
 expect Mock.on_answer("p", Bool.False, 3).len() == 3
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
+
+expect {
+	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested({ request_id: "p1", tool: "edit", description: "" }) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
+	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
+		and Mock.on_cancel([{ sequence: 1, event: StatusChanged(Idle) }]) == []
+}
 expect Mock.git("main", Uncommitted, NoFile).diff == []
 expect Mock.git("fix-auth", Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), Selected("tests/Auth.roc")).diff.map(|shown| shown.hunks.len()) == [1]
 
 # Each seed session works in one workspace, of a listed project.
 expect Mock.seeds.all(|seed| Mock.workspaces.keep_if(|shown| shown.session_ids.contains(seed.id)).len() == 1)
 expect Mock.workspaces.all(|shown| Mock.projects.any(|project| project.id == shown.project_id))
+
+expect {
+	names = |listing|
+		match listing {
+			Listed(entries) => entries.map(|entry| (entry.name, entry.kind))
+			_ => []
+		}
+	names(Mock.tree(".").listing) == [("README.md", File), ("AGENTS.md", Symlink), ("src", Directory), ("assets", Directory)]
+		and names(Mock.tree("src").listing) == [("Auth.roc", File), ("Generated.roc", File)]
+		and Mock.tree("README.md").listing == Unreadable("no directory README.md")
+}
+
+expect {
+	read = |path| Mock.contents(path).read
+	cut_short =
+		match read("src/Generated.roc") {
+			Text({ text, truncated, size, .. }) => truncated and text.count_utf8_bytes() == Files.text_limit and size > Files.text_limit
+			_ => Bool.False
+		}
+	cut_short and read("AGENTS.md") == read("README.md") and read("assets/logo.png") == Binary({ size: 4_096, modified: changed_at }) and read("src") == Unreadable("no file src")
+}

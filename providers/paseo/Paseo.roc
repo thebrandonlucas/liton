@@ -9,7 +9,7 @@ import cap.Manifest
 ## snake_case fields below; liton reads only these fields.
 Paseo := [].{
 	provider : Manifest.Provider
-	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1] }
+	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1] }
 
 	## How many timeline entries a fetch asks for: a session's first fetch
 	## takes its last ones, later fetches follow on while a page `has_newer`.
@@ -123,6 +123,22 @@ Paseo := [].{
 
 	resolved : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	resolved = |text, request_id| Paseo.write_answer(text, "agent_permission_resolved", request_id).map_ok(|_| {})
+
+	## Stops an agent's running turn, if any. Paseo answers with a
+	## `cancel_agent_response` once it stopped, or why it couldn't (see
+	## `canceled`).
+	cancel_request : Str, Str -> Str
+	cancel_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "cancel_agent_request", agentId: agent_id, requestId: request_id } })
+
+	canceled : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	canceled = |text, request_id| {
+		answered : Try({ message : { payload : { error : Try(Try(Str, [Null]), [Missing]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "cancel_agent_response", request_id)?)
+		match answered?.message.payload.error {
+			Ok(Ok(reason)) => Err(Refused(reason))
+			_ => Ok({})
+		}
+	}
 
 	## Asks for one agent, for its state when a timeline page lacks it.
 	agent_request : Str, Str -> Str
@@ -647,6 +663,16 @@ expect {
 		and Paseo.resolved(failure, "p2") == Err(OtherMessage)
 		and Paseo.answers_request(resolution, "p1")
 		and Paseo.answers_request(failure, "p1")
+}
+
+expect Paseo.cancel_request("a1", "c1") == request("{\"agentId\":\"a1\",\"requestId\":\"c1\",\"type\":\"cancel_agent_request\"}")
+
+expect {
+	answer = |fields| session("{\"type\":\"cancel_agent_response\",\"payload\":{\"requestId\":\"c1\",\"agentId\":\"a1\",\"agent\":null${fields}}}")
+	Paseo.canceled(answer(",\"error\":null"), "c1") == Ok({})
+		and Paseo.canceled(answer(""), "c1") == Ok({})
+		and Paseo.canceled(answer(",\"error\":\"Agent a1 is still running\""), "c1") == Err(Refused("Agent a1 is still running"))
+		and Paseo.canceled(answer(",\"error\":null"), "c2") == Err(OtherMessage)
 }
 
 expect {

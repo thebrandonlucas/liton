@@ -35,6 +35,8 @@ All notable changes to liton are documented in this file. The format is based on
 - A bar across the top replaces the toolbar. On the left are your setup's presets as numbered workspaces, with the one shown marked: click one, or press Alt+1 to Alt+9 outside a text box. On the right are how many sessions need you, how many agents are running, the drawer buttons and Settings. Escape closes Settings.
 - Themes: Pastoral, gold on a dark gradient (the default); Hypr, with an edge that fades from teal to violet; and Plain, light and calm with nothing moving. Pick one in Settings. The browser keeps it with your layout, and a snapshot carries it. A setup declares its themes and its default one (`Setup.with_theme`, `with_default_theme`), and Settings offers the daemon's.
 - A Glass switch in Settings turns off the blur behind the tiles, which saves work on a slow device's graphics card.
+- Stop a running agent with chat.v1's `Cancel` call (`liton call chat.v1 '{"Cancel":{"session_id":"…"}}'`), for Paseo's agents, the mock's and those of providers outside the daemon.
+- Browse the files of a session's or workspace's directory with the new `files.v1` capability: `/liton/v1/poll` follows a directory's entries (`tree/<context>/<path>`) and a file's text, up to its first 256 KiB, or whether it is binary or too large (`file/<context>/<path>`). Paseo, the mock and providers outside the daemon offer it; the daemon asks Paseo for a directory or file when it is first watched and again at most every 10 s while it is.
 
 ### Changed
 

@@ -1,8 +1,8 @@
 ## liton's daemon: offers its providers' capabilities, chat.v1,
-## workspace.git.v1 and workspaces.v1, and those its transformers derive
-## (transformers/), such as attention.v1 from chat.v1, at /liton/v1 in the
-## capability protocol (docs/protocol.md), from what it keeps in SQLite, and
-## serves the UI.
+## workspace.git.v1, workspaces.v1 and files.v1, and those its transformers
+## derive (transformers/), such as attention.v1 from chat.v1, at /liton/v1 in
+## the capability protocol (docs/protocol.md), from what it keeps in SQLite,
+## and serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
@@ -56,6 +56,7 @@ import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
 import paseo.Paseo
+import paseo.PaseoFiles
 import paseo.PaseoGit
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
@@ -314,6 +315,8 @@ interested! = |context, subject| {
 			}
 		Changes({ context: focus, scope }) => git_interested!(context, focus, { scope, file: NoFile })
 		File({ context: focus, scope, path }) => git_interested!(context, focus, { scope, file: Selected(path) })
+		Tree({ context: focus, path }) => files_interested!(context, focus, "tree", path)
+		Contents({ context: focus, path }) => files_interested!(context, focus, "file", path)
 		Importable if context.paseo.is_ok() => wanted!(db, "importable", "")
 		WorkspaceList if context.paseo.is_ok() => {
 			wanted!(db, "agent_list", "")?
@@ -330,6 +333,32 @@ git_interested! = |context, focus, asked|
 		PaseoDirectory(directory) => git_wanted!(context.db, directory, asked)
 		_ => Ok({})
 	}
+
+## Notes that a poll watches a directory's listing ("tree") or a file
+## ("file") of a context's workspace.
+files_interested! : Context, [Session(Str), Workspace(Str)], Str, Str => Try({}, _)
+files_interested! = |context, focus, kind, path|
+	match located!(context, focus)? {
+		PaseoDirectory(directory) => wanted!(context.db, kind, Json.to_str({ directory, path }))
+		_ => Ok({})
+	}
+
+## A files.v1 topic's event: the directory (`Tree`) or file (`Contents`) at
+## `path` of a context's workspace, as its provider has it; `Unknown` while
+## Paseo hasn't answered, or there is no workspace.
+explored! : Context, [Tree, Contents], [Session(Str), Workspace(Str)], Str => Try(Protocol.Event, _)
+explored! = |context, what, focus, path| {
+	unknown = if (what == Tree) Tree({ path, listing: Unknown }) else Contents({ path, read: Unknown })
+	match located!(context, focus)? {
+		MockWorkspace(_) => Ok(if (what == Tree) Tree(Mock.tree(path)) else Contents(Mock.contents(path)))
+		PaseoDirectory(directory) => {
+			cached : Try(Protocol.Event, _)
+			cached = Json.parse(file_cached!(context.db, directory, "${if (what == Tree) "tree" else "file"} ${path}")?.map_ok(|row| row.value) ?? "")
+			Ok(cached ?? unknown)
+		}
+		Nowhere => Ok(unknown)
+	}
+}
 
 ## A topic's update: a timeline's entries after its cursor, or a snapshot of
 ## anything else.
@@ -352,6 +381,8 @@ update! = |context, wanted, subject| {
 		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
 		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
 		File({ context: focus, scope, path }) => Ok(Protocol.snapshot(wanted, File(WorkspaceGit.file_hunks(path, git_found!(context, focus, { scope, file: Selected(path) })?))))
+		Tree({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Tree, focus, path)?))
+		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 	}
 }
 
@@ -436,6 +467,22 @@ chat_call! = |context, provider, asked| {
 					}
 					NoSession => Ok(no_session(session_id))
 				}
+			}
+		Cancel({ session_id }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "DELETE FROM entries WHERE session_id = :session_id AND visible_at > :now;", params: { session_id, now: now_ms!() } })?
+					timeline = visible!(db, session_id, 0)?
+					schedule!(db, session_id, |_| Mock.on_cancel(timeline))?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-cancel-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.cancel_request(session_id, request_id), request_id, Paseo.canceled)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
 			}
 	}
 }
@@ -703,6 +750,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
@@ -873,8 +921,9 @@ importable_interval_ms = 60_000
 
 ## Notes that a poll watches `subject` as `kind`: "agent_list",
 ## "workspace_list" or "importable" (no subject), "timeline" (a session id), "workspace",
-## "uncommitted" or "base" (a directory), or "commit_file". What no poll
-## watched within `interest_ms` is asked about in a cycle at once.
+## "uncommitted" or "base" (a directory), "commit_file", or "tree" or "file"
+## (a directory and a path in it). What no poll watched within `interest_ms`
+## is asked about in a cycle at once.
 wanted! : Sqlite.Db, Str, Str => Try({}, _)
 wanted! = |db, kind, subject| {
 	now = now_ms!()
@@ -975,8 +1024,10 @@ store! = |db, session_id, stored, { state, events }| {
 ## watched within `interest_ms`, over one WebSocket connection: its agents
 ## and its workspaces, each timeline's new entries, then each directory's
 ## status and, when due (see `PaseoGit.refresh`), its commits and diffs, then
-## the commit files not cached yet. Nothing watched, no connection. A question
-## that fails is logged and the next asked; a lost connection ends the cycle.
+## the commit files not cached yet, then the listings and files fetched
+## `PaseoFiles.lifetime_ms` ago or never. Nothing watched, no connection. A
+## question that fails is logged and the next asked; a lost connection ends
+## the cycle.
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
 paseo_cycle! : Context => Try({}, _)
 paseo_cycle! = |{ db, paseo, .. }|
@@ -987,6 +1038,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 				Ok({})
 			} else {
 				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: now_ms!() - interest_ms } })?
+				Sqlite.execute!({ db, query: "DELETE FROM file_cache WHERE fetched_at <= :since;", params: { since: now_ms!() - file_cache_ms } })?
 				wanted : List({ kind : Str, subject : Str })
 				wanted = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
 				if !wanted.is_empty() {
@@ -994,7 +1046,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok(connection) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							ordered = ["agent_list", "workspace_list", "importable", "timeline", "workspace", "uncommitted", "base", "commit_file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							ordered = ["agent_list", "workspace_list", "importable", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
@@ -1079,6 +1131,8 @@ asked! = |db, connection, { kind, subject }, request_id|
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
 		"base" => diffed!(db, connection, subject, AgainstBase, request_id)
 		"commit_file" => commit_file!(db, connection, subject, request_id)
+		"tree" => explored_by_paseo!(db, connection, kind, subject, request_id)
+		"file" => explored_by_paseo!(db, connection, kind, subject, request_id)
 		_ => Ok({})
 	}
 
@@ -1218,6 +1272,43 @@ commit_file! = |db, connection, subject, request_id| {
 		hunks = PaseoGit.commit_file_answer(exchange!(connection, PaseoGit.commit_file_request(directory, sha, path, request_id), request_id)?, request_id)?
 		cache!(db, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
 	}
+}
+
+## How long the daemon keeps a listing or a file no poll watches any more.
+file_cache_ms : I64
+file_cache_ms = 600_000
+
+## Fetches a directory's listing ("tree") or a file ("file") a poll watched,
+## unless it was fetched within `PaseoFiles.lifetime_ms`, and keeps it as its
+## topic's event.
+explored_by_paseo! : Sqlite.Db, Tcp.Connection, Str, Str, Str => Try({}, _)
+explored_by_paseo! = |db, connection, kind, subject, request_id| {
+	decoded : Try({ directory : Str, path : Str }, _)
+	decoded = Json.parse(subject)
+	{ directory, path } = decoded?
+	what = "${kind} ${path}"
+	since = now_ms!() - PaseoFiles.lifetime_ms
+	if file_cached!(db, directory, what)?.map_ok(|row| row.fetched_at > since) ?? Bool.False {
+		Ok({})
+	} else {
+		event : Protocol.Event
+		event =
+			if kind == "tree" {
+				Tree(PaseoFiles.tree_answer(exchange!(connection, PaseoFiles.tree_request(directory, path, request_id), request_id)?, path, request_id)?)
+			} else {
+				Contents(PaseoFiles.contents_answer(exchange!(connection, PaseoFiles.contents_request(directory, path, request_id), request_id)?, path, request_id)?)
+			}
+		Sqlite.execute!({ db, query: "INSERT INTO file_cache (directory, what, fetched_at, value) VALUES (:directory, :what, :now, :value) ON CONFLICT (directory, what) DO UPDATE SET fetched_at = excluded.fetched_at, value = excluded.value;", params: { directory, what, now: now_ms!(), value: Json.to_str(event) } })
+	}
+}
+
+## What the file cache holds of a directory: "tree <path>" or "file <path>",
+## a files.v1 topic's event.
+file_cached! : Sqlite.Db, Str, Str => Try(Try({ fetched_at : I64, value : Str }, [NothingCached]), _)
+file_cached! = |db, directory, what| {
+	rows : List({ fetched_at : I64, value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT fetched_at, value FROM file_cache WHERE directory = :directory AND what = :what;", params: { directory, what }, limits: Sqlite.default_query_limits })?
+	Ok(rows.first().map_err(|_| NothingCached))
 }
 
 websocket_mask : List(U8)
