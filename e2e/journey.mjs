@@ -105,12 +105,14 @@ try {
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });
-  await step("focusing the login fix shows its changed file in Changes, and picking it shows a hunk", async () => {
+  await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
     await click("Sessions", ".session button", "Fix the login redirect");
     await see("Changes", ".git-status", "fix-auth");
     await click("Changes", ".git-file button", "src/Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
     await see("Changes", ".diff-line .added", "redirect_to = request.came_from");
+    await see("Chat", ".markdown .code", "/login");
+    await see("Chat", ".md-item", "Logging in now returns you where you were.");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Sessions", ".session button", "Find the flaky CI test");

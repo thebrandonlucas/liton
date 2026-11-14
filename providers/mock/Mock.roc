@@ -26,7 +26,7 @@ Mock := [].{
 				StatusChanged(Running),
 				ToolCall({ call_id: "seed-1", tool: "bash", input: "rg -n redirect src/Auth.roc" }),
 				ToolResult({ call_id: "seed-1", output: "src/Auth.roc:41:\tredirect_to = \"/login\"", failed: Bool.False }),
-				AgentMessage({ text: "The redirect target is hard-coded to /login. I changed it to the page you came from." }),
+				AgentMessage({ text: "The redirect target is hard-coded to `/login`. I changed it to **the page you came from**:\n\n```roc\n# src/Auth.roc\nredirect_to = request.came_from ?? \"/\"\n```\n\n- Logging in now returns you where you were.\n- With no page to go back to, you land on `/`." }),
 				StatusChanged(Idle),
 			],
 		},

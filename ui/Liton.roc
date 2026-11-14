@@ -9,6 +9,8 @@ import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
 import setup.Setup
+import Highlight
+import Markdown
 import Themes
 import Model
 import Widgets
@@ -739,10 +741,15 @@ Liton := [].{
 										Html.li(
 											[Engine.class_s(row.field(|entry| Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
 											[
-												Engine.when(
-													row.field(|entry| entry.card.is_ok()),
-													|| Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" })),
-													|| Html.pre_s(row.field(|entry| Liton.describe(entry.event)), []),
+												Engine.switch(
+													row.field(|entry| if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
+													[Card, Message, Plain],
+													|kind|
+														match kind {
+															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }))
+															Message => Liton.markdown(row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
+															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
+														},
 												),
 											],
 										),
@@ -1140,6 +1147,111 @@ Liton := [].{
 			],
 		)
 	}
+
+	## A message's text, which shows as Markdown.
+	message : Chat.Event -> Try(Str, [NotMessage])
+	message = |event|
+		match event {
+			UserMessage({ text }) | AgentMessage({ text }) => Ok(text)
+			_ => Err(NotMessage)
+		}
+
+	## Markdown's blocks as elements (ui/Markdown.roc).
+	markdown : Signal(ctx, List(Markdown.Block)) -> Elem(ctx)
+	markdown = |blocks|
+		Html.div(
+			"markdown",
+			[
+				Engine.each(
+					blocks,
+					|block| block.key,
+					|row| {
+						attrs = |name| [Engine.class(name)]
+						Html.div_attrs(
+							[Engine.class_s(row.field(|block| if (block.quote > 0) "md-block quoted" else "md-block")), Engine.attr_s("style", row.field(|block| "--indent: ${block.indent.to_str()}"))],
+							[
+								Engine.switch(
+									row.field(|block| block.kind),
+									[Paragraph, Heading, Code, List, Rule],
+									|kind|
+										match kind {
+											Paragraph => Engine.element("p", attrs("md-p"), [Liton.spans(row.field(|block| block.spans))])
+											Heading => Engine.element("p", attrs("md-h").concat([Engine.attr("role", "heading"), Engine.attr_s("aria-level", row.field(|block| block.level.to_str()))]), [Liton.spans(row.field(|block| block.spans))])
+											Rule => Engine.element("hr", attrs("md-rule"), [])
+											Code => Liton.code_block(row.field(|block| block.code), attrs("md-code"))
+											List =>
+												Engine.element(
+													"ul",
+													attrs("md-list"),
+													[
+														Engine.each(
+															row.field(|block| block.items.map_with_index(|item, index| { index: index.to_str(), item })),
+															|keyed| keyed.index,
+															|item| Html.li([Engine.class("md-item"), Engine.attr_s("style", item.field(|keyed| "--depth: ${keyed.item.depth.to_str()}"))], [Html.span_s(item.field(|keyed| keyed.item.marker), [Engine.class("md-marker")]), Engine.element("span", [], [Liton.spans(item.field(|keyed| keyed.item.spans))])]),
+														),
+													],
+												)
+										},
+								),
+							],
+						)
+					},
+				),
+			],
+		)
+
+	## Inline Markdown: text, set as its class says, and links, which open in
+	## a new tab.
+	spans : Signal(ctx, List(Markdown.Span)) -> Elem(ctx)
+	spans = |listed|
+		Engine.each(
+			listed.map(|shown| shown.map_with_index(|span, index| { index: index.to_str(), span })),
+			|keyed| keyed.index,
+			|row|
+				Engine.element(
+					"span",
+					[Engine.class_s(row.field(|keyed| keyed.span.class))],
+					[
+						Engine.when(
+							row.field(|keyed| !keyed.span.href.is_empty()),
+							|| Engine.element("a", [Engine.attr_s("href", row.field(|keyed| keyed.span.href)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer")], [Engine.text_s(row.field(|keyed| keyed.span.text))]),
+							|| Engine.text_s(row.field(|keyed| keyed.span.text)),
+						),
+					],
+				),
+		)
+
+	## A code block: its language over its highlighted lines.
+	code_block : Signal(ctx, { language : Str, text : Str, lines : List(List(Highlight.Token)) }), List(Engine.Attr(ctx)) -> Elem(ctx)
+	code_block = |code, attrs|
+		Html.div_attrs(
+			attrs,
+			[
+				Html.div(
+					"md-code-bar",
+					[
+						Html.span_s(code.map(|shown| shown.language), [Engine.class("md-language")]),
+					],
+				),
+				Engine.element(
+					"pre",
+					[],
+					[
+						Engine.element(
+							"code",
+							[],
+							[
+								Engine.each(
+									code.map(|shown| shown.lines.map_with_index(|tokens, index| { index: index.to_str(), tokens })),
+									|keyed| keyed.index,
+									|line| Engine.element("span", [Engine.class("line")], [Engine.each(line.field(|keyed| keyed.tokens.map_with_index(|token, index| { index: index.to_str(), token })), |keyed| keyed.index, |token| Html.span_s(token.field(|keyed| keyed.token.text), [Engine.class_s(token.field(|keyed| keyed.token.class))]))]),
+								),
+							],
+						),
+					],
+				),
+			],
+		)
 
 	describe : Chat.Event -> Str
 	describe = |event|

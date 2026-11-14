@@ -39,6 +39,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Each chat.v1 session tells, when its provider knows, the model it runs, the directory and workspace it works in, its branch, and when its running turn started and it last changed, for an agent's header to show.
 - Browse the files of a session's or workspace's directory with the new `files.v1` capability: `/liton/v1/poll` follows a directory's entries (`tree/<context>/<path>`) and a file's text, up to its first 256 KiB, or whether it is binary or too large (`file/<context>/<path>`). Paseo, the mock and providers outside the daemon offer it; the daemon asks Paseo for a directory or file when it is first watched and again at most every 10 s while it is.
 - The daemon transcribes dictation on your own machine: set `LITON_STT=sherpa=ws://127.0.0.1:6006` (Parakeet in sherpa-onnx) or `LITON_STT=whisper=http://127.0.0.1:8178` (whisper.cpp), which `rig/speech/` runs, and it offers `voice.v1`. Clients post the audio in acknowledged 1 s chunks to `/liton/v1/audio/voice.v1/<utterance>/<seq>`, so a dropped link loses nothing, and `Finish` answers the transcript (docs/protocol.md, Audio).
+- Messages in the chat show as Markdown: headings, bold, italic and struck-through text, inline code, lists (nested too), quotes and links, which open in a new tab; a table shows as its text, in a code block. Only links to the web or to email addresses work, and any HTML in a message shows as text.
 
 ### Changed
 
