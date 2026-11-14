@@ -4,12 +4,12 @@
 ## its options, and the parts of it that are stable hooks for styling. When a
 ## widget is relevant (a `when` expression over the focus) is still to come.
 import cap.Capability
+import setup.Setup
 
 Widgets := [].{
 
-	## Where a column sits: in a Workbench's left drawer, main area or right
-	## drawer, or anywhere (`Free`) in Tiling, which takes every widget.
-	Slot : [Left, Main, Right, Free]
+	## Where a column sits (Setup.Slot).
+	Slot : Setup.Slot
 
 	## An option's kind, from a closed set, with its default. Text, Int,
 	## CapabilityRef, ContextRef and ThemeToken are next.

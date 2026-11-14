@@ -6,35 +6,31 @@ import cap.Chat
 import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
+import setup.Default
+import setup.Setup
 import Widgets
 
 Model := [].{
 
-	## `pinned` is the session a pane shows whatever the focus is, or "" to
-	## follow the focus. `options` holds the values set of its widget's options;
-	## the rest have their defaults.
-	Pane : { id : Str, widget : Str, pinned : Str, options : List({ key : Str, value : Str }) }
+	## The layout's parts, as setups' presets hold them (setup/Setup.roc).
+	Pane : Setup.Pane
 
-	## Panes side by side make a row of columns. A column stacks its panes, or
-	## when `tabbed` shows only its `active` one. `size` weighs its width.
-	Column : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(Pane) }
+	Column : Setup.Column
 
 	## A pane and column as snapshots before version 4 saved them, without options.
 	OldPane : { id : Str, widget : Str, pinned : Str }
 
 	OldColumn : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(OldPane) }
 
-	## How columns are laid out: freely in Tiling, or in a Workbench's three
-	## slots, the left drawer, the main area and the right drawer.
-	Shell : [Workbench, Tiling]
+	Shell : Setup.Shell
 
 	## `collapsed` are the Workbench drawers hidden.
 	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot) }
 
-	Slot : Widgets.Slot
+	Slot : Setup.Slot
 
 	## The part of the model a snapshot saves: deterministic JSON others can load.
-	Snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }
+	Snapshot : Setup.Snapshot
 
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
@@ -107,37 +103,20 @@ Model := [].{
 
 	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
 
-	## The Developer preset, the default: a Workbench of sessions, the chat
-	## following the focus, and the focused session's changes beside what the
-	## daemon advertises.
+	## The layout of a preset or snapshot.
+	layout_of : Snapshot -> Layout
+	layout_of = |{ shell, columns, collapsed, .. }| { shell, columns, collapsed }
+
+	## liton's own presets (setup/Default.roc): Developer, the default,
+	## Inbox and Tiling.
 	developer : Layout
-	developer = {
-		shell: Workbench,
-		columns: [
-			{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
-			{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-			{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "capabilities", pinned: "", options: [] }] },
-		],
-		collapsed: [],
-	}
+	developer = Model.layout_of(Default.developer.snapshot)
 
-	## The Inbox preset: a Workbench of what needs you, the chat following the
-	## item opened, and the Developer preset's right drawer, collapsed.
 	inbox : Layout
-	inbox = { ..Model.developer, columns: Model.developer.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }] } else column), collapsed: [Right] }
+	inbox = Model.layout_of(Default.inbox.snapshot)
 
-	## The Tiling preset: sessions, a wider chat and what the daemon advertises,
-	## each in a column.
 	tiling : Layout
-	tiling = {
-		shell: Tiling,
-		columns: [
-			{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
-			{ id: "column-2", size: 2, tabbed: Bool.False, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-			{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "", options: [] }] },
-		],
-		collapsed: [],
-	}
+	tiling = Model.layout_of(Default.tiling.snapshot)
 
 	initial : Str -> State
 	initial = |saved|
@@ -189,7 +168,7 @@ Model := [].{
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: 4, shell: state.shell, columns: state.columns, collapsed: state.collapsed }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State

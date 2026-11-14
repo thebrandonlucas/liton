@@ -182,12 +182,12 @@ pub fn build(b: *std.Build) void {
     addFilesCommand(b, fmt_step, &.{ roc_ui, "fmt" }, ui_roc_files.items);
     addFilesCommand(b, fmt_step, &.{ "zig", "fmt" }, sources.zig_files);
 
-    // The capabilities package is imported by the UI and the daemon, so both
-    // compilers check and test it.
+    // The capabilities and setup packages are imported by the UI and the
+    // daemon, so both compilers check and test them.
     const test_step = b.step("test", "Run checks and Roc tests");
     test_step.dependOn(check_step);
     for (sources.roc_roots) |root| {
-        const shared = std.mem.startsWith(u8, root, "capabilities/");
+        const shared = std.mem.startsWith(u8, root, "capabilities/") or std.mem.startsWith(u8, root, "setup/");
         if (shared or !isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
         if (shared or isUi(root)) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
