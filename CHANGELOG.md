@@ -51,6 +51,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Switching sessions, picking a file or a scope in Changes, or showing a pane brings what it shows faster: the UI asks the daemon at once instead of on its next once-a-second update, which now asks for everything on screen in one request.
 - Without an Inbox in the layout, the browser tab's title counts the sessions waiting for you.
 - Layouts saved before themes existed show the setup's default theme. A `liton.setup.json` evaluated before then still loads, and offers no themes of its own.
+- Each pane's header shows what the pane shows. What it follows or is pinned to, Pin, the moves in Tiling and Close pane are in its ⋯ menu.
 
 ### Fixed
 

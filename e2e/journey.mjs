@@ -80,7 +80,7 @@ try {
   };
 
   await step("the three preset panes render", async () => {
-    for (const pane of ["Sessions", "Chat", "Capabilities"]) await see(pane, ".pane-header", "");
+    for (const pane of ["Sessions", "Chat", "Capabilities"]) await see(pane, ".pane-header", "⋯");
     await see("Capabilities", ".manifest", "Mock agents (mock)");
   });
   await step("the seeded sessions appear in Sessions", async () => {

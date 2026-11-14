@@ -113,6 +113,9 @@ Model := [].{
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
+		## The pane whose ⋯ menu is open, or "".
+		menu : Str,
+
 		## The code block last copied, by its key, and the copy asked of the
 		## clipboard; `copied` is "" again if the clipboard refused it.
 		copied : Str,
@@ -184,6 +187,7 @@ Model := [].{
 				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
 				glass: Bool.True,
 				focused_pane: "",
+				menu: "",
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 			},
@@ -312,15 +316,18 @@ Model := [].{
 		option = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
 		match (numbered, option, state.presets.get(numbered ?? (option ?? 9))) {
 			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
-			_ if key == "Escape" => { ..state, show_settings: Bool.False }
+			_ if key == "Escape" => { ..state, show_settings: Bool.False, menu: "" }
 			_ => state
 		}
 	}
 
 	## Marks the pane clicked or focused in, and shows its column on a narrow
-	## screen.
+	## screen. Another pane's menu closes.
 	focus_pane : State, { pane : Str, column : Str } -> State
-	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column }
+	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column, menu: if (state.menu == pane) pane else "" }
+
+	toggle_menu : State, Str -> State
+	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
 
 	## Copies a code block, shown as copied at once.
 	copy : State, { key : Str, text : Str } -> State
@@ -698,7 +705,7 @@ Model := [].{
 	stop : State, Str -> State
 	stop = |state, pane_id| {
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id }))
+		{ ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
 	}
 
 	## Whether a session is being stopped, or why it wasn't.

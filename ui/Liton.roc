@@ -85,6 +85,8 @@ Liton := [].{
 						Liton.settings(model),
 					],
 				),
+				# Under an open ⋯ menu's pane: a click anywhere else closes the menu.
+				Engine.when(model.signal().map(|state| !state.menu.is_empty()), || Html.div_attrs([Engine.class("menu-backdrop"), Engine.on_click(model.update(|state| { ..state, menu: "" }))], []), || Engine.text("")),
 			].concat(Liton.effects(model)),
 		)
 
@@ -505,28 +507,12 @@ Liton := [].{
 									"pane-heading",
 									[
 										Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
-										Html.span_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
+										Html.span_s(shown.map(|{ pane, state }| if (Widgets.find(pane.widget).follows_session) Model.session(state, Model.session_of(state, pane)).title else ""), [Engine.class("pane-context")]),
 									],
 								),
 						),
-						Engine.when(
-							row.field(|pane| Widgets.find(pane.widget).follows_session),
-							|| Html.button_s(row.field(|pane| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, Model.toggle_pin)),
-							|| Engine.text(""),
-						),
-						Engine.when(
-							model.signal().map(|state| state.shell == Tiling),
-							||
-								Html.div(
-									"moves",
-									[
-										Html.icon_button("←", title.map(|name| "Move ${name} left"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Left))),
-										Html.icon_button("→", title.map(|name| "Move ${name} right"), "move", model.update_by(id, |state, pane_id| Model.move_pane(state, pane_id, Right))),
-									],
-								),
-							|| Engine.text(""),
-						),
-						Html.button("×", [Html.aria_label("Close pane"), Engine.class("close")], model.update_by(id, Model.close_pane)),
+						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
+						Liton.pane_menu(model, id, title, shown),
 					],
 				),
 				Engine.switch(
@@ -639,6 +625,59 @@ Liton := [].{
 				Html.div("agent-meta", [Html.span_s(agent.map(|shown| shown.kind), [Engine.class("agent-kind")]), Html.span_s(agent.map(|shown| shown.place), [Engine.class("agent-place")])]),
 			],
 		)
+
+	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, the moves
+	## Tiling allows, and Close. Each closes the menu.
+	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	pane_menu = |model, id, title, shown| {
+		closing = |change| |state, pane_id| { ..change(state, pane_id), menu: "" }
+		Html.div(
+			"pane-menu",
+			[
+				Engine.element(
+					"button",
+					[
+						Engine.attr("type", "button"),
+						Engine.class("menu-toggle"),
+						Html.aria_label_s(title.map(|name| "${name} menu")),
+						Engine.attr("aria-haspopup", "true"),
+						Html.flag("aria-expanded", id.map2(model.signal(), |pane_id, state| state.menu == pane_id)),
+						Engine.on_click(model.update_by(id, Model.toggle_menu)),
+					],
+					[Engine.text("⋯")],
+				),
+				Engine.when(
+					id.map2(model.signal(), |pane_id, state| state.menu == pane_id),
+					||
+						Html.div(
+							"menu",
+							[
+								Html.p_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
+								Engine.when(
+									shown.map(|{ pane, .. }| Widgets.find(pane.widget).follows_session),
+									|| Html.button_s(shown.map(|{ pane, .. }| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, closing(Model.toggle_pin))),
+									|| Engine.text(""),
+								),
+								Engine.when(
+									model.signal().map(|state| state.shell == Tiling),
+									||
+										Html.div(
+											"moves",
+											[
+												Html.button_s(title.map(|name| "← Move ${name} left"), [Html.aria_label_s(title.map(|name| "Move ${name} left"))], model.update_by(id, closing(|state, pane_id| Model.move_pane(state, pane_id, Left)))),
+												Html.button_s(title.map(|name| "Move ${name} right →"), [Html.aria_label_s(title.map(|name| "Move ${name} right"))], model.update_by(id, closing(|state, pane_id| Model.move_pane(state, pane_id, Right)))),
+											],
+										),
+									|| Engine.text(""),
+								),
+								Html.button("Close pane", [Engine.class("close")], model.update_by(id, closing(Model.close_pane))),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+	}
 
 	## What needs you, then what failed, is done or working, then what you set
 	## aside, folded away.

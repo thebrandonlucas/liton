@@ -10,7 +10,7 @@
     (expect-attr (test-id "slot-right") class "column slot slot-right tabbed collapsed")
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"codex\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Working 1\",\"state\":\"Working\",\"summary\":\"\",\"title\":\"Refactor\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s2\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"Can I?\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s3\",\"set_aside\":\"No\",\"signature\":\"Idle 1\",\"state\":\"Idle\",\"summary\":\"\",\"title\":\"Scratch\"}]}]}]}")
     (run-effect 3)
-    (expect-text (test-id "slot-left") "Inbox (1)Inbox (1)×Needs youFix testsclaudeneeds youCan I?SettleSnooze 1 hourWorkingRefactorcodexworkingSettleSnooze 1 hour")
+    (expect-text (test-id "slot-left") "Inbox (1)Inbox (1)⋯Needs youFix testsclaudeneeds youCan I?SettleSnooze 1 hourWorkingRefactorcodexworkingSettleSnooze 1 hour")
     (click (test-id "show-left"))
     (click (role button :name "Fix tests"))
     (expect-text (test-id "session-title") "Fix tests")

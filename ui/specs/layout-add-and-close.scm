@@ -1,4 +1,4 @@
-(test "Liton — settings add a widget as a tab of the Workbench's main area, and × closes one"
+(test "Liton — settings add a widget as a tab of the Workbench's main area, and Close in its menu closes one"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -13,6 +13,7 @@
     (expect-attr (role region :name "Chat") class "pane hidden")
     (expect-visible (text "This widget needs ci.v1, which no connected provider supplies. Connect one that does, and it fills in here."))
     ; The first pane's close button is the Sessions pane's. Its drawer stays.
+    (click (role button :name "Sessions menu"))
     (click (role button :name "Close pane"))
     (expect-absent (role region :name "Sessions"))
     (expect-text (test-id "show-left") "")
