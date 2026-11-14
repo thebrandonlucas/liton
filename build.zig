@@ -238,6 +238,13 @@ pub fn build(b: *std.Build) void {
     build_cli.has_side_effects = true;
     cli_step.dependOn(&build_cli.step);
 
+    // The example provider outside the daemon, a server of /liton/v1 on the
+    // daemon's platform and compiler.
+    const example_step = b.step("example-provider", "Build the example provider into zig-out/bin/provider-echo");
+    const build_example = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build examples/provider-echo/main.roc --output=zig-out/bin/provider-echo", "sh", roc });
+    build_example.has_side_effects = true;
+    example_step.dependOn(&build_example.step);
+
     // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
     // LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
