@@ -24,13 +24,14 @@ review = {
 			{ id: "column-3", size: 2, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [{ key: "diff_layout", value: "Split" }] }] },
 		],
 		collapsed: [],
+		theme: "",
 	},
 }
 
 setup : Setup.Declared
 setup = Setup.merge(
 	Setup.without_preset(Setup.without_transformer(Default.setup, "attention"), "Inbox"),
-	{ remotes: [{ name: "team", url: "http://127.0.0.1:8096" }], transformers: [], presets: [review], default_preset: "Review" },
+	{ ..Setup.empty, remotes: [{ name: "team", url: "http://127.0.0.1:8096" }], presets: [review], default_preset: "Review" },
 )
 
 main! = |_arguments| Stdout.line!(Setup.to_json(setup))

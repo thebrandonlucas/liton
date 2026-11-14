@@ -45,13 +45,13 @@ What stays out: no plugin API into liton's internals (a part sees only the proto
 
 ### Setups
 
-A setup is what a daemon and its clients start from: the remotes to connect, the transformers to host, and the presets Settings offers, with the one a new browser starts with. Its types are the `setup` package (`setup/Setup.roc`), which the daemon, the UI and the CLI share as they do `capabilities/`. Keys, options and themes are still to come.
+A setup is what a daemon and its clients start from: the remotes to connect, the transformers to host, the presets and themes Settings offers, with the ones a new browser starts with. Its types are the `setup` package (`setup/Setup.roc`), which the daemon, the UI and the CLI share as they do `capabilities/`. Keys and options are still to come.
 
 - **Declared in Roc.** A `Litonfile.roc` is an app on basic-cli whose `main!` prints a `Setup.Declared` as JSON; apart from that print it is pure, so it does only what it declares. liton's own setup is `setup/Default.roc`: no remotes, attention, and the Developer, Inbox and Tiling presets, Developer first. The `Litonfile.roc` at the root prints it as it is.
-- **Built on another.** A setup imports another as a package and changes it with `Setup.with_remote`, `without_remote`, `with_transformer`, `without_transformer`, `with_preset`, `without_preset`, `with_default_preset` and `merge`, which adds a second setup's remotes and presets over the first's by name. `examples/litonfile-team/` builds on liton's. An app can't be imported, so what a setup shares is a module of a package, as `Default` is, with a Litonfile beside it that only prints it.
+- **Built on another.** A setup imports another as a package and changes it with `Setup.with_remote`, `without_remote`, `with_transformer`, `without_transformer`, `with_preset`, `without_preset`, `with_default_preset`, their `_theme` counterparts and `merge`, which adds a second setup's remotes, presets and themes over the first's by name. `examples/litonfile-team/` builds on liton's. An app can't be imported, so what a setup shares is a module of a package, as `Default` is, with a Litonfile beside it that only prints it.
 - **Evaluated once.** `liton setup [path]` runs a Litonfile with `roc`, reads back what it prints and writes it to `liton.setup.json`, its fields in order, so the same Litonfile gives the same bytes. That file is the setup evaluated.
 - **Read by the daemon.** At start the daemon reads the setup `LITON_SETUP` names, by default `liton.setup.json` if there is one, and otherwise liton's own. The environment still overrides it: `LITON_PROVIDERS`'s remotes take the place of the setup's of the same name and add the rest, and `LITON_TRANSFORMERS` adds transformers. A setup that can't be read, or that names a transformer the daemon doesn't have or a malformed remote, stops the daemon with why.
-- **Offered to clients.** The manifest's `setup` (protocol.md) holds the presets and the default. The UI's preset picker shows them in place of liton's own, which it keeps while the daemon offers none, and a browser with no layout of its own starts with the default. A preset is a snapshot with a name, so loading one is loading a snapshot: the user changes it from there, and the browser keeps their layout.
+- **Offered to clients.** The manifest's `setup` (protocol.md) holds the presets and themes and the defaults. The UI's preset picker shows them in place of liton's own, which it keeps while the daemon offers none, and a browser with no layout of its own starts with the default. A preset is a snapshot with a name, so loading one is loading a snapshot: the user changes it from there, and the browser keeps their layout. Settings offers the themes likewise.
 - **Pinned.** A setup imported by URL is pinned by the hash in its URL, as every Roc package is, so a Litonfile's imports are its lockfile for now. A lockfile of its own waits on setups that pin what Roc doesn't, such as widget packages.
 
 ### Providers
@@ -125,7 +125,7 @@ Using it:
 - **Keys:** a modal leader key (tmux/i3-like) for layout operations. Panes keep their own keys, and a terminal gets raw input.
 - **Narrow screens:** each shell says how its slots collapse below a breakpoint. There is no separate mobile config.
 - **Missing capability:** the pane stays in place as a placeholder. It names the missing capability and the providers that could supply it.
-- **Theme:** color, spacing and font tokens in light and dark. Themes are shareable like layouts.
+- **Theme:** a `Setup.Theme` record of tokens: light or dark, an accent and the color its focused edge fades to, text colors, the edges' strengths, the glass (tint, opacity, blur), the background (a gradient or a color), gap, radius, fonts and motion. The UI sets them as custom properties on its root, which the stylesheet alone uses, so widgets hold no theme code. A snapshot names its theme; setups declare and share themes as they do presets.
 
 ## Snapshot
 

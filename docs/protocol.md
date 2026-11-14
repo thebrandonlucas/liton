@@ -51,7 +51,9 @@ capability as patterns:
   ],
   "setup": {
     "default_preset": "Developer",
-    "presets": [{ "name": "Developer", "snapshot": { "version": 4, "shell": "Workbench", "columns": […], "collapsed": [] } }, …]
+    "default_theme": "Pastoral",
+    "presets": [{ "name": "Developer", "snapshot": { "version": 5, "shell": "Workbench", "columns": […], "collapsed": [], "theme": "" } }, …],
+    "themes": [{ "name": "Pastoral", "scheme": "Dark", "accent": "#e8c872", … }, …]
   }
 }
 ```
@@ -62,9 +64,10 @@ show what is missing and who could supply it.
 
 `setup` holds what the daemon's setup (design.md, Setups) offers its
 clients: its presets, each a layout as a client saves it, a snapshot, with a
-name, and the one a client starts with. Its types are `Setup.Offered` and
-`Setup.Preset` in the `setup` package. A daemon may leave it out, and a
-client then offers presets of its own.
+name, and the one a client starts with; and its themes (`Setup.Theme`) and the
+one a snapshot naming none shows. Its types are `Setup.Offered`, `Setup.Preset`
+and `Setup.Theme` in the `setup` package. A daemon may leave it out, and a
+client then offers presets and themes of its own.
 
 ### Call
 

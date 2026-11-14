@@ -31,6 +31,10 @@ All notable changes to liton are documented in this file. The format is based on
 - Describe a setup in a `Litonfile.roc`, a Roc program: the providers outside the daemon to connect, the transformers it runs and the presets Settings offers. It builds on liton's own, or on another setup it imports, and changes what it needs (`examples/litonfile-team/`). `liton setup [path]` evaluates it to `liton.setup.json`, the same file every time.
 - The daemon starts from `liton.setup.json`, or the setup `LITON_SETUP` names: its remotes and transformers, with `LITON_PROVIDERS` and `LITON_TRANSFORMERS` added over them, and its presets in the manifest.
 - Settings offers the presets of the daemon's setup, and a browser with no layout of its own starts with the setup's default. Change it from there, and the browser keeps your layout. A preset shows as picked while the layout is still its own.
+- A new look: each pane is a glass tile with rounded corners, evenly spaced over a dark gradient. The pane you last clicked in has a bright edge and the others dim a little. Panes and Settings fade in when they open, and buttons respond as you hover and press them. All motion stops when your system asks for reduced motion.
+- A bar across the top replaces the toolbar. On the left are your setup's presets as numbered workspaces, with the one shown marked: click one, or press Alt+1 to Alt+9 outside a text box. On the right are how many sessions need you, how many agents are running, the drawer buttons and Settings. Escape closes Settings.
+- Themes: Pastoral, gold on a dark gradient (the default); Hypr, with an edge that fades from teal to violet; and Plain, light and calm with nothing moving. Pick one in Settings. The browser keeps it with your layout, and a snapshot carries it. A setup declares its themes and its default one (`Setup.with_theme`, `with_default_theme`), and Settings offers the daemon's.
+- A Glass switch in Settings turns off the blur behind the tiles, which saves work on a slow device's graphics card.
 
 ### Changed
 
@@ -40,6 +44,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Layouts saved by an earlier version, in the browser or as a snapshot, load in Tiling, the oldest with one column per pane. One that is just the old default of Sessions, Chat and Capabilities loads as the new Developer workbench instead.
 - Switching sessions, picking a file or a scope in Changes, or showing a pane brings what it shows faster: the UI asks the daemon at once instead of on its next once-a-second update, which now asks for everything on screen in one request.
 - Without an Inbox in the layout, the browser tab's title counts the sessions waiting for you.
+- Layouts saved before themes existed show the setup's default theme. A `liton.setup.json` evaluated before then still loads, and offers no themes of its own.
 
 ### Fixed
 

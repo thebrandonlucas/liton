@@ -59,8 +59,8 @@ await answering(echoPort);
 await answering(peerPort);
 const interval = 1000;
 // A setup as `liton setup` writes one, with a preset of its own.
-const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "chat", pinned: "", options: [] }] }] } };
-const setup = { remotes: [{ name: "echo", url: `http://127.0.0.1:${echoPort}` }], transformers: ["attention", "needs-you"], presets: [review], default_preset: "Review" };
+const review = { name: "Review", snapshot: { version: 5, shell: "Tiling", collapsed: [], theme: "", columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "chat", pinned: "", options: [] }] }] } };
+const setup = { remotes: [{ name: "echo", url: `http://127.0.0.1:${echoPort}` }], transformers: ["attention", "needs-you"], presets: [review], default_preset: "Review", themes: [], default_theme: "" };
 fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify(setup));
 const main = start("liton-daemon", {
   LITON_PORT: String(mainPort),
@@ -86,7 +86,7 @@ try {
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "echo/echo", "peer/mock"]);
     assert.deepEqual(manifest.providers[1].capabilities, [{ name: "chat", version: 1 }]);
   });
-  await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [review] }));
+  await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [review], themes: [], default_theme: "" }));
   await step("ListSessions merges every provider's sessions, named under their remotes", async () => {
     const sessions = await until("remote sessions", async () => {
       const listed = (await call("chat.v1", "ListSessions")).Ok.Sessions;

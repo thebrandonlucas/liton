@@ -9,6 +9,7 @@ import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
 import setup.Setup
+import Themes
 import Model
 import Widgets
 
@@ -22,18 +23,35 @@ Liton := [].{
 	snapshot_key : Str
 	snapshot_key = "liton.snapshot"
 
+	## Whether tiles blur what is behind them, "on" or "off": this browser's,
+	## not the snapshot's, as it is about the device.
+	glass_key : Str
+	glass_key = "liton.glass"
+
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key], max_inflight: 32 },
-		|boot| Engine.state(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Liton.page),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], max_inflight: 32 },
+		|boot| Engine.state({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off") }, Liton.page),
 	)
 
+	## The theme is custom properties on the root (`Themes.style`), which the
+	## stylesheet alone uses. Keys pressed outside a text field reach the root
+	## (`Model.pressed`): roc-signals 0.5.0 delivers none at the document and
+	## no modifiers, so text fields stop theirs with a handler that does
+	## nothing (roc-issues RS-004, lukewilliamboswell/roc-signals#212).
 	page : State(Ctx, Model.State) -> Elem(Ctx)
 	page = |model|
-		Html.div(
-			"liton",
+		Engine.element(
+			"div",
 			[
-				Liton.toolbar(model),
+				Engine.class("liton"),
+				Engine.attr_s("style", model.signal().map(|state| Themes.style(Model.theme_shown(state), state.glass))),
+				Engine.attr("tabindex", "-1"),
+				Engine.ref("app"),
+				Engine.on("keydown", model.set_value(Model.pressed)),
+			],
+			[
+				Liton.bar(model),
 				Html.div(
 					"work",
 					[
@@ -80,11 +98,11 @@ Liton := [].{
 					text = Engine.http_text(res) ?? ""
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
-					# The setup's presets, which a daemon may leave out.
+					# The setup's presets and themes, which a daemon may leave out.
 					set_up : Try({ setup : Setup.Offered }, _)
 					set_up = Json.parse(text)
 					match decoded {
-						Ok(offered) => Model.set_up(Model.advertise(state, offered), set_up.map_ok(|manifest| manifest.setup) ?? { presets: [], default_preset: "" })
+						Ok(offered) => Model.set_up(Model.advertise(state, offered), set_up.map_ok(|manifest| manifest.setup) ?? Setup.offered(Setup.empty))
 						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
@@ -129,6 +147,8 @@ Liton := [].{
 				},
 			),
 		),
+		# Keys reach the root only from inside it.
+		Engine.watch(Engine.const({}), |_| [Focus("app")], Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
 		# A composer cleared by sending is built anew, out of focus: focus it.
 		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
@@ -137,31 +157,83 @@ Liton := [].{
 			|text| [StorageSet(Liton.snapshot_key, text)],
 			Engine.ignore({}),
 		),
+		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [StorageSet(Liton.glass_key, if (glass) "on" else "off")], Engine.ignore({})),
 	]
 
 	## A call, its JSON `body` naming the capability and holding the request.
 	call : Str -> Engine.Request
 	call = |body| Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout_ms: 5000 })
 
-	toolbar : State(Ctx, Model.State) -> Elem(Ctx)
-	toolbar = |model|
-		Html.div(
-			"toolbar",
+	## A bar over the tiles: the presets as numbered workspaces, the one shown
+	## marked, and, as status modules, what needs you, the agents running, the
+	## Workbench's drawers and Settings.
+	bar : State(Ctx, Model.State) -> Elem(Ctx)
+	bar = |model|
+		Engine.element(
+			"header",
+			[Engine.class("bar")],
 			[
-				Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
-				Engine.when(
-					model.signal().map(|state| state.shell == Workbench),
-					|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "◧", "Left drawer"), Liton.drawer_toggle(model, Right, "◨", "Right drawer")]),
-					|| Engine.text(""),
+				Engine.element(
+					"nav",
+					[Engine.class("workspaces"), Html.aria_label("Workspaces")],
+					[
+						Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
+						Engine.each(
+							model.signal().map(|state| state.presets.map_with_index(|preset, index| { name: preset.name, number: (index + 1).to_str(), title: if (index < 9) "${preset.name} (Alt+${(index + 1).to_str()})" else preset.name })),
+							|workspace| workspace.name,
+							|row| {
+								shown = row.key().map2(model.signal().lift_row(), |name, state| name == Model.workspace_shown(state))
+								number = row.field(|workspace| workspace.number)
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.class("workspace"),
+										Html.flag("aria-pressed", shown),
+										Engine.attr_s("aria-label", row.field(|workspace| "${workspace.number} ${workspace.name}")),
+										Engine.attr_s("title", row.field(|workspace| workspace.title)),
+										Engine.on_click(model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name)))),
+									],
+									[Html.span_s(number, [Engine.class("number")]), Html.span_s(row.key(), [Engine.class("name")])],
+								)
+							},
+						),
+					],
 				),
-				Html.button("Settings", [Engine.class("settings-toggle"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
 				Html.span_s(model.signal().map(|state| state.notice), [Engine.class("notice")]),
+				Html.div(
+					"modules",
+					[
+						Liton.count_module(model.signal().map(Model.needs_you), "needs-you", "need you"),
+						Liton.count_module(model.signal().map(Model.running), "running", "running"),
+						Engine.when(
+							model.signal().map(|state| state.shell == Workbench),
+							|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "Left drawer"), Liton.drawer_toggle(model, Right, "Right drawer")]),
+							|| Engine.text(""),
+						),
+						Html.button("Settings", [Engine.class("module settings-toggle"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
+					],
+				),
 			],
 		)
 
-	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str, Str -> Elem(Ctx)
-	drawer_toggle = |model, drawer, glyph, name|
-		Html.button(glyph, [Html.aria_label(name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+	## Keeps a text field's keys from the root's shortcuts (`Liton.page`).
+	keeps_keys : State(ctx, Model.State) -> Engine.Attr(ctx)
+	keeps_keys = |model| Engine.on("keydown", model.set_value(|state, _| state))
+
+	## A count and what it counts, marked while it isn't 0.
+	count_module : Signal(Ctx, U64), Str, Str -> Elem(Ctx)
+	count_module = |count, class, counted|
+		Engine.element(
+			"span",
+			[Engine.class_s(count.map(|shown| if (shown > 0) "module ${class} counting" else "module ${class}")), Engine.test_id(class)],
+			[Html.span_s(count.map(|shown| shown.to_str()), [Engine.class("count")]), Html.span_s(Engine.const(" ${counted}"), [Engine.class("counted")])],
+		)
+
+	## Shows or hides a drawer. Its icon is the stylesheet's.
+	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str -> Elem(Ctx)
+	drawer_toggle = |model, drawer, name|
+		Html.button("", [Engine.class("module drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
 	## to move, remove or set the options of, adds widgets, and shows the
@@ -192,6 +264,30 @@ Liton := [].{
 								),
 							],
 						),
+						Html.h3("Theme", ""),
+						Html.div(
+							"choices",
+							[
+								Engine.each(
+									model.signal().map(|state| state.themes),
+									|theme| theme.name,
+									|row|
+										Engine.element(
+											"button",
+											[
+												Engine.attr("type", "button"),
+												Engine.class("theme-choice"),
+												Engine.attr_s("aria-label", row.key().map(|name| "${name} theme")),
+												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |name, state| Model.theme_shown(state).name == name)),
+												Engine.on_click(model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_theme(state, name)))),
+											],
+											[Html.span_s(Engine.const(""), [Engine.class("swatch"), Engine.attr_s("style", row.field(Themes.swatch))]), Engine.text_s(row.key())],
+										),
+								),
+							],
+						),
+						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked == "true" })), Engine.text("Glass")]),
+						Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
 						Html.h3("Layout", ""),
 						Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.settings_column(model, row)),
 						Html.h3("Add a widget", ""),
@@ -213,7 +309,7 @@ Liton := [].{
 						),
 						Html.h3("Snapshot", ""),
 						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
-						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
+						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [Liton.keeps_keys(model)], model.set_value(|state, text| { ..state, snapshot_text: text })),
 						Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 					],
 				),
@@ -266,7 +362,7 @@ Liton := [].{
 								Html.select(
 									title.map(|name| "Move ${name} to"),
 									slot.lift_row().map(Model.slot_name),
-									[],
+									[Liton.keeps_keys(model)],
 									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.attr_s("value", choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
 									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text(Model.move_to_slot(state, pane_id, Model.slot_named(name)))),
 								),
@@ -309,7 +405,7 @@ Liton := [].{
 				Engine.when(
 					checkbox,
 					|| Engine.element("label", [], [Html.checkbox(label, value.map(|shown| shown == "true"), [], set), Engine.text_s(label)]),
-					|| Engine.element("label", [], [Engine.text_s(label), Html.select(label, value, [], [Engine.each(choices, |choice| choice, |choice| Html.option_s(choice.key()))], set)]),
+					|| Engine.element("label", [], [Engine.text_s(label), Html.select(label, value, [Liton.keeps_keys(model)], [Engine.each(choices, |choice| choice, |choice| Html.option_s(choice.key()))], set)]),
 				),
 				Html.p_s(row.field(|option| option.help), [Engine.class("help")]),
 			],
@@ -382,7 +478,13 @@ Liton := [].{
 		shown = row.field(|pane| pane).map2(model.signal(), |pane, state| { pane: pane, state: state })
 		Engine.element(
 			"section",
-			[Html.aria_label_s(title), Engine.class_s(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane"))],
+			[
+				Html.aria_label_s(title),
+				Engine.class_s(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane").map2(id.map2(model.signal(), |pane_id, state| pane_id == state.focused_pane), |class, focused| if (focused) "${class} focused" else class)),
+				# Clicking anywhere in it focuses it, or what was clicked in it.
+				Engine.attr("tabindex", "-1"),
+				Engine.on("focus", model.update_by(id.map2(column.lift_row(), |pane_id, group| { pane: pane_id, column: group.id }), Model.focus_pane)),
+			],
 			[
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
@@ -705,7 +807,7 @@ Liton := [].{
 	}
 
 	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	composer_input = |model, id| Html.text_input(Engine.const("Message"), "text", id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent"), Engine.ref("composer")], model.set_value_by(id, Model.set_draft))
+	composer_input = |model, id| Html.text_input(Engine.const("Message"), "text", id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Liton.keeps_keys(model)], model.set_value_by(id, Model.set_draft))
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls

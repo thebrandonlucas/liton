@@ -99,6 +99,19 @@ Model := [].{
 
 		## What each Changes pane shows.
 		git_panes : List(GitPane),
+
+		## The themes settings offer and the one a snapshot naming none shows:
+		## the daemon's setup's, or liton's own until it offers some. `theme`
+		## is the one picked, or "" for the default. `glass` is whether tiles
+		## blur what is behind them, which this browser keeps apart from the
+		## snapshot.
+		themes : List(Setup.Theme),
+		default_theme : Str,
+		theme : Str,
+		glass : Bool,
+
+		## The pane last clicked or focused in, which the bright edge marks.
+		focused_pane : Str,
 	}
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
@@ -161,8 +174,13 @@ Model := [].{
 				git_changes: [],
 				git_hunks: [],
 				git_panes: [],
+				themes: Default.setup.themes,
+				default_theme: Default.setup.default_theme,
+				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
+				glass: Bool.True,
+				focused_pane: "",
 			},
-			restored ?? Model.developer,
+			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
 	}
 
@@ -178,31 +196,40 @@ Model := [].{
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, theme: state.theme }
+
+	## A layout as a snapshot showing the setup's default theme.
+	snapshot_of : Layout -> Snapshot
+	snapshot_of = |{ shell, columns, collapsed }| { version: Setup.snapshot_version, shell, columns, collapsed, theme: "" }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 4, panes have their options' defaults
-	## and the drawers show. A version 1 or 2 one loads in Tiling, a version 1
-	## one with a column for each pane, unless it holds just the old default's
-	## widgets: then it loads the Developer preset.
-	restore : Str -> Try(Layout, [Invalid])
+	## Reads a snapshot. Before version 5, it shows the setup's default theme;
+	## before version 4, panes have their options' defaults and the drawers
+	## show. A version 1 or 2 one loads in Tiling, a version 1 one with a
+	## column for each pane, unless it holds just the old default's widgets:
+	## then it loads the Developer preset.
+	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		current : Try(Snapshot, _)
-		current = Json.parse(text)
+		# Since version 4 a snapshot is laid out alike; version 5 names its theme.
+		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
+		laid = Json.parse(text)
+		themed : Try({ theme : Str }, _)
+		themed = Json.parse(text)
 		third : Try({ version : U32, shell : Shell, columns : List(OldColumn) }, _)
 		third = Json.parse(text)
 		second : Try({ version : U32, columns : List(OldColumn) }, _)
 		second = Json.parse(text)
 		first : Try({ version : U32, panes : List(OldPane) }, _)
 		first = Json.parse(text)
-		match (current, third, second, first) {
-			(Ok({ version: 4, shell, columns, collapsed }), _, _, _) if shell == Tiling or columns.len() == 3 => Ok({ shell, columns, collapsed })
-			(_, Ok({ version: 3, shell, columns }), _, _) if shell == Tiling or columns.len() == 3 => Ok({ shell, columns: Model.with_options(columns), collapsed: [] })
-			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.migrated(Model.with_options(columns)))
-			(_, _, _, Ok({ version: 1, panes })) => Ok(Model.migrated(Model.with_options(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] }))))
+		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
+		match (laid, third, second, first) {
+			(Ok({ version, shell, columns, collapsed }), _, _, _) if (version == 4 or version == 5) and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed }), theme: if (version == 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [] }))
+			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
+			(_, _, _, Ok({ version: 1, panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] })))))
 			_ => Err(Invalid)
 		}
 	}
@@ -217,29 +244,80 @@ Model := [].{
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, loaded), notice: "Loaded a layout of ${loaded.columns.len().to_str()} columns." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, notice: "Loaded a layout of ${loaded.columns.len().to_str()} columns." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
 	advertise : State, Manifest.Offered -> State
 	advertise = |state, offered| { ..state, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
-	## Offers the presets the daemon's setup offers, if any, and shows the
-	## one it starts with, unless the layout is the one the browser kept.
+	## Offers the presets and themes the daemon's setup offers, if any, and
+	## shows the preset it starts with, unless the layout is the one the
+	## browser kept.
 	set_up : State, Setup.Offered -> State
-	set_up = |state, offered|
+	set_up = |state0, offered| {
+		state = if (offered.themes.is_empty()) state0 else { ..state0, themes: offered.themes, default_theme: offered.default_theme }
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(starting) => { ..Model.layout(state, Model.layout_of(starting.snapshot)), presets: offered.presets, kept_layout: Bool.True }
+			Ok(starting) => { ..Model.use_preset({ ..state, presets: offered.presets }, starting.name), kept_layout: Bool.True }
 		}
+	}
 
+	## Shows a preset's layout, and its theme if it names one.
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => Model.layout(state, Model.layout_of(preset.snapshot))
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme }
 			Err(NotFound) => state
 		}
+
+	## The theme shown: the one picked, else the setup's default, else the
+	## first offered.
+	theme_shown : State -> Setup.Theme
+	theme_shown = |state| {
+		named = |name| state.themes.find_first(|theme| theme.name == name)
+		match (named(state.theme), named(state.default_theme)) {
+			(Ok(picked), _) => picked
+			(_, Ok(default)) => default
+			_ => state.themes.first() ?? Default.pastoral
+		}
+	}
+
+	use_theme : State, Str -> State
+	use_theme = |state, name| { ..state, theme: name }
+
+	## The preset the layout is a workspace of: the first whose shell holds
+	## the same widgets in the same columns, however they are sized, set or
+	## folded.
+	workspace_shown : State -> Str
+	workspace_shown = |state| {
+		shape = |shell, columns| (shell, columns.map(|column| column.panes.map(|pane| pane.widget)))
+		state.presets.find_first(|preset| shape(preset.snapshot.shell, preset.snapshot.columns) == shape(state.shell, state.columns)).map_ok(|preset| preset.name) ?? ""
+	}
+
+	## A key pressed outside a text field: 1 to 9, with or without Alt (or
+	## Option, which types ¡ to ª on a Mac), shows that workspace; Escape
+	## closes settings.
+	pressed : State, Str -> State
+	pressed = |state, key| {
+		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
+		option = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
+		match (numbered, option, state.presets.get(numbered ?? (option ?? 9))) {
+			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
+			_ if key == "Escape" => { ..state, show_settings: Bool.False }
+			_ => state
+		}
+	}
+
+	## Marks the pane clicked or focused in, and shows its column on a narrow
+	## screen.
+	focus_pane : State, { pane : Str, column : Str } -> State
+	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column }
+
+	## How many sessions are running.
+	running : State -> U64
+	running = |state| state.sessions.keep_if(|session| session.status == Running).len()
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
@@ -949,17 +1027,17 @@ expect {
 # the browser kept a layout; a preset is shown until the layout changes.
 expect {
 	review = { name: "Review", snapshot: { ..Default.tiling.snapshot, columns: Default.tiling.snapshot.columns.drop_first(1) } }
-	fresh = Model.set_up(Model.initial(""), { presets: [Default.developer, review], default_preset: "Review" })
-	kept = Model.set_up(Model.initial(Json.to_str(Model.snapshot(Model.initial("")))), { presets: [review], default_preset: "Review" })
+	fresh = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), presets: [Default.developer, review], default_preset: "Review" })
+	kept = Model.set_up(Model.initial(Json.to_str(Model.snapshot(Model.initial("")))), { ..Setup.offered(Setup.empty), presets: [review], default_preset: "Review" })
 	fresh.presets.map(|preset| preset.name) == ["Developer", "Review"] and Model.preset_shown(fresh, "Review") and !Model.preset_shown(Model.use_preset(fresh, "Developer"), "Review") and kept.shell == Workbench and kept.presets == [review] and !Model.preset_shown(Model.close_pane(fresh, "pane-2"), "Review")
 }
 
-expect Model.set_up(Model.initial(""), { presets: [], default_preset: "" }).presets == Default.setup.presets
+expect Model.set_up(Model.initial(""), Setup.offered(Setup.empty)).presets == Default.setup.presets
 
 expect {
 	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
 	chat = { id: "pane-7", widget: "chat", pinned: "", options: [] }
-	Model.restore(saved) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [] }) and Model.initial(saved).next_id == 8
+	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [] }) and Model.initial(saved).next_id == 8
 }
 
 expect {
@@ -971,14 +1049,14 @@ expect {
 	}
 	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
 	old_columns = old_columns_of(Model.tiling)
-	Model.restore(version_2(old_columns.map(|column| { ..column, size: 3 }))) == Ok(Model.developer) and Model.restore(version_2(old_columns.drop_first(1))).map_ok(|layout| layout.shell) == Ok(Tiling)
+	Model.restore(version_2(old_columns.map(|column| { ..column, size: 3 }))).map_ok(Model.layout_of) == Ok(Model.developer) and Model.restore(version_2(old_columns.drop_first(1))).map_ok(|layout| layout.shell) == Ok(Tiling)
 }
 
 expect {
 	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
 	version_3 : { version : U32, shell : Model.Shell, columns : List(Model.OldColumn) }
 	version_3 = { version: 3, shell: Workbench, columns: old_columns_of(Model.developer) }
-	Model.restore(Json.to_str(version_3)) == Ok(Model.developer)
+	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of(Model.developer))
 }
 
 expect {
@@ -1018,4 +1096,18 @@ expect {
 expect {
 	call = { sequence: 1, event: ToolCall({ call_id: "c", tool: "bash", input: "ls" }) }
 	Model.with_tool_cards([call]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Running, output: "", folded: "" })]
+}
+
+# A theme picked is saved with the layout; one never picked follows the
+# setup's default, and a preset naming none keeps the one shown.
+expect {
+	picked = Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Tiling")
+	offered = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), themes: [Default.plain, Default.hypr], default_theme: "Hypr" })
+	Model.theme_shown(Model.initial("")).name == "Pastoral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
+}
+
+# 1 to 9 show the workspaces in order, however the one shown is changed.
+expect {
+	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
+	Model.workspace_shown(state) == "Tiling" and Model.workspace_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡")) == "Developer" and Model.pressed(state, "7") == state
 }
