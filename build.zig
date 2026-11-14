@@ -269,6 +269,11 @@ pub fn build(b: *std.Build) void {
     run_protocol.step.dependOn(&build_daemon.step);
     run_protocol.step.dependOn(&build_cli.step);
     e2e_step.dependOn(&run_protocol.step);
+    const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
+    run_federation.has_side_effects = true;
+    run_federation.step.dependOn(&build_daemon.step);
+    run_federation.step.dependOn(&build_example.step);
+    e2e_step.dependOn(&run_federation.step);
 
     // Benchmarks liton against Paseo's web client in a private network
     // namespace, against a throwaway Paseo (bench/README.md).
