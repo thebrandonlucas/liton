@@ -60,6 +60,7 @@ const main = start("liton-daemon", {
   LITON_DB: path.join(scratch, "main.db"),
   LITON_PROVIDERS: `echo=http://127.0.0.1:${echoPort},peer=http://127.0.0.1:${peerPort}/,down=http://127.0.0.1:${downPort}`,
   LITON_PROVIDERS_INTERVAL_MS: String(interval),
+  LITON_TRANSFORMERS: "needs-you",
 });
 
 const base = `http://127.0.0.1:${mainPort}/liton/v1`;
@@ -114,6 +115,16 @@ try {
     assert.ok(list.events[0].Listed.workspaces.find((w) => w.id === "peer/fix-auth").session_ids.includes("peer/fix-auth"));
     assert.equal((await poll([{ capability: "workspace.git.v1", topic: "changes/echo/echo/Uncommitted", after: "" }]))[0].error.code, "Unsupported");
     assert.ok((await call("attention.v1", "ListItems")).Ok.Items.some((item) => item.session_id === "echo/echo"));
+  });
+  await step("a transformer uses another's output: needs-you.v1 from attention.v1, across remotes", async () => {
+    assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses.map((u) => u.name)]), [["attention", "attention", ["chat"]], ["needs-you", "needs-you", ["attention"]]]);
+    assert.deepEqual(manifest.topics.find((t) => t.capability.name === "needs-you").patterns, ["items"]);
+    const [needing, attention] = await poll([{ capability: "needs-you.v1", topic: "items", after: "" }, { capability: "attention.v1", topic: "items", after: "" }]);
+    const ids = needing.events[0].Items.map((i) => i.session_id);
+    assert.ok(ids.includes("flaky-ci") && ids.includes("peer/flaky-ci"), ids.join());
+    assert.deepEqual(needing.events[0].Items, attention.events[0].Items.filter((i) => i.state === "NeedsYou"));
+    assert.deepEqual((await call("needs-you.v1", "ListItems")).Ok.Items.map((i) => i.session_id), ids);
+    assert.equal((await poll([{ capability: "needs-you.v1", topic: "items", after: needing.cursor }]))[0].events.length, 0);
   });
   await step("a remote that is down fails only its own topics, and is logged once", async () => {
     const [down, local] = await poll(["timeline/down/s1", "timeline/fix-auth"]);

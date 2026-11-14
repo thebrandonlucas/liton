@@ -48,11 +48,11 @@ Protocol := [].{
 	## written with its `%` as `%25` and its `/` as `%2F`.
 	Subject : [Sessions, Timeline(Str), Importable, Items, WorkspaceList, Changes({ context : Context.Id, scope : WorkspaceGit.Scope }), File({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str })]
 
-	## The topics of each capability, as the manifest lists them.
+	## The topics of each capability providers offer, as the manifest lists
+	## them. A transformer declares those of the capability it offers.
 	topics : List(Manifest.Topics)
 	topics = [
 		{ capability: Capability.chat_v1, patterns: ["sessions", "timeline/<session_id>", "importable"] },
-		{ capability: Capability.attention_v1, patterns: ["items"] },
 		{ capability: Capability.workspaces_v1, patterns: ["list"] },
 		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
 	]

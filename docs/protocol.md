@@ -179,7 +179,7 @@ A name is letters, digits, `-` and `_`. Then:
 - **Manifest.** The daemon asks each remote for its manifest at start, then
   every minute, and adds its providers with the capabilities the daemon routes
   (`chat.v1`, `workspaces.v1`, `workspace.git.v1`). A remote's transformers
-  are left out: the daemon derives `attention.v1` from every provider's chat.
+  are left out: the daemon's own derive from every provider (Transformers).
 - **Calls.** A call to a remote's session (`SendMessage`, `WatchSession`,
   `AnswerPermission`) is forwarded to it with the session and provider as it
   names them, and its answer returned as given. Lists (`ListSessions`,
@@ -221,10 +221,51 @@ same exchange as a pure state machine.
 ## Transformers
 
 A transformer is a part that uses capabilities and offers one: `attention.v1` is
-derived from `chat.v1`. It is declared like a provider, with what it `uses`; the
-daemon feeds it the events of the topics it needs and serves what it offers like
-any other capability. Transformers compose, which is how a setup pipes one view
-of its agents into another.
+derived from `chat.v1`. Transformers compose, which is how a setup pipes one
+view of its agents into another.
+
+A transformer is a pure Roc value, a `Transformer.Part` (`transformers/`),
+which declares:
+
+- `id` and `name`, as the manifest's `transformers` lists it;
+- `offers`: the capability it offers and its topics' patterns, which the
+  manifest's `topics` lists;
+- `uses`: the topics it follows, such as `chat.v1`'s `sessions`, and
+  `follows`, the further topics those lead to, such as each listed session's
+  `timeline/<session_id>`;
+- `derive`: from the latest events of those topics (a snapshot's value, a
+  timeline's entries from the first), its stored state and the time, its new
+  state and the events of each topic it offers;
+- `call`: from the same inputs, its state, a call's body and the time, its new
+  state and the call's answer.
+
+The daemon hosts every transformer the same way, knowing none of them:
+
+- **Offered.** A transformer is offered once the capabilities it uses are,
+  by a provider or a transformer registered before it, so one may use
+  another's output but never its own. The manifest lists it with the
+  capabilities of the topics it uses.
+- **Inputs.** A client's poll of a transformer's topic notes that the topics
+  it `uses` are wanted, as a poll of those would, recursively for a
+  transformer's output; the topics it `follows` are read from what the daemon
+  keeps, with no work upstream. So a transformer adds no load beyond its
+  `uses`: attention asks no provider for a timeline no client watches, and
+  derives from what the daemon has of it.
+- **Topics.** Each poll of an offered topic derives it again and answers it
+  like any topic: a snapshot by its fingerprint, entries after their
+  cursor. A topic it doesn't offer is `NotFound`.
+- **Calls.** A call to the capability goes to `call`, whose answer is
+  returned as given.
+- **State.** The daemon keeps each transformer's state, its own JSON, in
+  SQLite, and stores a new one only if no other was stored since it read it;
+  a call that loses is asked again. Attention's state is the settles and
+  snoozes that still hold.
+
+`attention.v1` is always registered. `needs-you.v1`, attention's items that need
+you, is offered when `LITON_TRANSFORMERS` names it (`LITON_TRANSFORMERS=needs-you`),
+to show and check composition; a Litonfile will declare a setup's transformers.
+A remote's transformers are not routed: the daemon derives its own from every
+provider, local or remote.
 
 ## The CLI
 

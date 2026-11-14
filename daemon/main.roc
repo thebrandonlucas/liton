@@ -1,7 +1,8 @@
 ## liton's daemon: offers its providers' capabilities, chat.v1,
-## workspace.git.v1 and workspaces.v1, and attention.v1 derived from chat.v1,
-## at /liton/v1 in the capability protocol (docs/protocol.md), from what it
-## keeps in SQLite, and serves the UI.
+## workspace.git.v1 and workspaces.v1, and those its transformers derive
+## (transformers/), such as attention.v1 from chat.v1, at /liton/v1 in the
+## capability protocol (docs/protocol.md), from what it keeps in SQLite, and
+## serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
@@ -15,6 +16,9 @@
 ## Their providers, sessions and workspaces are named `<name>/<their id>`.
 ## The daemon asks each at most every LITON_PROVIDERS_INTERVAL_MS (default
 ## 1000) for all that polls watch of it, in one poll of its own.
+##
+## LITON_TRANSFORMERS adds the optional transformers it names, comma-separated:
+## `needs-you`, attention.v1's items that need you, as needs-you.v1.
 app [Context, program] {
 	cap: "../capabilities/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
@@ -22,6 +26,7 @@ app [Context, program] {
 	paseo: "../providers/paseo/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.21.0/4viZsnWjdYsyH4Q87ESFAwM5c55Hnc15nAGW1UwzWpFU.tar.zst",
 	remote: "../providers/remote/main.roc",
+	transformers: "../transformers/main.roc",
 }
 
 import pf.Env
@@ -35,7 +40,6 @@ import pf.Tcp
 import pf.UnixTime
 import http.Request
 import http.Response
-import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Manifest
@@ -48,8 +52,11 @@ import paseo.PaseoGit
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
+import transformers.AttentionTransformer
+import transformers.NeedsYou
+import transformers.Transformer
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64 }
+Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part) }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -87,7 +94,9 @@ init! = || {
 			.with_listen({ host, port })
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
-	context = { db, mock_enabled, paseo, remotes, remote_interval_ms }
+	named_transformers = env_or!("LITON_TRANSFORMERS", "").split_on(",").map(|name| name.trim())
+	transformers = [AttentionTransformer.part].concat([NeedsYou.part].keep_if(|part| named_transformers.contains(part.id)))
+	context = { db, mock_enabled, paseo, remotes, remote_interval_ms, transformers }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -150,14 +159,20 @@ offered! : Context => Try(Manifest.Offered, _)
 offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far, up| so_far.concat(Remote.providers(up.name, up.advertised)))))
 
 ## What /liton/v1/manifest answers: the enabled providers, then the remotes',
-## and attention once one of them supplies chat.v1.
+## and the transformers whose capabilities they offer (see
+## `Transformer.offered`).
 offered : Context, List(Manifest.Provider) -> Manifest.Offered
-offered = |{ mock_enabled, paseo, .. }, remote_providers| {
+offered = |{ mock_enabled, paseo, transformers, .. }, remote_providers| {
 	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(remote_providers)
-	transformers = if (providers.any(|provider| provider.capabilities.contains(Capability.chat_v1))) [attention_transformer] else []
-	manifest = { protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers, topics: [] }
-	{ ..manifest, topics: Protocol.topics.keep_if(|topics| Manifest.offered(manifest).contains(topics.capability)) }
+	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
+	offered_parts = Transformer.offered(transformers, provided)
+	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
 }
+
+## The offered transformer whose capability a call or topic names.
+transformer_of : Context, Manifest.Offered, Str -> Try(Transformer.Part, [NotTransformed])
+transformer_of = |context, manifest, capability|
+	context.transformers.find_first(|part| Capability.to_str(part.offers.capability) == capability and manifest.transformers.any(|offered_part| offered_part.id == part.id)).map_err(|_| NotTransformed)
 
 ## Answers a /liton/v1/call by its capability (see docs/protocol.md).
 call! : Context, Server.Request => Try(Response, _)
@@ -165,11 +180,16 @@ call! = |context, request| {
 	body = read_json!(request)?
 	addressed : Try(Protocol.Addressed, _)
 	addressed = Json.parse(body)
+	manifest = offered!(context)?
 	routed =
 		match addressed {
-			Ok(asked) => Protocol.routed(offered!(context)?, asked).map_ok(|id| (Capability.to_str(id), asked.provider))
+			Ok(asked) => Protocol.routed(manifest, asked).map_ok(|id| (Capability.to_str(id), asked.provider))
 			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
 		}
+	match routed.map_ok(|(capability, _)| transformer_of(context, manifest, capability)) {
+		Ok(Ok(part)) => return Ok(json(transformer_call!(context, manifest, part, body)?))
+		_ => {}
+	}
 	unanswered : Str -> Protocol.Error
 	unanswered = |capability| { code: BadRequest, message: "expected a ${capability} request" }
 	answered =
@@ -181,16 +201,6 @@ call! = |context, request| {
 				answer = match decoded {
 					Ok({ request: asked, .. }) => chat_call!(context, provider, asked)?
 					Err(_) => Err(unanswered("chat.v1"))
-				}
-				Json.to_str(answer)
-			}
-			Ok(("attention.v1", _)) => {
-				decoded : Try(Protocol.Call(Attention.Request), _)
-				decoded = Json.parse(body)
-				answer : Protocol.Answer(Attention.Response)
-				answer = match decoded {
-					Ok({ request: asked, .. }) => attention_call!(context, asked)?
-					Err(_) => Err(unanswered("attention.v1"))
 				}
 				Json.to_str(answer)
 			}
@@ -227,22 +237,14 @@ polled_topics! = |context, request| {
 		Err(_) => Ok(text(400, "expected a poll, such as {\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"after\":\"\"}]}"))
 		Ok({ topics }) => {
 			manifest = offered!(context)?
-			for wanted in topics {
-				match Protocol.subject(manifest, wanted) {
-					Ok(subject) => interested!(context, subject)?
-					Err(_) => {}
-				}
+			for { capability, topic, .. } in topics {
+				watched!(context, manifest, { capability, topic })?
 			}
 			paseo_cycle!(context)?
 			remotes_cycle!(context)?
 			var $updates = []
 			for wanted in topics {
-				$updates = $updates.append(
-					match Protocol.subject(manifest, wanted) {
-						Ok(subject) => update!(context, wanted, subject)?
-						Err(error) => Protocol.failed(wanted, error)
-					},
-				)
+				$updates = $updates.append(topic_update!(context, manifest, wanted)?)
 			}
 			polled : Protocol.Polled
 			polled = { topics: $updates }
@@ -305,7 +307,8 @@ update! = |context, wanted, subject| {
 				Ok(after) => Ok(Protocol.appended(wanted, visible!(context.db, session_id, after)?))
 				Err(error) => Ok(Protocol.failed(wanted, error))
 			}
-		Items => Ok(Protocol.snapshot(wanted, Items(attention_items!(context)?)))
+		# A transformer offers attention.v1 (see `topic_update!`), never a provider.
+		Items => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
 		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
 		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
 		Changes({ context: focus, scope }) => Ok(Protocol.snapshot(wanted, Changes(WorkspaceGit.snapshot(scope, git_found!(context, focus, { scope, file: NoFile })?))))
@@ -523,48 +526,86 @@ selected_commit_file = |poll|
 		_ => Err(NoFile)
 	}
 
-## What the daemon derives from the providers' chat.v1.
-attention_transformer : Manifest.Transformer
-attention_transformer = { id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }
+## Notes that a poll watches a topic: a provider's subject, or what a
+## transformer offering it uses, as a client's poll of those would.
+watched! : Context, Manifest.Offered, Transformer.Topic => Try({}, _)
+watched! = |context, manifest, { capability, topic }|
+	match transformer_of(context, manifest, capability) {
+		Ok(part) => {
+			for used in part.uses {
+				watched!(context, manifest, used)?
+			}
+			Ok({})
+		}
+		Err(_) =>
+			match Protocol.subject(manifest, { capability, topic, after: "" }) {
+				Ok(subject) => interested!(context, subject)
+				Err(_) => Ok({})
+			}
+	}
 
-## Every session's attention item, ranked. Forgets the settles and snoozes
-## that no longer hold, so an item that came back stays back.
-attention_items! : Context => Try(List(Attention.Item), _)
-attention_items! = |context| {
-	db = context.db
-	var $items = []
-	for session in sessions!(context)? {
-		$items = $items.append(Attention.item(session, visible!(db, session.id, 0)?))
+## A topic's update: from the transformer that offers it, or of its subject.
+topic_update! : Context, Manifest.Offered, Protocol.Wanted => Try(Protocol.Update, _)
+topic_update! = |context, manifest, wanted|
+	match transformer_of(context, manifest, wanted.capability) {
+		Ok(part) => Ok(Transformer.update(derived!(context, manifest, part)?.topics, wanted))
+		Err(_) =>
+			match Protocol.subject(manifest, wanted) {
+				Ok(subject) => update!(context, wanted, subject)
+				Err(error) => Ok(Protocol.failed(wanted, error))
+			}
 	}
-	asides : List(Attention.Aside)
-	asides = Sqlite.query_many!({ db, query: "SELECT session_id, signature, snoozed_until FROM attention_asides;", params: {}, limits: Sqlite.default_query_limits })?
-	now = now_ms!()
-	for aside in asides.drop_if(|aside| Attention.holds(aside, $items, now)) {
-		Sqlite.execute!({ db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: aside.session_id } })?
-	}
-	Ok(Attention.ranked($items, asides, now))
+
+## A transformer's inputs: the events the daemon has of the topics it uses,
+## then of those they lead it to follow, read from what the daemon keeps.
+inputs! : Context, Manifest.Offered, Transformer.Part => Try(List(Transformer.Input), _)
+inputs! = |context, manifest, part| {
+	read! = |topics| topics.map_try(|{ capability, topic }| Ok({ capability, topic, events: topic_update!(context, manifest, { capability, topic, after: "" })?.events }))
+	used = read!(part.uses)?
+	Ok(used.concat(read!((part.follows)(used))?))
 }
 
-attention_call! : Context, Attention.Request => Try(Protocol.Answer(Attention.Response), _)
-attention_call! = |context, asked|
-	match asked {
-		ListItems => Ok(Ok(Items(attention_items!(context)?)))
-		Settle({ session_id, signature }) => set_aside!(context, { session_id, signature, snoozed_until: 0 })
-		Snooze({ session_id, signature, minutes }) => set_aside!(context, { session_id, signature, snoozed_until: now_ms!() + minutes.to_i64() * 60_000 })
-		Unsettle({ session_id }) => {
-			Sqlite.execute!({ db: context.db, query: "DELETE FROM attention_asides WHERE session_id = :session_id;", params: { session_id: session_id } })?
-			Ok(Ok(Accepted))
-		}
-	}
+## What a transformer derives now, its state stored when that changed.
+derived! : Context, Manifest.Offered, Transformer.Part => Try({ state : Str, topics : List(Transformer.Derived) }, _)
+derived! = |context, manifest, part| {
+	inputs = inputs!(context, manifest, part)?
+	stored = transformer_state!(context.db, part.id)?
+	derived = (part.derive)(inputs, stored, now_ms!())
+	_ = state_swapped!(context.db, part.id, stored, derived.state)?
+	Ok(derived)
+}
 
-set_aside! : Context, Attention.Aside => Try(Protocol.Answer(Attention.Response), _)
-set_aside! = |context, { session_id, signature, snoozed_until }|
-	match provider!(context, session_id)? {
-		NoSession if Remote.owner(context.remotes, session_id).is_err() => Ok(no_session(session_id))
-		_ => {
-			Sqlite.execute!({ db: context.db, query: "INSERT INTO attention_asides (session_id, signature, snoozed_until) VALUES (:session_id, :signature, :snoozed_until) ON CONFLICT (session_id) DO UPDATE SET signature = excluded.signature, snoozed_until = excluded.snoozed_until;", params: { session_id, signature, snoozed_until } })?
-			Ok(Ok(Accepted))
-		}
+## Answers a call to a transformer's capability, storing the state it leaves,
+## or asking it again when a request stored another since its state was read.
+transformer_call! : Context, Manifest.Offered, Transformer.Part, Str => Try(Str, _)
+transformer_call! = |context, manifest, part, body| {
+	inputs = inputs!(context, manifest, part)?
+	answered! = || {
+		stored = transformer_state!(context.db, part.id)?
+		called = (part.call)(inputs, stored, body, now_ms!())
+		if (state_swapped!(context.db, part.id, stored, called.state)?) Ok(called.answer) else answered!()
+	}
+	answered!()
+}
+
+## A transformer's state as last stored, "" before.
+transformer_state! : Sqlite.Db, Str => Try(Str, _)
+transformer_state! = |db, transformer| {
+	rows : List({ state : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT state FROM transformer_states WHERE transformer = :transformer;", params: { transformer }, limits: Sqlite.default_query_limits })?
+	Ok(rows.first().map_ok(|row| row.state) ?? "")
+}
+
+## Stores a transformer's state unless another was stored since `stored` was
+## read, and says whether it did.
+state_swapped! : Sqlite.Db, Str, Str, Str => Try(Bool, _)
+state_swapped! = |db, transformer, stored, state|
+	if state == stored {
+		Ok(Bool.True)
+	} else {
+		swapped : List({ transformer : Str })
+		swapped = Sqlite.query_many!({ db, query: "INSERT INTO transformer_states (transformer, state) VALUES (:transformer, :state) ON CONFLICT (transformer) DO UPDATE SET state = excluded.state WHERE transformer_states.state = :stored RETURNING transformer;", params: { transformer, state, stored }, limits: Sqlite.default_query_limits })?
+		Ok(!swapped.is_empty())
 	}
 
 ## Every enabled provider's projects and workspaces, each workspace with its
@@ -576,7 +617,7 @@ workspaces! = |context| {
 	if context.paseo.is_ok() {
 		wanted!(db, "workspace_list", "")?
 	}
-	items = sessions!(context)?.map(|session| Attention.item(session, []))
+	sessions = sessions!(context)?
 	from_mock = if (context.mock_enabled) { projects: Mock.projects, workspaces: Mock.workspaces } else { projects: [], workspaces: [] }
 	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
 	placed : List({ id : Str, workspace_id : Str })
@@ -590,7 +631,7 @@ workspaces! = |context| {
 			_ => so_far
 		},
 	)
-	Ok({ projects: from_mock.projects.concat(from_paseo.projects).concat(from_remotes.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(items, shown.session_ids) }).concat(from_remotes.workspaces) })
+	Ok({ projects: from_mock.projects.concat(from_paseo.projects).concat(from_remotes.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(sessions, shown.session_ids) }).concat(from_remotes.workspaces) })
 }
 
 ## Paseo's projects and workspaces as the cycle last listed them, none before.
@@ -612,7 +653,14 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS entries (session_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (session_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_states (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_checks (what TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS attention_asides (session_id TEXT PRIMARY KEY, signature TEXT NOT NULL, snoozed_until INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS transformer_states (transformer TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
+	# Settles and snoozes kept before transformers came are attention's state.
+	asides : List({ name : Str })
+	asides = Sqlite.query_many!({ db, query: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attention_asides';", params: {}, limits: Sqlite.default_query_limits })?
+	if !asides.is_empty() {
+		Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO transformer_states (transformer, state) SELECT 'attention', json_group_array(json_object('session_id', session_id, 'signature', signature, 'snoozed_until', snoozed_until)) FROM attention_asides;", params: {} })?
+		Sqlite.execute!({ db, query: "DROP TABLE attention_asides;", params: {} })?
+	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?

@@ -101,6 +101,20 @@ try {
     assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
   });
+  await step("attention.v1's transformer sets an item aside until unsettled, and keeps it", async () => {
+    const item = async () => (await call("attention.v1", "ListItems")).Ok.Items.find((i) => i.session_id === "fix-auth");
+    const { signature } = await item();
+    assert.deepEqual(await call("attention.v1", { Settle: { session_id: "fix-auth", signature } }), { Ok: "Accepted" });
+    assert.equal((await item()).set_aside, "Settled");
+    const [items] = (await post("poll", { topics: [{ capability: "attention.v1", topic: "items", after: "" }] })).topics;
+    assert.equal(items.events[0].Items.find((i) => i.session_id === "fix-auth").set_aside, "Settled");
+    assert.deepEqual(await call("attention.v1", { Snooze: { session_id: "fix-auth", signature, minutes: 5 } }), { Ok: "Accepted" });
+    assert.equal((await item()).set_aside, "Snoozed");
+    assert.deepEqual(await call("attention.v1", { Unsettle: { session_id: "fix-auth" } }), { Ok: "Accepted" });
+    assert.equal((await item()).set_aside, "No");
+    assert.equal((await call("attention.v1", { Settle: { session_id: "nope", signature } })).Err.code, "NotFound");
+    assert.equal((await call("attention.v1", { Settle: {} })).Err.code, "BadRequest");
+  });
   await step("the old /api endpoints are gone", async () => {
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/manifest`)).status, 404);
   });

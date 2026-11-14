@@ -55,12 +55,12 @@ Remote := [].{
 			AnswerPermission({ session_id, .. }) => Remote.owner(endpoints, session_id)
 		}
 
-	## The topics of each remote a merged list needs: attention and workspaces
-	## are counted from sessions.
+	## The topics of each remote a merged list needs: workspaces are counted
+	## from sessions.
 	merged : Protocol.Subject -> List(Protocol.Subject)
 	merged = |subject|
 		match subject {
-			Sessions | Items => [Sessions]
+			Sessions => [Sessions]
 			Importable => [Importable]
 			WorkspaceList => [WorkspaceList, Sessions]
 			_ => []
@@ -121,7 +121,7 @@ Remote := [].{
 }
 
 ## The capabilities the daemon routes to a remote's sessions and workspaces.
-## attention.v1 it derives itself, from every provider's chat.v1.
+## A remote's transformers are left out: the daemon's derive from every provider.
 routable : List(Capability.Id)
 routable = [Capability.chat_v1, Capability.workspaces_v1, Capability.workspace_git_v1]
 
@@ -184,7 +184,7 @@ expect Remote.routed([echo, peer], Changes({ context: Workspace("echo/w1"), scop
 expect Remote.routed([echo, peer], File({ context: Session("echo/s1"), scope: AgainstBase, path: "a.roc" })) == Ok({ endpoint: echo, subject: File({ context: Session("s1"), scope: AgainstBase, path: "a.roc" }) })
 expect [Timeline("fix-auth"), Timeline("import:claude:/home/a"), Timeline("echo/"), Timeline("echoes/s1"), Sessions, Items].all(|subject| Remote.routed([echo, peer], subject) == Err(Merged))
 expect Remote.owner([echo], "echo/s1") == Ok(echo) and Remote.owner([echo], "s1") == Err(Local)
-expect Remote.merged(Items) == [Sessions] and Remote.merged(WorkspaceList) == [WorkspaceList, Sessions] and Remote.merged(Timeline("s1")) == []
+expect Remote.merged(Sessions) == [Sessions] and Remote.merged(WorkspaceList) == [WorkspaceList, Sessions] and Remote.merged(Timeline("s1")) == []
 
 # A remote's providers are named under it, with what the daemon routes.
 expect {

@@ -3,6 +3,7 @@
 ## lists its sessions, and is as urgent as the most urgent of them. Only
 ## listing so far; Create, Archive, Rename and Pin are the commands to come.
 import Attention
+import Chat
 
 Workspaces := [].{
 	Project : { id : Str, provider : Str, name : Str, directory : Str }
@@ -31,16 +32,17 @@ Workspaces := [].{
 
 	Response : [Listed(Listed), Rejected(Str)]
 
-	## The most urgent state of the items of `session_ids`, Idle for none.
-	state : List(Attention.Item), List(Str) -> Attention.State
-	state = |items, session_ids| {
-		states = items.keep_if(|shown| session_ids.contains(shown.session_id)).map(|shown| shown.state)
+	## The most urgent state of the sessions of `session_ids`, as attention
+	## ranks them, Idle for none.
+	state : List(Chat.Session), List(Str) -> Attention.State
+	state = |sessions, session_ids| {
+		states = sessions.keep_if(|session| session_ids.contains(session.id)).map(|session| Attention.item(session, []).state)
 		Attention.ranks.find_first(|ranked| states.contains(ranked)) ?? Idle
 	}
 }
 
-item : Str, Attention.State -> Attention.Item
-item = |session_id, state| { session_id, provider: "mock", title: "", agent: "claude", state, summary: "", permissions: [], signature: "", set_aside: No }
+with_status : Str, Chat.Status -> Chat.Session
+with_status = |id, status| { id, provider: "mock", agent: "claude", title: "", status }
 
-expect Workspaces.state([item("s1", Done), item("s2", Failed), item("s3", NeedsYou)], ["s1", "s2"]) == Failed
-expect Workspaces.state([item("s1", Done)], []) == Idle
+expect Workspaces.state([with_status("s1", Finished), with_status("s2", Failed("")), with_status("s3", AwaitingPermission)], ["s1", "s2"]) == Failed
+expect Workspaces.state([with_status("s1", Finished)], []) == Idle
