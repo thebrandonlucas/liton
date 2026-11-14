@@ -599,10 +599,10 @@ Model := [].{
 	last_sequence = |state, session_id| Model.entries(state, session_id).last().map_ok(|entry| entry.sequence) ?? 0
 
 	## The topics the panes follow: the sessions; the timeline of each session
-	## a chat pane shows; the attention items, which the title counts; and,
-	## of each Changes pane on screen, its scope's changes and the hunks
-	## of the file it shows. Until the manifest arrives, every capability
-	## counts as offered.
+	## a chat pane shows; the attention items, which the title counts; of
+	## each Changes pane on screen, its scope's changes and the hunks of the
+	## file it shows; and the workspaces, while a pane lists them. Until the
+	## manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
@@ -618,7 +618,8 @@ Model := [].{
 			}
 		}
 		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("")).join_map(git) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes)
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(listing)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -1061,9 +1062,86 @@ Model := [].{
 		rows.map_with_index(|cells, index| { key: index.to_str(), cells: cells.map_with_index(|cell, column| { key: column.to_str(), class: cell.class, text: cell.text }) })
 	}
 
+	## A row of a Workspaces pane: a group of workspaces, by project or by
+	## what they need from you, folded or not; a workspace in it; or a
+	## session in that. `key` is the context a workspace or session row
+	## focuses (`Context.to_str`), or `group:` and the group's.
+	Row : { key : Str, kind : [Group, Workspace, Session], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool }
+
+	## A Workspaces pane's rows, as its options group and filter them, each
+	## workspace marked as urgent as its most urgent session.
+	workspace_rows : State, Pane -> List(Row)
+	workspace_rows = |state, shown| {
+		folded = Model.option(shown, "folded").split_on("\n")
+		listed = state.workspaces.workspaces.drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle)
+		groups =
+			if Model.option(shown, "group_by") == "Status" {
+				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank) }).drop_if(|group| group.members.is_empty())
+			} else {
+				state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id) })
+			}
+		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False }
+		workspace_row = |workspace| {
+			branch = match workspace.branch {
+				Branch(name) if name != workspace.name => name
+				Detached => "detached"
+				_ => ""
+			}
+			{ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot: attention_dot(workspace.state), focused: state.focus == Workspace(workspace.id) }
+		}
+		groups.join_map(
+			|group| {
+				header = { ..blank, key: group.key, title: group.title, counts: group.members.len().to_str(), folded: folded.contains(group.key) }
+				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(state.sessions.keep_if(|listed_session| workspace.session_ids.contains(listed_session.id)).map(|listed_session| Model.session_row(state, listed_session))))
+				if (header.folded) [header] else members.prepend(header)
+			},
+		)
+	}
+
+	## A session's row, in a Workspaces or a Sessions pane.
+	session_row : State, Chat.Session -> Row
+	session_row = |state, listed_session| {
+		rank = Attention.item(listed_session, []).state
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False }
+	}
+
+	## A Sessions pane's rows: every session, with its agent if it shows that.
+	session_rows : State, Pane -> List(Row)
+	session_rows = |state, shown| state.sessions.map(|listed_session| { ..Model.session_row(state, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
+
+	## A workspace's uncommitted changes as "+3 −1": as its provider counts
+	## them, else as a Changes pane last saw them; "changed" when they are
+	## there but uncounted, and nothing when they are none or unknown.
+	change_counts : State, Workspaces.Workspace -> Str
+	change_counts = |state, workspace| {
+		seen = workspace.session_ids.map(|session_id| Session(session_id)).prepend(Workspace(workspace.id)).keep_oks(|context| Model.git_changes_of(state, context, Uncommitted)).first()
+		counted =
+			match (workspace.changes, seen) {
+				(Counted(counts), _) if counts.additions + counts.deletions > 0 => Ok(counts)
+				(_, Ok({ files, .. })) => Ok(files.fold({ additions: 0, deletions: 0 }, |sum, file| { additions: sum.additions + file.additions, deletions: sum.deletions + file.deletions }))
+				_ => Err(Unknown)
+			}
+		match counted {
+			Ok({ additions, deletions }) if additions + deletions > 0 => "+${additions.to_str()} −${deletions.to_str()}"
+			_ if workspace.dirty => "changed"
+			_ => ""
+		}
+	}
+
+	## Folds or unfolds a group of a Workspaces pane, which the snapshot
+	## keeps, or focuses a workspace or a session.
+	pick_row : State, { pane_id : Str, key : Str } -> State
+	pick_row = |state, { pane_id, key }|
+		if key.starts_with("group:") {
+			folded = Model.option(Model.pane(state, pane_id), "folded").split_on("\n").drop_if(Str.is_empty)
+			Model.set_option(state, pane_id, "folded", Str.join_with(if (folded.contains(key)) folded.drop_if(|group| group == key) else folded.append(key), "\n"))
+		} else {
+			Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
+		}
+
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## or a placeholder naming what is missing.
-	Body : [Sessions, Chat, Inbox, Changes, Capabilities, Connecting, Missing]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Capabilities, Connecting, Missing]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -1079,6 +1157,7 @@ Model := [].{
 		else
 			match shown.widget {
 				"sessions" => Sessions
+				"workspaces" => Workspaces
 				"chat" => Chat
 				"inbox" => Inbox
 				"changes" => Changes
@@ -1223,4 +1302,47 @@ expect {
 	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
 	pinned = Model.toggle_pin(state, "pane-3")
 	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted })] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
+}
+
+## What a workspace or a session in `rank` is doing, as a row of the
+## Workspaces pane, or a group of them, says it.
+attention_word : Attention.State -> Str
+attention_word = |rank|
+	match rank {
+		NeedsYou => "waiting for you"
+		Failed => "failed"
+		Working => "running"
+		Done => "done"
+		Idle => "idle"
+	}
+
+## The class of a status dot (ui/style.css) showing `rank`.
+attention_dot : Attention.State -> Str
+attention_dot = |rank|
+	match rank {
+		NeedsYou => "waiting"
+		Failed => "failed"
+		Working => "running"
+		Done => "done"
+		Idle => "idle"
+	}
+
+# Workspaces list under their project, each with its sessions. Folding a
+# project hides them, and grouping by status lists what needs you first.
+expect {
+	project = { id: "p1", provider: "mock", name: "app", directory: "/app" }
+	workspace = |id, rank, session_ids| { id, provider: "mock", project_id: "p1", name: id, directory: "/app", kind: Checkout, branch: Branch("main"), state: rank, dirty: Bool.False, changes: Counted({ additions: 2, deletions: 1 }), pinned: Bool.False, labels: [], session_ids }
+	listed = { projects: [project], workspaces: [workspace("w1", Idle, ["s1"]), workspace("w2", NeedsYou, [])] }
+	state = Model.add_pane({ ..Model.initial(""), workspaces: listed, sessions: [Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Idle })] }, "workspaces")
+	keys = |shown| Model.workspace_rows(shown, Model.pane(shown, "pane-4")).map(|row| row.key)
+	folded = Model.pick_row(state, { pane_id: "pane-4", key: "group:p1" })
+	by_status = Model.set_option(state, "pane-4", "group_by", "Status")
+	keys(state) == ["group:p1", "workspace:w1", "s1", "workspace:w2"]
+		and keys(folded) == ["group:p1"]
+		and keys(Model.pick_row(folded, { pane_id: "pane-4", key: "group:p1" })) == keys(state)
+		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "workspace:w1", "s1"]
+		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
+		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == Workspace("w1")
+		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == ["2", "+2 −1", "", "+2 −1"]
+		and Model.subjects(state).contains(WorkspaceList)
 }

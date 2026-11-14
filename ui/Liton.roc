@@ -518,10 +518,11 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Chat, Inbox, Changes, Capabilities, Connecting, Missing],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Capabilities, Connecting, Missing],
 					|body|
 						match body {
-							Sessions => Liton.sessions(model, row.field(|pane| pane))
+							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)))
+							Workspaces => Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)))
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -813,27 +814,40 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	sessions : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
-	sessions = |model0, pane|
+	## Rows of a tree, Workspaces' or Sessions': a dot for each one's state
+	## (a workspace's is its most urgent session's), its title, its branch or
+	## agent, its changes and its status. A group folds; a workspace or a
+	## session is focused. Both widgets share it, as one list of rows, to
+	## keep the module small.
+	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
+	tree = |model0, id, rows|
 		Html.ul(
-			[Engine.class("sessions"), Engine.attr("data-part", "list")],
+			[Engine.class("tree"), Engine.attr("data-part", "list")],
 			[
 				Engine.each(
-					model0.signal().map(|state| state.sessions),
-					|session| session.id,
+					rows,
+					|row| row.key,
 					|row| {
 						model = model0.lift_row()
+						kind = row.field(
+							|shown|
+								match shown.kind {
+									Group => "group"
+									Workspace => "workspace"
+									Session => "session"
+								},
+						)
 						Html.li(
-							[Engine.class_s(row.key().map2(model.signal(), |key, state| if (Session(key) == state.focus) "session focused" else "session")), Engine.attr("data-part", "session")],
 							[
-								Html.button_s(row.field(|session| "${session.title}"), [], model.update_by(row.key(), |state, key| { ..state, focus: Session(key) })),
-								Html.div(
-									"session-meta",
-									[
-										Engine.text_s(row.field(|session| session.agent).map2(pane.lift_row(), |agent, shown| if (Model.option(shown, "show_agent") == "true") agent else "")),
-										Html.span_s(row.field(|session| Liton.status_text(session.status)), [Engine.class_s(row.field(|session| Liton.badge_class(session.status))), Engine.test_id("session-status")]),
-									],
-								),
+								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}")),
+								Engine.attr_s("data-part", kind),
+							],
+							[
+								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key }), Model.pick_row)),
+								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
+								Html.span_s(row.field(|shown| shown.counts), [Engine.class("counts")]),
+								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
 							],
 						)
 					},
@@ -1222,14 +1236,6 @@ Liton := [].{
 			AwaitingPermission => "waiting for you"
 			Finished => "finished"
 			Failed(reason) => "failed: ${reason}"
-		}
-
-	badge_class : Chat.Status -> Str
-	badge_class = |status|
-		match status {
-			AwaitingPermission => "badge waiting"
-			Failed(_) => "badge failed"
-			_ => "badge"
 		}
 
 	## A tool call's name and state over its input, then its output with all

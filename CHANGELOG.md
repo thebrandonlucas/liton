@@ -44,6 +44,7 @@ All notable changes to liton are documented in this file. The format is based on
 - "Jump to latest" appears over a chat scrolled up from its newest message, in browsers with scroll-driven CSS animations, such as Chrome and Edge.
 - Start an agent with chat.v1's `Create`, in a workspace, of a kind its provider offers (chat.v1's new `agents` topic lists them), with a model and a first prompt; and make a workspace of a project, a checkout of it or a worktree on a new branch, with workspaces.v1's `Create` (docs/protocol.md). Each answers the new session's or workspace's id. The mock provider and providers outside the daemon take both.
 - Start Paseo's agents and create its workspaces through those calls too, an agent also in any directory of Paseo's.
+- A Workspaces widget lists your projects, each with its workspaces and their sessions: a dot for what each needs (a workspace's is its most urgent session's), its branch, and its uncommitted changes as "+3 −1" when the provider or a Changes pane has counted them. Fold a project away, which the browser remembers, or group the workspaces by what they need from you, and hide idle ones, in its options. Click a workspace to show it: the chat shows its session that needs you most, and Changes shows the workspace's changes. Click a session under it to show that one. Sessions now lists its sessions the same way, a row each with its dot.
 
 ### Changed
 

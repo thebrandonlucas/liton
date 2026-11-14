@@ -32,6 +32,19 @@ Widgets := [].{
 			parts: ["header", "list", "session"],
 		},
 		{
+			id: "workspaces",
+			title: "Workspaces",
+			needs: [Capability.workspaces_v1],
+			slots: [Left, Main],
+			minimum_width: 220,
+			follows_session: Bool.False,
+			options: [
+				{ key: "group_by", label: "Group by", help: "List workspaces under their project, or under what they need from you.", kind: Choice({ default: "Project", choices: ["Project", "Status"] }) },
+				{ key: "show_idle", label: "Show idle workspaces", help: "List workspaces whose agents need nothing.", kind: Bool(Bool.True) },
+			],
+			parts: ["header", "list", "group", "workspace", "session"],
+		},
+		{
 			id: "chat",
 			title: "Chat",
 			needs: [Capability.chat_v1],
