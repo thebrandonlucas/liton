@@ -226,7 +226,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .liton { --gap: 6px; }
   .bar { gap: .25rem; }
   .brand { font-size: 17px; padding-right: .3rem; }
-  .workspace:not([aria-pressed="true"]) .name, .module .counted, .running { display: none; }
+  .workspace:not([aria-pressed="true"]) .name, .module .counted, .module.running { display: none; }
   .workspace .number { margin-right: 0; }
   .workspace[aria-pressed="true"] .number { margin-right: .45em; }
   .settings-toggle { font-size: 0; }
