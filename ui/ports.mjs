@@ -14,6 +14,9 @@ document.addEventListener("keydown", (event) => {
   box.form.requestSubmit();
 }, true);
 
+// Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
+const voice = () => import("./voice.mjs");
+
 export default {
   // Copies text, answering whether the browser let it. The clipboard API
   // needs a secure context; a page served over plain HTTP from another
@@ -35,4 +38,12 @@ export default {
       }
     },
   },
+  "liton/voice/capture": {
+    subscribe(asked, port) {
+      let stop, gone;
+      voice().then((v) => gone || (stop = v.capture(asked, port)), port.close);
+      return () => (gone = true) && stop?.();
+    },
+  },
+  "liton/voice/order": { command: (asked) => voice().then((v) => v.order(asked)) },
 };

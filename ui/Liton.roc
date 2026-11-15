@@ -11,6 +11,7 @@ import cap.WorkspaceGit
 import setup.Setup
 import Highlight
 import Markdown
+import Microphone
 import Ports
 import Themes
 import Model
@@ -94,7 +95,7 @@ Liton := [].{
 					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
-			].concat(Liton.effects(model)),
+			].concat(Liton.effects(model)).concat(Microphone.effects(model)),
 		)
 
 	## Every request to the daemon is a call or a poll of /liton/v1
@@ -1033,6 +1034,7 @@ Liton := [].{
 							|| Liton.composer_input(model0, id),
 							|| Liton.composer_input(model0, id),
 						),
+						Microphone.controls(model0, id),
 						Html.submit_button("Send", []),
 					],
 				),

@@ -10,6 +10,7 @@ import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
 import setup.Setup
+import Speech
 import Widgets
 
 Model := [].{
@@ -134,6 +135,9 @@ Model := [].{
 		## How many times each chat pane jumped to its latest entry.
 		jumps : List({ pane : Str, count : U64 }),
 
+		## What voice in the composers is doing (ui/Microphone.roc).
+		voice : Speech.State,
+
 		## The form a Workspaces pane opened, to start an agent or create a
 		## workspace, and what is typed in it.
 		form : Form,
@@ -231,6 +235,7 @@ Model := [].{
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
+				voice: Speech.initial,
 				form: Model.closed_form,
 				creating: [],
 				create_outbox: { serial: 0, key: "", text: "" },
@@ -687,7 +692,9 @@ Model := [].{
 		}
 		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:")).join_map(git) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(listing)
+		# The speech engine's, for the mic in chat panes' composers, once offered.
+		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(listing).concat(voice)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -770,6 +777,7 @@ Model := [].{
 			(_, Items(items)) => { ..state, attention: items }
 			(_, Listed(listed)) => { ..state, workspaces: listed }
 			(_, Agents(listed)) => { ..state, agents: listed }
+			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
 					..state,

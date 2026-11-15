@@ -256,6 +256,24 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .composer textarea { flex: 1; min-width: 0; max-height: 9em; padding: 6px 10px; resize: none; field-sizing: content; transition: border-color var(--fast) ease; }
 .composer textarea:focus { outline: none; border-color: var(--edge-active); }
 .composer button { min-height: calc(1.45em + 14px); color: var(--accent); }
+/* Voice in the composer (ui/Microphone.roc): the mic, whose ring follows the
+   input's level while it listens, and a word over it saying what it is doing. */
+.composer { position: relative; }
+.voice { display: flex; gap: 6px; }
+.voice[hidden], .voice-status:empty { display: none; }
+.composer .mic { --size: calc(1.45em + 14px); position: relative; width: var(--size); min-width: var(--size); height: var(--size); padding: 0; border-radius: 50%; transition: background var(--fast) ease, box-shadow var(--fast) linear; }
+.composer .mic::before { content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; background: currentColor; mask: var(--icon) center / contain no-repeat; }
+.composer .mic { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><rect x='9' y='3' width='6' height='11' rx='3'/><path d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/></svg>"); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.composer .mic[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.composer .mic.listening { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 calc(var(--level) * .08px) color-mix(in srgb, var(--accent) 35%, transparent); }
+.composer .mic.transcribing { opacity: 1; cursor: progress; }
+.composer .mic.transcribing::before { animation: mic-busy calc(var(--motion) * 700ms + 1ms) ease-in-out infinite alternate; }
+.composer .mic.denied, .composer .mic.failed { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 50%, transparent); }
+.voice-status { position: absolute; right: 8px; bottom: calc(100% - 10px); padding: 2px 10px; border: 1px solid var(--edge); border-radius: 999px; background: var(--glass-deep); color: var(--muted); font-size: 12px; pointer-events: none; }
+@keyframes mic-busy { from { opacity: 1; } to { opacity: .35; } }
+@media (max-width: 640px) {
+  .composer .mic { --size: 44px; background: transparent; border-color: var(--edge); color: var(--accent); }
+}
 /* Jump to latest: shown once the timeline is scrolled up from its newest
    entry, where the browser has scroll-driven animations. */
 .jump { position: sticky; bottom: 0; z-index: 3; height: 0; display: flex; justify-content: center; }
