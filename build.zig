@@ -195,13 +195,16 @@ pub fn build(b: *std.Build) void {
     }
 
     // The UI's .scm specs, in the native runner roc-signals's release builds
-    // the UI into for the machine running the build.
+    // the UI into for the machine running the build. Without lambda-set
+    // specialization it builds in about a minute rather than ten after a UI
+    // change, and the specs check behaviour, not speed; the e2e step drives
+    // the specialized module the browser gets.
     const spec_step = b.step("spec", "Run the UI's specs natively");
     const run_specs = b.addSystemCommand(&.{
         "sh",               "-c",
         \\set -e
         \\mkdir -p zig-out/bin
-        \\"$1" build --target="$2" ui/main.roc --output=zig-out/bin/liton-specs
+        \\"$1" build --specialize=no --target="$2" ui/main.roc --output=zig-out/bin/liton-specs
         \\zig-out/bin/liton-specs ui/specs/*.scm
         ,
         "sh",               roc_ui,
@@ -213,6 +216,9 @@ pub fn build(b: *std.Build) void {
 
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
     // Built for size: the wasm's download is most of a cold load (bench/).
+    // Specialized still: --specialize=no makes it a quarter of the size, but
+    // a long chat (200 messages with code blocks) takes seconds to open or
+    // leave, against a third of a second.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
     const build_ui = b.addSystemCommand(&.{
         "sh", "-c",
