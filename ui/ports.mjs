@@ -46,4 +46,5 @@ export default {
     },
   },
   "liton/voice/order": { command: (asked) => voice().then((v) => v.order(asked)) },
+  "liton/voice/voices": { call: () => voice().then((v) => v.voices()) },
 };

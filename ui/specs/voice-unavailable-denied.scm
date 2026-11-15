@@ -8,6 +8,7 @@
     (run-effect 3)
     (expect-attr (role button :name "Dictate") "aria-disabled" "true")
     (expect-attr (role button :name "Dictate") "title" "Voice is unavailable: no engine at 127.0.0.1:6006")
+    (expect-attr (role button :name "Conversation") "aria-disabled" "true")
     (click (role button :name "Dictate"))
     (expect-port-subscriptions "liton/voice/capture" 0)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v2\",\"events\":[{\"Status\":{\"stt\":\"Ready\"}}]}]}")

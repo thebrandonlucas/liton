@@ -257,22 +257,31 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .composer textarea:focus { outline: none; border-color: var(--edge-active); }
 .composer button { min-height: calc(1.45em + 14px); color: var(--accent); }
 /* Voice in the composer (ui/Microphone.roc): the mic, whose ring follows the
-   input's level while it listens, and a word over it saying what it is doing. */
+   input's level while it listens and pulses through a conversation, the
+   conversation toggle, and a word over them saying what they are doing. */
 .composer { position: relative; }
 .voice { display: flex; gap: 6px; }
-.voice[hidden], .voice-status:empty { display: none; }
-.composer .mic { --size: calc(1.45em + 14px); position: relative; width: var(--size); min-width: var(--size); height: var(--size); padding: 0; border-radius: 50%; transition: background var(--fast) ease, box-shadow var(--fast) linear; }
-.composer .mic::before { content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; background: currentColor; mask: var(--icon) center / contain no-repeat; }
+.voice[hidden], .voice-settings[hidden], .voice-status:empty { display: none; }
+.composer .mic, .composer .talk { --size: calc(1.45em + 14px); position: relative; width: var(--size); min-width: var(--size); height: var(--size); padding: 0; border-radius: 50%; transition: background var(--fast) ease, box-shadow var(--fast) linear; }
+.composer .mic::before, .composer .talk::before { content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; background: currentColor; mask: var(--icon) center / contain no-repeat; }
 .composer .mic { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><rect x='9' y='3' width='6' height='11' rx='3'/><path d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/></svg>"); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-.composer .mic[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
-.composer .mic.listening { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 calc(var(--level) * .08px) color-mix(in srgb, var(--accent) 35%, transparent); }
+.composer .talk { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/></svg>"); }
+.composer .mic[aria-disabled="true"], .composer .talk[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.composer .mic.listening, .composer .mic.conversation, .composer .talk[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.composer .mic.listening, .composer .mic.conversation { box-shadow: 0 0 0 calc(var(--level) * .08px) color-mix(in srgb, var(--accent) 35%, transparent); }
+.composer .mic.conversation::after { content: ""; position: absolute; inset: -5px; border: 2px solid var(--accent); border-radius: 50%; animation: mic-pulse calc(var(--motion) * 1600ms + 1ms) ease-out infinite; }
+.composer .mic.speaking { background: var(--accent-to); border-color: var(--accent-to); }
+.composer .mic.speaking::after { border-color: var(--accent-to); animation-duration: calc(var(--motion) * 800ms + 1ms); }
 .composer .mic.transcribing { opacity: 1; cursor: progress; }
 .composer .mic.transcribing::before { animation: mic-busy calc(var(--motion) * 700ms + 1ms) ease-in-out infinite alternate; }
 .composer .mic.denied, .composer .mic.failed { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 50%, transparent); }
 .voice-status { position: absolute; right: 8px; bottom: calc(100% - 10px); padding: 2px 10px; border: 1px solid var(--edge); border-radius: 999px; background: var(--glass-deep); color: var(--muted); font-size: 12px; pointer-events: none; }
+.voice-settings { display: grid; gap: 6px; }
+.voice-settings .setting { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+@keyframes mic-pulse { from { transform: scale(1); opacity: .9; } to { transform: scale(1.45); opacity: 0; } }
 @keyframes mic-busy { from { opacity: 1; } to { opacity: .35; } }
 @media (max-width: 640px) {
-  .composer .mic { --size: 44px; background: transparent; border-color: var(--edge); color: var(--accent); }
+  .composer .mic, .composer .talk { --size: 44px; background: transparent; border-color: var(--edge); color: var(--accent); }
 }
 /* Jump to latest: shown once the timeline is scrolled up from its newest
    entry, where the browser has scroll-driven animations. */

@@ -1,61 +1,97 @@
 ## What voice in the chat composer is doing, and the ports to the page's
-## JavaScript that records (ui/voice.mjs, which ui/ports.mjs loads on first
-## use). The audio itself never reaches the app: the page posts it to the
-## daemon's audio route (docs/protocol.md, Audio), asks voice.v1 for its
-## transcript, and tells the app only what changed.
+## JavaScript that record and speak (ui/voice.mjs, which ui/ports.mjs loads
+## on first use). The audio itself never reaches the app: the page posts it
+## to the daemon's audio route (docs/protocol.md, Audio), asks voice.v1 for
+## its transcript, and tells the app only what changed.
 import cap.Voice
 import pf.Engine
 import pf.Port
 
 Speech := [].{
 
+	## Dictation types what is said into the composer; a conversation sends
+	## each utterance and speaks the agent's replies.
+	Mode : [Dictation, Conversation]
+
 	## `engine` is the daemon's speech engine. The microphone records for the
-	## pane `pane`, `serial` counting recordings. `held` follows a press of
-	## the mic button, held once the page reports levels for a moment, which
-	## records until released; `swallow_click` eats the click that ends such
-	## a press. `stopping` asks the page to end the recording numbered so.
+	## pane `pane`, whose session a conversation talks with (`session`),
+	## `serial` counting recordings. `held` follows a press of the mic
+	## button, held once the page reports levels for a moment, which records
+	## until released; `swallow_click` eats the click that ends such a
+	## press. `stopping` asks the page to end the recording numbered so, and
+	## `transcribing` counts the utterances it is transcribing. A
+	## conversation speaks the agent's messages after the entry `spoken`.
+	## `voices` and `picked` are settings' speech choices, which the page
+	## keeps.
 	State : {
 		engine : Voice.Engine,
 		pane : Str,
+		session : Str,
+		mode : Mode,
 		phase : [Idle, Listening, Transcribing, Failed(Str)],
 		serial : U64,
 		level : U8,
 		held : [Up, Pressed(U8), Held],
 		swallow_click : Bool,
+		speaking : Bool,
 		stopping : U64,
+		transcribing : U64,
+		spoken : U64,
+		voices : List({ name : Str, local : Bool }),
+		picked : Picked,
 	}
+
+	## The voice and rate settings picked, unknown until settings ask the page.
+	Picked : [Unknown, Picked({ voice : Str, rate : Str })]
 
 	initial : State
 	initial = {
 		engine: Down("checking the speech engine"),
 		pane: "",
+		session: "",
+		mode: Dictation,
 		phase: Idle,
 		serial: 0,
 		level: 0,
 		held: Up,
 		swallow_click: Bool.False,
+		speaking: Bool.False,
 		stopping: 0,
+		transcribing: 0,
+		spoken: 0,
+		voices: [],
+		picked: Unknown,
 	}
 
-	## What the page tells of a recording: the input's level, 0 to 100; the
+	## What the page tells of a recording: the input's level, 0 to 100; an
 	## utterance ended and is being transcribed; its transcript, and where
 	## the composer's selection then was, as byte offsets into the draft, or
-	## why there is none.
-	Heard : [Level(U8), Transcribing, Transcript({ text : Str, from : U64, to : U64 }), NotTranscribed(Str)]
+	## why there is none; a reply being spoken started or stopped; or the
+	## speaker talked over it, which stopped it.
+	Heard : [Level(U8), Transcribing, Transcript({ text : Str, from : U64, to : U64 }), NotTranscribed(Str), Speaking(Bool), BargedIn]
 
-	## Records from the microphone while subscribed, until stopped.
-	capture : Port.Subscription({ pane : Str, serial : U64 }, Heard)
+	## Records from the microphone while subscribed: until stopped for
+	## dictation, or utterance after utterance, each ended by silence, for a
+	## conversation.
+	capture : Port.Subscription({ pane : Str, mode : Mode, serial : U64 }, Heard)
 	capture = Port.subscription({ name: "liton/voice/capture", delivery: Every(64) })
 
 	## What the page is to do, as it changes: end the dictation numbered
-	## `stop`, posting what is left.
-	Order : { stop : U64 }
+	## `stop`, posting what is left; speak the agent's messages in a
+	## conversation's session (`replies`) it hasn't, sentence by sentence,
+	## naming code rather than reading it; and keep the voice and rate picked.
+	Order : { stop : U64, session : Str, replies : List({ sequence : U64, text : Str }), picked : Picked }
 
 	order : Port.Command(Order)
 	order = Port.command({ name: "liton/voice/order" })
 
+	## The browser's voices, those on the device first, and the voice and rate
+	## picked before.
+	voices : Port.Call({}, { voices : List({ name : Str, local : Bool }), voice : Str, rate : Str })
+	voices = Port.call({ name: "liton/voice/voices", timeout: Ms(5000) })
+
 	registrations : List(Engine.PortRegistration)
-	registrations = [Speech.capture.registration(), Speech.order.registration()]
+	registrations = [Speech.capture.registration(), Speech.order.registration(), Speech.voices.registration()]
 
 	## Whether the microphone is in use.
 	active : State -> Bool

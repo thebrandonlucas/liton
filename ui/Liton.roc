@@ -325,6 +325,7 @@ Liton := [].{
 						),
 						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked == "true" })), Engine.text("Glass")]),
 						Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
+						Microphone.settings(model, Liton.choices),
 						Html.h3("Layout", ""),
 						Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.settings_column(model, row)),
 						Html.h3("Add a widget", ""),

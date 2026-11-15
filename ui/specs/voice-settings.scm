@@ -1,0 +1,18 @@
+(test "Liton — settings pick the voice that speaks replies, those on the device first, and the page keeps it"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"voice\",\"version\":1}],\"id\":\"local-speech\",\"name\":\"Local speech\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[{\"Status\":{\"stt\":\"Ready\"}}]}]}")
+    (run-effect 3)
+    (click (role button :name "Settings"))
+    (expect-port-call 4 "liton/voice/voices" "{}")
+    (answer-port 4 reply "{\"voices\":[{\"name\":\"Samantha\",\"local\":true},{\"name\":\"Google US English\",\"local\":false}],\"voice\":\"default\",\"rate\":\"1\"}")
+    (expect-value (label "Speaking voice") "default")
+    (expect-visible (text "Google US English (online)"))
+    (select-option (label "Speaking voice") "Samantha")
+    (select-option (label "Speaking rate") "1.25")
+    (expect-port-sent "liton/voice/order" 3 "{\"picked\":{\"Picked\":{\"rate\":\"1.25\",\"voice\":\"Samantha\"}},\"replies\":[],\"session\":\"\",\"stop\":\"0\"}")
+  )
+)
