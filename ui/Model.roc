@@ -61,8 +61,11 @@ Model := [].{
 		active_column : Str,
 
 		## The panel a narrow Workbench last scrolled to, by the reference
-		## focusing it; `serial` counts each scroll.
-		jump : { serial : U64, panel : Str },
+		## focusing it, and the URL hashes it replaced and pushed for the
+		## browser's back to return to, "" for none (`Model.jump_to`);
+		## `serial` counts each scroll. `url_hash` is the hash the URL shows.
+		jump : { serial : U64, panel : Str, replace : Str, push : Str },
+		url_hash : Str,
 
 		## Counts on the numbers ending pane and column ids, so each is new.
 		next_id : U64,
@@ -196,7 +199,8 @@ Model := [].{
 				columns: [],
 				collapsed: [],
 				active_column: "",
-				jump: { serial: 0, panel: "" },
+				jump: { serial: 0, panel: "", replace: "", push: "" },
+				url_hash: "",
 				next_id: 1,
 				drafts: [],
 				cleared: [],
@@ -237,13 +241,14 @@ Model := [].{
 	}
 
 	## Shows a layout, counting ids on from the numbers ending theirs. A
-	## Workbench shows its main area first.
+	## Workbench shows the panel the URL names first, or its main area.
 	layout : State, Layout -> State
 	layout = |state, { shell, columns, collapsed }| {
 		ids = columns.join_map(|column| column.panes.map(|pane| pane.id).append(column.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
-		shown = if (shell == Workbench) columns.get(1) else columns.first()
-		jump = { serial: state.jump.serial + 1, panel: if (shell == Workbench) Model.panel_ref(Main) else "" }
+		slot = if (shell == Workbench) Model.slot_hashed(state.url_hash) else Free
+		shown = columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 0)
+		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(slot), replace: "", push: "" }
 		{ ..state, shell, columns, next_id, collapsed, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
 	}
 
@@ -456,11 +461,40 @@ Model := [].{
 	panel_ref : Slot -> Str
 	panel_ref = |slot| if (slot == Free) "" else "panel-${Model.slot_name(slot)}"
 
-	## Shows a column on a narrow screen, scrolling a Workbench to its panel.
+	## Shows a column on a narrow screen, scrolling a Workbench to its panel,
+	## whose hash then replaces the URL's.
 	show_column : State, Str -> State
-	show_column = |state, column_id| {
-		panel = Model.panel_ref(Model.slot_of(state, column_id))
-		{ ..state, active_column: column_id, jump: if (panel.is_empty()) state.jump else { serial: state.jump.serial + 1, panel } }
+	show_column = |state, column_id| Model.jump_to(state, column_id, Replace)
+
+	## Shows a column as `show_column` does. `Push` leaves the panel the user
+	## is in as an entry of the browser's history, so back returns to it,
+	## unless the URL names the panel shown already.
+	jump_to : State, Str, [Replace, Push] -> State
+	jump_to = |state, column_id, how| {
+		(from, to) = (Model.slot_hash(Model.slot_of(state, state.active_column)), Model.slot_hash(Model.slot_of(state, column_id)))
+		(replace, push) = match how {
+			Replace if to != state.url_hash => (to, "")
+			Push if to != state.url_hash and from != to => (from, to)
+			_ => ("", "")
+		}
+		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(Model.slot_of(state, column_id)), replace, push }
+		if (to.is_empty()) { ..state, active_column: column_id } else { ..state, active_column: column_id, jump, url_hash: to }
+	}
+
+	## The URL hash naming a Workbench slot's panel, and the slot a hash
+	## names: the main area for none.
+	slot_hash : Slot -> Str
+	slot_hash = |slot| if (slot == Free) "" else "#${Model.slot_name(slot)}"
+
+	slot_hashed : Str -> Slot
+	slot_hashed = |hash| [Left, Right].find_first(|slot| Model.slot_hash(slot) == hash) ?? Main
+
+	## Follows the browser to `url`, by its back or forward or on loading the
+	## page: a Workbench shows the panel its hash names.
+	went : State, Str -> State
+	went = |state0, url| {
+		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
+		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed }) else state
 	}
 
 	toggle_drawer : State, Slot -> State
@@ -999,7 +1033,7 @@ Model := [].{
 	open = |state, context| {
 		focused = { ..state, focus: context }
 		match state.columns.find_first(|column| column.panes.any(|shown| shown.widget == "chat")) {
-			Ok(column) => Model.show_column(focused, column.id)
+			Ok(column) => Model.jump_to(focused, column.id, Push)
 			Err(NotFound) => focused
 		}
 	}

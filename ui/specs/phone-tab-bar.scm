@@ -11,7 +11,10 @@
     (click (test-id "show-right"))
     (expect-attr (test-id "show-right") aria-pressed "true")
     (expect-attr (test-id "slot-right") class "column slot slot-right tabbed shown")
+    (expect-current-location "/#right")
+    ; A tab replaces the URL's hash: back doesn't step through the tabs.
     (click (test-id "show-left"))
+    (expect-current-location "/#left")
     ; The Inbox counts what needs you itself.
     (click (role button :name "Settings"))
     (click (role button :name "Inbox preset"))

@@ -34,7 +34,7 @@ Liton := [].{
 	program : Engine.Program
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], max_inflight: 32 },
-		|boot| Engine.state({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off") }, Liton.page),
+		|boot| Engine.state(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off") }, boot.url), Liton.page),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -162,7 +162,19 @@ Liton := [].{
 		),
 		# Keys reach the root only from inside it.
 		Engine.watch(Engine.const({}), |_| [Focus("app")], Engine.ignore({})),
-		Engine.watch(model.signal().map(|state| state.jump), |jump| if (jump.panel.is_empty()) [] else [Focus(jump.panel)], Engine.ignore({})),
+		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, request)| request), Engine.ignore({})),
+		# The browser's back and forward show the panel the URL names.
+		Engine.watch(
+			Engine.const({}),
+			|_| [Popstate],
+			model.on_result(
+				|state, _, res|
+					match res {
+						Location(url) => Model.went(state, url)
+						_ => state
+					},
+			),
+		),
 		# A composer cleared by sending is built anew, out of focus: focus it.
 		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Focus("latest")], Engine.ignore({})),
