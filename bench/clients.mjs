@@ -15,7 +15,7 @@ export const clients = {
     answers: 'section[aria-label="Chat"] .entry',
     session_rows: 'section[aria-label="Workspaces"] .tree-session button',
     row_text: (k) => `Bench agent ${k}`,
-    composer: 'section[aria-label="Chat"] input[aria-label="Message"]',
+    composer: 'section[aria-label="Chat"] textarea[aria-label="Message"]',
   },
   paseo: {
     origin: () => `http://127.0.0.1:${ports.paseo_for_browser}`,

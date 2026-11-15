@@ -1035,8 +1035,10 @@ Liton := [].{
 		)
 	}
 
+	## A box that grows with the draft to a few lines. Enter sends it, from
+	## ui/ports.mjs, which sees the Shift key that inserts a line instead.
 	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	composer_input = |model, id| Html.text_input(Engine.const("Message"), "text", id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Liton.keeps_keys(model)], model.set_value_by(id, Model.set_draft))
+	composer_input = |model, id| Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Liton.keeps_keys(model)], model.set_value_by(id, Model.set_draft))
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls

@@ -138,7 +138,7 @@ try {
   await step("a message sent to Scratch with Enter appears, and leaves the composer empty and focused", async () => {
     await click("Workspaces", ".tree-session button", "Scratch");
     await see("Chat", ".pane-header .pane-title", "Scratch");
-    const composer = 'section[aria-label="Chat"] input[aria-label="Message"]';
+    const composer = 'section[aria-label="Chat"] textarea[aria-label="Message"]';
     await (await page.$(composer)).type("Find the TODOs");
     await page.keyboard.press("Enter");
     await see("Chat", ".entry.user", "Find the TODOs");

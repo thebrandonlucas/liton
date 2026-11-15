@@ -1,5 +1,19 @@
 // liton: what the app (app.wasm, from ui/) asks of the page that
 // roc-signals 0.5.0 does not model. The ports are declared in ui/Ports.roc.
+
+// Enter in a chat's composer sends the message, and Shift+Enter starts a
+// new line. On a touch screen, whose keyboard has no Shift+Enter, Enter
+// starts a new line and Send sends. roc-signals 0.5.0 tells a key handler
+// no modifiers, nor lets it keep only some keys from the box (roc-issues
+// RS-004, lukewilliamboswell/roc-signals#212).
+document.addEventListener("keydown", (event) => {
+  const box = event.target;
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || !box.matches?.(".composer textarea")) return;
+  if (matchMedia("(pointer: coarse)").matches) return;
+  event.preventDefault();
+  box.form.requestSubmit();
+}, true);
+
 export default {
   // Copies text, answering whether the browser let it. The clipboard API
   // needs a secure context; a page served over plain HTTP from another
