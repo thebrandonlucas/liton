@@ -289,6 +289,14 @@ pub fn build(b: *std.Build) void {
     run_voice.has_side_effects = true;
     run_voice.step.dependOn(&build_daemon.step);
     e2e_step.dependOn(&run_voice.step);
+    // Dictates in headless Chrome from a fake microphone playing the same
+    // fixture, and skips the dictation without an engine.
+    const run_voice_ui = b.addSystemCommand(&.{ "node", "e2e/voice-ui.mjs" });
+    run_voice_ui.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_voice_ui.has_side_effects = true;
+    run_voice_ui.step.dependOn(&build_ui.step);
+    run_voice_ui.step.dependOn(&build_daemon.step);
+    e2e_step.dependOn(&run_voice_ui.step);
 
     // Benchmarks liton against Paseo's web client in a private network
     // namespace, against a throwaway Paseo (bench/README.md).
