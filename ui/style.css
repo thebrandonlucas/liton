@@ -26,7 +26,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --fast: calc(var(--motion) * 140ms);
   --slow: calc(var(--motion) * 200ms);
   height: 100%; display: flex; flex-direction: column; outline: none;
-  background: var(--background); color: var(--text);
+  background: var(--background); color: var(--text); accent-color: var(--accent);
   font: 14px/1.45 var(--font-ui);
   scrollbar-color: var(--edge) transparent;
 }
@@ -344,22 +344,22 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* Phones: one panel at a time, in the reach of a thumb. */
+.sheet-backdrop { display: none; }
 @media (max-width: 640px) {
   .liton { --gap: 6px; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   input, select, textarea { font-size: 16px; }
-  .bar { gap: .25rem; }
-  .brand { font-size: 17px; padding-right: .3rem; }
-  .workspace:not([aria-pressed="true"]) .name, .module .counted, .module.running { display: none; }
-  .workspace .number { margin-right: 0; }
-  .workspace[aria-pressed="true"] .number { margin-right: .45em; }
+  /* The bar slims to the brand, what needs you and Settings; the presets are in Settings. */
+  .bar { flex-basis: 48px; gap: .25rem; padding: 0 2px 0 .4rem; }
+  .brand { font-size: 20px; }
+  .workspace, .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggles { display: none; }
+  .bar button { min-width: 44px; min-height: 44px; }
   .settings-toggle { font-size: 0; }
-  .settings-toggle::before { font-size: 15px; margin: 0; }
+  .settings-toggle::before { font-size: 19px; margin: 0; }
   .column-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
-  .settings { width: calc(100% - 2 * var(--gap)); }
   .column { min-width: 0; overflow-y: auto; }
   .tiling .column { display: none; }
   .tiling .column.shown { display: flex; }
-  .column-header .resize, .drawer-toggles { display: none; }
+  .column-header .resize { display: none; }
   .tiling .pane { min-height: 60vh; }
   /* A Workbench's slots are full-width panels, swiped between or picked
      from a tab bar at the bottom. */
@@ -383,11 +383,42 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .column-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
+  /* Settings: a sheet from the bottom, over a dimmed screen that closes it. */
+  .sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 4; background: rgb(0 0 0 / 38%); animation: fade-in var(--slow) ease-out backwards; }
+  .settings { top: auto; left: 0; right: 0; bottom: 0; width: 100%; max-height: 86%; gap: 8px;
+    padding: 6px 16px calc(16px + env(safe-area-inset-bottom)); border-bottom: none;
+    border-radius: calc(var(--radius) + 12px) calc(var(--radius) + 12px) 0 0; animation-name: sheet-up; }
+  .settings::before { content: ""; flex: none; align-self: center; width: 38px; height: 5px; margin-bottom: 2px; border-radius: 3px; background: var(--muted); opacity: .5; }
+  .settings button, .settings select, .settings summary { min-height: 44px; }
+  .settings-header .close { min-width: 44px; font-size: 24px; }
+  .settings .toggle input { width: 22px; height: 22px; }
+  /* Panes: bigger targets, no hover-only parts. */
+  .pane-header { min-height: 50px; padding: 3px 2px 3px 14px; font-size: 13px; }
+  .pane-header button { min-width: 44px; min-height: 44px; }
+  .pane-menu { align-self: center; }
+  .pane-header .menu-toggle, .pane-header .new-workspace { font-size: 20px; }
+  .pane-header .menu button { min-height: 44px; font-size: 14px; }
   /* A chat's header: its title, status dot and Stop, the agent and where it works below them. */
   .agent-line .pane-title { font-size: 15.5px; }
   .agent-line .status-word:not(.waiting, .failed) { display: none; }
   .agent-meta { font-size: 11.5px; }
   .pane-header .stop { min-height: 34px; padding: 0 14px; border-radius: 999px; }
+  .tree { padding: 4px 4px 8px; }
+  .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
+  .tree-session .status-word { margin-right: 12px; }
+  .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
+  .tree-row .branch, .tree-row .counts, .tree-row .status-word { font-size: 12px; }
+  .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; font-size: 20px; opacity: 1; }
+  .tree-group { margin-top: 10px; }
+  .tree-group .row-title { font-size: 12px; }
+  .tree-workspace ~ .tree-session { padding-left: 30px; }
+  .create-form input, .create-form select, .create-actions button { min-height: 44px; }
+  .inbox-item > button, .inbox-actions button, .permission button { min-height: 44px; }
+  .git-file { min-height: 44px; }
+  .changes .choices button { min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
+  .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
+  .entry { font-size: 15px; }
+  .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
   /* The composer: round, above the tab bar, a thumb's Send beside it. */
   .composer { gap: 8px; padding: 8px; }
   .composer textarea { min-height: 44px; padding: 10px 16px; border-radius: 22px; }
@@ -412,3 +443,5 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 @keyframes panel-left { 0%, 25% { --tab-on: 1; color: var(--accent); } 26%, 100% { --tab-on: 0; color: var(--muted); } }
 @keyframes panel-main { 0%, 24% { --tab-on: 0; color: var(--muted); } 25%, 75% { --tab-on: 1; color: var(--accent); } 76%, 100% { --tab-on: 0; color: var(--muted); } }
 @keyframes panel-right { 0%, 74% { --tab-on: 0; color: var(--muted); } 75%, 100% { --tab-on: 1; color: var(--accent); } }
+@keyframes sheet-up { from { transform: translateY(40%); opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } }

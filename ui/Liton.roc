@@ -87,8 +87,13 @@ Liton := [].{
 						Liton.settings(model),
 					],
 				),
-				# Under an open ⋯ menu's pane: a click anywhere else closes the menu.
-				Engine.when(model.signal().map(|state| !state.menu.is_empty()), || Html.div_attrs([Engine.class("menu-backdrop"), Engine.on_click(model.update(|state| { ..state, menu: "" }))], []), || Engine.text("")),
+				# Under an open ⋯ menu's pane, or a phone's Settings sheet: a click
+				# anywhere else closes it.
+				Engine.when(
+					model.signal().map(|state| !state.menu.is_empty() or state.show_settings),
+					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
+					|| Engine.text(""),
+				),
 			].concat(Liton.effects(model)),
 		)
 
