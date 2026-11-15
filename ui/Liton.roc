@@ -59,7 +59,8 @@ Liton := [].{
 					"work",
 					[
 						# Shown by CSS on narrow screens: Tiling shows the column picked here,
-						# and a Workbench, which is swiped through, scrolls to it.
+						# and a Workbench, which is swiped through, scrolls to it. Its left
+						# drawer's tab counts what needs you, unless an inbox there does.
 						Html.div(
 							"column-tabs",
 							[
@@ -72,6 +73,7 @@ Liton := [].{
 											[
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_column)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
+												Engine.attr_s("data-badge", row.field(|column| column).map2(model.signal().lift_row(), |column, state| if (Model.slot_of(state, column.id) != Left or column.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) "" else Model.needs_you(state).to_str())),
 											],
 											model.lift_row().update_by(row.key(), Model.show_column),
 										),

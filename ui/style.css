@@ -343,8 +343,9 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes pulse { 50% { opacity: .35; } }
 
+/* Phones: one panel at a time, in the reach of a thumb. */
 @media (max-width: 640px) {
-  .liton { --gap: 6px; }
+  .liton { --gap: 6px; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   .bar { gap: .25rem; }
   .brand { font-size: 17px; padding-right: .3rem; }
   .workspace:not([aria-pressed="true"]) .name, .module .counted, .module.running { display: none; }
@@ -359,14 +360,30 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .tiling .column.shown { display: flex; }
   .column-header .resize, .drawer-toggles { display: none; }
   .tiling .pane { min-height: 60vh; }
-  /* A Workbench's slots are full-width panels, swiped between. */
-  .column-tabs:has(+ .workbench) { justify-content: center; }
-  .column-tabs:has(+ .workbench) button { border-radius: 999px; }
-  .column-tabs:has(+ .workbench) button::before { content: "● " / ""; }
+  /* A Workbench's slots are full-width panels, swiped between or picked
+     from a tab bar at the bottom. */
   .workbench { gap: 0; padding: 0; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
   .workbench .column, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: var(--gap); scroll-snap-align: start; scroll-snap-stop: always; }
+  .column-tabs:has(+ .workbench) { order: 1; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; overflow: visible;
+    margin: 0 var(--gap) max(var(--gap), env(safe-area-inset-bottom)); padding: 4px;
+    border: 1px solid var(--edge); border-radius: calc(var(--radius) + 10px); background: var(--glass-deep);
+    backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar); box-shadow: var(--shadow); }
+  .column-tabs:has(+ .workbench) button { --tab-on: 0; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 0; min-height: 52px; padding: 5px 4px; border: none; border-radius: calc(var(--radius) + 6px);
+    background: color-mix(in srgb, var(--accent) calc(var(--tab-on) * 15%), transparent); color: var(--muted);
+    font: 600 11px/1.1 var(--font-ui); letter-spacing: .01em; white-space: nowrap; overflow: hidden; }
+  .column-tabs:has(+ .workbench) [aria-pressed="true"] { --tab-on: 1; color: var(--accent); }
+  .column-tabs:has(+ .workbench) button::before { content: ""; flex: none; width: 24px; height: 24px; background: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+  .column-tabs:has(+ .workbench) button:nth-child(1) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M9 6h11M9 12h11M9 18h11'/><circle cx='4.5' cy='6' r='1.3' fill='black'/><circle cx='4.5' cy='12' r='1.3' fill='black'/><circle cx='4.5' cy='18' r='1.3' fill='black'/></svg>"); }
+  .column-tabs:has(+ .workbench) button:nth-child(2) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='M6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h.5A2.5 2.5 0 0 1 4 13.5v-7A2.5 2.5 0 0 1 6.5 4z'/></svg>"); }
+  .column-tabs:has(+ .workbench) button:nth-child(3) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M6 3.5v11'/><circle cx='6' cy='18' r='2.5'/><circle cx='18' cy='6' r='2.5'/><path d='M18 8.5a9 9 0 0 1-9 9'/></svg>"); }
+  /* What needs you, on the left drawer's tab. */
+  .column-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
+    min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--on-accent);
+    font: 700 10.5px/17px var(--font-ui); text-align: center; }
 }
-/* Where the browser can, the strip follows the swipe: it marks the panel
+/* Where the browser can, the tab bar follows the swipe: it marks the panel
    scrolled to, not just the one last tapped. */
 @supports (animation-timeline: scroll()) {
   @media (max-width: 640px) {
@@ -378,6 +395,6 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
     .column-tabs:has(+ .workbench) button:nth-child(3) { animation-name: panel-right; }
   }
 }
-@keyframes panel-left { 0%, 25% { color: var(--accent); border-color: var(--edge-active); } 26%, 100% { color: var(--muted); border-color: var(--edge); } }
-@keyframes panel-main { 0%, 24% { color: var(--muted); border-color: var(--edge); } 25%, 75% { color: var(--accent); border-color: var(--edge-active); } 76%, 100% { color: var(--muted); border-color: var(--edge); } }
-@keyframes panel-right { 0%, 74% { color: var(--muted); border-color: var(--edge); } 75%, 100% { color: var(--accent); border-color: var(--edge-active); } }
+@keyframes panel-left { 0%, 25% { --tab-on: 1; color: var(--accent); } 26%, 100% { --tab-on: 0; color: var(--muted); } }
+@keyframes panel-main { 0%, 24% { --tab-on: 0; color: var(--muted); } 25%, 75% { --tab-on: 1; color: var(--accent); } 76%, 100% { --tab-on: 0; color: var(--muted); } }
+@keyframes panel-right { 0%, 74% { --tab-on: 0; color: var(--muted); } 75%, 100% { --tab-on: 1; color: var(--accent); } }

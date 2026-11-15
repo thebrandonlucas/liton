@@ -59,6 +59,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Each pane's header shows what the pane shows. What it follows or is pinned to, Pin, the moves in Tiling and Close pane are in its ⋯ menu.
 - The Developer and Inbox presets' right drawer holds Changes alone. Capabilities is still in Tiling, and Settings → Add a widget adds it.
 - The Developer preset's left drawer is Workspaces, the sessions under their workspaces. Sessions is still in Tiling, and Settings → Add a widget adds it.
+- On a phone, the Workbench's panels sit over a glass tab bar at the bottom, Workspaces, Chat and Changes, each with its icon, in place of the strip of dots above them. The Workspaces tab counts what needs you, and the tab bar follows your swipes.
 
 ### Fixed
 

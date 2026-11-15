@@ -1,0 +1,20 @@
+(test "Liton — a Workbench's tab bar shows the panel tapped, names it in the URL, and counts what needs you on the left drawer's tab"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[{\"id\":\"attention\",\"name\":\"Attention\",\"offers\":{\"name\":\"attention\",\"version\":1},\"uses\":[{\"name\":\"chat\",\"version\":1}]}],\"topics\":[]}")
+    (run-effect 1)
+    (expect-attr (test-id "show-main") aria-pressed "true")
+    (expect-no-attr (test-id "show-left") data-badge)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"}]}]}]}")
+    (run-effect 2)
+    (expect-attr (test-id "show-left") data-badge "1")
+    (expect-no-attr (test-id "show-main") data-badge)
+    (click (test-id "show-right"))
+    (expect-attr (test-id "show-right") aria-pressed "true")
+    (expect-attr (test-id "slot-right") class "column slot slot-right tabbed shown")
+    (click (test-id "show-left"))
+    ; The Inbox counts what needs you itself.
+    (click (role button :name "Settings"))
+    (click (role button :name "Inbox preset"))
+    (expect-no-attr (test-id "show-left") data-badge)
+  )
+)
