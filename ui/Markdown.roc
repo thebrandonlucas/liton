@@ -120,11 +120,12 @@ heading_of = |line| {
 	}
 }
 
-## How many `c`s there are in a row from `at`.
+## How many `c`s there are in a row from `at`, which ends where `bytes` do
+## even when `c` is 0.
 run_of : List(U8), U64, U8 -> U64
 run_of = |bytes, at, c| {
 	var $n = 0
-	while (bytes.get(at + $n) ?? 0) == c {
+	while bytes.get(at + $n) == Ok(c) {
 		$n = $n + 1
 	}
 	$n
@@ -670,3 +671,4 @@ expect Markdown.blocks("> **hi**\n\n```sh\nnix run\n```").map(|block| (block.kin
 expect Markdown.blocks("1. Run:\n   ```\n   x\n   ```\n2. Done").map(|block| (block.kind, block.indent)) == [(List, 0), (Code, 1), (List, 0)]
 expect Markdown.blocks("| a | b |\n|---|:-:|\n| 1 | `x|y` |\nafter").map(|block| (block.kind, block.code.text)) == [(Code, "| a | b |\n|---|:-:|\n| 1 | `x|y` |"), (Paragraph, "")]
 expect Markdown.blocks("## Plan ##").map(|block| (block.kind, block.level, block.spans)) == [(Heading, 2, [{ text: "Plan", class: "", href: "" }])]
+expect Markdown.blocks("```\na\n\nb\n```").map(|block| block.code.text) == ["a\n\nb"]
