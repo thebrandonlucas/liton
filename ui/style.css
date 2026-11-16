@@ -41,18 +41,14 @@ button:active { transform: scale(.97); }
 .pane:focus-visible, .liton:focus-visible, .panel-anchor:focus-visible { outline: none; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--edge); border-radius: var(--small-radius); }
 
-/* The bar: workspaces on the left, status modules on the right. */
+/* The bar: liton, a notice, and status modules on the right. */
 .bar { display: flex; flex: 0 0 2.4rem; align-items: center; gap: .75rem; margin: var(--gap) var(--gap) 0; padding: 0 .4rem;
   border: 1px solid var(--edge); border-radius: var(--radius); background: var(--glass-deep);
   backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
   font: 500 12.5px/1 var(--font-mono); color: var(--muted); box-shadow: var(--shadow); }
 .bar button { background: none; border-color: transparent; padding: .35rem .55rem; white-space: nowrap; }
 .bar button:hover { color: var(--text); border-color: var(--edge); }
-.workspaces { display: flex; align-items: center; gap: .2rem; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .brand { padding: 0 .55rem 0 .35rem; font: italic 500 19px/1 var(--font-display); color: var(--accent); letter-spacing: .01em; }
-.workspace .number { margin-right: .45em; color: color-mix(in srgb, var(--accent) 70%, var(--muted)); }
-.workspace[aria-pressed="true"] { border-color: var(--edge-active); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
-.workspace[aria-pressed="true"] .number { color: var(--accent); }
 .notice { color: var(--fail); font-family: var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modules { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
 .module { padding: .35rem .5rem; border-radius: var(--small-radius); white-space: nowrap; }
@@ -469,7 +465,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   /* The bar slims to the brand, what needs you and Settings; the presets are in Settings. */
   .bar { flex-basis: 48px; gap: .25rem; padding: 0 2px 0 .4rem; }
   .brand { font-size: 20px; }
-  .workspace, .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggles { display: none; }
+  .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggles { display: none; }
   .bar button { min-width: 44px; min-height: 44px; }
   .settings-toggle { font-size: 0; }
   .settings-toggle::before { font-size: 19px; margin: 0; }

@@ -203,42 +203,16 @@ Liton := [].{
 	call : Str -> Engine.Request
 	call = |body| Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout_ms: 5000 })
 
-	## A bar over the tiles: the presets as numbered workspaces, the one shown
-	## marked, and, as status modules, what needs you, the agents running, the
-	## Workbench's drawers and Settings.
+	## A bar over the tiles: liton's name and, as status modules, what needs
+	## you, the agents running, the Workbench's drawers and Settings, which
+	## picks the preset (as Alt+1 to 9 do).
 	bar : State(Ctx, Model.State) -> Elem(Ctx)
 	bar = |model|
 		Engine.element(
 			"header",
 			[Engine.class("bar")],
 			[
-				Engine.element(
-					"nav",
-					[Engine.class("workspaces"), Html.aria_label("Workspaces")],
-					[
-						Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
-						Engine.each(
-							model.signal().map(|state| state.presets.map_with_index(|preset, index| { name: preset.name, number: (index + 1).to_str(), title: if (index < 9) "${preset.name} (Alt+${(index + 1).to_str()})" else preset.name })),
-							|workspace| workspace.name,
-							|row| {
-								shown = row.key().map2(model.signal().lift_row(), |name, state| name == Model.workspace_shown(state))
-								number = row.field(|workspace| workspace.number)
-								Engine.element(
-									"button",
-									[
-										Engine.attr("type", "button"),
-										Engine.class("workspace"),
-										Html.flag("aria-pressed", shown),
-										Engine.attr_s("aria-label", row.field(|workspace| "${workspace.number} ${workspace.name}")),
-										Engine.attr_s("title", row.field(|workspace| workspace.title)),
-										Engine.on_click(model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name)))),
-									],
-									[Html.span_s(number, [Engine.class("number")]), Html.span_s(row.key(), [Engine.class("name")])],
-								)
-							},
-						),
-					],
-				),
+				Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
 				Html.span_s(model.signal().map(|state| state.notice), [Engine.class("notice")]),
 				Html.div(
 					"modules",
@@ -303,6 +277,7 @@ Liton := [].{
 								),
 							],
 						),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

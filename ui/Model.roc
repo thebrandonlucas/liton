@@ -384,17 +384,8 @@ Model := [].{
 	use_theme : State, Str -> State
 	use_theme = |state, name| { ..state, theme: name }
 
-	## The preset the layout is a workspace of: the first whose shell holds
-	## the same widgets in the same columns, however they are sized, set or
-	## folded.
-	workspace_shown : State -> Str
-	workspace_shown = |state| {
-		shape = |shell, columns| (shell, columns.map(|column| column.panes.map(|pane| pane.widget)))
-		state.presets.find_first(|preset| shape(preset.snapshot.shell, preset.snapshot.columns) == shape(state.shell, state.columns)).map_ok(|preset| preset.name) ?? ""
-	}
-
 	## A key pressed outside a text field: 1 to 9, with or without Alt (or
-	## Option, which types ¡ to ª on a Mac), shows that workspace; Escape
+	## Option, which types ¡ to ª on a Mac), shows that preset; Escape
 	## closes settings.
 	pressed : State, Str -> State
 	pressed = |state, key| {
@@ -1968,10 +1959,10 @@ expect {
 	Model.theme_shown(Model.initial("")).name == "Pastoral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
 }
 
-# 1 to 9 show the workspaces in order, however the one shown is changed.
+# 1 to 9 show the presets in order, however the one shown was changed.
 expect {
 	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.workspace_shown(state) == "Tiling" and Model.workspace_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡")) == "Developer" and Model.pressed(state, "7") == state
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session
