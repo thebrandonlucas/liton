@@ -1,0 +1,31 @@
+(test "Liton — a thread shows on its lines where the daemon finds them as the file changes, and once they are gone only in the review, outdated"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"files\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"review\",\"version\":1}],\"id\":\"review\",\"name\":\"Review\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix the login redirect\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 3)
+    (click (role button :name "Files"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"tree/fix-auth/.\",\"cursor\":\"t1\",\"events\":[{\"Tree\":{\"path\":\".\",\"listing\":{\"Listed\":[{\"name\":\"Auth.roc\",\"kind\":\"File\",\"size\":16,\"modified\":\"\"}]}}}]},{\"capability\":\"review.v1\",\"topic\":\"threads/fix-auth\",\"cursor\":\"r1\",\"events\":[{\"Threads\":{\"round\":1,\"next\":3,\"threads\":[{\"id\":\"t2\",\"outdated\":false,\"resolved\":false,\"anchor\":{\"path\":\"Auth.roc\",\"scope\":\"File\",\"side\":\"New\",\"start_line\":1,\"end_line\":1,\"quote\":\"start\"},\"comments\":[{\"id\":\"c1\",\"author\":\"Me\",\"text\":\"Why start here?\",\"state\":{\"Sent\":1}}]}],\"comments\":[]}}]}]}")
+    (run-effect 4)
+    (expect-visible (role button :name "Auth.roc:1"))
+    (click (role button :name "Auth.roc"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"tree/fix-auth/.\",\"cursor\":\"t1\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"file/fix-auth/Auth.roc\",\"cursor\":\"f1\",\"events\":[{\"Contents\":{\"path\":\"Auth.roc\",\"read\":{\"Text\":{\"text\":\"login\\nstart\\ngo\\n\",\"truncated\":false,\"size\":16,\"modified\":\"\"}}}}]},{\"capability\":\"review.v1\",\"topic\":\"threads/fix-auth\",\"cursor\":\"r2\",\"events\":[{\"Threads\":{\"round\":1,\"next\":3,\"threads\":[{\"id\":\"t2\",\"outdated\":false,\"resolved\":false,\"anchor\":{\"path\":\"Auth.roc\",\"scope\":\"File\",\"side\":\"New\",\"start_line\":2,\"end_line\":2,\"quote\":\"start\"},\"comments\":[{\"id\":\"c1\",\"author\":\"Me\",\"text\":\"Why start here?\",\"state\":{\"Sent\":1}}]}],\"comments\":[]}}]}]}")
+    (run-effect 5)
+    ; A line came in above it, so the daemon moved it down one.
+    (expect-visible (role button :name "Auth.roc:2"))
+    (expect-absent (role button :name "Auth.roc:1"))
+    (expect-text (test-id "comment-state") "sent in round 1")
+    ; Its place in the review opens a reply under it.
+    (click (role button :name "Auth.roc:2"))
+    (expect-value (label "Your comment") "")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"tree/fix-auth/.\",\"cursor\":\"t1\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"file/fix-auth/Auth.roc\",\"cursor\":\"f2\",\"events\":[{\"Contents\":{\"path\":\"Auth.roc\",\"read\":{\"Text\":{\"text\":\"login\\nbegin\\ngo\\n\",\"truncated\":false,\"size\":16,\"modified\":\"\"}}}}]},{\"capability\":\"review.v1\",\"topic\":\"threads/fix-auth\",\"cursor\":\"r3\",\"events\":[{\"Threads\":{\"round\":1,\"next\":3,\"threads\":[{\"id\":\"t2\",\"outdated\":true,\"resolved\":false,\"anchor\":{\"path\":\"Auth.roc\",\"scope\":\"File\",\"side\":\"New\",\"start_line\":2,\"end_line\":2,\"quote\":\"start\"},\"comments\":[{\"id\":\"c1\",\"author\":\"Me\",\"text\":\"Why start here?\",\"state\":{\"Sent\":1}}]}],\"comments\":[]}}]}]}")
+    (tick-interval 1000)
+    (run-effect 6)
+    ; Its line is gone: it leaves the code, and the review says so.
+    (expect-visible (text "begin"))
+    (expect-absent (test-id "comment-state"))
+    (expect-text (test-id "row-status") "outdated")
+  )
+)

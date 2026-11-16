@@ -1226,7 +1226,7 @@ Model := [].{
 	## focuses (`Context.to_str`), or `group:` and the group's. A row is
 	## `creatable` when + on it starts an agent there, or creates a workspace
 	## of its project.
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
 
 	## A Workspaces pane's rows, as its options group and filter them, each
 	## workspace marked as urgent as its most urgent session.
@@ -1296,7 +1296,8 @@ Model := [].{
 	}
 
 	## Folds or unfolds a group of a Workspaces pane, which the snapshot
-	## keeps, or focuses a workspace or a session.
+	## keeps, or focuses a workspace or a session; opens or closes a Files
+	## pane's folder, or shows its file; or jumps to a review's thread.
 	pick_row : State, { pane_id : Str, key : Str } -> State
 	pick_row = |state, { pane_id, key }|
 		if key.starts_with("group:") {
@@ -1306,6 +1307,10 @@ Model := [].{
 			Model.toggle_folder(state, pane_id, key.drop_prefix("dir:"))
 		} else if key.starts_with("file:") {
 			Model.show_file(state, pane_id, key.drop_prefix("file:"))
+		} else if key.starts_with("thread:") {
+			Model.jump_to_thread(state, { pane_id, thread: key.drop_prefix("thread:") })
+		} else if key.starts_with("comment:") {
+			state
 		} else {
 			if (key.starts_with("starting:") or key.starts_with("workspace:starting:")) state else Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
 		}
@@ -1583,6 +1588,86 @@ Model := [].{
 			Delete => Model.ask_review(state, DeleteComment({ context, comment_id: note.comment }))
 			Resolve if note.resolved => Model.ask_review(state, Reopen({ context, thread_id: note.thread }))
 			Resolve => Model.ask_review(state, Resolve({ context, thread_id: note.thread }))
+		}
+	}
+
+	## The review of a pane's context, as its review panel lists it in a
+	## tree's rows: its threads in the order of their files and lines, each
+	## where it is, its first comment's first line and its state, then its
+	## comments on the whole review.
+	review_rows : State, Pane -> List(Row)
+	review_rows = |state, shown| {
+		review = Model.review_of(state, Model.context_of(state, shown))
+		first_line = |comments| comments.first().map_ok(|comment| comment.text.trim().split_on("\n").first() ?? "") ?? ""
+		thread_state = |thread|
+			if thread.resolved {
+				"resolved"
+			} else if thread.outdated {
+				"outdated"
+			} else if thread.comments.any(|comment| comment.state == Draft) {
+				"draft"
+			} else {
+				"open"
+			}
+		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
+		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: "", dot: status, status, focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
+	}
+
+	## What a review panel says of its review: its drafts and rounds sent.
+	review_summary : State, Pane -> Str
+	review_summary = |state, shown| {
+		review = Model.review_of(state, Model.context_of(state, shown))
+		drafts = Review.drafts(review)
+		Str.join_with([if (drafts == 0) "no drafts" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
+	}
+
+	## Adds a pane's comment on the whole review, shown at once as a draft.
+	comment_overall : State, Str -> State
+	comment_overall = |state, pane_id| {
+		key = "${pane_id}/review"
+		text = Model.draft(state, key).trim()
+		context = Context.to_str(Model.context_of(state, Model.pane(state, pane_id)))
+		if (text.is_empty()) state else Model.ask_review(Model.set_draft(state, key, ""), AddComment({ context, place: Overall, author: Me, text }))
+	}
+
+	## Sends the drafts of a pane's review to the session it shows, as one
+	## message: they show as sent at once, and as drafts again if the daemon
+	## refuses.
+	send_review : State, Str -> State
+	send_review = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		session_id = Model.session_of(state, shown)
+		context = Context.to_str(Model.context_of(state, shown))
+		if session_id.is_empty() or session_id.starts_with("starting:") {
+			{ ..state, notice: "There is no agent to send the review to." }
+		} else if Review.drafts(Model.review_of(state, Model.context_of(state, shown))) == 0 {
+			{ ..state, notice: "There are no drafts to send." }
+		} else {
+			Model.ask_review(state, Send({ context, session_id }))
+		}
+	}
+
+	## Shows the file or diff a thread is on, the Files pane for a file's and
+	## the Changes pane for a diff's, with a reply to it open, focused,
+	## which scrolls to it.
+	jump_to_thread : State, { pane_id : Str, thread : Str } -> State
+	jump_to_thread = |state, { pane_id, thread }| {
+		found = Model.review_of(state, Model.context_of(state, Model.pane(state, pane_id))).threads.find_first(|shown| shown.id == thread)
+		target = |widget| Model.panes(state).find_first(|shown| shown.widget == widget).map_ok(|shown| shown.id)
+		diff = |changes_id, scope, path| Ok((Model.show_git(state, changes_id, scope, Selected(path)), changes_id))
+		opened =
+			match (found.map_ok(|shown| shown.anchor), target("files"), target("changes")) {
+				(Ok({ scope: File, path, .. }), Ok(files_id), _) => Ok((Model.show_file(state, files_id, path), files_id))
+				(Ok({ scope: Uncommitted, path, .. }), _, Ok(changes_id)) => diff(changes_id, Uncommitted, path)
+				(Ok({ scope: AgainstBase, path, .. }), _, Ok(changes_id)) => diff(changes_id, AgainstBase, path)
+				(Ok({ scope: Commit(sha), path, .. }), _, Ok(changes_id)) => diff(changes_id, Commit(sha), path)
+				_ => Err(NoPane)
+			}
+		match opened {
+			Ok((showing, target_id)) => Model.compose(Model.activate_tab(showing, target_id), { pane_id: target_id, thread, editing: "" })
+			Err(NoPane) => state
 		}
 	}
 

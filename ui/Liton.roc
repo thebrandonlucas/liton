@@ -850,15 +850,15 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	## Rows of a tree, Workspaces', Sessions' or Files': a dot for each one's
-	## state (a workspace's is its most urgent session's), its title, its
-	## branch or agent, its changes, its status, and +, on a workspace's to
-	## start an agent there and on a project's to create a workspace of it. A
-	## group folds, as a folder does, indented by its depth; a workspace, a
-	## session or a file is focused. The widgets share it, as one list of
-	## rows, each with every part the stylesheet hides where it doesn't
-	## apply, to keep the module small.
-
+	## Rows of a tree, Workspaces', Sessions', Files' or a review's threads: a
+	## dot for each one's state (a workspace's is its most urgent session's),
+	## its title, its branch or agent, its changes, its status, and +, on a
+	## workspace's to start an agent there and on a project's to create a
+	## workspace of it. A group folds, as a folder does, indented by its
+	## depth; a workspace, a session or a file is focused, and a thread jumps
+	## to its lines. The widgets share it, as one list of rows, each with
+	## every part the stylesheet hides where it doesn't apply, to keep the
+	## module small.
 	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
 	tree = |model0, id, rows|
 		Html.ul(
@@ -877,6 +877,7 @@ Liton := [].{
 									Session => "session"
 									Folder => "folder"
 									File => "file"
+									Thread => "thread"
 								},
 						)
 						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
@@ -1082,6 +1083,7 @@ Liton := [].{
 								Html.div(
 									"git",
 									[
+										Liton.review_panel(model, id, pane),
 										Html.div_attrs(
 											[Engine.class("git-status"), Engine.attr("data-part", "status")],
 											[
@@ -1151,6 +1153,37 @@ Liton := [].{
 	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
 	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
 
+	## A pane's review, over its files or changes: its drafts and the rounds
+	## sent, Send review, which sends the drafts to the agent as one message,
+	## and, opened, its threads, each jumping to its lines, and a comment on
+	## the whole review.
+	review_panel : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	review_panel = |model, id, pane| {
+		key = id.map(|pane_id| "${pane_id}/review")
+		Html.div_attrs(
+			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.flag_maybe("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.review_v1)))],
+			[
+				Engine.element(
+					"details",
+					[],
+					[
+						Engine.element("summary", [], [Html.span_s(Engine.const("Review"), [Engine.class("review-title")]), Html.span_s(pane.map2(model.signal(), |shown, state| Model.review_summary(state, shown)), [Engine.class("review-summary"), Engine.test_id("review-summary")])]),
+						Liton.tree(model, id, pane.map2(model.signal(), |shown, state| Model.review_rows(state, shown))),
+						Html.form(
+							"Comment on the whole review",
+							[Engine.class("review-overall"), Engine.on("submit:prevent", model.update_by(id, Model.comment_overall))],
+							[
+								Html.textarea(Engine.const("Comment on the whole review"), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "2"), Engine.attr("placeholder", "On the whole review, in Markdown"), Liton.keeps_keys(model)], model.set_value_by(key, Model.set_draft)),
+								Html.submit_button("Add", []),
+							],
+						),
+					],
+				),
+				Html.button("Send review", [Engine.class("send-review"), Engine.attr("title", "Send the drafts to the agent as one message")], model.update_by(id, Model.send_review)),
+			],
+		)
+	}
+
 	## A context's files: its folders, each opened to list it, and the file
 	## picked, its lines numbered and highlighted. Polls follow them only
 	## while it is on screen (see `Model.subjects`).
@@ -1160,6 +1193,7 @@ Liton := [].{
 		Html.div(
 			"files",
 			[
+				Liton.review_panel(model, id, pane),
 				Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), [Engine.class("missing")]),
 				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown))),
 				Html.div_attrs(

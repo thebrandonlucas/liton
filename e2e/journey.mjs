@@ -123,6 +123,24 @@ try {
     await see("Chat", ".md-code .tok-comment", "# src/Auth.roc");
     await see("Chat", ".md-item", "Logging in now returns you where you were.");
   });
+  await step("a comment on lines of the file opened from Changes is a draft until Send review sends it to the agent, which replies", async () => {
+    await click("Changes", ".diff-path button", "Open in Files");
+    await see("Files", ".file-path", "src/Auth.roc");
+    await see("Files", ".code-row", "Session.start(redirect_to)");
+    await click("Files", ".code-row .number", "2");
+    await click("Files", ".code-row .number", "3");
+    await see("Files", ".composer-title", "Comment on src/Auth.roc:2-3");
+    await page.keyboard.type("Fall back to `/` without a page to return to?");
+    await click("Files", ".comment-actions button", "Comment");
+    await see("Files", '.comment [data-testid="comment-state"]', "draft");
+    await see("Files", '[data-testid="review-summary"]', "1 draft");
+    await click("Files", ".review-panel button", "Send review");
+    await see("Files", '.comment [data-testid="comment-state"]', "sent in round 1");
+    await see("Chat", ".entry.user", "src/Auth.roc:2-3");
+    await see("Chat", ".entry.user", "Fall back to");
+    await see("Chat", ".markdown", "Looking into it", 8000);
+    await see("Files", '[data-testid="review-summary"]', "no drafts · 1 round sent");
+  });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Workspaces", ".tree-session button", "Find the flaky CI test");
     await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
@@ -191,7 +209,7 @@ try {
     if (page.errors.length) throw new Error(page.errors.join("; "));
   });
   await browser.close();
-  console.log("ok   e2e journey: panes, workspaces and new agents, sessions, the inbox, a setup's preset, changes, permission prompts and tool cards against the mock daemon");
+  console.log("ok   e2e journey: panes, workspaces and new agents, sessions, the inbox, a setup's preset, changes, files and a review sent to the agent, permission prompts and tool cards against the mock daemon");
   process.exit(0);
 } catch (error) {
   fail(error);

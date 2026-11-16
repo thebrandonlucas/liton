@@ -419,6 +419,28 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .diff-path .file-path { position: static; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; }
 .diff-path button { flex: none; margin-right: 4px; padding: 0 8px; font-size: 12px; }
 
+/* A pane's review: its drafts and rounds, Send review, and opened, its threads and a comment on the whole review. */
+.review-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; padding: 6px 10px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--tool); font-size: 12.5px; }
+.files > .review-panel { margin: 6px 6px 0; }
+.review-panel[hidden] { display: none; }
+.review-panel details { flex: 1; min-width: 0; }
+.review-panel summary { cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+.review-panel summary::before { content: "▸" / ""; color: var(--muted); }
+.review-panel details[open] summary::before { content: "▾" / ""; }
+.review-title { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+.review-summary { color: var(--muted); }
+.send-review { flex: none; padding: 1px 10px; font-size: 12px; font-weight: 600; color: var(--accent); border-color: var(--edge-active); }
+.review-panel .tree { margin-top: 4px; padding: 0; overflow: visible; }
+.tree-thread { padding: 2px 4px; font-size: 12.5px; }
+.tree-thread .status-dot { display: none; }
+.tree-thread .row-title { flex: none; font: 11.5px var(--font-mono); color: var(--accent); }
+.tree-thread .branch { flex: 1; font: inherit; color: var(--text); }
+.tree-thread .status-word.draft { color: var(--warn-strong); }
+.tree-thread:has(.outdated, .resolved) { opacity: .6; }
+.tree-thread:has(.status-word.resolved) .branch { text-decoration: line-through; }
+.review-overall { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
+.review-overall textarea { flex: 1; min-width: 0; padding: 4px 8px; resize: vertical; field-sizing: content; max-height: 8em; font: 12.5px/1.4 var(--font-ui); }
+
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 @keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
