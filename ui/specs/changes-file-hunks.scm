@@ -18,8 +18,11 @@
     (run-effect 4)
     (expect-absent (text "Loading…"))
     (expect-visible (text "@@ -40,3 +40,3 @@"))
-    (expect-visible (text "- go(login_page)"))
-    (expect-visible (text "+ go(came_from)"))
+    ; Each line highlighted, after its sign.
+    (expect-visible (text "- "))
+    (expect-visible (text "(login_page)"))
+    (expect-visible (text "+ "))
+    (expect-visible (text "(came_from)"))
     (expect-visible (text "42"))
   )
 )

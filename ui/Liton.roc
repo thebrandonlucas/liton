@@ -1130,7 +1130,7 @@ Liton := [].{
 												match hunks_shown {
 													NoFile => Engine.text("")
 													Loading => Html.p("Loading…", "missing")
-													Shown => Liton.git_diff(pane.map(|pane_shown| Model.option(pane_shown, "diff_layout")), hunks.map(Liton.hunks_or_none))
+													Shown => Liton.git_diff(pane.map(|pane_shown| Model.option(pane_shown, "diff_layout")), shown.map(|{ pane: pane_shown, state }| Model.git_code(state, pane_shown)))
 												},
 										),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
@@ -1164,7 +1164,7 @@ Liton := [].{
 					[
 						Html.p_s(id.map2(model.signal(), |pane_id, state| Model.file_pane(state, pane_id).file), [Engine.class("file-path")]),
 						Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), [Engine.class("missing"), Engine.test_id("file-status")]),
-						Liton.code_view("code-view file", shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
+						Liton.code_view(Engine.const("code-view file"), shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
 					],
 				),
 			],
@@ -1174,10 +1174,10 @@ Liton := [].{
 	## Rows of code, a file's or a diff's, `class` saying which: each line
 	## under its old and new numbers, an old line beside the new in a split
 	## diff, highlighted.
-	code_view : Str, Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
+	code_view : Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
 	code_view = |class, rows|
 		Html.div_attrs(
-			[Engine.class(class)],
+			[Engine.class_s(class)],
 			[
 				Engine.each(
 					rows,
@@ -1213,29 +1213,14 @@ Liton := [].{
 			],
 		)
 
-	## A file's hunks, in one column or old beside new.
-	git_diff : Signal(ctx, Str), Signal(ctx, List(WorkspaceGit.Hunk)) -> Elem(ctx)
-	git_diff = |layout, hunks|
-		Html.div_s(
-			layout.map(|shown| if (shown == "Split") "file-diff split" else "file-diff unified"),
+	## A file's hunks in the code view, in one column or old beside new.
+	git_diff : Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
+	git_diff = |layout, rows|
+		Html.div(
+			"file-diff",
 			[
-				Engine.when(hunks.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
-				Engine.each(
-					hunks,
-					|hunk| "${hunk.old_start.to_str()},${hunk.new_start.to_str()}",
-					|row|
-						Html.div_attrs(
-							[Engine.class("hunk"), Engine.attr("data-part", "hunk")],
-							[
-								Html.div("hunk-header", [Engine.text_s(row.field(|hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"))]),
-								Engine.each(
-									row.field(|hunk| hunk.lines).map2(layout.lift_row(), |lines, shown| Model.diff_rows(shown, lines)),
-									|line| line.key,
-									|line_row| Html.div_attrs([Engine.class("diff-line"), Engine.attr("data-part", "line")], [Engine.each(line_row.field(|line| line.cells), |cell| cell.key, |cell| Html.span_s(cell.field(|shown| shown.text), [Engine.class_s(cell.field(|shown| shown.class))]))]),
-								),
-							],
-						),
-				),
+				Engine.when(rows.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
+				Liton.code_view(layout.map(|shown| if (shown == "Split") "code-view split" else "code-view unified"), rows),
 			],
 		)
 
@@ -1288,13 +1273,6 @@ Liton := [].{
 				),
 			],
 		)
-
-	hunks_or_none : [Hunks(List(WorkspaceGit.Hunk)), Loading, NoFile] -> List(WorkspaceGit.Hunk)
-	hunks_or_none = |asked|
-		match asked {
-			Hunks(listed) => listed
-			_ => []
-		}
 
 	branch_text : [Status(WorkspaceGit.Status), NoStatus] -> Str
 	branch_text = |status|

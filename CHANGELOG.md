@@ -67,6 +67,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, the Workbench's panels sit over a glass tab bar at the bottom, Workspaces, Chat and Changes, each with its icon, in place of the strip of dots above them. The Workspaces tab counts what needs you, and the tab bar follows your swipes.
 - The message box grows to a few lines as you type: Enter sends and Shift+Enter starts a new line, while on a touch screen Enter starts one and Send sends. On a phone it is round, with Send beside it, and the tab bar gives way to the keyboard; a chat's header is its title, status dot and Stop over a smaller line of the agent and where it works.
 - On a phone, Settings slides up from the bottom as a sheet over a dimmed screen, which a tap closes, and the top bar holds only liton, what needs you and Settings: pick a preset in Settings. Rows, buttons and menus are at least 44 pixels tall, and a row's + shows without hovering.
+- A diff in Changes highlights each line's code, as a chat's code blocks do.
 
 ### Fixed
 

@@ -1141,13 +1141,11 @@ Model := [].{
 		}
 	}
 
-	DiffCell : { key : Str, class : Str, text : Str }
-
-	## A hunk's lines as rows of cells: unified, each line under its old and new
-	## numbers, or split, old beside new with a removed line beside the added
-	## line replacing it.
-	diff_rows : Str, List(WorkspaceGit.Line) -> List({ key : Str, cells : List(DiffCell) })
-	diff_rows = |diff_layout, lines| {
+	## A file's hunks as rows of the code view, each under its header:
+	## unified, each line under its old and new numbers, or split, old beside
+	## new with a removed line beside the added line replacing it.
+	diff_code : Str, Str, List(WorkspaceGit.Hunk) -> List(CodeRow)
+	diff_code = |diff_layout, path, hunks| {
 		number = |line_number| if (line_number == 0) "" else line_number.to_str()
 		kind = |line|
 			match line.kind {
@@ -1155,36 +1153,46 @@ Model := [].{
 				Removed => "removed"
 				Context => "context"
 			}
-		old = |line| [{ class: "number", text: number(line.old_line) }, { class: kind(line), text: line.text }]
-		new = |line| [{ class: "number", text: number(line.new_line) }, { class: kind(line), text: line.text }]
-		blank = [{ class: "number", text: "" }, { class: "empty", text: "" }]
-		rows =
+		tokens = |line| Highlight.lines(path.split_last(".").map_ok(|parts| parts.after) ?? "", [line.text]).first() ?? []
+		blank = { key: "", old: "", new: "", left: [], right: [], left_class: "empty", right_class: "empty" }
+		old = |row, line| { ..row, old: number(line.old_line), left: tokens(line), left_class: kind(line) }
+		new = |row, line| { ..row, new: number(line.new_line), right: tokens(line), right_class: kind(line) }
+		rows_of = |lines|
 			if diff_layout == "Split" {
 				paired = lines.fold(
 					{ rows: [], open: 0 },
 					|so_far, line|
 						match line.kind {
-							Context => { rows: so_far.rows.append({ left: old(line), right: new(line) }), open: so_far.rows.len() + 1 }
-							Removed => { ..so_far, rows: so_far.rows.append({ left: old(line), right: blank }) }
+							Context => { rows: so_far.rows.append(new(old(blank, line), line)), open: so_far.rows.len() + 1 }
+							Removed => { ..so_far, rows: so_far.rows.append(old(blank, line)) }
 							Added =>
 								if (so_far.open < so_far.rows.len())
-									{ rows: so_far.rows.map_with_index(|row, index| if (index == so_far.open) { ..row, right: new(line) } else row), open: so_far.open + 1 }
+									{ rows: so_far.rows.map_with_index(|row, index| if (index == so_far.open) new(row, line) else row), open: so_far.open + 1 }
 								else
-									{ rows: so_far.rows.append({ left: blank, right: new(line) }), open: so_far.rows.len() + 1 }
+									{ rows: so_far.rows.append(new(blank, line)), open: so_far.rows.len() + 1 }
 						},
 				)
-				paired.rows.map(|row| row.left.concat(row.right))
+				paired.rows
 			} else {
 				sign = |line|
 					match line.kind {
-						Added => "+"
-						Removed => "-"
-						Context => " "
+						Added => "+ "
+						Removed => "- "
+						Context => "  "
 					}
-				lines.map(|line| [{ class: "number", text: number(line.old_line) }, { class: "number", text: number(line.new_line) }, { class: kind(line), text: "${sign(line)} ${line.text}" }])
+				lines.map(|line| { ..new(blank, line), old: number(line.old_line), right: tokens(line).prepend({ class: "sign", text: sign(line) }) })
 			}
-		rows.map_with_index(|cells, index| { key: index.to_str(), cells: cells.map_with_index(|cell, column| { key: column.to_str(), class: cell.class, text: cell.text }) })
+		header = |hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"
+		hunks.map_with_index(|hunk, at| rows_of(hunk.lines).map_with_index(|row, index| { ..row, key: "${at.to_str()}/${index.to_str()}" }).prepend({ ..blank, key: at.to_str(), right: [{ class: "", text: header(hunk) }], right_class: "hunk-header" })).join_map(|rows| rows)
 	}
+
+	## The diff of the file a Changes pane shows, as rows of the code view.
+	git_code : State, Pane -> List(CodeRow)
+	git_code = |state, shown|
+		match (Model.git_pane(state, shown.id).file, Model.git_hunks_of(state, shown)) {
+			(Selected(path), Hunks(hunks)) => Model.diff_code(Model.option(shown, "diff_layout"), path, hunks)
+			_ => []
+		}
 
 	## A row of a Workspaces pane: a group of workspaces, by project or by
 	## what they need from you, folded or not; a workspace in it; or a

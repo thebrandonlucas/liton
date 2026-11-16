@@ -350,14 +350,6 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .git-file:has([aria-pressed="true"]) { background: var(--user); }
 .git-file .lines { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
 .file-diff { font: 12px var(--font-mono); tab-size: 2; border: 1px solid var(--edge); border-radius: var(--small-radius); overflow-x: auto; }
-.hunk-header { padding: 2px 8px; color: var(--muted); background: var(--tool); }
-.diff-line { display: grid; grid-template-columns: 4ch 4ch 1fr; }
-.split .diff-line { grid-template-columns: 4ch 1fr 4ch 1fr; }
-.diff-line span { white-space: pre; padding: 0 6px; min-height: 1.45em; }
-.diff-line .number { text-align: right; color: var(--muted); user-select: none; }
-.diff-line .added { background: color-mix(in srgb, var(--ok) 16%, transparent); }
-.diff-line .removed { background: color-mix(in srgb, var(--fail) 16%, transparent); }
-.diff-line .empty { background: var(--tool); }
 .git-commits summary { cursor: pointer; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .commits { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
 .commit-line { display: flex; gap: 6px; align-items: center; }
@@ -392,7 +384,8 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .code-row .removed { background: color-mix(in srgb, var(--fail) 16%, transparent); }
 .code-row .empty { background: var(--tool); }
 .code-row:has(.hunk-header) > :not(.hunk-header) { display: none; }
-.code-row .hunk-header { grid-column: 1 / -1; color: var(--muted); background: var(--tool); }
+.code-row .hunk-header { grid-column: 1 / -1; padding: 2px 8px; color: var(--muted); background: var(--tool); }
+.code-row .sign { color: var(--muted); }
 
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 @keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }
