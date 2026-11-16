@@ -19,7 +19,8 @@ Speech := [].{
 	## button, held once the page reports levels for a moment, which records
 	## until released; `swallow_click` eats the click that ends such a
 	## press. `stopping` asks the page to end the recording numbered so, and
-	## `transcribing` counts the utterances it is transcribing. A
+	## `transcribing` counts the utterances it is transcribing; `sending`
+	## sends the dictation's transcript once it comes. A
 	## conversation speaks the agent's messages after the entry `spoken`.
 	## `voices` and `picked` are settings' speech choices, which the page
 	## keeps.
@@ -36,6 +37,7 @@ Speech := [].{
 		speaking : Bool,
 		stopping : U64,
 		transcribing : U64,
+		sending : Bool,
 		spoken : U64,
 		voices : List({ name : Str, local : Bool }),
 		picked : Picked,
@@ -58,6 +60,7 @@ Speech := [].{
 		speaking: Bool.False,
 		stopping: 0,
 		transcribing: 0,
+		sending: Bool.False,
 		spoken: 0,
 		voices: [],
 		picked: Unknown,

@@ -1,0 +1,33 @@
+(test "Liton — Send while dictating stops it, shown as transcribing at once, and sends what was typed with the transcript after it"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"voice\",\"version\":1}],\"id\":\"local-speech\",\"name\":\"Local speech\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[{\"Status\":{\"stt\":\"Ready\"}}]}]}")
+    (run-effect 3)
+    (fill (label "Message") "Please")
+    (click (role button :name "Dictate"))
+    (expect-text (test-id "voice-status") "Listening")
+    (click (role button :name "Send"))
+    ; Transcribing before the page or the daemon answer, the typed text kept.
+    (expect-text (test-id "voice-status") "Transcribing…")
+    (expect-port-sent "liton/voice/order" 2 "{\"picked\":\"Unknown\",\"replies\":[],\"session\":\"s1\",\"stop\":\"1\"}")
+    (expect-value (label "Message") "Please")
+    (expect-pending-effects 0)
+    (emit-port "liton/voice/capture" "\"Transcribing\"")
+    (expect-text (test-id "voice-status") "Transcribing…")
+    ; The transcript goes after what was typed, wherever the caret was.
+    (emit-port "liton/voice/capture" "{\"Transcript\":{\"text\":\" run the tests\",\"from\":0,\"to\":0}}")
+    ; Sent, and shown as sending, before the daemon answers.
+    (expect-pending-effects 1)
+    (expect-text (test-id "sent-status") "Sending…")
+    (expect-visible (text "Please run the tests"))
+    (expect-value (label "Message") "")
+    (expect-text (test-id "voice-status") "")
+    (expect-port-subscriptions "liton/voice/capture" 0)
+    (stub-http "send" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
+    (run-effect 4)
+    (expect-text (test-id "sent-status") "Sending…")
+  )
+)

@@ -70,6 +70,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The message box grows to a few lines as you type: Enter sends and Shift+Enter starts a new line, while on a touch screen Enter starts one and Send sends. On a phone it is round, with Send beside it, and the tab bar gives way to the keyboard; a chat's header is its title, status dot and Stop over a smaller line of the agent and where it works.
 - On a phone, Settings slides up from the bottom as a sheet over a dimmed screen, which a tap closes, and the top bar holds only liton, what needs you and Settings: pick a preset in Settings. Rows, buttons and menus are at least 44 pixels tall, and a row's + shows without hovering.
 - A diff in Changes highlights each line's code, as a chat's code blocks do.
+- Send, or Enter, while dictating stops the recording and sends what you typed with what you said after it, in one go. Tapping the mic still stops it to edit before sending. If nothing is transcribed, nothing is sent: what you typed stays, with why.
 
 ### Fixed
 

@@ -23,6 +23,8 @@
     (expect-text (test-id "voice-status") "Transcribing…")
     (emit-port "liton/voice/capture" "{\"Transcript\":{\"text\":\" run it\",\"from\":6,\"to\":6}}")
     (expect-value (label "Message") "Please run it now")
+    ; A tap stops it for editing: nothing is sent.
+    (expect-pending-effects 0)
     (expect-text (test-id "voice-status") "")
     (expect-port-subscriptions "liton/voice/capture" 0)
     (expect-visible (role button :name "Dictate"))

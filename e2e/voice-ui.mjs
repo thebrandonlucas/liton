@@ -3,8 +3,10 @@
 // and run the tests."), dictates into a chat's composer against a daemon of
 // its own. The mic loads its JavaScript only when first pressed. With
 // LITON_STT naming a running engine (rig/speech/), a tap starts it, a tap
-// stops it, and the transcript lands in the composer beside what was typed.
-// Without one, the mic says the engine is down, and the dictation is skipped.
+// stops it, and the transcript lands in the composer beside what was typed;
+// then Send while dictating stops it and sends what was typed with the
+// transcript after it, in one go. Without one, the mic says the engine is
+// down, and the dictation is skipped.
 // CDP is roc-signals's DevTools client, which `zig build e2e` passes; CHROME
 // names the browser (default `chromium` on PATH).
 import { spawn } from "node:child_process";
@@ -125,6 +127,29 @@ try {
     const shown = await mic();
     if (shown.status !== "" || shown.label !== "Dictate") throw new Error(JSON.stringify(shown));
     console.log(`  ${engine.split("=")[0]}: "${text}", ${Math.round(performance.now() - start)} ms after the stop`);
+  });
+
+  await step("Send while dictating stops it, shown as transcribing at once, then sends what was typed with the transcript", async () => {
+    await page.evaluate(() => [...document.querySelectorAll(".tree-session button")].find((button) => button.textContent.includes("Scratch")).click());
+    await until("Scratch in the chat", () => page.evaluate(() => [...document.querySelectorAll(".pane-header")].some((header) => header.textContent.includes("Scratch"))));
+    await page.evaluate(() => {
+      const box = document.querySelector(".composer textarea");
+      box.focus();
+      box.select();
+      document.execCommand("insertText", false, "Then:");
+    });
+    await (await page.evaluateHandle(() => document.querySelector(".composer .mic"))).click();
+    await until("a level over 30", async () => (await mic()).level > 30, 5000);
+    await new Promise((r) => setTimeout(r, 3500));
+    await (await page.evaluateHandle(() => document.querySelector(".composer button[type=submit]"))).click();
+    const shown = await mic();
+    if (shown.status !== "Transcribing…") throw new Error(JSON.stringify(shown));
+    const start = performance.now();
+    const sent = await until("the message sent", () =>
+      page.evaluate(() => [...document.querySelectorAll(".entry.user")].map((entry) => entry.textContent).find((text) => /Then: open the authentication module,? and run the tests/i.test(text))), 20000);
+    const left = await page.evaluate(() => document.querySelector(".composer textarea").value);
+    if (left !== "" || (await mic()).label !== "Dictate") throw new Error(JSON.stringify({ left, mic: await mic() }));
+    console.log(`  sent "${sent}", ${Math.round(performance.now() - start)} ms after Send`);
   });
 
   console.log("PASS voice in the UI");

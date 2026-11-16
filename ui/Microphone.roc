@@ -62,7 +62,7 @@ Microphone := [].{
 		if (!Microphone.usable(state, pane_id) or (mode == Conversation and session_id.is_empty()))
 			state
 		else
-			{ ..state, voice: { ..voice, pane: pane_id, session: session_id, mode, phase: Listening, serial: voice.serial + 1, level: 0, held: Up, swallow_click: Bool.False, speaking: Bool.False, transcribing: 0, spoken: Model.last_sequence(state, session_id) } }
+			{ ..state, voice: { ..voice, pane: pane_id, session: session_id, mode, phase: Listening, serial: voice.serial + 1, level: 0, held: Up, swallow_click: Bool.False, speaking: Bool.False, transcribing: 0, sending: Bool.False, spoken: Model.last_sequence(state, session_id) } }
 	}
 
 	## Ends a dictation, shown as transcribing at once, or a conversation.
@@ -87,6 +87,15 @@ Microphone := [].{
 			Microphone.stop(state)
 		else
 			Microphone.start(state, pane_id, Dictation)
+	}
+
+	## Send in a composer: while it dictates, stops the dictation, shown as
+	## transcribing at once, to send what was typed and the transcript
+	## after it once it comes; else sends what was typed.
+	send : Model.State, Str -> Model.State
+	send = |state, pane_id| {
+		voice = state.voice
+		if (voice.pane == pane_id and voice.mode == Dictation and Speech.active(voice)) Microphone.stop({ ..state, voice: { ..voice, sending: Bool.True } }) else Model.submit(state, pane_id)
 	}
 
 	## A press of the mic starts dictating at once; held while the page
@@ -131,14 +140,15 @@ Microphone := [].{
 	}
 
 	## Takes what the page heard. A transcript dictated goes into the draft
-	## where the selection was, for editing; one said in a conversation is
-	## sent. Talking over a reply stops the agent too. A microphone the
-	## browser refused, or that stopped, fails the recording.
+	## where the selection was, for editing, or, if Send stopped it, after
+	## what was typed, sent with it; one said in a conversation is sent.
+	## Talking over a reply stops the agent too. A microphone the browser
+	## refused, or that stopped, fails the recording.
 	heard : Model.State, Try(Speech.Heard, _) -> Model.State
 	heard = |state, message| {
 		voice = state.voice
 		changed_to = |changed| { ..state, voice: changed }
-		done = { ..voice, transcribing: if (voice.transcribing > 0) voice.transcribing - 1 else 0, phase: if (voice.mode == Dictation) Idle else voice.phase }
+		done = { ..voice, transcribing: if (voice.transcribing > 0) voice.transcribing - 1 else 0, phase: if (voice.mode == Dictation) Idle else voice.phase, sending: Bool.False }
 		match message {
 			Ok(Level(level)) =>
 				match voice.held {
@@ -147,7 +157,12 @@ Microphone := [].{
 					_ => changed_to({ ..voice, level })
 				}
 			Ok(Transcribing) => changed_to({ ..voice, transcribing: voice.transcribing + 1, phase: if (voice.mode == Dictation) Transcribing else voice.phase })
-			Ok(Transcript({ text, .. })) if text.trim().is_empty() => changed_to(done)
+			Ok(Transcript({ text, .. })) if text.trim().is_empty() => changed_to(if (voice.sending) { ..done, phase: Failed("no speech was heard") } else done)
+			Ok(Transcript({ text, .. })) if voice.sending => {
+				draft = Model.draft(state, voice.pane)
+				end = draft.to_utf8().len()
+				Model.submit(Model.set_draft(changed_to(done), voice.pane, Speech.insert(draft, end, end, text)), voice.pane)
+			}
 			Ok(Transcript({ text, from, to })) if voice.mode == Dictation => {
 				count = (state.cleared.find_first(|composer| composer.pane == voice.pane).map_ok(|composer| composer.count) ?? 0) + 1
 				typed = Model.set_draft(state, voice.pane, Speech.insert(Model.draft(state, voice.pane), from, to, text))

@@ -1033,7 +1033,7 @@ Liton := [].{
 				),
 				Html.form(
 					"Send a message",
-					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model0.update_by(id, Model.submit))],
+					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model0.update_by(id, Microphone.send))],
 					[
 						# roc-signals 0.5.0 writes a new value into a focused text box only
 						# once it loses focus, so a draft cleared by pressing Enter would
