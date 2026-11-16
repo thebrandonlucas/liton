@@ -54,6 +54,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Comment on code in Files and in Changes: click a line's number, and then another's for the lines between, to write a comment under them in Markdown, which shows at once as a draft beside its lines, marked in the gutter. Reply to a thread, edit or delete a draft, and resolve a thread, which folds it. Open in Files, over a diff in Changes, shows the whole file.
 - Send a review from Files or Changes: each pane's Review counts the drafts and the rounds sent, lists the threads, each opening a reply under its lines, takes a comment on the whole review, and Send review sends the drafts to the agent as one message. They show as sent at once, and as drafts again, with why, if the daemon can't send them.
 - attention.v1 lists what needs you first and then the latest, and its items tell when their session last changed (`updated`) and whether it changed since it was last seen (`unread`); its new `Seen` call marks sessions seen, or unread again (docs/protocol.md).
+- Unread, as in email: a session that finished, failed or asks for you since you last looked has a dot and a bolder title in the Inbox, and a ring round its dot in Workspaces and Sessions. Opening it, or having it in a chat on screen, reads it; Mark read, Mark unread and Mark all read in the Inbox do it by hand. Each shows at once.
 
 ### Changed
 
@@ -72,6 +73,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, Settings slides up from the bottom as a sheet over a dimmed screen, which a tap closes, and the top bar holds only liton, what needs you and Settings: pick a preset in Settings. Rows, buttons and menus are at least 44 pixels tall, and a row's + shows without hovering.
 - A diff in Changes highlights each line's code, as a chat's code blocks do.
 - Send, or Enter, while dictating stops the recording and sends what you typed with what you said after it, in one go. Tapping the mic still stops it to edit before sending. If nothing is transcribed, nothing is sent: what you typed stays, with why.
+- The Inbox reads like an email inbox: what needs you on top, then every other session in one list, the latest first, each with its state and the agent's last message, rather than a section for each state. It lists idle sessions too, unless you turn that option off.
 
 ### Fixed
 

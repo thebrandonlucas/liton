@@ -82,10 +82,11 @@ Model := [].{
 		sent : List(Sent),
 		attention : List(Attention.Item),
 
-		## A settle or snooze sent, shown until the daemon's items show it, or
-		## until the poll numbered `accepted` answers, the first sent after the
-		## daemon accepted it (0 while it waits).
-		setting_aside : List({ serial : U64, session_id : Str, set_aside : [No, Settled, Snoozed], accepted : U64 }),
+		## A settle, snooze or mark of what was seen sent, shown until the
+		## daemon's items show it, or until the poll numbered `accepted`
+		## answers, the first sent after the daemon accepted it (0 while it
+		## waits).
+		attending : List({ serial : U64, request : Attention.Request, accepted : U64 }),
 		attention_outbox : { serial : U64, request : Attention.Request },
 
 		## The last poll sent, while `polling`, and whether another is to
@@ -239,7 +240,7 @@ Model := [].{
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],
-				setting_aside: [],
+				attending: [],
 				attention_outbox: { serial: 0, request: ListItems },
 				poll: { serial: 0, subjects: [], topics: [] },
 				polling: Bool.False,
@@ -1009,15 +1010,30 @@ Model := [].{
 			Err(NoneWaiting) => state
 		}
 
-	## The attention items as the inbox shows them: set aside, or back, as soon
-	## as asked.
+	## The attention items as the inbox shows them: set aside, back, read or
+	## unread as soon as asked.
 	inbox_items : State -> List(Attention.Item)
-	inbox_items = |state|
-		state.attention.map(|item| state.setting_aside.find_last(|asked| asked.session_id == item.session_id).map_ok(|asked| { ..item, set_aside: asked.set_aside }) ?? item)
+	inbox_items = |state| state.attention.map(|item| state.attending.fold(item, |shown, asked| Model.attended(shown, asked.request)))
+
+	## An item as a request sent of it leaves it.
+	attended : Attention.Item, Attention.Request -> Attention.Item
+	attended = |item, request|
+		match request {
+			Settle({ session_id, .. }) if session_id == item.session_id => { ..item, set_aside: Settled }
+			Snooze({ session_id, .. }) if session_id == item.session_id => { ..item, set_aside: Snoozed }
+			Unsettle({ session_id }) if session_id == item.session_id => { ..item, set_aside: No }
+			Seen(marks) => marks.find_first(|mark| mark.session_id == item.session_id).map_ok(|mark| { ..item, unread: item.state != Working and mark.through != item.updated }) ?? item
+			_ => item
+		}
 
 	## The items in `attention_state` not set aside.
 	waiting : State, Attention.State -> List(Attention.Item)
 	waiting = |state, attention_state| Model.inbox_items(state).keep_if(|item| item.state == attention_state and item.set_aside == No)
+
+	## The items an inbox pane lists under what needs you, the latest first:
+	## those not set aside, idle ones if it shows them.
+	latest : State, Pane -> List(Attention.Item)
+	latest = |state, shown| Model.inbox_items(state).keep_if(|item| item.set_aside == No and item.state != NeedsYou and (item.state != Idle or Model.option(shown, "show_idle") == "true"))
 
 	later : State -> List(Attention.Item)
 	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
@@ -1027,12 +1043,21 @@ Model := [].{
 	needs_you : State -> U64
 	needs_you = |state| Model.waiting(state, NeedsYou).len()
 
-	## Takes the items the poll numbered `asked` answered.
+	## Takes the items the poll numbered `asked` answered, and marks the
+	## sessions a chat pane shows seen.
 	attention_fetched : State, U64, List(Attention.Item) -> State
 	attention_fetched = |state, asked, items| {
-		shown = |aside| (aside.accepted > 0 and aside.accepted <= asked) or items.any(|item| item.session_id == aside.session_id and item.set_aside == aside.set_aside)
-		fetched = { ..state, attention: items, setting_aside: state.setting_aside.drop_if(shown) }
-		{ ..fetched, sent: fetched.sent.drop_if(|sent| Model.confirmed(fetched, sent)) }
+		answered = |attending| (attending.accepted > 0 and attending.accepted <= asked) or items.all(|item| Model.attended(item, attending.request) == item)
+		fetched = { ..state, attention: items, attending: state.attending.drop_if(answered) }
+		on_screen = Model.panes(fetched).keep_if(|shown| shown.widget == "chat" and Model.pane_visible(fetched, shown.id)).map(|shown| Model.session_of(fetched, shown))
+		Model.mark_seen({ ..fetched, sent: fetched.sent.drop_if(|sent| Model.confirmed(fetched, sent)) }, on_screen, Bool.True)
+	}
+
+	## Sends a request of attention.v1, its change shown at once.
+	attend : State, Attention.Request -> State
+	attend = |state, request| {
+		serial = state.attention_outbox.serial + 1
+		{ ..state, attention_outbox: { serial, request }, attending: state.attending.append({ serial, request, accepted: 0 }), notice: "" }
 	}
 
 	## Settles an item, snoozes it for some minutes, or brings it back (`No`).
@@ -1040,17 +1065,28 @@ Model := [].{
 	set_aside = |state, session_id, asked|
 		match state.attention.find_first(|item| item.session_id == session_id) {
 			Err(NotFound) => state
-			Ok({ signature, .. }) => {
-				serial = state.attention_outbox.serial + 1
-				(request, set_aside) =
+			Ok({ signature, .. }) =>
+				Model.attend(
+					state,
 					match asked {
-						Settled => (Settle({ session_id, signature }), Settled)
-						Snoozed(minutes) => (Snooze({ session_id, signature, minutes }), Snoozed)
-						No => (Unsettle({ session_id: session_id }), No)
-					}
-				{ ..state, attention_outbox: { serial, request }, setting_aside: state.setting_aside.append({ serial, session_id, set_aside, accepted: 0 }), notice: "" }
-			}
+						Settled => Settle({ session_id, signature })
+						Snoozed(minutes) => Snooze({ session_id, signature, minutes })
+						No => Unsettle({ session_id: session_id })
+					},
+				)
 		}
+
+	## Marks the items of sessions read as they are now (`seen`), or unread,
+	## those not so already.
+	mark_seen : State, List(Str), Bool -> State
+	mark_seen = |state, session_ids, seen| {
+		marks = Model.inbox_items(state).keep_if(|item| session_ids.contains(item.session_id) and item.unread == seen).map(|item| { session_id: item.session_id, through: if (seen) item.updated else "" })
+		if (marks.is_empty()) state else Model.attend(state, Seen(marks))
+	}
+
+	## Whether a session's item is unread, as the inbox shows it.
+	unread : State, Str -> Bool
+	unread = |state, session_id| state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| state.attending.fold(item, |shown, asked| Model.attended(shown, asked.request)).unread) ?? Bool.False
 
 	## How long an inbox pane's Snooze sets an item aside, in minutes.
 	snooze_minutes : Pane -> U32
@@ -1061,13 +1097,14 @@ Model := [].{
 			_ => 60
 		}
 
-	## Takes the daemon's answer to a settle or snooze: accepted, it holds until
-	## the poll it asks for shows it; refused, the item comes back, with why.
-	set_aside_answered : State, U64, Protocol.Answer(Attention.Response) -> State
-	set_aside_answered = |state, serial, answered|
+	## Takes the daemon's answer to a request of attention.v1: accepted, it
+	## holds until the poll it asks for shows it; refused, the item is as it
+	## was, with why.
+	attention_answered : State, U64, Protocol.Answer(Attention.Response) -> State
+	attention_answered = |state, serial, answered|
 		match answered {
-			Ok(Rejected(reason)) | Err({ message: reason, .. }) => { ..state, setting_aside: state.setting_aside.drop_if(|aside| aside.serial == serial), notice: reason }
-			Ok(_) => Model.poll({ ..state, setting_aside: state.setting_aside.map(|aside| if (aside.serial == serial) { ..aside, accepted: state.poll.serial + 1 } else aside) })
+			Ok(Rejected(reason)) | Err({ message: reason, .. }) => { ..state, attending: state.attending.drop_if(|asked| asked.serial == serial), notice: reason }
+			Ok(_) => Model.poll({ ..state, attending: state.attending.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
 		}
 
 	## The latest permission request of an item that no answer on its way
@@ -1093,10 +1130,11 @@ Model := [].{
 		}
 
 	## Focuses a context, so panes that follow the focus show it, and shows
-	## the first chat's column, which on a narrow screen is a jump to it.
+	## the first chat's column, which on a narrow screen is a jump to it. A
+	## session opened is seen.
 	open : State, Context.Id -> State
 	open = |state, context| {
-		focused = { ..state, focus: context }
+		focused = Model.mark_seen({ ..state, focus: context }, [Context.to_str(context)], Bool.True)
 		match state.columns.find_first(|column| column.panes.any(|shown| shown.widget == "chat")) {
 			Ok(column) => Model.jump_to(focused, column.id, Push)
 			Err(NotFound) => focused
@@ -1229,7 +1267,8 @@ Model := [].{
 	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
 
 	## A Workspaces pane's rows, as its options group and filter them, each
-	## workspace marked as urgent as its most urgent session.
+	## workspace marked as urgent as its most urgent session, and unread while
+	## one is.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
@@ -1250,7 +1289,8 @@ Model := [].{
 				Detached => "detached"
 				_ => ""
 			}
-			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot: attention_dot(workspace.state), focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
+			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
 		}
 		sessions_in = |workspace| {
 			agents = state.creating.keep_if(|creating| creating.form.kind == Agent and creating.form.place == workspace.id).map(|creating| Model.session(state, Model.created_id(creating)))
@@ -1269,7 +1309,8 @@ Model := [].{
 	session_row : State, Chat.Session -> Row
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
+		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session, with its agent if it shows that.

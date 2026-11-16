@@ -4,6 +4,7 @@
 // preset added. CDP is roc-signals's DevTools client (its
 // tests/browser/cdp.mjs), which `zig build e2e` passes. CHROME names the
 // browser (default `chromium` on PATH).
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -91,12 +92,23 @@ try {
   await step("the flaky CI session is waiting for you", () =>
     until("its status", () => page.evaluate(() =>
       [...document.querySelectorAll(".tree-session")].some((s) => s.textContent.includes("Find the flaky CI test") && s.querySelector('[data-testid="row-status"]')?.textContent === "waiting for you"))));
-  await step("the Inbox preset lists it under Needs you, and the title counts it", async () => {
+  await step("the Inbox preset lists it under Needs you, the title counts it, and opening an unread item reads it", async () => {
     await page.click(".settings-toggle");
     await click("Settings", "button", "Inbox preset");
     await see("Inbox", ".inbox-section", "Needs you");
     await see("Inbox", ".inbox-section .inbox-item", "Find the flaky CI test");
     await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
+    // Unread until opened, then read at once.
+    await page.click(".settings-toggle");
+    await see("Inbox", ".inbox-item.unread > button");
+    const title = await page.evaluate(() => document.querySelector(".inbox-item.unread > button").textContent);
+    await click("Inbox", ".inbox-item.unread > button", title);
+    const read = () => page.evaluate((title) => [...document.querySelectorAll(".inbox-item > button")].some((b) => b.textContent === title && !b.parentElement.classList.contains("unread")), title);
+    await until(`${title} read`, read);
+    // And still, once the daemon took it and a poll or two followed.
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.ok(await read(), `${title} read after polls`);
+    await page.click(".settings-toggle");
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });

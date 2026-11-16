@@ -145,7 +145,7 @@ Liton := [].{
 				|state, outbox, res| {
 					decoded : Try(Protocol.Answer(Attention.Response), _)
 					decoded = Json.parse(Engine.http_text(res) ?? "")
-					Model.set_aside_answered(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
+					Model.attention_answered(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
 		),
@@ -717,18 +717,22 @@ Liton := [].{
 		)
 	}
 
-	## What needs you, then what failed, is done or working, then what you set
-	## aside, folded away.
+	## An inbox: what needs you, then the rest the latest first, each marked
+	## while unread, then what you set aside, folded away.
 	inbox : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	inbox = |model, pane|
 		Html.div(
 			"inbox",
 			[
+				Html.div(
+					"inbox-toolbar",
+					[
+						Html.span_s(model.signal().map(|state| Liton.unread_text(Model.inbox_items(state).keep_if(|item| item.unread and item.set_aside == No).len())), [Engine.class("unread-count"), Engine.test_id("unread-count")]),
+						Html.button("Mark all read", [], model.update(|state| Model.mark_seen(state, state.attention.map(|item| item.session_id), Bool.True))),
+					],
+				),
 				Liton.inbox_section(model, pane, "Needs you", model.signal().map(|state| Model.waiting(state, NeedsYou))),
-				Liton.inbox_section(model, pane, "Failed", model.signal().map(|state| Model.waiting(state, Failed))),
-				Liton.inbox_section(model, pane, "Done", model.signal().map(|state| Model.waiting(state, Done))),
-				Liton.inbox_section(model, pane, "Working", model.signal().map(|state| Model.waiting(state, Working))),
-				Liton.inbox_section(model, pane, "Idle", pane.map2(model.signal(), |shown, state| if (Model.option(shown, "show_idle") == "true") Model.waiting(state, Idle) else [])),
+				Liton.inbox_section(model, pane, "Latest", pane.map2(model.signal(), |shown, state| Model.latest(state, shown))),
 				Engine.when(
 					model.signal().map(|state| !Model.later(state).is_empty()),
 					||
@@ -751,7 +755,8 @@ Liton := [].{
 		)
 
 	## Each item: its title, which opens it, its agent, state and summary, the
-	## permission it asks for, and Settle and Snooze, or Bring back once set aside.
+	## permission it asks for, and Mark read or unread (not while working),
+	## Settle and Snooze, or Bring back once set aside. Unread, it is marked.
 	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
@@ -767,7 +772,7 @@ Liton := [].{
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						Html.li(
-							[Engine.class_s(id.map2(model.signal(), |key, state| if (Session(key) == state.focus) "inbox-item focused" else "inbox-item")), Engine.attr("data-part", "item")],
+							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == state.focus) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")],
 							[
 								Html.button_s(title, [], model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))),
 								Html.div(
@@ -798,6 +803,7 @@ Liton := [].{
 										Html.div_attrs(
 											[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
 											[
+												Html.button_s(row.field(|item| if (item.unread) "Mark read" else "Mark unread"), [Engine.class("mark"), Html.aria_label_s(row.field(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"))], model.update_by(row.field(|item| item), |state, item| Model.mark_seen(state, [item.session_id], item.unread))),
 												Html.button("Settle", [Html.aria_label_s(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
 												Html.button_s(
 													snooze_length.map(|length| "Snooze ${length}"),
@@ -814,6 +820,9 @@ Liton := [].{
 				),
 			],
 		)
+
+	unread_text : U64 -> Str
+	unread_text = |count| if (count == 0) "All read" else "${count.to_str()} unread"
 
 	## "Allowing…" or "Denying…" for an answer on its way.
 	answering : Model.Sent -> Try(Str, [NotAnswer])

@@ -65,7 +65,7 @@ Widgets := [].{
 			minimum_width: 240,
 			follows_session: Bool.False,
 			options: [
-				{ key: "show_idle", label: "Show idle sessions", help: "List sessions that need nothing, last.", kind: Bool(Bool.False) },
+				{ key: "show_idle", label: "Show idle sessions", help: "List sessions whose agents sit idle, with the rest.", kind: Bool(Bool.True) },
 				{ key: "snooze_length", label: "Snooze length", help: "How long Snooze sets an item aside.", kind: Choice({ default: "1 hour", choices: ["1 hour", "1 day", "1 week"] }) },
 			],
 			parts: ["header", "section", "item", "actions"],
