@@ -4,7 +4,7 @@
     (run-effect 1)
     (expect-text (test-id "show-left") "Workspaces")
     (expect-text (test-id "show-main") "Chat")
-    (expect-text (test-id "show-right") "Changes")
+    (expect-text (test-id "show-right") "Changes · Files")
     (expect-attr (test-id "slot-main") class "column slot slot-main tabbed shown")
     ; Changes waits for a provider of workspace.git.
     (expect-attr (role region :name "Changes") class "pane")

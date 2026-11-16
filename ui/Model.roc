@@ -4,12 +4,14 @@ import cap.Attention
 import cap.Capability
 import cap.Chat
 import cap.Context
+import cap.Files
 import cap.Manifest
 import cap.Protocol
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
 import setup.Setup
+import Highlight
 import Speech
 import Widgets
 
@@ -111,6 +113,13 @@ Model := [].{
 		## What each Changes pane shows.
 		git_panes : List(GitPane),
 
+		## What polls answered of each context's files: directories' entries,
+		## and files' contents with their lines highlighted; and what each
+		## Files pane shows.
+		trees : List({ context : Context.Id, tree : Files.Tree }),
+		texts : List({ context : Context.Id, contents : Files.Contents, lines : List(List(Highlight.Token)) }),
+		file_panes : List(FilePane),
+
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
 		## is the one picked, or "" for the default. `glass` is whether tiles
@@ -172,6 +181,9 @@ Model := [].{
 
 	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
 
+	## A Files pane's directories open, and the file it shows, "" for none.
+	FilePane : { pane : Str, folders : List(Str), file : Str }
+
 	## The layout of a preset or snapshot.
 	layout_of : Snapshot -> Layout
 	layout_of = |{ shell, columns, collapsed, .. }| { shell, columns, collapsed }
@@ -226,6 +238,9 @@ Model := [].{
 				git_changes: [],
 				git_hunks: [],
 				git_panes: [],
+				trees: [],
+				texts: [],
+				file_panes: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
@@ -674,8 +689,9 @@ Model := [].{
 	## The topics the panes follow: the sessions; the timeline of each session
 	## a chat pane shows; the attention items, which the title counts; of
 	## each Changes pane on screen, its scope's changes and the hunks of the
-	## file it shows; and the workspaces, while a pane lists them. Until the
-	## manifest arrives, every capability counts as offered.
+	## file it shows; of each Files pane on screen, its root, the directories
+	## open and the file it shows; and the workspaces, while a pane lists
+	## them. Until the manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
@@ -690,11 +706,19 @@ Model := [].{
 				NoFile => [Changes({ context, scope })]
 			}
 		}
-		changes = if (offered(Capability.workspace_git_v1)) laid_out.keep_if(|shown| shown.widget == "changes" and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:")).join_map(git) else []
+		# The panes of a widget on screen that show a context.
+		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
+		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git) else []
+		files = |shown| {
+			context = Model.context_of(state, shown)
+			{ folders, file, .. } = Model.file_pane(state, shown.id)
+			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
+		}
+		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(listing).concat(voice)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -786,6 +810,15 @@ Model := [].{
 				}
 			(File({ context, scope, .. }), File({ path, hunks })) =>
 				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks }) }
+			(Tree({ context, .. }), Tree(tree)) => { ..state, trees: state.trees.drop_if(|known| known.context == context and known.tree.path == tree.path).append({ context, tree }) }
+			(Contents({ context, .. }), Contents(contents)) => {
+				lines =
+					match contents.read {
+						Text({ text, .. }) => Highlight.lines(contents.path.split_last(".").map_ok(|parts| parts.after) ?? "", text.drop_suffix("\n").split_on("\n").take_first(Model.lines_shown))
+						_ => []
+					}
+				{ ..state, texts: state.texts.drop_if(|known| known.context == context and known.contents.path == contents.path).append({ context, contents, lines }) }
+			}
 			_ => state
 		}
 
@@ -1159,7 +1192,7 @@ Model := [].{
 	## focuses (`Context.to_str`), or `group:` and the group's. A row is
 	## `creatable` when + on it starts an agent there, or creates a workspace
 	## of its project.
-	Row : { key : Str, kind : [Group, Workspace, Session], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool }
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
 
 	## A Workspaces pane's rows, as its options group and filter them, each
 	## workspace marked as urgent as its most urgent session.
@@ -1175,7 +1208,7 @@ Model := [].{
 			} else {
 				state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
 		workspace_row = |workspace| {
 			branch = match workspace.branch {
@@ -1202,7 +1235,7 @@ Model := [].{
 	session_row : State, Chat.Session -> Row
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot: attention_dot(rank), status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session, with its agent if it shows that.
@@ -1235,9 +1268,102 @@ Model := [].{
 		if key.starts_with("group:") {
 			folded = Model.option(Model.pane(state, pane_id), "folded").split_on("\n").drop_if(Str.is_empty)
 			Model.set_option(state, pane_id, "folded", Str.join_with(if (folded.contains(key)) folded.drop_if(|group| group == key) else folded.append(key), "\n"))
+		} else if key.starts_with("dir:") {
+			Model.toggle_folder(state, pane_id, key.drop_prefix("dir:"))
+		} else if key.starts_with("file:") {
+			Model.show_file(state, pane_id, key.drop_prefix("file:"))
 		} else {
 			if (key.starts_with("starting:") or key.starts_with("workspace:starting:")) state else Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
 		}
+
+	## What a Files pane shows: its root, and no folder open nor file until
+	## picked.
+	file_pane : State, Str -> FilePane
+	file_pane = |state, pane_id| state.file_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, folders: [], file: "" }
+
+	set_file_pane : State, FilePane -> State
+	set_file_pane = |state, shown| { ..state, file_panes: state.file_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
+
+	## Opens a folder of a Files pane, or closes it with those in it, at once;
+	## the poll it sends at once lists what the UI doesn't have yet.
+	toggle_folder : State, Str, Str -> State
+	toggle_folder = |state, pane_id, path| {
+		shown = Model.file_pane(state, pane_id)
+		Model.set_file_pane(state, { ..shown, folders: if (shown.folders.contains(path)) shown.folders.drop_if(|folder| folder == path or folder.starts_with("${path}/")) else shown.folders.append(path) })
+	}
+
+	## Shows a file in a Files pane, the folders it is in open.
+	show_file : State, Str, Str -> State
+	show_file = |state, pane_id, path| {
+		shown = Model.file_pane(state, pane_id)
+		parts = path.split_on("/")
+		folders = parts.drop_last(1).map_with_index(|_, index| Str.join_with(parts.take_first(index + 1), "/"))
+		Model.set_file_pane(state, { ..shown, file: path, folders: folders.fold(shown.folders, |kept, folder| if (kept.contains(folder)) kept else kept.append(folder)) })
+	}
+
+	## Shows a file in the first Files pane, as its column's tab shown, from
+	## a path elsewhere, such as in Changes.
+	open_file : State, Str -> State
+	open_file = |state, path|
+		match Model.panes(state).find_first(|shown| shown.widget == "files") {
+			Ok(files) => Model.activate_tab(Model.show_file(state, files.id, path), files.id)
+			Err(NotFound) => state
+		}
+
+	## A Files pane's rows: its root's entries, folders first, and under each
+	## folder open its own.
+	file_rows : State, Pane -> List(Row)
+	file_rows = |state, shown| folder_rows(state, Model.context_of(state, shown), Model.file_pane(state, shown.id), ".", 0)
+
+	## What a Files pane says of its root, "" once it lists it.
+	tree_status : State, Pane -> Str
+	tree_status = |state, shown| {
+		context = Model.context_of(state, shown)
+		match state.trees.find_first(|known| known.context == context and known.tree.path == ".").map_ok(|known| known.tree.listing) {
+			_ if context == Session("") => "Pick a session to see its files."
+			Ok(Listed([])) => "No files."
+			Ok(Listed(_)) => ""
+			Ok(Unreadable(why)) => "Can't read its files: ${why}"
+			_ => "Loading…"
+		}
+	}
+
+	## What a Files pane says of its file: why it shows none of it or not
+	## all, "" when it shows it whole or there is none.
+	file_status : State, Pane -> Str
+	file_status = |state, shown| {
+		context = Model.context_of(state, shown)
+		{ file, .. } = Model.file_pane(state, shown.id)
+		match state.texts.find_first(|known| known.context == context and known.contents.path == file) {
+			_ if file.is_empty() => ""
+			Ok({ contents: { read: Binary({ size, .. }), .. }, .. }) => "A binary file of ${size_text(size)}."
+			Ok({ contents: { read: TooLarge, .. }, .. }) => "Too large to show."
+			Ok({ contents: { read: Unreadable(why), .. }, .. }) => "Can't read it: ${why}"
+			Ok({ contents: { read: Text({ truncated: Bool.True, size, .. }), .. }, .. }) => "Its first ${size_text(Files.text_limit)} of ${size_text(size)}."
+			Ok({ contents: { read: Text(_), .. }, lines, .. }) if lines.len() == Model.lines_shown => "Its first ${Model.lines_shown.to_str()} lines."
+			Ok({ contents: { read: Text(_), .. }, .. }) => ""
+			_ => "Loading…"
+		}
+	}
+
+	## How many of a file's lines the code view shows at most.
+	lines_shown : U64
+	lines_shown = 2000
+
+	## A row of the code view, a file's or a diff's: a line under its old and
+	## new numbers ("" for none), its text (`right`) and, in a split diff, the
+	## old line beside it (`left`), each side's class saying whether it was
+	## added, removed or neither; or a hunk's header.
+	CodeRow : { key : Str, old : Str, new : Str, left : List(Highlight.Token), right : List(Highlight.Token), left_class : Str, right_class : Str }
+
+	## The file a Files pane shows, as rows of the code view.
+	file_code : State, Pane -> List(CodeRow)
+	file_code = |state, shown| {
+		context = Model.context_of(state, shown)
+		{ file, .. } = Model.file_pane(state, shown.id)
+		lines = state.texts.find_first(|known| known.context == context and known.contents.path == file).map_ok(|known| known.lines) ?? []
+		lines.map_with_index(|tokens, index| { key: (index + 1).to_str(), old: "", new: (index + 1).to_str(), left: [], right: tokens, left_class: "", right_class: "" })
+	}
 
 	## Opens a Workspaces pane's form: from a workspace's row, to start an
 	## agent there of the first kind its provider starts; from a project's,
@@ -1319,7 +1445,7 @@ Model := [].{
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## or a placeholder naming what is missing.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Capabilities, Connecting, Missing]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -1339,6 +1465,7 @@ Model := [].{
 				"chat" => Chat
 				"inbox" => Inbox
 				"changes" => Changes
+				"files" => Files
 				_ => Capabilities
 			}
 	}
@@ -1429,7 +1556,7 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], []] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", ""] and moved.collapsed == []
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
 expect {
@@ -1445,7 +1572,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files"]] and state.active_column == "column-2"
 }
 
 expect {
@@ -1524,3 +1651,36 @@ expect {
 		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == ["2", "+2 −1", "", "+2 −1"]
 		and Model.subjects(state).contains(WorkspaceList)
 }
+
+## A Files pane's rows of `folder`, `depth` folders deep, and of each folder
+## open in it.
+folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
+folder_rows = |state, context, shown, folder, depth| {
+	blank = { key: "", kind: File, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
+	entries =
+		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
+			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))
+			_ => []
+		}
+	entries.join_map(
+		|entry| {
+			path = if (folder == ".") entry.name else "${folder}/${entry.name}"
+			match entry.kind {
+				Directory if shown.folders.contains(path) => folder_rows(state, context, shown, path, depth + 1).prepend({ ..blank, key: "dir:${path}", kind: Folder, title: entry.name })
+				Directory => [{ ..blank, key: "dir:${path}", kind: Folder, title: entry.name, folded: Bool.True }]
+				_ => [{ ..blank, key: "file:${path}", title: entry.name, detail: if (entry.kind == Symlink) "link" else "", focused: path == shown.file }]
+			}
+		},
+	)
+}
+
+## A size in bytes, as "4 KB" or "1.2 MB".
+size_text : U64 -> Str
+size_text = |bytes|
+	if bytes < 1_000 {
+		"${bytes.to_str()} bytes"
+	} else if bytes < 1_000_000 {
+		"${(bytes // 1_000).to_str()} KB"
+	} else {
+		"${(bytes // 1_000_000).to_str()}.${(bytes // 100_000 % 10).to_str()} MB"
+	}

@@ -50,6 +50,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Start an agent from Workspaces: + on a workspace's row opens a small form with the kinds of agent its provider offers, a model if you want one and a first prompt, and + on a project, or in the pane's header, creates a workspace of it, a worktree on a new branch or a checkout. Each shows at once as starting, in the tree and in the chat, until the daemon lists it; one the provider refuses goes away again, and the form comes back with why.
 - On a phone, back returns from a chat you opened in Workspaces to the list, and forward goes to the chat again. The page's address names the panel shown (`#left`, `#main` or `#right`), so reloading keeps it.
 - Review an agent's work with the new `review.v1` capability, which the daemon hosts for every session and workspace: comment on lines of a file or of a diff, and on the whole review, as drafts, then `Send` them to the agent as one Markdown message, each comment under the file and lines it is about with those lines quoted. Sent comments are marked with their round, and threads stay until you resolve them. A thread follows its lines when the file changes, and is marked outdated once they are gone (docs/protocol.md, Review).
+- A Files widget, beside Changes in the right drawer, browses the files of the focused session's or workspace's directory: open a folder to list it, and pick a file to see its lines, numbered and highlighted, or why it can't show them (binary, too large, unreadable, or only its first part). It works with any provider of `files.v1`, and asks for updates only while it is on screen.
 
 ### Changed
 
@@ -61,7 +62,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Without an Inbox in the layout, the browser tab's title counts the sessions waiting for you.
 - Layouts saved before themes existed show the setup's default theme. A `liton.setup.json` evaluated before then still loads, and offers no themes of its own.
 - Each pane's header shows what the pane shows. What it follows or is pinned to, Pin, the moves in Tiling and Close pane are in its ⋯ menu.
-- The Developer and Inbox presets' right drawer holds Changes alone. Capabilities is still in Tiling, and Settings → Add a widget adds it.
+- The Developer and Inbox presets' right drawer holds Changes and Files, as tabs. Capabilities is still in Tiling, and Settings → Add a widget adds it.
 - The Developer preset's left drawer is Workspaces, the sessions under their workspaces. Sessions is still in Tiling, and Settings → Add a widget adds it.
 - On a phone, the Workbench's panels sit over a glass tab bar at the bottom, Workspaces, Chat and Changes, each with its icon, in place of the strip of dots above them. The Workspaces tab counts what needs you, and the tab bar follows your swipes.
 - The message box grows to a few lines as you type: Enter sends and Shift+Enter starts a new line, while on a touch screen Enter starts one and Send sends. On a phone it is round, with Send beside it, and the tab bar gives way to the keyboard; a chat's header is its title, status dot and Stop over a smaller line of the agent and where it works.

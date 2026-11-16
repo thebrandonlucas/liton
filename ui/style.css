@@ -365,6 +365,35 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .commit .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .commit .git-files { padding-left: 12px; }
 
+/* Files: the folders, then the file picked, each line under its number. */
+.files { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.files > .tree { flex: 0 1 auto; max-height: 40%; overflow-y: auto; margin: 0; padding: 4px 4px 6px; list-style: none; }
+.files .missing { margin: 0; padding: 6px 12px; }
+.files .missing:empty, .file-path:empty { display: none; }
+.tree-folder, .tree-file { padding-left: calc(8px + var(--depth, 0) * 14px); }
+.tree-folder .status-dot, .tree-file .status-dot { display: none; }
+.tree-folder .row-title::before { content: "▾ " / ""; color: var(--muted); }
+.tree-folder.folded .row-title::before { content: "▸ " / ""; }
+.tree-file .row-title { font: 12.5px var(--font-mono); }
+.file-view { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--edge); }
+.file-view:not(:has(.file-path:not(:empty))) { display: none; }
+.file-path { position: sticky; top: 0; left: 0; z-index: 1; margin: 0; padding: 4px 10px; font: 600 12px var(--font-mono); color: var(--accent); background: var(--glass-deep); border-bottom: 1px solid var(--edge); }
+
+/* The code view, a file's lines or a diff's, highlighted. */
+.code-view { width: max-content; min-width: 100%; font: 12px/1.5 var(--font-mono); tab-size: 2; }
+.code-row { display: grid; grid-template-columns: 4ch 4ch 1fr; }
+.code-row > span { white-space: pre; padding: 0 6px; min-height: 1.5em; }
+.code-view .number { text-align: right; color: var(--muted); user-select: none; }
+.code-view:not(.split) .left { display: none; }
+.code-view.file .code-row { grid-template-columns: 5ch 1fr; }
+.code-view.file .code-row > .number:first-child { display: none; }
+.code-view.split .code-row { grid-template-columns: 4ch 1fr 4ch 1fr; }
+.code-row .added { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.code-row .removed { background: color-mix(in srgb, var(--fail) 16%, transparent); }
+.code-row .empty { background: var(--tool); }
+.code-row:has(.hunk-header) > :not(.hunk-header) { display: none; }
+.code-row .hunk-header { grid-column: 1 / -1; color: var(--muted); background: var(--tool); }
+
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 @keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }

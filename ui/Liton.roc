@@ -550,7 +550,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Capabilities, Connecting, Missing],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)))
@@ -558,6 +558,7 @@ Liton := [].{
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
+							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Capabilities => Liton.capabilities(model)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
@@ -847,13 +848,14 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	## Rows of a tree, Workspaces' or Sessions': a dot for each one's state
-	## (a workspace's is its most urgent session's), its title, its branch or
-	## agent, its changes, its status, and +, on a workspace's to start an
-	## agent there and on a project's to create a workspace of it. A group
-	## folds; a workspace or a session is focused. Both widgets share it, as
-	## one list of rows, each with every part the stylesheet hides where it
-	## doesn't apply, to keep the module small.
+	## Rows of a tree, Workspaces', Sessions' or Files': a dot for each one's
+	## state (a workspace's is its most urgent session's), its title, its
+	## branch or agent, its changes, its status, and +, on a workspace's to
+	## start an agent there and on a project's to create a workspace of it. A
+	## group folds, as a folder does, indented by its depth; a workspace, a
+	## session or a file is focused. The widgets share it, as one list of
+	## rows, each with every part the stylesheet hides where it doesn't
+	## apply, to keep the module small.
 	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
 	tree = |model0, id, rows|
 		Html.ul(
@@ -870,6 +872,8 @@ Liton := [].{
 									Group => "group"
 									Workspace => "workspace"
 									Session => "session"
+									Folder => "folder"
+									File => "file"
 								},
 						)
 						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
@@ -877,6 +881,7 @@ Liton := [].{
 							[
 								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}")),
 								Engine.attr_s("data-part", kind),
+								Engine.attr_s("style", row.field(|shown| "--depth: ${shown.depth.to_str()}")),
 							],
 							[
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
@@ -1142,6 +1147,58 @@ Liton := [].{
 	## from ever finishing; not reported upstream yet.
 	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
 	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
+
+	## A context's files: its folders, each opened to list it, and the file
+	## picked, its lines numbered and highlighted. Polls follow them only
+	## while it is on screen (see `Model.subjects`).
+	files_pane : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	files_pane = |model, id, pane| {
+		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
+		Html.div(
+			"files",
+			[
+				Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), [Engine.class("missing")]),
+				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown))),
+				Html.div_attrs(
+					[Engine.class("file-view"), Engine.attr("data-part", "file")],
+					[
+						Html.p_s(id.map2(model.signal(), |pane_id, state| Model.file_pane(state, pane_id).file), [Engine.class("file-path")]),
+						Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), [Engine.class("missing"), Engine.test_id("file-status")]),
+						Liton.code_view("code-view file", shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
+					],
+				),
+			],
+		)
+	}
+
+	## Rows of code, a file's or a diff's, `class` saying which: each line
+	## under its old and new numbers, an old line beside the new in a split
+	## diff, highlighted.
+	code_view : Str, Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
+	code_view = |class, rows|
+		Html.div_attrs(
+			[Engine.class(class)],
+			[
+				Engine.each(
+					rows,
+					|row| row.key,
+					|row|
+						Html.div_attrs(
+							[Engine.class("code-row"), Engine.attr("data-part", "line")],
+							[
+								Html.span_s(row.field(|shown| shown.old), [Engine.class("number")]),
+								Liton.highlighted(row.field(|shown| "left ${shown.left_class}"), row.field(|shown| shown.left)),
+								Html.span_s(row.field(|shown| shown.new), [Engine.class("number")]),
+								Liton.highlighted(row.field(|shown| "right ${shown.right_class}"), row.field(|shown| shown.right)),
+							],
+						),
+				),
+			],
+		)
+
+	## A line's text, its runs in their classes (ui/Highlight.roc).
+	highlighted : Signal(ctx, Str), Signal(ctx, List(Highlight.Token)) -> Elem(ctx)
+	highlighted = |class, listed| Engine.element("span", [Engine.class_s(class)], [Engine.each(listed.map(|shown| shown.map_with_index(|token, index| { index: index.to_str(), token })), |keyed| keyed.index, |token| Html.span_s(token.field(|keyed| keyed.token.text), [Engine.class_s(token.field(|keyed| keyed.token.class))]))])
 
 	## A changed file: its path, which picks it, how it changed and by how many
 	## lines.
@@ -1473,7 +1530,7 @@ Liton := [].{
 								Engine.each(
 									code.map(|shown| shown.lines.map_with_index(|tokens, index| { index: index.to_str(), tokens })),
 									|keyed| keyed.index,
-									|line| Engine.element("span", [Engine.class("line")], [Engine.each(line.field(|keyed| keyed.tokens.map_with_index(|token, index| { index: index.to_str(), token })), |keyed| keyed.index, |token| Html.span_s(token.field(|keyed| keyed.token.text), [Engine.class_s(token.field(|keyed| keyed.token.class))]))]),
+									|line| Liton.highlighted(Engine.const("line"), line.field(|keyed| keyed.tokens)),
 								),
 							],
 						),

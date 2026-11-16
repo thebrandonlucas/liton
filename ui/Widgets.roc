@@ -83,6 +83,16 @@ Widgets := [].{
 			],
 			parts: ["header", "status", "files", "file", "hunk", "line", "commits"],
 		},
+		{
+			id: "files",
+			title: "Files",
+			needs: [Capability.files_v1],
+			slots: [Right, Main],
+			minimum_width: 240,
+			follows_session: Bool.True,
+			options: [],
+			parts: ["header", "list", "folder", "file", "line"],
+		},
 		{ id: "capabilities", title: "Capabilities", needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: ["header", "manifest"] },
 		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
 	]
