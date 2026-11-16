@@ -74,6 +74,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A diff in Changes highlights each line's code, as a chat's code blocks do.
 - Send, or Enter, while dictating stops the recording and sends what you typed with what you said after it, in one go. Tapping the mic still stops it to edit before sending. If nothing is transcribed, nothing is sent: what you typed stays, with why.
 - The Inbox reads like an email inbox: what needs you on top, then every other session in one list, the latest first, each with its state and the agent's last message, rather than a section for each state. It lists idle sessions too, unless you turn that option off.
+- Workspaces and Sessions list the latest first: sessions by when they last changed, workspaces by their latest session and projects by their latest workspace. Their new Order option lists them by name instead. A browser opens on the latest session.
 
 ### Fixed
 

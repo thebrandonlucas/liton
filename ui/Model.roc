@@ -773,7 +773,8 @@ Model := [].{
 	follow = |state| if (state.polling and state.poll.subjects == Model.subjects(state)) state else Model.poll(state)
 
 	## Takes a poll's answer, each topic's in the order asked: its events and
-	## cursor. Then sends the poll asked for meanwhile, if any.
+	## cursor, the focus on the latest session until there is one. Then sends
+	## the poll asked for meanwhile, if any.
 	polled : State, Poll, List(Protocol.Update) -> State
 	polled = |state, sent, updates| {
 		applied = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
@@ -784,7 +785,7 @@ Model := [].{
 					_ => so_far
 				},
 		)
-		focus = if (applied.focus == Session("")) Session(applied.sessions.first().map_ok(|first| first.id) ?? "") else applied.focus
+		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|latest| latest.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -1266,20 +1267,28 @@ Model := [].{
 	## of its project.
 	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
 
-	## A Workspaces pane's rows, as its options group and filter them, each
-	## workspace marked as urgent as its most urgent session, and unread while
-	## one is.
+	## A Workspaces pane's rows, as its options group, filter and order them,
+	## each workspace marked as urgent as its most urgent session, and unread
+	## while one is.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
+		order = Model.option(shown, "order")
 		# Those still starting show where they will be, idle and without git.
 		placeholders = state.creating.keep_if(|creating| creating.form.kind == Workspace).map(|creating| { id: Model.created_id(creating), provider: "", project_id: creating.form.place, name: creating.title, directory: "", kind: Checkout, branch: NotGit, state: Idle, dirty: Bool.False, changes: Uncounted, pinned: Bool.False, labels: [], session_ids: [] })
-		listed = state.workspaces.workspaces.concat(placeholders).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
+		sessions_in = |workspace| {
+			agents = state.creating.keep_if(|creating| creating.form.kind == Agent and creating.form.place == workspace.id).map(|creating| Model.session(state, Model.created_id(creating)))
+			listed_sessions = state.sessions.keep_if(|listed_session| workspace.session_ids.contains(listed_session.id)).concat(agents.drop_if(|agent| workspace.session_ids.contains(agent.id)))
+			Model.ordered(listed_sessions, order, |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title)
+		}
+		workspace_changed = |workspace| if (Model.starting(state, workspace.id)) Model.newest else sessions_in(workspace).map(|listed_session| Model.changed(state, listed_session)).fold(0, U64.max)
+		listed = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
 				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
-				state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
+				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
+				Model.ordered(projects, order, |group| group.members.first().map_ok(workspace_changed) ?? 0, |group| group.title)
 			}
 		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
@@ -1291,10 +1300,6 @@ Model := [].{
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
 			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
-		}
-		sessions_in = |workspace| {
-			agents = state.creating.keep_if(|creating| creating.form.kind == Agent and creating.form.place == workspace.id).map(|creating| Model.session(state, Model.created_id(creating)))
-			state.sessions.keep_if(|listed_session| workspace.session_ids.contains(listed_session.id)).concat(agents.drop_if(|agent| workspace.session_ids.contains(agent.id)))
 		}
 		groups.join_map(
 			|group| {
@@ -1313,9 +1318,31 @@ Model := [].{
 		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
 	}
 
-	## A Sessions pane's rows: every session, with its agent if it shows that.
+	## A Sessions pane's rows: every session in its order, with its agent if
+	## it shows that.
 	session_rows : State, Pane -> List(Row)
-	session_rows = |state, shown| state.sessions.map(|listed_session| { ..Model.session_row(state, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
+	session_rows = |state, shown| Model.ordered(state.sessions, Model.option(shown, "order"), |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).map(|listed_session| { ..Model.session_row(state, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
+
+	## When a session last changed, as `Attention.recency` orders times: as
+	## its inbox item says, else as it does. One starting is the newest.
+	changed : State, Chat.Session -> U64
+	changed = |state, listed_session|
+		if (Model.starting(state, listed_session.id)) Model.newest else Attention.recency(state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? ""))
+
+	## Newer than any time `Attention.recency` gives.
+	newest : U64
+	newest = 100_000_000_000_000_000
+
+	## `items` in the `order` a pane's option names: by `name`, or the latest
+	## first, as `changed_at` tells; those alike in the order given.
+	ordered : List(a), Str, (a -> U64), (a -> Str) -> List(a)
+	ordered = |items, order, changed_at, name| {
+		compared = |left, right| if (left < right) Before else if (left > right) After else Same
+		lower = |text| text.to_utf8().map(|byte| if (byte >= 'A' and byte <= 'Z') byte + 32 else byte)
+		keyed = items.map_with_index(|item, index| { item, index, changed: changed_at(item), name: if (order == "Name") lower(name(item)) else [] })
+		by = |left, right| if (order == "Name") bytes_order(left.name, right.name) else compared(right.changed, left.changed)
+		keyed.sort_with(|left, right| [by(left, right), compared(left.index, right.index)].find_first(|so_far| so_far != Same) ?? Same).map(|kept| kept.item)
+	}
 
 	## A workspace's uncommitted changes as "+3 −1": as its provider counts
 	## them, else as a Changes pane last saw them; "changed" when they are
@@ -2038,4 +2065,15 @@ comment_state = |state|
 	match state {
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
+	}
+
+## Byte strings in order, as a dictionary orders words.
+bytes_order : List(U8), List(U8) -> [Before, After, Same]
+bytes_order = |left, right|
+	match (left.first(), right.first()) {
+		(Ok(first), Ok(second)) if first == second => bytes_order(left.drop_first(1), right.drop_first(1))
+		(Ok(first), Ok(second)) => if (first < second) Before else After
+		(Err(_), Ok(_)) => Before
+		(Ok(_), Err(_)) => After
+		_ => Same
 	}

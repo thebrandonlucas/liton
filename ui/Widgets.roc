@@ -28,7 +28,7 @@ Widgets := [].{
 			slots: [Left, Main],
 			minimum_width: 200,
 			follows_session: Bool.False,
-			options: [{ key: "show_agent", label: "Show agent", help: "Name the agent under each session.", kind: Bool(Bool.True) }],
+			options: [{ key: "show_agent", label: "Show agent", help: "Name the agent under each session.", kind: Bool(Bool.True) }, Widgets.order],
 			parts: ["header", "list", "session"],
 		},
 		{
@@ -41,6 +41,7 @@ Widgets := [].{
 			options: [
 				{ key: "group_by", label: "Group by", help: "List workspaces under their project, or under what they need from you.", kind: Choice({ default: "Project", choices: ["Project", "Status"] }) },
 				{ key: "show_idle", label: "Show idle workspaces", help: "List workspaces whose agents need nothing.", kind: Bool(Bool.True) },
+				Widgets.order,
 			],
 			parts: ["header", "list", "group", "workspace", "session"],
 		},
@@ -96,6 +97,10 @@ Widgets := [].{
 		{ id: "capabilities", title: "Capabilities", needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: ["header", "manifest"] },
 		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
 	]
+
+	## The order of a list of sessions or workspaces: the latest first, or by name.
+	order : Option
+	order = { key: "order", label: "Order", help: "List the latest first, or by name.", kind: Choice({ default: "Latest", choices: ["Latest", "Name"] }) }
 
 	find : Str -> Widget
 	find = |id| Widgets.all.find_first(|widget| widget.id == id) ?? { id, title: id, needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: [] }
