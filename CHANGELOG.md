@@ -53,6 +53,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A Files widget, beside Changes in the right drawer, browses the files of the focused session's or workspace's directory: open a folder to list it, and pick a file to see its lines, numbered and highlighted, or why it can't show them (binary, too large, unreadable, or only its first part). It works with any provider of `files.v1`, and asks for updates only while it is on screen.
 - Comment on code in Files and in Changes: click a line's number, and then another's for the lines between, to write a comment under them in Markdown, which shows at once as a draft beside its lines, marked in the gutter. Reply to a thread, edit or delete a draft, and resolve a thread, which folds it. Open in Files, over a diff in Changes, shows the whole file.
 - Send a review from Files or Changes: each pane's Review counts the drafts and the rounds sent, lists the threads, each opening a reply under its lines, takes a comment on the whole review, and Send review sends the drafts to the agent as one message. They show as sent at once, and as drafts again, with why, if the daemon can't send them.
+- attention.v1 lists what needs you first and then the latest, and its items tell when their session last changed (`updated`) and whether it changed since it was last seen (`unread`); its new `Seen` call marks sessions seen, or unread again (docs/protocol.md).
 
 ### Changed
 

@@ -4,7 +4,7 @@
     (run-effect 1)
     (expect-attr (test-id "show-main") aria-pressed "true")
     (expect-no-attr (test-id "show-left") data-badge)
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 2)
     (expect-attr (test-id "show-left") data-badge "1")
     (expect-no-attr (test-id "show-main") data-badge)

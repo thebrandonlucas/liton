@@ -4,11 +4,11 @@
     (run-effect 1)
     (click (role button :name "Settings"))
     (click (role button :name "Inbox preset"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[{\"description\":\"rm -rf build\",\"request_id\":\"p1\",\"tool\":\"bash\"}],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[{\"description\":\"rm -rf build\",\"request_id\":\"p1\",\"tool\":\"bash\"}],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 2)
     ; The first poll, sent before the manifest, also asked for the
     ; workspaces, which this daemon doesn't offer, so another follows it.
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[{\"description\":\"rm -rf build\",\"request_id\":\"p1\",\"tool\":\"bash\"}],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[{\"description\":\"rm -rf build\",\"request_id\":\"p1\",\"tool\":\"bash\"}],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 3)
     (expect-visible (text "Allow bash: rm -rf build?"))
     (click (role button :name "Allow Fix tests"))
@@ -24,7 +24,7 @@
     (expect-text (test-id "answer-status") "Allowing…")
     (stub-http "answer" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
     (run-effect 5)
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i2\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Working 1\",\"state\":\"Working\",\"summary\":\"\",\"title\":\"Fix tests\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i2\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Working 1\",\"state\":\"Working\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 6)
     (expect-absent (text "Allowing…"))
     (expect-visible (text "working"))

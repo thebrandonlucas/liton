@@ -4,11 +4,11 @@
     (run-effect 1)
     (click (role button :name "Settings"))
     (click (role button :name "Inbox preset"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 2)
     ; The first poll, sent before the manifest, also asked for the
     ; workspaces, which this daemon doesn't offer, so another follows it.
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 3)
     (expect-absent (test-id "later"))
     (click (role button :name "Settle Write docs"))
@@ -25,7 +25,7 @@
     (stub-http "settle" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
     (run-effect 5)
     (expect-visible (text "Later (1)"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i2\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"Settled\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\"}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i2\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"Settled\",\"signature\":\"Done 1\",\"state\":\"Done\",\"summary\":\"\",\"title\":\"Write docs\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 6)
     (expect-visible (text "Later (1)"))
     (expect-absent (role button :name "Settle Write docs"))

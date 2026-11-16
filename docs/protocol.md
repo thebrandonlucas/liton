@@ -100,7 +100,7 @@ Error codes are a closed set shared by all capabilities:
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `AnswerPermission`, `Cancel` and `Create`; `attention.v1`'s `ListItems`,
-`Settle`, `Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces` and
+`Settle`, `Snooze`, `Unsettle` and `Seen`; `workspaces.v1`'s `ListWorkspaces` and
 `Create`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
 `Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
 `Finish` and `Cancel` (Audio, below).
@@ -109,6 +109,19 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 own stop button does, and is `Accepted` once the provider stopped it (from
 Paseo, its `cancel_agent_request`). A session that isn't running is left as
 it is, and accepted too.
+
+`attention.v1` is an inbox: one item per session, those that need you first,
+then the rest by when they last changed, the latest first. An item is
+`{"session_id", "provider", "title", "agent", "state", "summary",
+"permissions", "signature", "updated", "unread", "set_aside"}`: `state` is
+`NeedsYou`, `Failed`, `Working`, `Done` or `Idle`; `summary` the agent's last
+message; `updated` when the session last changed, as
+`2026-01-01T09:00:00.000Z`, as its provider tells or else as the daemon saw
+it; and `unread` whether it changed since it was seen, unless its agent is
+working. `{"Seen": [{"session_id", "through"}]}` marks each session seen as
+its item was `updated` (a client sends it when the user opens one); through
+`""`, it is unread again. Sessions it doesn't list are ignored. `Settle` and
+`Snooze` take the item's `signature` and set it aside until that changes.
 
 `Create` starts an agent, and creates a workspace:
 
@@ -169,7 +182,7 @@ events when nothing changed:
 | `chat.v1` | `timeline/<session_id>` | append-only | `{"Entry": {"sequence", "event"}}`, one per entry |
 | `chat.v1` | `importable` | snapshot | `{"Importable": [{"session", "directory"}]}` |
 | `chat.v1` | `agents` | snapshot | `{"Agents": [{"provider", "agent"}]}`, the kinds of agent each provider starts |
-| `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, ranked |
+| `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, what needs you first, then the latest |
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
 | `workspace.git.v1` | `file/<context>/<scope>/<path>` | snapshot | `{"File": {"path", "hunks"}}` |
@@ -455,7 +468,8 @@ The daemon hosts every transformer the same way, knowing none of them:
 - **State.** The daemon keeps each transformer's state, its own JSON, in
   SQLite, and stores a new one only if no other was stored since it read it;
   a call that loses is asked again. Attention's state is the settles and
-  snoozes that still hold.
+  snoozes that still hold, the sessions seen, and when it saw a session
+  change whose provider tells no `updated`.
 
 A setup names the transformers the daemon hosts by id, and `LITON_TRANSFORMERS`
 adds to them, comma-separated. There are two: `attention`, which liton's own

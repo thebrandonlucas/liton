@@ -145,6 +145,18 @@ try {
     assert.equal((await call("attention.v1", { Settle: { session_id: "nope", signature } })).Err.code, "NotFound");
     assert.equal((await call("attention.v1", { Settle: {} })).Err.code, "BadRequest");
   });
+  await step("attention.v1 lists what needs you, then the latest first, and Seen reads an item until it changes", async () => {
+    const items = async () => (await call("attention.v1", "ListItems")).Ok.Items;
+    const listed = await items();
+    const rest = listed.filter((i) => i.state !== "NeedsYou").map((i) => i.updated);
+    assert.deepEqual(rest, [...rest].sort().reverse());
+    const shown = listed.find((i) => i.state !== "Working" && i.unread);
+    const unread = async () => (await items()).find((i) => i.session_id === shown.session_id).unread;
+    assert.deepEqual(await call("attention.v1", { Seen: [{ session_id: shown.session_id, through: shown.updated }] }), { Ok: "Accepted" });
+    assert.equal(await unread(), false);
+    assert.deepEqual(await call("attention.v1", { Seen: [{ session_id: shown.session_id, through: "" }] }), { Ok: "Accepted" });
+    assert.equal(await unread(), true);
+  });
   await step("Cancel stops a running session's turn, and leaves one that isn't running be", async () => {
     const events = async () => (await call("chat.v1", { WatchSession: { session_id: "fix-auth", after: 0 } })).Ok.Entries.map((e) => e.event);
     const pause = (ms) => new Promise((r) => setTimeout(r, ms));

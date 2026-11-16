@@ -65,6 +65,26 @@ Chat := [].{
 	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
 	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing) }
 
+	## Milliseconds since the epoch as a time such as 2026-01-01T09:00:00.000Z,
+	## by the days-to-civil-date algorithm of Howard Hinnant's chrono notes.
+	timestamp : I64 -> Str
+	timestamp = |ms| {
+		days = ms // 86_400_000 + 719_468
+		era = days // 146_097
+		day_of_era = days - era * 146_097
+		year_of_era = (day_of_era - day_of_era // 1_460 + day_of_era // 36_524 - day_of_era // 146_096) // 365
+		day_of_year = day_of_era - (365 * year_of_era + year_of_era // 4 - year_of_era // 100)
+		month_index = (5 * day_of_year + 2) // 153
+		month = if (month_index < 10) month_index + 3 else month_index - 9
+		year = year_of_era + era * 400 + (if (month <= 2) 1 else 0)
+		padded = |number, width| {
+			digits = number.to_str()
+			"${Str.repeat("0", width - digits.count_utf8_bytes())}${digits}"
+		}
+		of_day = ms % 86_400_000
+		"${year.to_str()}-${padded(month, 2)}-${padded(day_of_year - (153 * month_index + 2) // 5 + 1, 2)}T${padded(of_day // 3_600_000, 2)}:${padded(of_day // 60_000 % 60, 2)}:${padded(of_day // 1_000 % 60, 2)}.${padded(of_day % 1_000, 3)}Z"
+	}
+
 	## The permission requests in a timeline that no answer follows.
 	pending_permissions : List(Entry) -> List(Str)
 	pending_permissions = |timeline|
@@ -87,3 +107,5 @@ expect {
 	]
 	Chat.pending_permissions(timeline) == ["b"]
 }
+
+expect [0, 951_782_400_000, 1_767_258_000_123, 1_709_210_096_789].map(Chat.timestamp) == ["1970-01-01T00:00:00.000Z", "2000-02-29T00:00:00.000Z", "2026-01-01T09:00:00.123Z", "2024-02-29T12:34:56.789Z"]
