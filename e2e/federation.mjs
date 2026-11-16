@@ -83,8 +83,8 @@ const step = async (name, run) => {
 try {
   const manifest = await until("manifest", () => fetch(`${base}/manifest`).then((r) => r.json()));
   await step("the manifest adds the remotes' providers under their names, and leaves out one that is down", () => {
-    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "echo/echo", "peer/mock"]);
-    assert.deepEqual(manifest.providers[1].capabilities, [{ name: "chat", version: 1 }]);
+    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "echo/echo", "peer/mock"]);
+    assert.deepEqual(manifest.providers[2].capabilities, [{ name: "chat", version: 1 }]);
   });
   await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [review], themes: [], default_theme: "" }));
   await step("ListSessions merges every provider's sessions, named under their remotes", async () => {

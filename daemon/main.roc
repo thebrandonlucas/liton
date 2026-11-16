@@ -56,8 +56,10 @@ import http.Request
 import http.Response
 import cap.Capability
 import cap.Chat
+import cap.Context as Focus
 import cap.Manifest
 import cap.Protocol
+import cap.Review
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
@@ -215,7 +217,10 @@ offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far,
 ## `Transformer.offered`).
 offered : Context, List(Manifest.Provider) -> Manifest.Offered
 offered = |{ mock_enabled, paseo, speech, transformers, .. }, remote_providers| {
-	providers = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else []).concat(remote_providers)
+	local = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
+	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
+	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
+	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -263,6 +268,16 @@ call! = |context, request| {
 				answer = match decoded {
 					Ok({ request: asked, .. }) => workspaces_call!(context, provider, asked)?
 					Err(_) => Err(unanswered("workspaces.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("review.v1", _)) => {
+				decoded : Try(Protocol.Call(Review.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Review.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => review_call!(context, asked)?
+					Err(_) => Err(unanswered("review.v1"))
 				}
 				Json.to_str(answer)
 			}
@@ -342,7 +357,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus => Ok({})
+		VoiceStatus | Threads(_) => Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -406,6 +421,7 @@ update! = |context, wanted, subject| {
 		Tree({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Tree, focus, path)?))
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
+		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
 	}
 }
 
@@ -612,6 +628,90 @@ agents! = |context| {
 	from_paseo : Try(List(Chat.Agent), _)
 	from_paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
 	Ok((if (context.mock_enabled) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
+}
+
+## review.v1, which the daemon hosts itself (see `offered`).
+review_provider : Manifest.Provider
+review_provider = { id: "review", name: "Review", capabilities: [Capability.review_v1] }
+
+## Answers a review.v1 request. `Send` sends the drafts to the session as
+## one message, and marks them sent once its provider took it.
+review_call! : Context, Review.Request => Try(Protocol.Answer(Review.Response), _)
+review_call! = |context, asked| {
+	key = Review.context(asked)
+	refused = |problem| {
+		code =
+			match problem {
+				NotFound(_) => NotFound
+				_ => BadRequest
+			}
+		{ code, message: Review.refusal(problem) }
+	}
+	answered = |changed, response|
+		match changed {
+			Ok(review) => Ok(response(review))
+			Err(problem) => Err(refused(problem))
+		}
+	stored = review_stored!(context.db, key)?
+	match (asked, Review.applied(stored.review, asked)) {
+		(_, Err(problem)) => Ok(Err(refused(problem)))
+		(Send({ session_id, .. }), Ok(_)) =>
+			match chat_call!(context, Err(Missing), SendMessage({ session_id, text: Review.message(stored.review) }))? {
+				Err(error) => Ok(Err(error))
+				Ok(Rejected(reason)) => Ok(Err({ code: Refused, message: reason }))
+				Ok(_) => Ok(answered(review_changed!(context.db, key, |review| Review.applied(review, asked))?, |review| Sent({ round: review.round })))
+			}
+		(_, Ok(_)) => Ok(answered(review_changed!(context.db, key, |review| Review.applied(review, asked))?, |_| Accepted))
+	}
+}
+
+## A context's review, its threads moved to where their lines are in the
+## files as the daemon has them now (`Review.relocated`), which it stores.
+reviewed! : Context, Str => Try(Review.Snapshot, _)
+reviewed! = |context, key| {
+	stored = review_stored!(context.db, key)?
+	paths = stored.review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
+	var $texts = []
+	for path in paths {
+		read =
+			match Focus.from_str(key) {
+				Ok(focus) => update!(context, { capability: "files.v1", topic: "", after: "" }, Contents({ context: focus, path }))?.events
+				Err(_) => []
+			}
+		$texts = match read {
+			[Contents({ read: Text({ text: now, truncated: Bool.False, .. }), .. })] => $texts.append((path, now))
+			_ => $texts
+		}
+	}
+	texts = $texts
+	relocated = |review| texts.fold(review, |so_far, (path, now)| Review.relocated(so_far, path, now))
+	if (relocated(stored.review) == stored.review) Ok(stored.review) else Ok(review_changed!(context.db, key, |review| Ok(relocated(review)))? ?? stored.review)
+}
+
+## A context's review as stored, and its JSON, "" before it has one.
+review_stored! : Sqlite.Db, Str => Try({ value : Str, review : Review.Snapshot }, _)
+review_stored! = |db, key| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM reviews WHERE context = :context;", params: { context: key }, limits: Sqlite.default_query_limits })?
+	value = rows.first().map_ok(|row| row.value) ?? ""
+	decoded : Try(Review.Snapshot, _)
+	decoded = Json.parse(value)
+	Ok({ value, review: decoded ?? Review.empty })
+}
+
+## Changes a context's review and stores it, unless another was stored since
+## it was read: then it changes that one.
+review_changed! : Sqlite.Db, Str, (Review.Snapshot -> Try(Review.Snapshot, problem)) => Try(Try(Review.Snapshot, problem), _)
+review_changed! = |db, key, change| {
+	stored = review_stored!(db, key)?
+	match change(stored.review) {
+		Err(problem) => Ok(Err(problem))
+		Ok(changed) => {
+			swapped : List({ context : Str })
+			swapped = Sqlite.query_many!({ db, query: "INSERT INTO reviews (context, value) VALUES (:context, :value) ON CONFLICT (context) DO UPDATE SET value = excluded.value WHERE reviews.value = :stored RETURNING context;", params: { context: key, value: Json.to_str(changed), stored: stored.value }, limits: Sqlite.default_query_limits })?
+			if (swapped.is_empty()) review_changed!(db, key, change) else Ok(Ok(changed))
+		}
+	}
 }
 
 no_session : Str -> Protocol.Answer(a)
@@ -896,6 +996,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?

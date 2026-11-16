@@ -17,6 +17,10 @@ Capability := [].{
 
 	files_v1 : Id
 	files_v1 = { name: "files", version: 1 }
+
+	review_v1 : Id
+	review_v1 = { name: "review", version: 1 }
+
 	voice_v1 : Id
 	voice_v1 = { name: "voice", version: 1 }
 

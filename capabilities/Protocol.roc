@@ -8,6 +8,7 @@ import Chat
 import Context
 import Files
 import Manifest
+import Review
 import Voice
 import WorkspaceGit
 import Workspaces
@@ -37,7 +38,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -60,6 +61,7 @@ Protocol := [].{
 		Tree({ context : Context.Id, path : Str }),
 		Contents({ context : Context.Id, path : Str }),
 		VoiceStatus,
+		Threads(Context.Id),
 	]
 
 	## The topics of each capability providers offer, as the manifest lists
@@ -71,6 +73,7 @@ Protocol := [].{
 		{ capability: Capability.workspace_git_v1, patterns: ["changes/<session_id>/<scope>", "changes/workspace:<workspace_id>/<scope>", "file/<session_id>/<scope>/<path>", "file/workspace:<workspace_id>/<scope>/<path>"] },
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
 		{ capability: Capability.voice_v1, patterns: ["status"] },
+		{ capability: Capability.review_v1, patterns: ["threads/<session_id>", "threads/workspace:<workspace_id>"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -109,6 +112,7 @@ Protocol := [].{
 				"files.v1" if topic.starts_with("tree/") => placed_path(topic.drop_prefix("tree/")).map_ok(|placed| Tree(placed))
 				"files.v1" if topic.starts_with("file/") => placed_path(topic.drop_prefix("file/")).map_ok(|placed| Contents(placed))
 				"voice.v1" if topic == "status" => Ok(VoiceStatus)
+				"review.v1" if topic.starts_with("threads/") => context_of(topic.drop_prefix("threads/")).map_ok(|context| Threads(context))
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -125,6 +129,7 @@ Protocol := [].{
 			Items => { capability: "attention.v1", topic: "items" }
 			WorkspaceList => { capability: "workspaces.v1", topic: "list" }
 			VoiceStatus => { capability: "voice.v1", topic: "status" }
+			Threads(context) => { capability: "review.v1", topic: "threads/${Context.to_str(context)}" }
 			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
 			File({ context, scope, path }) => { capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped(path)}" }
 			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${Context.to_str(context)}/${escaped(path)}" }
@@ -222,7 +227,7 @@ offered : Manifest.Offered
 offered = {
 	protocol: 1,
 	daemon: { id: "liton", name: "liton" },
-	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1] }],
+	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1, Capability.review_v1] }],
 	transformers: [{ id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }],
 	topics: Protocol.topics,
 }
@@ -250,7 +255,7 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" })]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1"))]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 

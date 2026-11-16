@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -101,7 +101,9 @@ Error codes are a closed set shared by all capabilities:
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `AnswerPermission`, `Cancel` and `Create`; `attention.v1`'s `ListItems`,
 `Settle`, `Snooze` and `Unsettle`; `workspaces.v1`'s `ListWorkspaces` and
-`Create`; `voice.v1`'s `Begin`, `Finish` and `Cancel` (Audio, below).
+`Create`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
+`Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
+`Finish` and `Cancel` (Audio, below).
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
@@ -174,6 +176,7 @@ events when nothing changed:
 | `files.v1` | `tree/<context>/<path>` | snapshot | `{"Tree": {"path", "listing"}}` |
 | `files.v1` | `file/<context>/<path>` | snapshot | `{"Contents": {"path", "read"}}` |
 | `voice.v1` | `status` | snapshot | `{"Status": {"stt": "Ready"}}`, or `"Loading"`, or `{"Down": reason}` |
+| `review.v1` | `threads/<context>` | snapshot | `{"Threads": {"round", "next", "threads", "comments"}}` |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -226,6 +229,79 @@ at most one round of upstream work.
 The same topics will also stream: `GET /liton/v1/stream?topic=…` as server-sent
 events with the cursor as the event id, so a reconnect resumes with
 `Last-Event-ID`. Polling stays as the fallback.
+
+### Review
+
+`review.v1` is a review of a context's code, as crit.md does it: comments
+on lines of a file or a diff, and on the whole review, collected as drafts
+and sent to the agent as one message. The daemon hosts it itself, as its
+`review` provider, for every context while some provider offers `chat.v1`,
+and keeps each context's review in SQLite; a provider outside the daemon
+needn't offer it.
+
+A context's `threads/<context>` topic is its review: the rounds sent
+(`round`), its threads and the comments on the whole review. A thread is
+anchored to lines, numbered from 1:
+
+```json
+{ "id": "t2", "outdated": false, "resolved": false,
+  "anchor": { "path": "src/Auth.roc", "scope": "File", "side": "New", "start_line": 2, "end_line": 3, "quote": "…" },
+  "comments": [{ "id": "c1", "author": "Me", "text": "Should this fall back to `/`?", "state": "Draft" }] }
+```
+
+An anchor's `scope` is `File`, the file as it is, or the diff of
+`Uncommitted`, `AgainstBase` or `{"Commit": sha}` (workspace.git.v1's
+scopes), on its `New` side, or its `Old` one for removed lines. `quote` is
+the text of its lines. A comment is by `Me` or an `Agent`, and its `state`
+is `Draft` or `{"Sent": round}`. Each poll of the topic finds a thread's
+lines again in the file as the daemon has it (files.v1's `file/` topic,
+asking nothing upstream): where they were, or else where the quote is,
+the nearest if it is in several places, the thread moving there; a thread
+whose quote is gone is `outdated`. A commit's lines and removed ones don't
+move.
+
+```json
+{ "capability": "review.v1", "request": { "AddComment": { "context": "fix-auth", "place": { "Lines": { "path": "src/Auth.roc", "scope": "File", "side": "New", "start_line": 2, "end_line": 3, "quote": "…" } }, "author": "Me", "text": "Why?" } } }
+{ "capability": "review.v1", "request": { "Send": { "context": "fix-auth", "session_id": "fix-auth" } } }
+{ "Ok": { "Sent": { "round": 1 } } }
+```
+
+Each call names its context as topics do. `AddComment` adds a comment
+under a thread (`{"Thread": id}`), on lines as a new thread (`{"Lines":
+anchor}`) or on the whole review (`"Overall"`); a comment of yours is a
+draft, an agent's is sent. `EditComment` and `DeleteComment` change a
+draft alone (else `BadRequest`), and a thread goes with its last comment;
+`Resolve` and `Reopen` a thread, which a new comment reopens. Each answers
+`Accepted`, or `NotFound` for no such thread or comment. Ids are numbered
+from the review's `next`, so a client applying a call to the review it has
+shows what the daemon will (`Review.applied`). `Send` sends the drafts to
+the session as one chat.v1 message and, once its provider took it, marks
+them sent in the next round, answering `{"Sent": {"round"}}`; with no
+drafts it is `BadRequest`, and a message the provider refuses leaves them
+drafts, answering its error. The message is Markdown an agent can follow:
+
+````markdown
+# Review, round 1
+
+2 comments. Each heading is a file and its lines, with the lines quoted; reply to each by its heading, then revise.
+
+## src/Auth.roc:2-3
+
+```roc
+	redirect_to = request.came_from
+	Session.start(redirect_to)
+```
+
+Should this fall back to `/`?
+
+## Overall
+
+Looks good otherwise.
+````
+
+A heading says where a diff's lines are, as in `src/Auth.roc:41
+(the uncommitted diff, removed lines)`, and a thread's earlier comments
+are quoted under its lines.
 
 ### Audio
 

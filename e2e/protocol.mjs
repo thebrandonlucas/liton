@@ -69,7 +69,7 @@ try {
   }
   await step("the manifest lists the mock, attention as a transformer, and topics", () => {
     assert.equal(manifest.protocol, 1);
-    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock"]);
+    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review"]);
     assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
@@ -196,6 +196,21 @@ try {
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
     assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Review"], "Review"]);
+  });
+  await step("review.v1 keeps a context's threads, moves one to its lines, and sends the drafts to the agent as one message", async () => {
+    const threads = async () => (await post("poll", { topics: [{ capability: "review.v1", topic: "threads/notes", after: "" }] })).topics[0].events[0].Threads;
+    const lines = { path: "src/Auth.roc", scope: "File", side: "New", start_line: 9, end_line: 9, quote: "\tSession.start(redirect_to)" };
+    assert.deepEqual(await call("review.v1", { AddComment: { context: "notes", place: { Lines: lines }, author: "Me", text: "Why here?" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("review.v1", { AddComment: { context: "notes", place: "Overall", author: "Me", text: "Otherwise fine." } }), { Ok: "Accepted" });
+    const [thread] = (await threads()).threads;
+    assert.deepEqual([thread.id, thread.anchor.start_line, thread.outdated, thread.comments[0].state], ["t2", 3, false, "Draft"]);
+    assert.equal((await call("review.v1", { EditComment: { context: "notes", comment_id: "c9", text: "" } })).Err.code, "NotFound");
+    assert.deepEqual(await call("review.v1", { Send: { context: "notes", session_id: "notes" } }), { Ok: { Sent: { round: 1 } } });
+    assert.equal((await call("review.v1", { Send: { context: "notes", session_id: "notes" } })).Err.code, "BadRequest");
+    assert.equal((await call("review.v1", { DeleteComment: { context: "notes", comment_id: "c1" } })).Err.code, "BadRequest");
+    assert.deepEqual((await threads()).threads[0].comments[0].state, { Sent: 1 });
+    const sent = (await call("chat.v1", { WatchSession: { session_id: "notes", after: 0 } })).Ok.Entries.map((e) => e.event.UserMessage?.text ?? "").find((text) => text.startsWith("# Review"));
+    assert.ok(sent.startsWith("# Review, round 1") && sent.includes("## src/Auth.roc:3\n\n```roc\n\tSession.start(redirect_to)\n```\n\nWhy here?") && sent.endsWith("## Overall\n\nOtherwise fine."), sent);
   });
   await step("Create makes a workspace of the mock's project and starts an agent in it, which its listing has", async () => {
     const made = (await call("workspaces.v1", { Create: { project_id: "liton", kind: "Worktree", branch: "docs" } })).Ok.Created.workspace_id;
