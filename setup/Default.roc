@@ -1,6 +1,6 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
-## on: no remotes, attention derived from chat, the Developer, Inbox and
-## Tiling presets, Developer first, and the Pastoral, Hypr and Plain themes,
+## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling
+## and Chat presets, Developer first, and the Pastoral, Hypr and Plain themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Setup
@@ -32,6 +32,14 @@ Default := [].{
 	inbox = {
 		name: "Inbox",
 		snapshot: { ..Default.developer.snapshot, columns: Default.developer.snapshot.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }] } else column), collapsed: [Right] },
+	}
+
+	## A chat app: the sessions, the latest first, beside one large chat,
+	## with the right drawer hidden.
+	chat : Setup.Preset
+	chat = {
+		name: "Chat",
+		snapshot: { ..Default.developer.snapshot, columns: Default.developer.snapshot.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else column), collapsed: [Right] },
 	}
 
 	## Sessions, a wider chat and what the daemon advertises, each in a column.
@@ -119,5 +127,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
 }

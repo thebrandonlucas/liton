@@ -55,6 +55,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Send a review from Files or Changes: each pane's Review counts the drafts and the rounds sent, lists the threads, each opening a reply under its lines, takes a comment on the whole review, and Send review sends the drafts to the agent as one message. They show as sent at once, and as drafts again, with why, if the daemon can't send them.
 - attention.v1 lists what needs you first and then the latest, and its items tell when their session last changed (`updated`) and whether it changed since it was last seen (`unread`); its new `Seen` call marks sessions seen, or unread again (docs/protocol.md).
 - Unread, as in email: a session that finished, failed or asks for you since you last looked has a dot and a bolder title in the Inbox, and a ring round its dot in Workspaces and Sessions. Opening it, or having it in a chat on screen, reads it; Mark read, Mark unread and Mark all read in the Inbox do it by hand. Each shows at once.
+- The Chat preset, in Settings: your sessions, the latest first, beside one large chat, with the right drawer hidden.
 
 ### Changed
 
