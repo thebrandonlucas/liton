@@ -161,6 +161,10 @@ pub fn build(b: *std.Build) void {
     // With one compiler again, roc-ui's default becomes "roc".
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
     const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse "roc-ui";
+    // For iterating: the UI built without specialization, in under a minute
+    // rather than about six, and slower to run. Never for the preview or a
+    // final e2e run, which drive what ships.
+    const fast = b.option(bool, "fast", "Build the browser UI without specialization, for iterating") orelse false;
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -218,19 +222,20 @@ pub fn build(b: *std.Build) void {
     // Built for size: the wasm's download is most of a cold load (bench/).
     // Specialized still: --specialize=no makes it a quarter of the size, but
     // a long chat (200 messages with code blocks) takes seconds to open or
-    // leave, against a third of a second.
+    // leave, against a third of a second. -Dfast trades that for build time.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
     const build_ui = b.addSystemCommand(&.{
         "sh", "-c",
         \\set -e
         \\mkdir -p zig-out/www
-        \\"$1" build --opt=size --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
+        \\"$1" build --opt=size $4 --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
         \\cp ui/index.html ui/style.css ui/ports.mjs ui/voice.mjs ui/voice-worklet.js "$2" "$3" zig-out/www/
         ,
         "sh", roc_ui,
     });
     build_ui.addFileArg(roc_signals.path("runtime.mjs"));
     build_ui.addFileArg(roc_signals.path("worker.mjs"));
+    build_ui.addArg(if (fast) "--specialize=no" else "");
     build_ui.has_side_effects = true;
     ui_step.dependOn(&build_ui.step);
 
