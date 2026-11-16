@@ -372,10 +372,12 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .file-path { position: sticky; top: 0; left: 0; z-index: 1; margin: 0; padding: 4px 10px; font: 600 12px var(--font-mono); color: var(--accent); background: var(--glass-deep); border-bottom: 1px solid var(--edge); }
 
 /* The code view, a file's lines or a diff's, highlighted. */
+.file-view, .file-diff { container-type: inline-size; }
 .code-view { width: max-content; min-width: 100%; font: 12px/1.5 var(--font-mono); tab-size: 2; }
+.code-item { display: contents; }
 .code-row { display: grid; grid-template-columns: 4ch 4ch 1fr; }
 .code-row > span { white-space: pre; padding: 0 6px; min-height: 1.5em; }
-.code-view .number { text-align: right; color: var(--muted); user-select: none; }
+.code-view .number { min-height: 0; border: none; border-radius: 0; padding: 0 6px; background: none; font: inherit; text-align: right; color: var(--muted); user-select: none; }
 .code-view:not(.split) .left { display: none; }
 .code-view.file .code-row { grid-template-columns: 5ch 1fr; }
 .code-view.file .code-row > .number:first-child { display: none; }
@@ -386,6 +388,36 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .code-row:has(.hunk-header) > :not(.hunk-header) { display: none; }
 .code-row .hunk-header { grid-column: 1 / -1; padding: 2px 8px; color: var(--muted); background: var(--tool); }
 .code-row .sign { color: var(--muted); }
+
+/* Review: a line's number picks it, a second one the lines between, and
+   the composer opens under them; threads sit under the lines they end on. */
+.code-view .number:not(:empty):hover { color: var(--accent); background: var(--tool); }
+.code-row.marked > .number { color: var(--warn-strong); box-shadow: inset -2px 0 var(--warn-strong); }
+.code-row.picked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.code-row.picked > .number { color: var(--accent); box-shadow: inset -2px 0 var(--accent); }
+.comment, .comment-composer { position: sticky; left: 0; box-sizing: border-box; width: min(64ch, 100cqw - 12px); margin: 4px 0 6px; padding: 6px 10px;
+  font: 13px/1.45 var(--font-ui); white-space: normal; border: 1px solid var(--edge); border-left: 3px solid var(--warn-strong); border-radius: var(--small-radius); background: var(--glass-deep); }
+.comment:not(.last) { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.comment:not(.last) + .comment, .comment:not(.last) + .comment-composer { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0; }
+.comment.draft { border-left-style: dashed; }
+.comment.resolved { border-left-color: var(--ok); opacity: .75; }
+.comment-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment.resolved .comment-text { max-height: 1.45em; overflow: hidden; color: var(--muted); }
+.comment-header, .thread-actions, .comment-actions { display: flex; gap: 6px; align-items: center; }
+.comment-header { margin-bottom: 2px; }
+.comment-author { font-weight: 650; }
+.comment-header button, .thread-actions button { padding: 0 8px; font-size: 12px; background: none; border-color: transparent; color: var(--muted); }
+.comment-header button:first-of-type { margin-left: auto; }
+.comment-header button:hover, .thread-actions button:hover { color: var(--text); border-color: var(--edge); }
+.thread-actions { justify-content: flex-end; margin-top: 2px; }
+.comment:not(.draft) .for-draft, .comment:not(.last) .thread-actions, .comment.resolved .for-open { display: none; }
+.comment-composer { display: flex; flex-direction: column; gap: 6px; border-left-color: var(--accent); }
+.composer-title { margin: 0; font: 600 11px var(--font-mono); color: var(--accent); }
+.comment-composer textarea { padding: 6px 8px; resize: vertical; min-height: 4.5em; font: 13px/1.45 var(--font-ui); }
+.comment-actions button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.diff-path { position: sticky; left: 0; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--edge); }
+.diff-path .file-path { position: static; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; }
+.diff-path button { flex: none; margin-right: 4px; padding: 0 8px; font-size: 12px; }
 
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 @keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }

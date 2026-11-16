@@ -7,6 +7,7 @@ import cap.Capability
 import cap.Chat
 import cap.Manifest
 import cap.Protocol
+import cap.Review
 import cap.WorkspaceGit
 import setup.Setup
 import Highlight
@@ -160,11 +161,12 @@ Liton := [].{
 				},
 			),
 		),
-		# An agent or workspace to create, whose answer may take a provider a while.
+		# An agent or workspace to create, whose answer may take a provider a
+		# while, or a review.v1 request.
 		Engine.watch_changes(
-			model.signal().map(|state| state.create_outbox),
+			model.signal().map(|state| state.call_outbox),
 			|outbox| [Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout_ms: 60000 })],
-			model.on_result(|state, outbox, res| Model.created(state, outbox.serial, Engine.http_text(res) ?? "")),
+			model.on_result(|state, outbox, res| if (outbox.key == "review.v1") Model.reviewed(state, outbox.serial, Engine.http_text(res) ?? "") else Model.created(state, outbox.serial, Engine.http_text(res) ?? "")),
 		),
 		# Keys reach the root only from inside it.
 		Engine.watch(Engine.const({}), |_| [Focus("app")], Engine.ignore({})),
@@ -856,6 +858,7 @@ Liton := [].{
 	## session or a file is focused. The widgets share it, as one list of
 	## rows, each with every part the stylesheet hides where it doesn't
 	## apply, to keep the module small.
+
 	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
 	tree = |model0, id, rows|
 		Html.ul(
@@ -1130,7 +1133,7 @@ Liton := [].{
 												match hunks_shown {
 													NoFile => Engine.text("")
 													Loading => Html.p("Loading…", "missing")
-													Shown => Liton.git_diff(pane.map(|pane_shown| Model.option(pane_shown, "diff_layout")), shown.map(|{ pane: pane_shown, state }| Model.git_code(state, pane_shown)))
+													Shown => Liton.git_diff(model, id, pane)
 												},
 										),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
@@ -1164,7 +1167,7 @@ Liton := [].{
 					[
 						Html.p_s(id.map2(model.signal(), |pane_id, state| Model.file_pane(state, pane_id).file), [Engine.class("file-path")]),
 						Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), [Engine.class("missing"), Engine.test_id("file-status")]),
-						Liton.code_view(Engine.const("code-view file"), shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
+						Liton.code_view(model, id, Engine.const("code-view file"), shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
 					],
 				),
 			],
@@ -1173,28 +1176,107 @@ Liton := [].{
 
 	## Rows of code, a file's or a diff's, `class` saying which: each line
 	## under its old and new numbers, an old line beside the new in a split
-	## diff, highlighted.
-	code_view : Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
-	code_view = |class, rows|
+	## diff, highlighted; and between them, the review's threads on the lines
+	## they end on, and the composer of a comment under the lines picked.
+	## Clicking a number picks its line (`Model.pick_line`).
+	code_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.CodeRow)) -> Elem(PaneCtx)
+	code_view = |model0, id, class, rows|
 		Html.div_attrs(
 			[Engine.class_s(class)],
 			[
 				Engine.each(
 					rows,
 					|row| row.key,
-					|row|
-						Html.div_attrs(
-							[Engine.class("code-row"), Engine.attr("data-part", "line")],
+					|row| {
+						model = model0.lift_row()
+						asked = |pick| row.field(pick).map2(id.lift_row(), |picked, pane_id| { pane_id, picked })
+						# A row of an each is one element.
+						Html.div(
+							"code-item",
 							[
-								Html.span_s(row.field(|shown| shown.old), [Engine.class("number")]),
-								Liton.highlighted(row.field(|shown| "left ${shown.left_class}"), row.field(|shown| shown.left)),
-								Html.span_s(row.field(|shown| shown.new), [Engine.class("number")]),
-								Liton.highlighted(row.field(|shown| "right ${shown.right_class}"), row.field(|shown| shown.right)),
+								Engine.switch(
+									row.field(|shown| shown.kind),
+									[Code, Composer, Comment],
+									|kind|
+										match kind {
+											Code =>
+												Html.div_attrs(
+													[Engine.class_s(row.field(|shown| "code-row ${shown.class}")), Engine.attr("data-part", "line")],
+													[
+														Html.button_s(row.field(|shown| shown.old), [Engine.class("number")], model.update_by(asked(|shown| shown.old_pick), Model.pick_line)),
+														Liton.highlighted(row.field(|shown| "left ${shown.left_class}"), row.field(|shown| shown.left)),
+														Html.button_s(row.field(|shown| shown.new), [Engine.class("number")], model.update_by(asked(|shown| shown.new_pick), Model.pick_line)),
+														Liton.highlighted(row.field(|shown| "right ${shown.right_class}"), row.field(|shown| shown.right)),
+													],
+												)
+											Composer => Liton.comment_composer(model)
+											Comment => Liton.comment(model, row.field(|shown| shown.note).map2(id.lift_row(), |note, pane_id| { pane_id, note }))
+										},
+								),
 							],
-						),
+						)
+					},
 				),
 			],
 		)
+
+	## The composer of a comment on lines, a reply or a draft edited, in
+	## Markdown: Comment keeps it as a draft at once, Cancel closes it.
+	comment_composer : State(ctx, Model.State) -> Elem(ctx)
+	comment_composer = |model|
+		Html.form(
+			"Comment",
+			[Engine.class("comment-composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model.update(Model.submit_comment))],
+			[
+				Html.p_s(model.signal().map(|state| Liton.composing(state.composer)), [Engine.class("composer-title")]),
+				Html.textarea(Engine.const("Your comment"), model.signal().map(|state| state.composer.text), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown"), Engine.ref("comment"), Liton.keeps_keys(model)], model.set_value(|state, text| { ..state, composer: { ..state.composer, text } })),
+				Html.div("comment-actions", [Html.submit_button("Comment", []), Html.button("Cancel", [], model.update(|state| { ..state, composer: Model.closed_composer }))]),
+			],
+		)
+
+	composing : Model.Composer -> Str
+	composing = |composer|
+		if !composer.editing.is_empty() {
+			"Edit your draft"
+		} else if !composer.thread.is_empty() {
+			"Reply"
+		} else {
+			"Comment on ${Review.lines({ path: composer.path, scope: composer.scope, side: composer.side, start_line: composer.start, end_line: composer.end, quote: "" })}${if (composer.side == Old) ", removed" else ""}"
+		}
+
+	## A comment of a thread, as written, who said it and its state; Edit
+	## and Delete for a draft, and under a thread's last, Reply and Resolve,
+	## or Reopen for a resolved thread, folded to its first comment. The
+	## stylesheet hides what doesn't apply.
+	comment : State(ctx, Model.State), Signal(ctx, { pane_id : Str, note : Model.Note }) -> Elem(ctx)
+	comment = |model, noted| {
+		note = noted.map(|{ note: shown, .. }| shown)
+		# One handler for every button, to keep the module small.
+		acting = |action| noted.map(|{ pane_id, note: shown }| { pane_id, note: shown, action })
+		flags = |shown| Str.join_with(["comment", if (shown.draft) "draft" else "", if (shown.last) "last" else "", if (shown.resolved) "resolved" else ""].drop_if(Str.is_empty), " ")
+		Html.div_attrs(
+			[Engine.class_s(note.map(flags)), Engine.attr("data-part", "comment")],
+			[
+				Html.div(
+					"comment-header",
+					[
+						Html.span_s(note.map(|shown| shown.author), [Engine.class("comment-author")]),
+						Html.span_s(note.map(|shown| if (shown.resolved) "resolved" else shown.state), [Engine.class("badge"), Engine.test_id("comment-state")]),
+						Html.button("Edit", [Engine.class("for-draft")], model.update_by(acting(Edit), Model.review_comment)),
+						Html.button("Delete", [Engine.class("for-draft")], model.update_by(acting(Delete), Model.review_comment)),
+					],
+				),
+				Html.p_s(note.map(|shown| shown.text), [Engine.class("comment-text")]),
+				Html.div(
+					"thread-actions",
+					[
+						Html.button("Reply", [Engine.class("for-open")], model.update_by(acting(Reply), Model.review_comment)),
+						Html.button_s(note.map(|shown| if (shown.resolved) "Reopen" else "Resolve"), [], model.update_by(acting(Resolve), Model.review_comment)),
+					],
+				),
+			],
+		)
+	}
 
 	## A line's text, its runs in their classes (ui/Highlight.roc).
 	highlighted : Signal(ctx, Str), Signal(ctx, List(Highlight.Token)) -> Elem(ctx)
@@ -1213,16 +1295,28 @@ Liton := [].{
 			],
 		)
 
-	## A file's hunks in the code view, in one column or old beside new.
-	git_diff : Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
-	git_diff = |layout, rows|
+	## A file's diff in the code view, in one column or old beside new, under
+	## its path, which Open in Files shows in the Files pane.
+	git_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	git_diff = |model, id, pane| {
+		rows = pane.map2(model.signal(), |shown, state| Model.git_code(state, shown))
+		path = id.map2(
+			model.signal(),
+			|pane_id, state|
+				match Model.git_pane(state, pane_id).file {
+					Selected(selected) => selected
+					NoFile => ""
+				},
+		)
 		Html.div(
 			"file-diff",
 			[
+				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.flag_maybe("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file))]),
 				Engine.when(rows.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
-				Liton.code_view(layout.map(|shown| if (shown == "Split") "code-view split" else "code-view unified"), rows),
+				Liton.code_view(model, id, pane.map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), rows),
 			],
 		)
+	}
 
 	## The branch's commits, folded away, each with its files, which pick that
 	## commit's diff of them.

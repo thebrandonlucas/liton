@@ -7,6 +7,7 @@ import cap.Context
 import cap.Files
 import cap.Manifest
 import cap.Protocol
+import cap.Review
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
@@ -120,6 +121,15 @@ Model := [].{
 		texts : List({ context : Context.Id, contents : Files.Contents, lines : List(List(Highlight.Token)) }),
 		file_panes : List(FilePane),
 
+		## What polls answered of each context's review, the review.v1
+		## requests on their way (sent as `call_outbox`), and the comment being
+		## written. A request is applied to the review shown (`review_of`)
+		## until the daemon refuses it, or until the poll numbered `accepted`
+		## answers, the first sent after it accepted it (0 while it waits).
+		reviews : List({ context : Context.Id, review : Review.Snapshot }),
+		reviewing : List({ serial : U64, request : Review.Request, accepted : U64 }),
+		composer : Composer,
+
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
 		## is the one picked, or "" for the default. `glass` is whether tiles
@@ -152,12 +162,13 @@ Model := [].{
 		form : Form,
 
 		## Agents started and workspaces created, shown starting until a listing
-		## has them, and the call asking for the last, its capability as `key`
-		## and its JSON as `text`: the shape of `clipboard`, which spares the
-		## module another instance of the effect that sends it; the kinds of
-		## agent each provider starts.
+		## has them; the last call whose answer may take a provider a while, to
+		## create one, or a review.v1 request, its capability as `key` and its
+		## JSON as `text`: the shape of `clipboard`, which spares the module
+		## another instance of the effect that sends it; the kinds of agent each
+		## provider starts.
 		creating : List(Creating),
-		create_outbox : { serial : U64, key : Str, text : Str },
+		call_outbox : { serial : U64, key : Str, text : Str },
 		agents : List(Chat.Agent),
 	}
 
@@ -183,6 +194,11 @@ Model := [].{
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
+
+	## The composer of a comment: on the lines `start` to `end` of a side of
+	## the file or diff a pane shows, as a new thread; or a reply to a thread;
+	## or a draft edited. Closed, its pane is "".
+	Composer : { pane : Str, path : Str, scope : Review.Scope, side : Review.Side, start : U32, end : U32, thread : Str, editing : Str, text : Str }
 
 	## The layout of a preset or snapshot.
 	layout_of : Snapshot -> Layout
@@ -241,6 +257,9 @@ Model := [].{
 				trees: [],
 				texts: [],
 				file_panes: [],
+				reviews: [],
+				reviewing: [],
+				composer: Model.closed_composer,
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
@@ -253,7 +272,7 @@ Model := [].{
 				voice: Speech.initial,
 				form: Model.closed_form,
 				creating: [],
-				create_outbox: { serial: 0, key: "", text: "" },
+				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
@@ -690,8 +709,9 @@ Model := [].{
 	## a chat pane shows; the attention items, which the title counts; of
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows; of each Files pane on screen, its root, the directories
-	## open and the file it shows; and the workspaces, while a pane lists
-	## them. Until the manifest arrives, every capability counts as offered.
+	## open and the file it shows; the workspaces, while a pane lists them;
+	## and the review of the context of each, Files or Changes, on screen.
+	## Until the manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
@@ -715,10 +735,11 @@ Model := [].{
 			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
 		}
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
+		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -781,6 +802,8 @@ Model := [].{
 			Timeline(session_id) if !received.timelines.any(|timeline| timeline.session_id == session_id) => { ..received, timelines: received.timelines.append({ session_id, entries: [] }) }
 			# Unchanged items still settle what was set aside.
 			Items => Model.attention_fetched(received, serial, received.attention)
+			# The requests its review has held since the poll they waited for.
+			Threads(context) => { ..received, reviewing: received.reviewing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial and Review.context(asked.request) == Context.to_str(context)) }
 			_ => received
 		}
 	}
@@ -810,6 +833,7 @@ Model := [].{
 				}
 			(File({ context, scope, .. }), File({ path, hunks })) =>
 				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks }) }
+			(Threads(context), Threads(review)) => { ..state, reviews: state.reviews.drop_if(|known| known.context == context).append({ context, review }) }
 			(Tree({ context, .. }), Tree(tree)) => { ..state, trees: state.trees.drop_if(|known| known.context == context and known.tree.path == tree.path).append({ context, tree }) }
 			(Contents({ context, .. }), Contents(contents)) => {
 				lines =
@@ -1154,9 +1178,11 @@ Model := [].{
 				Context => "context"
 			}
 		tokens = |line| Highlight.lines(path.split_last(".").map_ok(|parts| parts.after) ?? "", [line.text]).first() ?? []
-		blank = { key: "", old: "", new: "", left: [], right: [], left_class: "empty", right_class: "empty" }
-		old = |row, line| { ..row, old: number(line.old_line), left: tokens(line), left_class: kind(line) }
-		new = |row, line| { ..row, new: number(line.new_line), right: tokens(line), right_class: kind(line) }
+		# Comments go on the new side's lines, or the old side's for removed ones.
+		pick = |line| if (line.kind == Removed) { side: Old, line: line.old_line } else { side: New, line: line.new_line }
+		blank = { ..Model.code_row, left_class: "empty", right_class: "empty" }
+		old = |row, line| { ..row, old: number(line.old_line), old_pick: pick(line), left: tokens(line), left_class: kind(line) }
+		new = |row, line| { ..row, new: number(line.new_line), new_pick: pick(line), right: tokens(line), right_class: kind(line) }
 		rows_of = |lines|
 			if diff_layout == "Split" {
 				paired = lines.fold(
@@ -1180,7 +1206,7 @@ Model := [].{
 						Removed => "- "
 						Context => "  "
 					}
-				lines.map(|line| { ..new(blank, line), old: number(line.old_line), right: tokens(line).prepend({ class: "sign", text: sign(line) }) })
+				lines.map(|line| { ..new(blank, line), old: number(line.old_line), old_pick: pick(line), right: tokens(line).prepend({ class: "sign", text: sign(line) }) })
 			}
 		header = |hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"
 		hunks.map_with_index(|hunk, at| rows_of(hunk.lines).map_with_index(|row, index| { ..row, key: "${at.to_str()}/${index.to_str()}" }).prepend({ ..blank, key: at.to_str(), right: [{ class: "", text: header(hunk) }], right_class: "hunk-header" })).join_map(|rows| rows)
@@ -1190,7 +1216,7 @@ Model := [].{
 	git_code : State, Pane -> List(CodeRow)
 	git_code = |state, shown|
 		match (Model.git_pane(state, shown.id).file, Model.git_hunks_of(state, shown)) {
-			(Selected(path), Hunks(hunks)) => Model.diff_code(Model.option(shown, "diff_layout"), path, hunks)
+			(Selected(path), Hunks(hunks)) => Model.annotated(state, shown, Model.diff_code(Model.option(shown, "diff_layout"), path, hunks))
 			_ => []
 		}
 
@@ -1361,8 +1387,21 @@ Model := [].{
 	## A row of the code view, a file's or a diff's: a line under its old and
 	## new numbers ("" for none), its text (`right`) and, in a split diff, the
 	## old line beside it (`left`), each side's class saying whether it was
-	## added, removed or neither; or a hunk's header.
-	CodeRow : { key : Str, old : Str, new : Str, left : List(Highlight.Token), right : List(Highlight.Token), left_class : Str, right_class : Str }
+	## added, removed or neither, or a hunk's header; the composer of a
+	## comment on the lines over it; or a comment of a thread on them.
+	## Clicking a number picks the line it says (`pick_line`).
+	CodeRow : { key : Str, kind : [Code, Composer, Comment], old : Str, new : Str, old_pick : Pick, new_pick : Pick, left : List(Highlight.Token), right : List(Highlight.Token), left_class : Str, right_class : Str, class : Str, note : Note }
+
+	## A line to comment on, on a side of a diff: none when `line` is 0.
+	Pick : { side : Review.Side, line : U32 }
+
+	## A comment as a row shows it: its thread's and its own id, who said it
+	## and its state, and whether it is the thread's last, as a resolved
+	## thread folded into one is.
+	Note : { thread : Str, comment : Str, author : Str, state : Str, text : Str, last : Bool, resolved : Bool, draft : Bool }
+
+	code_row : CodeRow
+	code_row = { key: "", kind: Code, old: "", new: "", old_pick: { side: New, line: 0 }, new_pick: { side: New, line: 0 }, left: [], right: [], left_class: "", right_class: "", class: "", note: { thread: "", comment: "", author: "", state: "", text: "", last: Bool.False, resolved: Bool.False, draft: Bool.False } }
 
 	## The file a Files pane shows, as rows of the code view.
 	file_code : State, Pane -> List(CodeRow)
@@ -1370,7 +1409,181 @@ Model := [].{
 		context = Model.context_of(state, shown)
 		{ file, .. } = Model.file_pane(state, shown.id)
 		lines = state.texts.find_first(|known| known.context == context and known.contents.path == file).map_ok(|known| known.lines) ?? []
-		lines.map_with_index(|tokens, index| { key: (index + 1).to_str(), old: "", new: (index + 1).to_str(), left: [], right: tokens, left_class: "", right_class: "" })
+		Model.annotated(state, shown, lines.map_with_index(|tokens, index| { ..Model.code_row, key: (index + 1).to_str(), new: (index + 1).to_str(), new_pick: { side: New, line: (index + 1).to_u32_wrap() }, right: tokens }))
+	}
+
+	## The file a Files or Changes pane shows, and the scope of review.v1
+	## its lines are in.
+	viewed : State, Pane -> Try({ path : Str, scope : Review.Scope }, [NoFile])
+	viewed = |state, shown|
+		match (shown.widget, Model.git_pane(state, shown.id)) {
+			("files", _) if !Model.file_pane(state, shown.id).file.is_empty() => Ok({ path: Model.file_pane(state, shown.id).file, scope: File })
+			("changes", { file: Selected(path), scope: Uncommitted, .. }) => Ok({ path, scope: Uncommitted })
+			("changes", { file: Selected(path), scope: AgainstBase, .. }) => Ok({ path, scope: AgainstBase })
+			("changes", { file: Selected(path), scope: Commit(sha), .. }) => Ok({ path, scope: Commit(sha) })
+			_ => Err(NoFile)
+		}
+
+	## The code view's rows with the review's threads on their lines, each
+	## after the line it ends on, its lines marked, and the composer after
+	## the lines picked, which are marked as picked.
+	annotated : State, Pane, List(CodeRow) -> List(CodeRow)
+	annotated = |state, shown, rows|
+		match Model.viewed(state, shown) {
+			Err(NoFile) => rows
+			Ok({ path, scope }) => {
+				composer = state.composer
+				threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| Review.shows(thread.anchor, path, scope) and !thread.outdated)
+				composing = composer.pane == shown.id and composer.path == path and composer.scope == scope
+				on = |picks, side, start, end| picks.any(|picked| picked.side == side and picked.line >= start and picked.line <= end)
+				composer_row = { ..Model.code_row, key: "composer", kind: Composer }
+				notes = |thread| {
+					last = thread.comments.len() - 1
+					listed = if (thread.resolved) thread.comments.take_first(1) else thread.comments
+					shown_notes = listed.map_with_index(
+						|comment, index| {
+							note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft }
+							if (composing and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
+						},
+					)
+					if (composing and composer.thread == thread.id) shown_notes.append(composer_row) else shown_notes
+				}
+				rows.join_map(
+					|row| {
+						picks = [row.old_pick, row.new_pick].keep_if(|picked| picked.line > 0)
+						picked = composing and on(picks, composer.side, composer.start, composer.end)
+						marked = threads.any(|thread| on(picks, thread.anchor.side, thread.anchor.start_line, thread.anchor.end_line))
+						ending = threads.keep_if(|thread| on(picks, thread.anchor.side, thread.anchor.end_line, thread.anchor.end_line))
+						opened = composing and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
+						class = Str.join_with([if (picked) "picked" else "", if (marked) "marked" else ""].drop_if(Str.is_empty), " ")
+						ending.join_map(notes).concat(if (opened) [composer_row] else []).prepend({ ..row, class })
+					},
+				)
+			}
+		}
+
+	## The review of a context as the daemon has it, with the requests on
+	## their way applied.
+	review_of : State, Context.Id -> Review.Snapshot
+	review_of = |state, context| {
+		stored = state.reviews.find_first(|known| known.context == context).map_ok(|known| known.review) ?? Review.empty
+		state.reviewing.keep_if(|asked| Review.context(asked.request) == Context.to_str(context)).fold(stored, |review, asked| Review.applied(review, asked.request) ?? review)
+	}
+
+	## Picks a line of the file or diff a pane shows to comment on, which
+	## opens the composer under it at once. With one line picked, a second
+	## picks the lines from one to the other; the line picked again closes an
+	## empty composer, and any other line starts again there, with what is
+	## typed.
+	pick_line : State, { pane_id : Str, picked : Pick } -> State
+	pick_line = |state, { pane_id, picked }|
+		match Model.viewed(state, Model.pane(state, pane_id)) {
+			_ if picked.line == 0 => state
+			Err(NoFile) => state
+			Ok({ path, scope }) => {
+				composer = state.composer
+				same = composer.pane == pane_id and composer.path == path and composer.scope == scope and composer.side == picked.side and composer.thread.is_empty() and composer.editing.is_empty()
+				one = composer.start == composer.end
+				if same and one and composer.start != picked.line {
+					Model.composing(state, { ..composer, start: U32.min(composer.start, picked.line), end: U32.max(composer.start, picked.line) })
+				} else if same and one and composer.text.is_empty() {
+					{ ..state, composer: Model.closed_composer }
+				} else {
+					Model.composing(state, { ..Model.closed_composer, pane: pane_id, path, scope, side: picked.side, start: picked.line, end: picked.line, text: if (same) composer.text else "" })
+				}
+			}
+		}
+
+	closed_composer : Composer
+	closed_composer = { pane: "", path: "", scope: File, side: New, start: 0, end: 0, thread: "", editing: "", text: "" }
+
+	## Opens the composer, focused to type in at once, which scrolls it into
+	## view.
+	composing : State, Composer -> State
+	composing = |state, composer| { ..state, composer, jump: { serial: state.jump.serial + 1, panel: "comment", replace: "", push: "" } }
+
+	## Opens the composer to reply to a thread, or to edit a draft of it, in
+	## the pane showing it.
+	compose : State, { pane_id : Str, thread : Str, editing : Str } -> State
+	compose = |state, { pane_id, thread, editing }|
+		match Model.viewed(state, Model.pane(state, pane_id)) {
+			Ok({ path, scope }) => {
+				text = Model.review_of(state, Model.context_of(state, Model.pane(state, pane_id))).threads.join_map(|shown| shown.comments).find_first(|comment| comment.id == editing).map_ok(|comment| comment.text) ?? ""
+				Model.composing(state, { ..Model.closed_composer, pane: pane_id, path, scope, thread: if (editing.is_empty()) thread else "", editing, text })
+			}
+			Err(NoFile) => state
+		}
+
+	## The lines picked of the file or diff a pane shows, as they read.
+	quoted : State, Pane, Composer -> Str
+	quoted = |state, shown, { side, start, end, .. }| {
+		context = Model.context_of(state, shown)
+		on_side = |line| if (side == Old) line.old_line else line.new_line
+		lines =
+			match Model.viewed(state, shown) {
+				Ok({ scope: File, path }) => (state.texts.find_first(|known| known.context == context and known.contents.path == path).map_ok(|known| known.lines) ?? []).map(|tokens| Str.join_with(tokens.map(|token| token.text), "")).sublist({ start: start.to_u64() - 1, len: (end - start + 1).to_u64() })
+				_ =>
+					match Model.git_hunks_of(state, shown) {
+						Hunks(hunks) => hunks.join_map(|hunk| hunk.lines).keep_if(|line| on_side(line) >= start and on_side(line) <= end and (side == New or line.kind == Removed)).map(|line| line.text)
+						_ => []
+					}
+			}
+		Str.join_with(lines, "\n")
+	}
+
+	## Sends the comment the composer holds, shown at once as a draft, and
+	## closes it.
+	submit_comment : State -> State
+	submit_comment = |state| {
+		composer = state.composer
+		shown = Model.pane(state, composer.pane)
+		context = Context.to_str(Model.context_of(state, shown))
+		text = composer.text.trim()
+		anchor = { path: composer.path, scope: composer.scope, side: composer.side, start_line: composer.start, end_line: composer.end, quote: Model.quoted(state, shown, composer) }
+		request =
+			if !composer.editing.is_empty() {
+				EditComment({ context, comment_id: composer.editing, text })
+			} else if !composer.thread.is_empty() {
+				AddComment({ context, place: Thread(composer.thread), author: Me, text })
+			} else {
+				AddComment({ context, place: Lines(anchor), author: Me, text })
+			}
+		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
+	}
+
+	## Sends a review.v1 request, shown at once by applying it to the review
+	## the UI has (`review_of`) until the daemon answers.
+	ask_review : State, Review.Request -> State
+	ask_review = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "review.v1", text: Json.to_str({ capability: "review.v1", request }) }, reviewing: state.reviewing.append({ serial, request, accepted: 0 }), notice: "" }
+	}
+
+	## Takes the daemon's answer to a review.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	reviewed : State, U64, Str -> State
+	reviewed = |state, serial, text| {
+		answered : Try(Protocol.Answer(Review.Response), _)
+		answered = Json.parse(text)
+		match answered {
+			Ok(Ok(_)) => Model.poll({ ..state, reviewing: state.reviewing.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
+			Ok(Err({ message, .. })) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: message }
+			Err(_) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: "The daemon did not answer." }
+		}
+	}
+
+	## What a comment's button asks: to edit the draft, delete it, reply to
+	## its thread, or resolve the thread, or reopen it if resolved.
+	review_comment : State, { pane_id : Str, note : Note, action : [Edit, Delete, Reply, Resolve] } -> State
+	review_comment = |state, { pane_id, note, action }| {
+		context = Context.to_str(Model.context_of(state, Model.pane(state, pane_id)))
+		match action {
+			Edit => Model.compose(state, { pane_id, thread: note.thread, editing: note.comment })
+			Reply => Model.compose(state, { pane_id, thread: note.thread, editing: "" })
+			Delete => Model.ask_review(state, DeleteComment({ context, comment_id: note.comment }))
+			Resolve if note.resolved => Model.ask_review(state, Reopen({ context, thread_id: note.thread }))
+			Resolve => Model.ask_review(state, Resolve({ context, thread_id: note.thread }))
+		}
 	}
 
 	## Opens a Workspaces pane's form: from a workspace's row, to start an
@@ -1400,20 +1613,20 @@ Model := [].{
 	submit_form : State -> State
 	submit_form = |state| {
 		form = { ..state.form, failed: "" }
-		serial = state.create_outbox.serial + 1
+		serial = state.call_outbox.serial + 1
 		optional = |text| if (text.trim().is_empty()) Err(Missing) else Ok(text.trim())
 		prompt = form.prompt.trim()
 		if form.kind == Agent {
 			call : { capability : Str, request : Chat.Request }
 			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), prompt }) }
 			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
-			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), create_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
+			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
 			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))
 		} else {
 			call : { capability : Str, request : Workspaces.Request }
 			call = { capability: "workspaces.v1", request: Create({ project_id: form.place, kind: if (form.worktree) Worktree else Checkout, branch: optional(form.branch) }) }
 			title = optional(form.branch) ?? "New workspace"
-			{ ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), create_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
+			{ ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
 		}
 	}
 
@@ -1479,10 +1692,10 @@ Model := [].{
 	}
 }
 
-# A Changes pane's git is followed only while it is on screen.
+# A Changes pane's git and review are followed only while it is on screen.
 expect {
 	state = { ..Model.initial(""), focus: Session("a") }
-	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList, Agents] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList, Agents]
+	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList, Agents, Threads(Session("a"))] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList, Agents]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
@@ -1614,7 +1827,7 @@ expect {
 	placed = |id, status| { ..Chat.session({ id, provider: "mock", agent: "claude", title: id, status }), workspace: Ok({ id: Ok("w1"), directory: "/w" }) }
 	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
 	pinned = Model.toggle_pin(state, "pane-3")
-	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList, Agents] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
+	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList, Agents, Threads(Workspace("w1"))] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
 }
 
 ## What a workspace or a session in `rank` is doing, as a row of the
@@ -1691,4 +1904,12 @@ size_text = |bytes|
 		"${(bytes // 1_000).to_str()} KB"
 	} else {
 		"${(bytes // 1_000_000).to_str()}.${(bytes // 100_000 % 10).to_str()} MB"
+	}
+
+## A comment's state as its row says it.
+comment_state : [Draft, Sent(U32)] -> Str
+comment_state = |state|
+	match state {
+		Draft => "draft"
+		Sent(round) => "sent in round ${round.to_str()}"
 	}
