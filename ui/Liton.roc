@@ -1502,8 +1502,10 @@ Liton := [].{
 			Failed(reason) => "failed: ${reason}"
 		}
 
-	## A tool call's name and state over its input, then its output with all
-	## but the first lines folded away.
+	## A tool call as one muted line, its tool and the first line of its
+	## input, which opens on the rest of its input and its output, all but
+	## the output's first lines folded away. It shimmers while running and is
+	## red once failed; the state's word is for screen readers.
 	tool_card : Signal(ctx, Model.ToolCard) -> Elem(ctx)
 	tool_card = |card| {
 		state = card.map(
@@ -1514,24 +1516,28 @@ Liton := [].{
 					Failed => "failed"
 				},
 		)
-		Html.div_attrs(
+		input = card.map(|shown| shown.input.split_first("\n") ?? { before: shown.input, after: "" })
+		Engine.element(
+			"details",
 			[Engine.class_s(state.map(|name| "tool-card ${name}")), Engine.attr("data-part", "tool-card")],
 			[
-				Html.div(
-					"tool-header",
+				Engine.element(
+					"summary",
+					[Engine.class("tool-line")],
 					[
 						Html.span_s(card.map(|shown| shown.tool), [Engine.class("tool-name")]),
-						Html.span_s(state, [Engine.class_s(state.map(|name| "badge ${name}")), Engine.test_id("tool-state")]),
+						Html.span_s(input.map(|lines| lines.before), [Engine.class("tool-target")]),
+						Html.span_s(state, [Engine.class("tool-state"), Engine.test_id("tool-state")]),
 					],
 				),
-				Html.pre_s(card.map(|shown| shown.input), [Engine.class("tool-input")]),
+				Html.pre_s(input.map(|lines| lines.after), [Engine.class("tool-input")]),
 				Html.pre_s(card.map(|shown| shown.output), [Engine.class("tool-output")]),
 				Engine.when(
 					card.map(|shown| !shown.folded.is_empty()),
 					||
 						Engine.element(
 							"details",
-							[],
+							[Engine.class("tool-more")],
 							[
 								Engine.element("summary", [], [Engine.text_s(card.map(|shown| "${shown.folded.split_on("\n").len().to_str()} more lines"))]),
 								Html.pre_s(card.map(|shown| shown.folded), [Engine.class("tool-output")]),
