@@ -241,6 +241,21 @@ pub fn build(b: *std.Build) void {
     build_ui.has_side_effects = true;
     ui_step.dependOn(&build_ui.step);
 
+    // liton's development tool (devtool/), on the daemon's compiler, which
+    // runs the tasks that would otherwise be shell scripts, as kai's does.
+    const build_devtool = b.addSystemCommand(&.{ roc, "build", "--opt=dev" });
+    build_devtool.addFileArg(b.path("devtool/main.roc"));
+    for (sources.roc_files) |path| {
+        if (std.mem.startsWith(u8, path, "devtool/")) build_devtool.addFileInput(b.path(path));
+    }
+    const devtool = build_devtool.addPrefixedOutputFileArg("--output=", "liton-devtool");
+    const devtool_step = b.step("devtool", "Run liton's development tool: zig build devtool -- help");
+    const run_devtool = std.Build.Step.Run.create(b, "run devtool");
+    run_devtool.addFileArg(devtool);
+    if (b.args) |args| run_devtool.addArgs(args);
+    run_devtool.has_side_effects = true;
+    devtool_step.dependOn(&run_devtool.step);
+
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build daemon/main.roc --output=zig-out/bin/liton-daemon", "sh", roc });
     build_daemon.has_side_effects = true;
