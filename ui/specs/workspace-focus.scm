@@ -8,6 +8,8 @@
     (expect-visible (text "fix-tests"))
     (expect-visible (text "+3"))
     (expect-visible (text "−1"))
+    ; The right drawer's button shows the changes of the chat's workspace.
+    (expect-text (label "Right drawer") "+3−1")
     (expect-visible (role button :name "Fix tests"))
     (expect-visible (text "waiting for you"))
     ; The chat follows the first session until a workspace is picked.

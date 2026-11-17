@@ -219,6 +219,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 /* What needs you, in the Workspaces header; in a Workbench, Settings at the left drawer's bottom left. */
 .needs-you-count { flex: none; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--warn); color: var(--on-accent); font: 700 11px/18px var(--font-ui); text-align: center; }
 .needs-you-count:empty { display: none; }
+.pane-header .drawer-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.drawer-toggle span { font: 11px var(--font-mono); }
+.drawer-toggle span:empty { display: none; }
+.drawer-toggle .added { margin-left: 2px; color: var(--added); }
+.drawer-toggle .removed { color: var(--removed); }
 .workbench .slot-left .pane { padding-bottom: 36px; }
 .workbench .slot-left .pane-header .settings-toggle { position: absolute; left: 8px; bottom: 6px; }
 .pane-header .menu-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--edge-active); }

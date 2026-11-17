@@ -1579,6 +1579,17 @@ Model := [].{
 		}
 	}
 
+	## The uncommitted lines added and removed in the workspace of what a
+	## pane shows, for the right drawer's button to show.
+	workspace_changes : State, Pane -> Counts
+	workspace_changes = |state, shown| {
+		workspace_id = match Model.context_of(state, shown) {
+			Workspace(id) => id
+			Session(session_id) => state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| listed.id) ?? (Model.session(state, session_id).workspace.map_ok(|placed| placed.id ?? "") ?? "")
+		}
+		state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| Model.change_counts(state, listed)) ?? Model.no_counts
+	}
+
 	## Folds or unfolds a group of a Workspaces pane, which the snapshot
 	## keeps, or focuses a workspace or a session; opens or closes a Files
 	## pane's folder, or shows its file; or jumps to a review's thread.

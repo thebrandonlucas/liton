@@ -92,6 +92,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A chat pane's new Collapse option, in Settings, shows every tool call open (Full), folds tool calls in a row into one line (Tools, the default), or also folds each finished turn's work into one line between your message and the agent's last reply (Turns). A turn ends where your next message starts, or once the agent stops.
 - Workspaces lists one row per session, which says how long ago it last changed ("now", "3m", "2h", "4d"). A workspace with one session is that session's row, with its branch if it is a worktree and its changes, and its + starts another agent beside it; a workspace with several still has a row of its own over them. Projects are written in sentence case rather than capitals.
 - The Developer, Inbox and Chat presets have no top bar. The drawer buttons are at the two ends of the chat's header, Settings is a gear at the bottom left of the left drawer, and how many sessions need you shows in the Workspaces header as well as the browser tab's title. On a phone the bar with liton's name is gone too, and the gear is in the Workspaces header. What went wrong shows as a toast at the bottom until you dismiss it. Tiling keeps its bar.
+- The right drawer's button, at the end of the chat's header, shows the lines the chat's workspace has added and removed but not committed, in green and red, so you can tell there is something to review without opening the drawer. Hovering a drawer's button names what the drawer holds, such as Changes · Files.
 
 ### Fixed
 

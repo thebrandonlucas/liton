@@ -262,11 +262,26 @@ Liton := [].{
 			[Html.span_s(count.map(|shown| shown.to_str()), [Engine.class("count")]), Html.span_s(Engine.const(" ${counted}"), [Engine.class("counted")])],
 		)
 
-	## Shows or hides a drawer. Its icon is the stylesheet's, as are those of
-	## every button of class `icon`.
-	drawer_toggle : State(ctx, Model.State), Model.Slot, Str -> Elem(ctx)
-	drawer_toggle = |model, drawer, name|
-		Html.button("", [Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", "${name} (${if (drawer == Left) "Ctrl+B" else "Ctrl+E"})"), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+	## Shows or hides a drawer, named by its panes when hovered, with the
+	## `workspace_changes` shown beside its icon, which is the
+	## stylesheet's, as are those of every button of class `icon`.
+	drawer_toggle : State(ctx, Model.State), Model.Slot, Signal(ctx, Model.Counts) -> Elem(ctx)
+	drawer_toggle = |model, drawer, workspace_changes| {
+		key = if (drawer == Left) "Ctrl+B" else "Ctrl+E"
+		panes = model.signal().map(|state| Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| column.panes.map(|pane| Liton.label(state, pane))), " · "))
+		Engine.element(
+			"button",
+			[
+				Engine.attr("type", "button"),
+				Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"),
+				Html.aria_label(if (drawer == Left) "Left drawer" else "Right drawer"),
+				Engine.attr_s("title", panes.map(|names| "${names} (${key})")),
+				Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer))),
+				Engine.on_click(model.update(|state| Model.toggle_drawer(state, drawer))),
+			],
+			[Html.span_s(workspace_changes.map(|counts| counts.added), [Engine.class("added")]), Html.span_s(workspace_changes.map(|counts| counts.removed), [Engine.class("removed")])],
+		)
+	}
 
 	## Where a pane's header is in a Workbench: the main area's shown tab,
 	## with the drawers' buttons at its ends, or the left drawer's, with
@@ -541,7 +556,7 @@ Liton := [].{
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
 					[
-						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Left, "Left drawer"), || Engine.text("")),
+						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)), || Engine.text("")),
 						Engine.when(
 							shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
 							|| Liton.agent_header(shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
@@ -563,7 +578,7 @@ Liton := [].{
 						),
 						Engine.when(place.map(|at| at == LeftTab), || Liton.settings_toggle(model, "icon settings-toggle"), || Engine.text("")),
 						Liton.pane_menu(model, id, title, shown),
-						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Right, "Right drawer"), || Engine.text("")),
+						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Right, shown.map(|{ pane, state }| Model.workspace_changes(state, pane))), || Engine.text("")),
 					],
 				),
 				Engine.switch(
