@@ -946,6 +946,7 @@ Liton := [].{
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
 		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
+		chip = shown.map(|{ pane, state }| Liton.model_chip(Model.session(state, Model.session_of(state, pane))))
 		Html.div(
 			"chat",
 			[
@@ -1033,18 +1034,24 @@ Liton := [].{
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
 					[
 						Liton.composer_input(model0, id),
-						Microphone.controls(model0, id),
-						# One round button: Send, or Stop while the agent works and
-						# nothing is typed, then a ring until it stops.
-						Engine.switch(
-							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
-							[Send, Stop, Stopping],
-							|action|
-								match action {
-									Send => Html.submit_button("", [Engine.class("send"), Html.aria_label("Send")])
-									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
-									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
-								},
+						Html.div(
+							"composer-row",
+							[
+								Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
+								Microphone.controls(model0, id),
+								# One round button: Send, or Stop while the agent works and
+								# nothing is typed, then a ring until it stops.
+								Engine.switch(
+									shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+									[Send, Stop, Stopping],
+									|action|
+										match action {
+											Send => Html.submit_button("", [Engine.class("send"), Html.aria_label("Send")])
+											Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+											Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+										},
+								),
+							],
 						),
 					],
 				),
@@ -1063,6 +1070,15 @@ Liton := [].{
 			_ => Send
 		}
 	}
+
+	## The composer's chip: the model a session runs, or its agent when the
+	## provider doesn't tell the model, and nothing without a session.
+	model_chip : Chat.Session -> { name : Str, title : Str }
+	model_chip = |session|
+		match session.model {
+			Ok(model) => { name: model.drop_prefix("${session.agent}-"), title: "${session.agent}, running ${model}" }
+			Err(Missing) => { name: session.agent, title: if (session.agent.is_empty()) "" else "${session.agent}: its provider doesn't say which model it runs" }
+		}
 
 	## A box that grows with the draft to a few lines. Enter sends it and
 	## Shift+Enter starts a new line, except on a touch screen, where Enter

@@ -89,6 +89,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Tool calls one after another fold into one line, how many and which tools, that opens on them.
 - A chat pane's new Collapse option, in Settings, shows every tool call open (Full), folds tool calls in a row into one line (Tools, the default), or also folds each finished turn's work into one line between your message and the agent's last reply (Turns). A turn ends where your next message starts, or once the agent stops.
 - A chat reads as a centred column at most 820px wide, in 15px text, with your own messages in a neutral grey bubble rather than a gold one.
+- The message box is one rounded box under the chat's column: what you type on top, and a row below it with a chip naming the session's model (or its agent, when the provider doesn't say which model), the mic and conversation buttons, and Send.
 
 ### Fixed
 
