@@ -474,7 +474,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .badge.dirty, .badge.modified, .badge.renamed { border-color: var(--warn); color: var(--warn); }
 .badge.added { border-color: var(--added); color: var(--added); }
 .badge.deleted { border-color: var(--removed); color: var(--removed); }
-.changes .choices button { font-size: 12px; padding: 0 8px; color: var(--muted); }
+.changes .choices { align-items: center; font: 11px var(--font-mono); }
+.changes .scope { padding: 2px 6px; font: 12px var(--font-ui); }
+.changes .choices .added { margin-left: auto; color: var(--added); }
+.changes .choices .removed { color: var(--removed); }
+.changes .choices span:empty { display: none; }
 .changes .missing { padding: 4px 0; margin: 0; }
 .changes .missing:empty { display: none; }
 .git-files { list-style: none; margin: 0; padding: 0; }
@@ -658,7 +662,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .create-form input, .create-form select, .create-actions button { min-height: 44px; }
   .inbox-item > button, .inbox-actions button, .permission button { min-height: 44px; }
   .git-file { min-height: 44px; }
-  .changes .choices button { min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
+  .changes .scope { min-height: 40px; }
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
   .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
   /* The composer: the screen's width, above the tab bar, with a thumb's Send or Stop. */

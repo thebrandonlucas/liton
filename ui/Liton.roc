@@ -1271,14 +1271,7 @@ Liton := [].{
 												Html.span_s(git.map(|known| if (Liton.dirty(known.status)) "uncommitted changes" else ""), [Engine.class("badge dirty")]),
 											],
 										),
-										Html.div(
-											"choices",
-											[
-												Liton.scope_button(model, id, scope, "Uncommitted", Uncommitted),
-												Liton.scope_button(model, id, scope, "Against base", AgainstBase),
-												Html.span_s(scope.map2(git, Liton.commit_text), [Engine.class("badge")]),
-											],
-										),
+										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
 										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
 										Html.ul(
 											[Engine.class("git-files"), Engine.attr("data-part", "files")],
@@ -1326,11 +1319,25 @@ Liton := [].{
 		)
 	}
 
-	## Shows a scope's files at once, pressed while shown. Top-level because,
-	## as a closure inside `changes`, it keeps `roc check` (nightly-2026-11-07)
-	## from ever finishing; not reported upstream yet.
-	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
-	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
+	## The scope a Changes pane shows, uncommitted or against the base, or the
+	## commit picked below; another shows its files at once. Top-level
+	## because, as a closure inside `changes`, it keeps `roc check`
+	## (nightly-2026-11-07) from ever finishing; not reported upstream yet.
+	scope_picker : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Signal(PaneCtx, Model.Git) -> Elem(PaneCtx)
+	scope_picker = |model, id, scope, git| {
+		value = scope.map(|current| if (current == Uncommitted) "Uncommitted" else if (current == AgainstBase) "AgainstBase" else "Commit")
+		pick = |state, pane_id, picked| Model.show_git(state, pane_id, if (picked == "Uncommitted") Uncommitted else if (picked == "AgainstBase") AgainstBase else Model.git_pane(state, pane_id).scope, NoFile)
+		commit = Engine.element("option", [Engine.prop(Engine.Prop.value, "Commit"), Html.boolean("hidden", value.map(|shown| shown != "Commit"))], [Engine.text_s(scope.map2(git, Liton.commit_text))])
+		Dropdown.select(Engine.const("Scope"), value, [Engine.class("scope")], [Dropdown.option("Uncommitted", "Uncommitted"), Dropdown.option("AgainstBase", "Against base"), commit], model.set_value_by(id, pick))
+	}
+
+	## The lines a scope's files add and remove, as "+14" and "−3".
+	total_lines : [Files(List(WorkspaceGit.File)), Loading] -> { added : Str, removed : Str }
+	total_lines = |listed|
+		match listed {
+			Files(files) if !files.is_empty() => { added: "+${files.fold(0, |sum, file| file.additions + sum).to_str()}", removed: "−${files.fold(0, |sum, file| file.deletions + sum).to_str()}" }
+			_ => { added: "", removed: "" }
+		}
 
 	## A pane's review, over its files or changes: its drafts and the rounds
 	## sent, Send review, which sends the drafts to the agent as one message,
