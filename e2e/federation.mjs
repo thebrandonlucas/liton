@@ -71,7 +71,7 @@ const main = start("liton-daemon", {
 });
 
 const base = `http://127.0.0.1:${mainPort}/liton/v1`;
-const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", body: JSON.stringify(body) })).json();
+const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
 const call = (capability, request, provider) => post("call", { capability, request, ...(provider && { provider }) });
 const poll = async (topics) => (await post("poll", { topics: topics.map((t) => (typeof t === "string" ? { capability: "chat.v1", topic: t, after: "" } : t)) })).topics;
 const upstreamPolls = () => echo.stderrText.split("\n").filter((line) => line.endsWith("POST /liton/v1/poll")).length;
