@@ -81,7 +81,7 @@ try {
   };
 
   await step("the three preset panes render, with Capabilities left to Settings", async () => {
-    for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header", "⋯");
+    for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header .menu-toggle");
     await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
   await step("the mock's project, its workspaces and their seeded sessions appear in Workspaces", async () => {

@@ -225,7 +225,7 @@ Liton := [].{
 							|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "Left drawer"), Liton.drawer_toggle(model, Right, "Right drawer")]),
 							|| Engine.text(""),
 						),
-						Html.button("Settings", [Engine.class("module settings-toggle"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
+						Html.button("", [Engine.class("module icon settings-toggle"), Html.aria_label("Settings"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
 					],
 				),
 			],
@@ -240,10 +240,11 @@ Liton := [].{
 			[Html.span_s(count.map(|shown| shown.to_str()), [Engine.class("count")]), Html.span_s(Engine.const(" ${counted}"), [Engine.class("counted")])],
 		)
 
-	## Shows or hides a drawer. Its icon is the stylesheet's.
+	## Shows or hides a drawer. Its icon is the stylesheet's, as are those of
+	## every button of class `icon`.
 	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str -> Elem(Ctx)
 	drawer_toggle = |model, drawer, name|
-		Html.button("", [Engine.class("module drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+		Html.button("", [Engine.class("module icon drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
 	## to move, remove or set the options of, adds widgets, and shows the
@@ -518,7 +519,7 @@ Liton := [].{
 						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
 						Engine.when(
 							row.field(|pane| pane.widget == "workspaces"),
-							|| Html.icon_button("+", Engine.const("New workspace"), "new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
+							|| Html.icon_button("", Engine.const("New workspace"), "icon new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 							|| Engine.text(""),
 						),
 						Liton.pane_menu(model, id, title, shown),
@@ -650,13 +651,13 @@ Liton := [].{
 					"button",
 					[
 						Engine.attr("type", "button"),
-						Engine.class("menu-toggle"),
+						Engine.class("icon menu-toggle"),
 						Html.aria_label_s(title.map(|name| "${name} menu")),
 						Engine.attr("aria-haspopup", "true"),
 						Html.flag("aria-expanded", id.map2(model.signal(), |pane_id, state| state.menu == pane_id)),
 						Engine.on_click(model.update_by(id, Model.toggle_menu)),
 					],
-					[Engine.text("⋯")],
+					[],
 				),
 				Engine.when(
 					id.map2(model.signal(), |pane_id, state| state.menu == pane_id),
@@ -878,7 +879,7 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
-								Html.icon_button("+", row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "new-agent", model.update_by(asked, Model.open_form)),
+								Html.icon_button("", row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
 							],
 						)
 					},

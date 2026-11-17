@@ -42,6 +42,11 @@ html, body { margin: 0; height: 100%; background: Canvas; }
      profits, whether in an action of contract, negligence or other
      tortious action, arising out of or in connection with the use or
      performance of this software. */
+  --icon-panel-left: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='18' height='18' x='3' y='3' rx='2'/><path d='M9 3v18'/></svg>");
+  --icon-panel-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='18' height='18' x='3' y='3' rx='2'/><path d='M15 3v18'/></svg>");
+  --icon-settings: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></svg>");
+  --icon-ellipsis: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='19' cy='12' r='1'/><circle cx='5' cy='12' r='1'/></svg>");
+  --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
   --icon-circle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='12' x2='12' y1='8' y2='12'/><line x1='12' x2='12.01' y1='16' y2='16'/></svg>");
   --icon-triangle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
   --shadow: 0 10px 40px light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 45%));
@@ -79,10 +84,16 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .needs-you.counting .count { background: var(--warn); color: var(--on-accent); font-weight: 700; }
 .running.counting .count { color: var(--text); }
 .drawer-toggles { display: flex; gap: .2rem; }
-.bar .drawer-left::before { content: "◧" / ""; }
-.bar .drawer-right::before { content: "◨" / ""; }
 .bar [aria-expanded="true"] { color: var(--accent); }
-.settings-toggle::before { content: "⚙" / ""; margin-right: .4em; }
+/* An icon button: its icon is --icon, drawn in its text's colour. */
+button.icon { display: inline-grid; place-items: center; }
+button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--icon-size, 16px); background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+.drawer-left { --icon: var(--icon-panel-left); }
+.drawer-right { --icon: var(--icon-panel-right); }
+.settings-toggle { --icon: var(--icon-settings); }
+.menu-toggle { --icon: var(--icon-ellipsis); }
+.new-workspace, .new-agent { --icon: var(--icon-plus); --icon-size: 14px; }
 
 .work { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
@@ -178,7 +189,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .agent-kind:not(:empty) + .agent-place::before { content: "·" / ""; margin-right: 6px; }
 /* The ⋯ menu: what the pane follows, and moving, pinning or closing it. */
 .pane-menu { position: relative; flex: none; align-self: flex-start; }
-.pane-header .menu-toggle { padding: 0 7px; font-size: 15px; line-height: 1.3; }
+.pane-header .menu-toggle, .pane-header .new-workspace { padding: 3px 6px; }
 .pane-header .menu-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--edge-active); }
 .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 190px; max-width: 280px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
   background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
@@ -215,14 +226,13 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .tree-workspace .row-title { font-weight: 600; }
 .tree-workspace ~ .tree-session { padding-left: 24px; }
 .workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tree-row .new-agent { flex: none; margin-left: auto; padding: 0 6px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
+.tree-row .new-agent { flex: none; margin-left: auto; padding: 2px 5px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
 .tree-row .added:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }
 .tree-group .counts:not(:empty) ~ .new-agent { margin-left: auto; }
 .tree-row:hover .new-agent, .tree-row .new-agent:focus-visible, .tree-row.focused .new-agent { opacity: 1; }
 .tree-row .new-agent:hover { color: var(--accent); border-color: var(--edge); }
 @media (hover: none) { .tree-row .new-agent { opacity: 1; } }
-.pane-header .new-workspace { padding: 0 7px; font-size: 15px; line-height: 1.3; }
 .create-form { display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); animation: menu-in var(--fast) ease-out backwards; }
 .create-form .create-title { margin: 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
 .create-form input, .create-form select { padding: 4px 6px; min-width: 0; }
@@ -496,8 +506,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .brand { font-size: 20px; }
   .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggles { display: none; }
   .bar button { min-width: 44px; min-height: 44px; }
-  .settings-toggle { font-size: 0; }
-  .settings-toggle::before { font-size: 19px; margin: 0; }
+  .bar .icon { --icon-size: 20px; }
   .column-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
   .column { min-width: 0; overflow-y: auto; }
   .tiling .column { display: none; }
@@ -539,7 +548,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .pane-header { min-height: 50px; padding: 3px 2px 3px 14px; font-size: 13px; }
   .pane-header button { min-width: 44px; min-height: 44px; }
   .pane-menu { align-self: center; }
-  .pane-header .menu-toggle, .pane-header .new-workspace { font-size: 20px; }
+  .pane-header .icon { --icon-size: 20px; }
   .pane-header .menu button { min-height: 44px; font-size: 14px; }
   /* A chat's header: its title, status dot and Stop, the agent and where it works below them. */
   .agent-line .pane-title { font-size: 15.5px; }
@@ -549,7 +558,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
   .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
   .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word { font-size: 12px; }
-  .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; font-size: 20px; opacity: 1; }
+  .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; --icon-size: 18px; opacity: 1; }
   .tree-group { margin-top: 10px; }
   .tree-group .row-title { font-size: 12px; }
   .tree-workspace ~ .tree-session { padding-left: 30px; }
