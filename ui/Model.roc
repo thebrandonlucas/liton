@@ -49,13 +49,20 @@ Model := [].{
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
 		transformers : List(Manifest.Transformer),
+
+		## The sessions, and below the projects and workspaces, as the daemon
+		## last listed them (`listed`) with the renames, pins and archives on
+		## their way applied (`Model.relisted`). An edit is shown until the
+		## daemon refuses it, or until the poll numbered `accepted` answers,
+		## the first sent after it accepted it (0 while it waits).
 		sessions : List(Chat.Session),
+		listed : { sessions : List(Chat.Session), workspaces : Workspaces.Listed },
+		editing : List({ serial : U64, edit : Edit, accepted : U64 }),
 		timelines : List(Timeline),
 
 		## What panes that follow the focus show, `Session("")` for nothing.
 		focus : Context.Id,
 
-		## The projects and workspaces the daemon lists.
 		workspaces : Workspaces.Listed,
 		shell : Shell,
 		columns : List(Column),
@@ -195,6 +202,9 @@ Model := [].{
 		agents : List(Chat.Agent),
 	}
 
+	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
+	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
+
 	## A Workspaces pane's form: an agent to start in the workspace `place`,
 	## or a workspace to create of the project `place`. `failed` says why the
 	## daemon didn't, "" until it refuses.
@@ -247,6 +257,8 @@ Model := [].{
 				providers: [],
 				transformers: [],
 				sessions: [],
+				listed: { sessions: [], workspaces: { projects: [], workspaces: [] } },
+				editing: [],
 				timelines: [],
 				focus: Session(""),
 				workspaces: { projects: [], workspaces: [] },
@@ -449,28 +461,37 @@ Model := [].{
 	row_menu_key = |{ pane_id, key }| "${pane_id} ${key}"
 
 	## What a row's ⋮ menu offers: on a project, a new workspace of it; on a
-	## workspace, a new agent there; on a session, a new agent beside it,
-	## stopping it while it works, marking it read or unread unless it works,
-	## and copying its
-	## id. Renaming, pinning and archiving wait on capabilities to call.
-	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, CopyId]
+	## workspace, a new agent there, and pinning or unpinning and archiving
+	## it; on a session, a new agent beside it, stopping it while it works,
+	## marking it read or unread unless it works, pinning or unpinning its
+	## workspace, copying its id and archiving it. Each edit is offered where
+	## its capability is.
+	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Pin, CopyId, Archive]
 
 	row_menu : State, Str -> List({ label : Str, action : RowAction })
-	row_menu = |state, key|
+	row_menu = |state, key| {
+		offered = |capability, items| if (state.capabilities.contains(capability)) items else []
+		pin = Model.row_workspace(state, key).map_ok(|workspace| offered(Capability.workspaces_v1, [{ label: if (workspace.pinned) "Unpin" else "Pin", action: Pin }])) ?? []
 		match Context.from_str(key) {
 			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }] else []
-			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }]
+			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive", action: Archive }]))
 			Ok(Session(session_id)) if !Model.starting(state, session_id) => {
 				listed_session = Model.session(state, session_id)
-				placed = state.workspaces.workspaces.any(|workspace| workspace.session_ids.contains(session_id))
 				read = state.attention.find_first(|item| item.session_id == session_id and item.state != Working).map_ok(|_| if (Model.unread(state, session_id)) [{ label: "Mark read", action: MarkRead }] else [{ label: "Mark unread", action: MarkUnread }]) ?? []
-				(if (placed) [{ label: "New agent beside it", action: NewAgent }] else [])
+				(if (Model.row_workspace(state, key).is_ok()) [{ label: "New agent beside it", action: NewAgent }] else [])
 					.concat(if (Model.busy(listed_session.status)) [{ label: "Stop agent", action: Stop }] else [])
 					.concat(read)
+					.concat(pin)
 					.append({ label: "Copy id", action: CopyId })
+					.concat(offered(Capability.chat_v1, [{ label: "Archive", action: Archive }]))
 			}
 			_ => []
 		}
+	}
+
+	## The workspace a row names, or the one its session works in.
+	row_workspace : State, Str -> Try(Workspaces.Workspace, [NotFound])
+	row_workspace = |state, key| state.workspaces.workspaces.find_first(|workspace| Context.to_str(Workspace(workspace.id)) == key or workspace.session_ids.contains(key))
 
 	## Does what a row's ⋮ menu offers, and closes it.
 	row_act : State, { pane_id : Str, key : Str, action : RowAction } -> State
@@ -482,6 +503,58 @@ Model := [].{
 			MarkRead => Model.mark_seen(state, [key], Bool.True)
 			MarkUnread => Model.mark_seen(state, [key], Bool.False)
 			CopyId => Model.copy(state, { key: "id:${key}", text: key })
+			Pin => Model.row_workspace(state, key).map_ok(|workspace| Model.edit(state, Workspaces(Pin({ workspace_id: workspace.id, pinned: !workspace.pinned })))) ?? state
+			Archive =>
+				match Context.from_str(key) {
+					Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Archive({ workspace_id: workspace_id })))
+					Ok(Session(session_id)) => Model.edit(state, Chat(Archive({ session_id: session_id })))
+					Err(_) => state
+				}
+		}
+	}
+
+	## Sends a rename, pin or archive, shown at once.
+	edit : State, Edit -> State
+	edit = |state, change| {
+		serial = state.call_outbox.serial + 1
+		text = match change {
+			Chat(request) => Json.to_str({ capability: "chat.v1", request })
+			Workspaces(request) => Json.to_str({ capability: "workspaces.v1", request })
+		}
+		Model.relisted({ ..state, editing: state.editing.append({ serial, edit: change, accepted: 0 }), call_outbox: { serial, key: "edit", text }, notice: "" })
+	}
+
+	## Takes the daemon's answer to an edit: accepted, it holds until the
+	## poll it asks for shows it; refused, it is undone, with why.
+	edit_answered : State, U64, Str -> State
+	edit_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer([Accepted, Rejected(Str)]), _)
+		answered = Json.parse(text)
+		undone = |reason| Model.relisted({ ..state, editing: state.editing.drop_if(|asked| asked.serial == serial), notice: reason })
+		match answered {
+			Ok(Ok(Accepted)) => Model.poll({ ..state, editing: state.editing.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## The sessions and workspaces as the daemon last listed them, with the
+	## edits on their way applied.
+	relisted : State -> State
+	relisted = |state| state.editing.fold({ ..state, sessions: state.listed.sessions, workspaces: state.listed.workspaces }, |shown, asked| Model.edited(shown, asked.edit))
+
+	## The listings as an edit leaves them: renamed, pinned, or without what
+	## it archived.
+	edited : State, Edit -> State
+	edited = |state, change| {
+		listed = state.workspaces
+		each_workspace = |change_one| { ..state, workspaces: { ..listed, workspaces: listed.workspaces.map(change_one) } }
+		match change {
+			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
+			Workspaces(Pin({ workspace_id, pinned })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, pinned } else workspace)
+			Workspaces(Archive({ workspace_id })) => { ..state, workspaces: { ..listed, workspaces: listed.workspaces.drop_if(|workspace| workspace.id == workspace_id) } }
+			_ => state
 		}
 	}
 
@@ -1004,7 +1077,7 @@ Model := [].{
 	## the poll asked for meanwhile, if any.
 	polled : State, Poll, List(Protocol.Update) -> State
 	polled = |state, sent, updates| {
-		applied = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
+		answered_topics = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
 			state,
 			|so_far, (subject, update)|
 				match subject {
@@ -1012,6 +1085,8 @@ Model := [].{
 					_ => so_far
 				},
 		)
+		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
+		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
@@ -1042,7 +1117,7 @@ Model := [].{
 	received : State, Protocol.Subject, Protocol.Event -> State
 	received = |state, subject, event|
 		match (subject, event) {
-			(_, Sessions(sessions)) => { ..state, sessions }
+			(_, Sessions(sessions)) => Model.relisted({ ..state, listed: { ..state.listed, sessions } })
 			(Timeline(session_id), Entry(entry)) =>
 				if (entry.sequence <= Model.last_sequence(state, session_id))
 					state
@@ -1051,7 +1126,7 @@ Model := [].{
 				else
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
-			(_, Listed(listed)) => { ..state, workspaces: listed }
+			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
@@ -1508,8 +1583,9 @@ Model := [].{
 	## `creatable` when + on it starts an agent there, or creates a workspace
 	## of its project. `counts` are a group's members, or a workspace's
 	## uncommitted lines added and removed, as "+3" and "−1". `age` is how
-	## long ago a session or workspace last changed (`Model.age`).
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+	## long ago a session or workspace last changed (`Model.age`). A
+	## workspace `pinned`, or its one session, lists first.
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, pinned : Bool, depth : U64 }
 
 	Counts : { members : Str, added : Str, removed : Str }
 
@@ -1532,15 +1608,16 @@ Model := [].{
 			Model.ordered(listed_sessions, order, |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title)
 		}
 		workspace_changed = |workspace| if (Model.starting(state, workspace.id)) Model.newest else sessions_in(workspace).map(|listed_session| Model.changed(state, listed_session)).fold(0, U64.max)
-		listed = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
+		in_order = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
+		listed = in_order.keep_if(|workspace| workspace.pinned).concat(in_order.drop_if(|workspace| workspace.pinned))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
 				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: sentence_case(attention_word(rank)), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
 				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
-				Model.ordered(projects, order, |group| group.members.first().map_ok(workspace_changed) ?? 0, |group| group.title)
+				Model.ordered(projects, order, |group| group.members.map(workspace_changed).fold(0, U64.max), |group| group.title)
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
 		workspace_rows_of = |workspace| {
 			sessions = sessions_in(workspace)
@@ -1551,11 +1628,11 @@ Model := [].{
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
 			newest_age = Model.ordered(sessions, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|latest_session| Model.age(state, latest_session)) ?? ""
-			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: state.focus == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
 			match sessions.first() {
 				Ok(lone) if sessions.len() == 1 => {
 					lone_row = Model.session_row(state, lone)
-					[mark({ ..lone_row, detail: if (workspace.kind == Worktree) branch_name(workspace.branch) else "", counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True })]
+					[mark({ ..lone_row, detail: if (workspace.kind == Worktree) branch_name(workspace.branch) else "", counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True, pinned: workspace.pinned })]
 				}
 				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
 			}
@@ -1573,7 +1650,7 @@ Model := [].{
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
 		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -1961,7 +2038,7 @@ Model := [].{
 			}
 		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
 		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
-		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
@@ -2322,7 +2399,7 @@ expect {
 ## open in it.
 folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
 folder_rows = |state, context, shown, folder, depth| {
-	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
+	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth }
 	entries =
 		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
 			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))

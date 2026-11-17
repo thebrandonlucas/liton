@@ -168,11 +168,18 @@ Liton := [].{
 			),
 		),
 		# An agent or workspace to create, whose answer may take a provider a
-		# while, or a review.v1 request.
+		# while, a review.v1 request, or an edit of a listing.
 		Engine.watch_changes(
 			model.signal().map(|state| state.call_outbox),
 			|outbox| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout: Ms(60000) })],
-			model.on_result(|state, outbox, res| if (outbox.key == "review.v1") Model.reviewed(state, outbox.serial, res ?? "") else Model.created(state, outbox.serial, res ?? "")),
+			model.on_result(
+				|state, outbox, res|
+					match outbox.key {
+						"review.v1" => Model.reviewed(state, outbox.serial, res ?? "")
+						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
+						_ => Model.created(state, outbox.serial, res ?? "")
+					},
+			),
 		),
 
 		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, command)| Engine.command(command)), Engine.ignore({})),
@@ -955,7 +962,7 @@ Liton := [].{
 						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
 						Html.li(
 							[
-								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}${if (menus == Menus and Liton.has_menu(shown)) " has-menu" else ""}")),
+								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}${if (shown.pinned) " pinned" else ""}${if (menus == Menus and Liton.has_menu(shown)) " has-menu" else ""}")),
 								Engine.attr_s("data-part", kind),
 								Engine.attr_s("style", row.field(|shown| "--depth: ${shown.depth.to_str()}")),
 							].concat(if (menus == Menus) [Engine.on_with("contextmenu", { prevent: Bool.True }, model.update_by(asked, |state, at| if (Model.row_menu(state, at.key).is_empty()) state else { ..state, menu: Model.row_menu_key(at) }))] else []),
