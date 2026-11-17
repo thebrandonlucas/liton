@@ -432,7 +432,13 @@ async function interaction(name, profile) {
     await page.evaluate(() => document.activeElement?.blur());
     if (name === "liton") {
       // liton's own controls: the chat's ⋯ menu, Settings, and on a desktop
-      // the right drawer's tabs.
+      // the right drawer's tabs. On a phone, Settings is in the Workspaces
+      // panel's header, so the tab bar shows each panel first, untimed.
+      const show = async (panel) => {
+        if (!profile.touch) return;
+        await press_at(page, profile, await center_of(page, `[data-testid="show-${panel}"]`));
+        await sleep(800);
+      };
       const press = async (selector, text, condition) => {
         const { shown, paint } = await timed_paint(page, "control", `() => (${condition})`, async () => press_at(page, profile, await center_of(page, selector, text)), 15000);
         out.control_paint.push(paint);
@@ -441,8 +447,10 @@ async function interaction(name, profile) {
       const chat_menu = `document.querySelector('section[aria-label="Chat"] .menu')`;
       const settings = `document.querySelector('section[aria-label="Settings"]')`;
       for (let k = 0; k < 3; k++) {
+        await show("main");
         out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `${chat_menu}`));
         out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `!${chat_menu}`));
+        await show("left");
         out.settings.push(await press(".settings-toggle", "", `${settings}`));
         out.settings.push(await press(".settings-toggle", "", `!${settings}`));
         if (!profile.touch) {

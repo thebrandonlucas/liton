@@ -7,7 +7,7 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/Uncommitted\",\"cursor\":\"g1\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":0,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"main\"},\"dirty\":false,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"Uncommitted\",\"fingerprint\":\"f0\",\"files\":[]},\"commits\":[]}}]}]}")
     (run-effect 3)
     (expect-visible (text "Working tree clean"))
-    (expect-absent (text "uncommitted changes"))
+    (expect-absent (text "uncommitted changes") :never-drawn)
     (tick-interval 1000)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/Uncommitted\",\"cursor\":\"g2\",\"events\":[{\"Changes\":{\"workspace\":\"Unknown\",\"status\":\"NoStatus\",\"changes\":{\"scope\":\"Uncommitted\",\"fingerprint\":\"f0\",\"files\":[]},\"commits\":[]}}]}]}")
     (run-effect 4)

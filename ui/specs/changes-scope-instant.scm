@@ -1,4 +1,4 @@
-(test "Liton — switching the Changes pane's scope shows at once, loading until answered, then cached"
+(test "Liton — switching the Changes pane's scope from its drop-down shows at once, loading until answered, then cached"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -6,9 +6,11 @@
     (run-effect 2)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/Uncommitted\",\"cursor\":\"g1\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"Uncommitted\",\"fingerprint\":\"f1\",\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"}]},\"commits\":[]}}]}]}")
     (run-effect 3)
-    (click (role button :name "Against base"))
+    (expect-value (label "Scope") "Uncommitted")
+    (expect-visible (text "+1"))
+    (select-option (label "Scope") "AgainstBase")
     ; Switched before the daemon answers, and asked for at once.
-    (expect-attr (role button :name "Against base") aria-pressed "true")
+    (expect-value (label "Scope") "AgainstBase")
     (expect-visible (text "Loading…"))
     (expect-absent (role button :name "src/Auth.roc"))
     (expect-pending-effects 1)
@@ -16,8 +18,9 @@
     (run-effect 4)
     (expect-visible (role button :name "tests/Auth.roc"))
     (expect-visible (text "added"))
+    (expect-visible (text "+4"))
     ; Back to uncommitted, its files show from the cache while it asks again.
-    (click (role button :name "Uncommitted"))
+    (select-option (label "Scope") "Uncommitted")
     (expect-absent (text "Loading…"))
     (expect-absent (role button :name "tests/Auth.roc"))
     (expect-visible (role button :name "src/Auth.roc"))

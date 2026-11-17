@@ -20,7 +20,7 @@ overlay =
 
 roc = Tool.from_quote("rocpkgs.${roc_version.trim()}").map_ok(|t| [t]) ?? []
 
-# The UI's platform, roc-signals 0.5.0, needs a later nightly than the daemon's,
+# The UI's platform, roc-signals 0.6.0, needs a later nightly than the daemon's,
 # basic-webserver 0.21.0, runs on. Once basic-webserver runs on it, move
 # .roc-version to it, delete ui/.roc-version and ui_roc, and make build.zig's
 # roc-ui default roc.

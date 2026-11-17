@@ -30,8 +30,8 @@ Model := [].{
 
 	Shell : Setup.Shell
 
-	## `collapsed` are the Workbench drawers hidden.
-	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot) }
+	## `collapsed` are the Workbench drawers hidden, `hidden` its panes hidden.
+	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot), hidden : List(Str) }
 
 	Slot : Setup.Slot
 
@@ -49,17 +49,25 @@ Model := [].{
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
 		transformers : List(Manifest.Transformer),
+
+		## The sessions, and below the projects and workspaces, as the daemon
+		## last listed them (`listed`) with the renames, pins and archives on
+		## their way applied (`Model.relisted`). An edit is shown until the
+		## daemon refuses it, or until the poll numbered `accepted` answers,
+		## the first sent after it accepted it (0 while it waits).
 		sessions : List(Chat.Session),
+		listed : { sessions : List(Chat.Session), workspaces : Workspaces.Listed },
+		editing : List({ serial : U64, edit : Edit, accepted : U64 }),
 		timelines : List(Timeline),
 
 		## What panes that follow the focus show, `Session("")` for nothing.
 		focus : Context.Id,
 
-		## The projects and workspaces the daemon lists.
 		workspaces : Workspaces.Listed,
 		shell : Shell,
 		columns : List(Column),
 		collapsed : List(Slot),
+		hidden : List(Str),
 
 		## The column a narrow screen shows.
 		active_column : Str,
@@ -75,9 +83,13 @@ Model := [].{
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
 
-		## How many times each chat pane's composer was cleared by sending its
-		## draft, which builds it anew (see `Liton.chat`).
-		cleared : List({ pane : Str, count : U64 }),
+		## How many times a draft changed other than by typing, sent or
+		## dictated, so `Liton.effects` writes it into its box though focused.
+		drafts_rewritten : U64,
+
+		## Whether the pointer is coarse, a touch screen's, whose keyboard has
+		## no Shift+Enter: Enter in a composer then starts a new line.
+		coarse_pointer : Bool,
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
 		attention : List(Attention.Item),
@@ -141,11 +153,26 @@ Model := [].{
 		theme : Str,
 		glass : Bool,
 
+		## The background this browser shows over the theme's (`Wallpaper`):
+		## an image's URL, or "" for the theme's, and its dim in percent.
+		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
+
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
-		## The pane whose ⋯ menu is open, or "".
+		## The pane whose ⋯ menu is open, or a row's ⋮ menu as
+		## `Model.row_menu_key` names it, or "".
 		menu : Str,
+
+		## The row of a pane being renamed, by its key ("" for none), and the
+		## name typed.
+		renaming : { pane : Str, key : Str, text : Str },
+
+		## The time, in milliseconds since 1970, as of the last minute that
+		## began, or second while a chat on screen shows a turn running: what
+		## rows count the time since their last activity from, and the chat
+		## how long its agent has worked.
+		now : I64,
 
 		## The code block last copied, by its key, and the copy asked of the
 		## clipboard; `copied` is "" again if the clipboard refused it.
@@ -158,6 +185,9 @@ Model := [].{
 		## How many of its session's latest entries each chat pane shows,
 		## for the panes shown more than `Model.window` (`Model.show_earlier`).
 		windows : List({ pane : Str, session_id : Str, count : U64 }),
+
+		## The folds each chat pane has opened, by their keys (`Model.Fold`).
+		opened_folds : List({ pane : Str, key : Str }),
 
 		## What voice in the composers is doing (ui/Microphone.roc).
 		voice : Speech.State,
@@ -177,6 +207,9 @@ Model := [].{
 		agents : List(Chat.Agent),
 	}
 
+	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
+	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
+
 	## A Workspaces pane's form: an agent to start in the workspace `place`,
 	## or a workspace to create of the project `place`. `failed` says why the
 	## daemon didn't, "" until it refuses.
@@ -195,7 +228,11 @@ Model := [].{
 
 	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
-	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str), in_main : Bool }
+
+	## A row of a Changes pane's tree: a changed file, or a folder of them
+	## with the lines they add and remove as its `file`'s.
+	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -207,7 +244,7 @@ Model := [].{
 
 	## The layout of a preset or snapshot.
 	layout_of : Snapshot -> Layout
-	layout_of = |{ shell, columns, collapsed, .. }| { shell, columns, collapsed }
+	layout_of = |{ shell, columns, collapsed, hidden, .. }| { shell, columns, collapsed, hidden }
 
 	## liton's own presets (setup/Default.roc): Developer, the default,
 	## Inbox and Tiling.
@@ -229,18 +266,22 @@ Model := [].{
 				providers: [],
 				transformers: [],
 				sessions: [],
+				listed: { sessions: [], workspaces: { projects: [], workspaces: [] } },
+				editing: [],
 				timelines: [],
 				focus: Session(""),
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
 				columns: [],
 				collapsed: [],
+				hidden: [],
 				active_column: "",
 				jump: { serial: 0, panel: "", replace: "", push: "" },
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
-				cleared: [],
+				drafts_rewritten: 0,
+				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],
@@ -267,14 +308,18 @@ Model := [].{
 				composer: Model.closed_composer,
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
-				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
+				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
 				glass: Bool.True,
+				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
 				menu: "",
+				renaming: Model.not_renaming,
+				now: 0,
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
 				windows: [],
+				opened_folds: [],
 				voice: Speech.initial,
 				form: Model.closed_form,
 				creating: [],
@@ -288,38 +333,41 @@ Model := [].{
 	## Shows a layout, counting ids on from the numbers ending theirs. A
 	## Workbench shows the panel the URL names first, or its main area.
 	layout : State, Layout -> State
-	layout = |state, { shell, columns, collapsed }| {
-		ids = columns.join_map(|column| column.panes.map(|pane| pane.id).append(column.id))
+	layout = |state, { shell, columns, collapsed, hidden }| {
+		ids = columns.join_map(|column| column.panes.map(|listed_pane| listed_pane.id).append(column.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
 		slot = if (shell == Workbench) Model.slot_hashed(state.url_hash) else Free
 		shown = columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 0)
 		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(slot), replace: "", push: "" }
-		{ ..state, shell, columns, next_id, collapsed, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
+		{ ..state, shell, columns, next_id, collapsed, hidden, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, theme: state.theme }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
-	snapshot_of = |{ shell, columns, collapsed }| { version: Setup.snapshot_version, shell, columns, collapsed, theme: "" }
+	snapshot_of = |{ shell, columns, collapsed, hidden }| { version: Setup.snapshot_version, shell, columns, collapsed, hidden, theme: "" }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 5, it shows the setup's default theme;
-	## before version 4, panes have their options' defaults and the drawers
-	## show. A version 1 or 2 one loads in Tiling, a version 1 one with a
+	## Reads a snapshot. Before version 6, it hides no panes; before version
+	## 5, it shows the setup's default theme; before version 4, panes have
+	## their options' defaults and the drawers show. A version 1 or 2 one loads in Tiling, a version 1 one with a
 	## column for each pane, unless it holds just the old default's widgets:
 	## then it loads the Developer preset.
 	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		# Since version 4 a snapshot is laid out alike; version 5 names its theme.
+		# Since version 4 a snapshot is laid out alike; version 5 names its
+		# theme, and version 6 the panes it hides.
 		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
 		laid = Json.parse(text)
 		themed : Try({ theme : Str }, _)
 		themed = Json.parse(text)
+		hiding : Try({ hidden : List(Str) }, _)
+		hiding = Json.parse(text)
 		third : Try({ version : U32, shell : Shell, columns : List(OldColumn) }, _)
 		third = Json.parse(text)
 		second : Try({ version : U32, columns : List(OldColumn) }, _)
@@ -328,20 +376,20 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (laid, third, second, first) {
-			(Ok({ version, shell, columns, collapsed }), _, _, _) if (version == 4 or version == 5) and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed }), theme: if (version == 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
-			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [] }))
+			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 6 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed, hidden: if (version == 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [], hidden: [] }))
 			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
-			(_, _, _, Ok({ version: 1, panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] })))))
+			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
 			_ => Err(Invalid)
 		}
 	}
 
 	with_options : List(OldColumn) -> List(Column)
-	with_options = |columns| columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned, options: [] }) })
+	with_options = |columns| columns.map(|{ id, size, tabbed, active, panes: column_panes }| { id, size, tabbed, active, panes: column_panes.map(|listed_pane| { id: listed_pane.id, widget: listed_pane.widget, pinned: listed_pane.pinned, options: [] }) })
 
 	migrated : List(Column) -> Layout
 	migrated = |columns|
-		if (columns.map(|column| column.panes.map(|pane| pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [] }
+		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [], hidden: [] }
 
 	load_snapshot : State -> State
 	load_snapshot = |state|
@@ -362,7 +410,7 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(starting) => { ..Model.use_preset({ ..state, presets: offered.presets }, starting.name), kept_layout: Bool.True }
+			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets }, preset.name), kept_layout: Bool.True }
 		}
 	}
 
@@ -390,26 +438,177 @@ Model := [].{
 	use_theme = |state, name| { ..state, theme: name }
 
 	## A key pressed outside a text field: 1 to 9, with or without Alt (or
-	## Option, which types ¡ to ª on a Mac), shows that preset; Escape
-	## closes settings.
+	## Option, which types ¡ to ª on a Mac), shows that preset, and Ctrl+B
+	## and Ctrl+E show or hide a Workbench's drawers and Ctrl+, opens or
+	## closes Settings, as Cmd+B, Cmd+E and Cmd+, do anywhere. Escape,
+	## anywhere, leaves a row's renaming, else closes a menu or Settings,
+	## else a Workspaces pane's form, else stops the agent of the chat
+	## focused, or of the first chat.
 	pressed : State, Str -> State
 	pressed = |state, key| {
 		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
-		option = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
-		match (numbered, option, state.presets.get(numbered ?? (option ?? 9))) {
+		option_glyph = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
+		chats = Model.panes(state).keep_if(|shown| shown.widget == "chat")
+		chat = chats.find_first(|shown| shown.id == state.focused_pane) ?? (chats.first() ?? Model.pane(state, ""))
+		chat_session = Model.session(state, Model.session_of(state, chat))
+		match (numbered, option_glyph, state.presets.get(numbered ?? (option_glyph ?? 9))) {
+			_ if key == "Escape" and !state.renaming.key.is_empty() => { ..state, renaming: Model.not_renaming }
 			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
-			_ if key == "Escape" => { ..state, show_settings: Bool.False, menu: "" }
+			_ if key == "Escape" and (state.show_settings or !state.menu.is_empty()) => { ..state, show_settings: Bool.False, menu: "" }
+			_ if key == "Escape" and state.form.kind != Closed => { ..state, form: Model.closed_form }
+			_ if key == "Escape" and Model.busy(chat_session.status) and Model.stopping(state, chat_session.id) != Stopping => Model.stop(state, chat.id)
+			_ if key == "Ctrl+B" and state.shell == Workbench => Model.toggle_drawer(state, Left)
+			_ if key == "Ctrl+E" and state.shell == Workbench => Model.toggle_drawer(state, Right)
+			_ if key == "Ctrl+," => Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })
 			_ => state
 		}
 	}
 
 	## Marks the pane clicked or focused in, and shows its column on a narrow
-	## screen. Another pane's menu closes.
+	## screen. Another pane's menu, or one of its rows', closes.
 	focus_pane : State, { pane : Str, column : Str } -> State
-	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column, menu: if (state.menu == pane) pane else "" }
+	focus_pane = |state, { pane: pane_id, column }| { ..state, focused_pane: pane_id, active_column: column, menu: if (state.menu == pane_id or state.menu.starts_with("${pane_id} ")) state.menu else "" }
 
 	toggle_menu : State, Str -> State
 	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
+
+	## What names a row's ⋮ menu in `menu`.
+	row_menu_key : { pane_id : Str, key : Str } -> Str
+	row_menu_key = |{ pane_id, key }| "${pane_id} ${key}"
+
+	## What a row's ⋮ menu offers: on a project, a new workspace of it and
+	## renaming it; on a workspace, a new agent there, and renaming, pinning
+	## or unpinning and archiving it; on a session, a new agent beside it,
+	## stopping it while it works, marking it read or unread unless it works,
+	## renaming it, pinning or unpinning its workspace, copying its id and
+	## archiving it. Each edit is offered where its capability is.
+	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Rename, Pin, CopyId, Archive]
+
+	row_menu : State, Str -> List({ label : Str, action : RowAction })
+	row_menu = |state, key| {
+		offered = |capability, items| if (state.capabilities.contains(capability)) items else []
+		pin = Model.row_workspace(state, key).map_ok(|workspace| offered(Capability.workspaces_v1, [{ label: if (workspace.pinned) "Unpin" else "Pin", action: Pin }])) ?? []
+		rename = |capability| offered(capability, [{ label: "Rename", action: Rename }])
+		match Context.from_str(key) {
+			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }].concat(rename(Capability.workspaces_v1)) else []
+			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(rename(Capability.workspaces_v1)).concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive", action: Archive }]))
+			Ok(Session(session_id)) if !Model.starting(state, session_id) => {
+				listed_session = Model.session(state, session_id)
+				read = state.attention.find_first(|item| item.session_id == session_id and item.state != Working).map_ok(|_| if (Model.unread(state, session_id)) [{ label: "Mark read", action: MarkRead }] else [{ label: "Mark unread", action: MarkUnread }]) ?? []
+				(if (Model.row_workspace(state, key).is_ok()) [{ label: "New agent beside it", action: NewAgent }] else [])
+					.concat(if (Model.busy(listed_session.status)) [{ label: "Stop agent", action: Stop }] else [])
+					.concat(read)
+					.concat(rename(Capability.chat_v1))
+					.concat(pin)
+					.append({ label: "Copy id", action: CopyId })
+					.concat(offered(Capability.chat_v1, [{ label: "Archive", action: Archive }]))
+			}
+			_ => []
+		}
+	}
+
+	## The workspace a row names, or the one its session works in.
+	row_workspace : State, Str -> Try(Workspaces.Workspace, [NotFound])
+	row_workspace = |state, key| state.workspaces.workspaces.find_first(|workspace| Context.to_str(Workspace(workspace.id)) == key or workspace.session_ids.contains(key))
+
+	## Does what a row's ⋮ menu offers, and closes it.
+	row_act : State, { pane_id : Str, key : Str, action : RowAction } -> State
+	row_act = |state0, { pane_id, key, action }| {
+		state = { ..state0, menu: "" }
+		match action {
+			NewWorkspace | NewAgent => Model.open_form(state, { pane_id, key })
+			Stop => Model.stop_session(state, key)
+			MarkRead => Model.mark_seen(state, [key], Bool.True)
+			MarkUnread => Model.mark_seen(state, [key], Bool.False)
+			CopyId => Model.copy(state, { key: "id:${key}", text: key })
+			Rename => { ..state, renaming: { pane: pane_id, key, text: Model.row_name(state, key) }, jump: { serial: state.jump.serial + 1, panel: "rename", replace: "", push: "" } }
+			Pin => Model.row_workspace(state, key).map_ok(|workspace| Model.edit(state, Workspaces(Pin({ workspace_id: workspace.id, pinned: !workspace.pinned })))) ?? state
+			Archive =>
+				match Context.from_str(key) {
+					Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Archive({ workspace_id: workspace_id })))
+					Ok(Session(session_id)) => Model.edit(state, Chat(Archive({ session_id: session_id })))
+					Err(_) => state
+				}
+		}
+	}
+
+	not_renaming : { pane : Str, key : Str, text : Str }
+	not_renaming = { pane: "", key: "", text: "" }
+
+	## The name of the project, workspace or session a row names, as its
+	## provider has it.
+	row_name : State, Str -> Str
+	row_name = |state, key|
+		match Context.from_str(key) {
+			_ if key.starts_with("group:") => state.workspaces.projects.find_first(|project| "group:${project.id}" == key).map_ok(|project| project.name) ?? ""
+			Ok(Workspace(workspace_id)) => state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.name) ?? ""
+			Ok(Session(session_id)) => Model.session(state, session_id).title
+			Err(_) => ""
+		}
+
+	## Renames the row being renamed to the name typed, shown at once, unless
+	## it is empty or the same.
+	rename_row : State -> State
+	rename_row = |state0| {
+		{ key, text, .. } = state0.renaming
+		state = { ..state0, renaming: Model.not_renaming }
+		name = text.trim()
+		match Context.from_str(key) {
+			_ if name.is_empty() or name == Model.row_name(state, key) => state
+			_ if key.starts_with("group:") => Model.edit(state, Workspaces(RenameProject({ project_id: key.drop_prefix("group:"), name })))
+			Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Rename({ workspace_id, name })))
+			Ok(Session(session_id)) => Model.edit(state, Chat(Rename({ session_id, title: name })))
+			Err(_) => state
+		}
+	}
+
+	## Sends a rename, pin or archive, shown at once.
+	edit : State, Edit -> State
+	edit = |state, change| {
+		serial = state.call_outbox.serial + 1
+		text = match change {
+			Chat(request) => Json.to_str({ capability: "chat.v1", request })
+			Workspaces(request) => Json.to_str({ capability: "workspaces.v1", request })
+		}
+		Model.relisted({ ..state, editing: state.editing.append({ serial, edit: change, accepted: 0 }), call_outbox: { serial, key: "edit", text }, notice: "" })
+	}
+
+	## Takes the daemon's answer to an edit: accepted, it holds until the
+	## poll it asks for shows it; refused, it is undone, with why.
+	edit_answered : State, U64, Str -> State
+	edit_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer([Accepted, Rejected(Str)]), _)
+		answered = Json.parse(text)
+		undone = |reason| Model.relisted({ ..state, editing: state.editing.drop_if(|asked| asked.serial == serial), notice: reason })
+		match answered {
+			Ok(Ok(Accepted)) => Model.poll({ ..state, editing: state.editing.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## The sessions and workspaces as the daemon last listed them, with the
+	## edits on their way applied.
+	relisted : State -> State
+	relisted = |state| state.editing.fold({ ..state, sessions: state.listed.sessions, workspaces: state.listed.workspaces }, |shown, asked| Model.edited(shown, asked.edit))
+
+	## The listings as an edit leaves them: renamed, pinned, or without what
+	## it archived.
+	edited : State, Edit -> State
+	edited = |state, change| {
+		listed = state.workspaces
+		each_workspace = |change_one| { ..state, workspaces: { ..listed, workspaces: listed.workspaces.map(change_one) } }
+		match change {
+			Chat(Rename({ session_id, title })) => { ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, title } else listed_session) }
+			Workspaces(Rename({ workspace_id, name })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, name } else workspace)
+			Workspaces(RenameProject({ project_id, name })) => { ..state, workspaces: { ..listed, projects: listed.projects.map(|project| if (project.id == project_id) { ..project, name } else project) } }
+			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
+			Workspaces(Pin({ workspace_id, pinned })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, pinned } else workspace)
+			Workspaces(Archive({ workspace_id })) => { ..state, workspaces: { ..listed, workspaces: listed.workspaces.drop_if(|workspace| workspace.id == workspace_id) } }
+			_ => state
+		}
+	}
 
 	## Copies a code block, shown as copied at once.
 	copy : State, { key : Str, text : Str } -> State
@@ -454,11 +653,11 @@ Model := [].{
 
 	## How many sessions are running.
 	running : State -> U64
-	running = |state| state.sessions.keep_if(|session| session.status == Running).len()
+	running = |state| state.sessions.keep_if(|listed_session| listed_session.status == Running).len()
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
-	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed })
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden })
 
 	## Every pane, column by column.
 	panes : State -> List(Pane)
@@ -468,10 +667,10 @@ Model := [].{
 	## its own at the end in Tiling.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
-		pane = { id: "pane-${state.next_id.to_str()}", widget, pinned: "", options: [] }
-		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] }
+		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
+		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
 		if (state.shell == Workbench)
-			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: pane.id, panes: main.panes.append(pane) } else main), next_id: state.next_id + 1 }
+			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), next_id: state.next_id + 1 }
 		else
 			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
 	}
@@ -498,14 +697,14 @@ Model := [].{
 	slot_named = |name| [Left, Main, Right].find_first(|slot| Model.slot_name(slot) == name) ?? Free
 
 	## Moves a pane to the end of a Workbench slot, as its active tab, and
-	## shows the slot's drawer.
+	## shows it and the slot's drawer.
 	move_to_slot : State, Str, Slot -> State
 	move_to_slot = |state, id, slot| {
 		moved = Model.pane(state, id)
 		to = state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? ""
-		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) })
+		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 		columns = left_behind.map(|column| if (column.id == to) { ..column, active: id, panes: column.panes.append(moved) } else column)
-		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot) })
+		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
 	}
 
 	## The value of a pane's option `key`, or its widget's default.
@@ -514,7 +713,7 @@ Model := [].{
 
 	set_option : State, Str, Str, Str -> State
 	set_option = |state, id, key, value| {
-		set = |pane| if (pane.id == id) { ..pane, options: pane.options.drop_if(|old| old.key == key).append({ key, value }) } else pane
+		set = |listed_pane| if (listed_pane.id == id) { ..listed_pane, options: listed_pane.options.drop_if(|old| old.key == key).append({ key, value }) } else listed_pane
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(set) }) }
 	}
 
@@ -556,24 +755,69 @@ Model := [].{
 	went : State, Str -> State
 	went = |state0, url| {
 		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
-		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed }) else state
+		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 
 	toggle_drawer : State, Slot -> State
 	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
 	close_pane : State, Str -> State
-	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) }) })
+	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+
+	## A tab's ×: in a Workbench it hides the pane, in Tiling it closes it.
+	close_tab : State, Str -> State
+	close_tab = |state, id| if (state.shell == Workbench) Model.hide_pane(state, id) else Model.close_pane(state, id)
+
+	## A column's panes a Workbench doesn't hide.
+	shown_panes : State, Column -> List(Pane)
+	shown_panes = |state, column| column.panes.drop_if(|listed_pane| state.hidden.contains(listed_pane.id))
+
+	## The panes hidden in the column of pane `id`, which its ⋯ menu shows again.
+	hidden_beside : State, Str -> List(Pane)
+	hidden_beside = |state, id| state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)).map_ok(|column| column.panes.keep_if(|listed_pane| state.hidden.contains(listed_pane.id))) ?? []
+
+	## What hiding a Workbench pane hides, as its ⋯ menu names it: the pane,
+	## while its column shows another, else its drawer. The main area's last
+	## pane, and Tiling's, don't hide: "".
+	hide_label : State, Str -> Str
+	hide_label = |state, id|
+		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(column) if state.shell == Workbench => {
+				slot = Model.slot_of(state, column.id)
+				if (Model.shown_panes(state, column).len() > 1) "Hide ${Widgets.find(Model.pane(state, id).widget).title}" else if (slot == Left or slot == Right) "Hide ${Model.slot_name(slot)} drawer" else ""
+			}
+			_ => ""
+		}
+
+	## Hides a Workbench pane as `hide_label` names it, its column showing,
+	## and focusing in its place, the next it shows.
+	hide_pane : State, Str -> State
+	hide_pane = |state, id|
+		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(column) if state.shell == Workbench => {
+				slot = Model.slot_of(state, column.id)
+				match Model.shown_panes(state, column).find_first(|listed_pane| listed_pane.id != id) {
+					Ok(next) => Model.change_column({ ..state, hidden: state.hidden.append(id), focused_pane: if (state.focused_pane == id) next.id else state.focused_pane }, column.id, |holding| if (holding.active == id) { ..holding, active: next.id } else holding)
+					Err(NotFound) if slot == Left or slot == Right => { ..state, collapsed: state.collapsed.append(slot) }
+					Err(NotFound) => state
+				}
+			}
+			_ => state
+		}
+
+	## Shows a hidden pane again, as its column's active tab, focused.
+	show_pane : State, Str -> State
+	show_pane = |state, id| Model.activate_tab({ ..state, hidden: state.hidden.drop_if(|hidden_id| hidden_id == id), focused_pane: id }, id)
 
 	## Drops columns left without panes, apart from a Workbench's slots, and
 	## points a tab group or the narrow screen that showed what is gone at what
-	## is left.
+	## is left and shown.
 	drop_empty_columns : State -> State
 	drop_empty_columns = |state| {
 		columns =
 			state.columns
 				.drop_if(|column| column.panes.is_empty() and state.shell == Tiling)
-				.map(|column| if (column.panes.any(|pane| pane.id == column.active)) column else { ..column, active: column.panes.first().map_ok(|pane| pane.id) ?? "" })
+				.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == column.active)) column else { ..column, active: Model.shown_panes(state, column).first().map_ok(|listed_pane| listed_pane.id) ?? "" })
 		active_column = if (columns.any(|column| column.id == state.active_column)) state.active_column else columns.first().map_ok(|column| column.id) ?? ""
 		{ ..state, columns, active_column }
 	}
@@ -582,11 +826,11 @@ Model := [].{
 	## its own, unless it is already alone there.
 	move_pane : State, Str, [Left, Right] -> State
 	move_pane = |state, id, direction|
-		match state.columns.find_first_index(|column| column.panes.any(|pane| pane.id == id)) {
+		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
 			Err(NotFound) => state
 			Ok(from) => {
 				moved = Model.pane(state, id)
-				left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) })
+				left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 				at_edge = if (direction == Left) from == 0 else from + 1 == state.columns.len()
 				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
 				if (at_edge and alone)
@@ -603,23 +847,52 @@ Model := [].{
 			}
 		}
 
+	## Where a pane's ⋯ menu moves it, each named: in a Workbench, the other
+	## slots its widget fits; in Tiling, into the column beside it each way,
+	## or past the edge into a new one unless it is alone there.
+	moves : State, Str -> List({ label : Str, move : [ToSlot(Slot), Beside([Left, Right])] })
+	moves = |state, id|
+		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(from) if state.shell == Workbench => {
+				at = state.columns.get(from).map_ok(|column| Model.slot_of(state, column.id)) ?? Free
+				[Left, Main, Right].keep_if(|to| to != at and Widgets.fits(Widgets.find(Model.pane(state, id).widget), to)).map(|to| { label: "Move to ${if (to == Main) "main area" else "${Model.slot_name(to)} drawer"}", move: ToSlot(to) })
+			}
+			Ok(from) => {
+				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
+				[(Left, "left", from == 0), (Right, "right", from + 1 == state.columns.len())]
+					.drop_if(|(_, _, at_edge)| at_edge and alone)
+					.map(|(side, name, at_edge)| { label: if (at_edge) "Move to a new column on the ${name}" else "Move to the column on the ${name}", move: Beside(side) })
+			}
+			Err(NotFound) => []
+		}
+
+	## Moves a pane where its ⋯ menu's move `label` names.
+	move : State, { pane_id : Str, label : Str } -> State
+	move = |state, { pane_id, label }|
+		match Model.moves(state, pane_id).find_first(|offered| offered.label == label) {
+			Ok({ move: ToSlot(slot), .. }) => Model.move_to_slot(state, pane_id, slot)
+			Ok({ move: Beside(side), .. }) => Model.move_pane(state, pane_id, side)
+			Err(NotFound) => state
+		}
+
 	change_column : State, Str, (Column -> Column) -> State
 	change_column = |state, column_id, change| { ..state, columns: state.columns.map(|column| if (column.id == column_id) change(column) else column) }
 
+	## Switches the column of pane `id` between a stack and tabs.
 	toggle_tabs : State, Str -> State
-	toggle_tabs = |state, column_id| Model.change_column(state, column_id, |column| { ..column, tabbed: !column.tabbed })
+	toggle_tabs = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, tabbed: !column.tabbed } else column) }
 
 	resize : State, Str, [Narrower, Wider] -> State
 	resize = |state, column_id, change| Model.change_column(state, column_id, |column| { ..column, size: if (change == Wider) column.size + 1 else if (column.size > 1) column.size - 1 else 1 })
 
 	## Shows a pane in its tab group.
 	activate_tab : State, Str -> State
-	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|pane| pane.id == id)) { ..column, active: id } else column) }
+	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, active: id } else column) }
 
 	## Pins a following pane to the focused context, or lets a pinned one follow.
 	toggle_pin : State, Str -> State
 	toggle_pin = |state, id| {
-		pin = |pane| if (pane.id != id) pane else if (pane.pinned.is_empty()) { ..pane, pinned: Context.to_str(state.focus) } else { ..pane, pinned: "" }
+		pin = |listed_pane| if (listed_pane.id != id) listed_pane else if (listed_pane.pinned.is_empty()) { ..listed_pane, pinned: Context.to_str(state.focus) } else { ..listed_pane, pinned: "" }
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(pin) }) }
 	}
 
@@ -638,7 +911,7 @@ Model := [].{
 		match Model.context_of(state, shown) {
 			Session(session_id) => session_id
 			Workspace(workspace_id) => {
-				placed = Model.workspace_sessions(state, workspace_id).map(|session| (session.id, Attention.item(session, []).state))
+				placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
 				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
 			}
 		}
@@ -647,7 +920,7 @@ Model := [].{
 	workspace_sessions : State, Str -> List(Chat.Session)
 	workspace_sessions = |state, workspace_id| {
 		listed = state.workspaces.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.session_ids) ?? []
-		state.sessions.keep_if(|session| listed.contains(session.id) or (session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
+		state.sessions.keep_if(|listed_session| listed.contains(listed_session.id) or (listed_session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
 	}
 
 	## What a pane's context is called: its session's title, or its
@@ -676,7 +949,12 @@ Model := [].{
 	## past its first 4 lines is `folded`.
 	ToolCard : { tool : Str, input : Str, state : [Running, Done, Failed], output : Str, folded : Str }
 
-	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]) }
+	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]), fold : Try(Fold, [NotFold]) }
+
+	## One line standing for entries folded under it, which opening it shows
+	## after it: what they did, and whether a tool call among them runs or
+	## failed. Its key names its session and its first entry.
+	Fold : { key : Str, summary : Str, state : [Running, Done, Failed], open : Bool }
 
 	## A timeline as a chat pane shows it: each tool call as a card holding its
 	## result, which shows no entry of its own.
@@ -698,21 +976,28 @@ Model := [].{
 							Ok(result) => (if (result.failed) Failed else Done, result.output.split_on("\n"))
 							Err(NotFound) => (Running, [])
 						}
-						Ok({ sequence, event, card: Ok({ tool, input, state, output: Str.join_with(lines.take_first(4), "\n"), folded: Str.join_with(lines.drop_first(4), "\n") }) })
+						Ok({ sequence, event, card: Ok({ tool, input, state, output: Str.join_with(lines.take_first(4), "\n"), folded: Str.join_with(lines.drop_first(4), "\n") }), fold: Err(NotFold) })
 					}
-					_ => Ok({ sequence, event, card: Err(NotTool) })
+					_ => Ok({ sequence, event, card: Err(NotTool), fold: Err(NotFold) })
 				},
 		)
 	}
 
 	## A chat pane's entries, the latest its window holds, as its options
-	## show them: tool output in full, folded or hidden, and status lines or
-	## not. A result before the window is its call's, before it too.
+	## show them: tool output in full, folded or hidden; status lines or not;
+	## and folded as Collapse says: nothing, tool calls in a row, or those
+	## and finished turns. A result before the window is its call's, before
+	## it too. A turn's end shows how long it worked, if its provider tells.
 	chat_entries : State, Pane -> List(Shown)
 	chat_entries = |state, shown| {
 		status = |entry|
 			match entry.event {
 				StatusChanged(_) => Bool.True
+				_ => Bool.False
+			}
+		untimed = |entry|
+			match entry.event {
+				TurnEnded({ started: Err(Missing), .. }) => Bool.True
 				_ => Bool.False
 			}
 		card = |tool|
@@ -721,11 +1006,121 @@ Model := [].{
 				"Hidden" => { ..tool, output: "", folded: "" }
 				_ => tool
 			}
-		timeline = Model.entries(state, Model.session_of(state, shown))
+		session_id = Model.session_of(state, shown)
+		timeline = Model.entries(state, session_id)
 		count = Model.window_of(state, shown)
-		Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
+		opened = state.opened_folds.keep_if(|fold| fold.pane == shown.id).map(|fold| fold.key)
+		listed = Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
 			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
+		session_running = [Running, AwaitingPermission].contains(Model.session(state, session_id).status)
+		folded = match Model.option(shown, "collapse") {
+			"Full" => listed
+			"Turns" => Model.tools_folded(Model.turns_folded(listed, session_id, opened, session_running), session_id, opened)
+			_ => Model.tools_folded(listed, session_id, opened)
+		}
+		folded.drop_if(untimed)
+	}
+
+	## "Worked for 2m 14s", from when a turn started to when it ended, or ""
+	## if either isn't a time.
+	worked : Str, Str -> Str
+	worked = |started, ended|
+		match (epoch_ms(started), epoch_ms(ended)) {
+			(Ok(from), Ok(to)) if to >= from => "Worked for ${Model.duration_text(to - from)}"
+			_ => ""
+		}
+
+	## Each finished turn's work under one fold, between its message and the
+	## agent's last reply, shown only once it is `opened`. A turn starts with
+	## a message of the user's and ends at its `TurnEnded`, or, where its
+	## provider marks none, once another message follows, the last once
+	## `session_running` is false; entries before the first message are a
+	## turn begun earlier.
+	turns_folded : List(Shown), Str, List(Str), Bool -> List(Shown)
+	turns_folded = |listed, session_id, opened, session_running| {
+		is_user = |entry|
+			match entry.event {
+				UserMessage(_) => Bool.True
+				_ => Bool.False
+			}
+		is_reply = |entry|
+			match entry.event {
+				AgentMessage(_) => Bool.True
+				_ => Bool.False
+			}
+		is_end = |entry|
+			match entry.event {
+				TurnEnded(_) => Bool.True
+				_ => Bool.False
+			}
+		under_fold = |rows, whole_turn, finished| {
+			(turn, ending) = match whole_turn {
+				[.. as rest, last] if is_end(last) => (rest, [last])
+				_ => (whole_turn, [])
+			}
+			(asked, after_message) = match turn {
+				[first, .. as rest] if is_user(first) => ([first], rest)
+				_ => ([], turn)
+			}
+			reply = after_message.find_last(is_reply).map_ok(|entry| [entry]) ?? []
+			work = after_message.drop_if(|entry| reply.contains(entry))
+			cards = work.keep_oks(|entry| entry.card)
+			messages = work.keep_if(is_reply).len()
+			match work {
+				[first, ..] if finished and (!cards.is_empty() or messages > 0) => {
+					key = "${session_id}/turn/${first.sequence.to_str()}"
+					summary = Str.join_with([Model.how_many(cards.len(), "tool call"), Model.how_many(messages, "message")].drop_if(Str.is_empty), ", ")
+					state = if (cards.any(|tool| tool.state == Failed)) Failed else Done
+					fold = { key, summary, state, open: opened.contains(key) }
+					rows.concat(asked).append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) work else []).concat(reply).concat(ending)
+				}
+				_ => rows.concat(whole_turn)
+			}
+		}
+		walked = listed.fold(
+			{ rows: [], turn: [] },
+			|so_far, entry|
+				if is_user(entry) {
+					{ rows: under_fold(so_far.rows, so_far.turn, Bool.True), turn: [entry] }
+				} else if is_end(entry) {
+					{ rows: under_fold(so_far.rows, so_far.turn.append(entry), Bool.True), turn: [] }
+				} else {
+					{ ..so_far, turn: so_far.turn.append(entry) }
+				},
+		)
+		under_fold(walked.rows, walked.turn, !session_running)
+	}
+
+	## "3 tool calls", "1 message", or "" for none.
+	how_many : U64, Str -> Str
+	how_many = |count, thing| if (count == 0) "" else if (count == 1) "1 ${thing}" else "${count.to_str()} ${thing}s"
+
+	## Runs of two or more tool calls, each under one fold, shown only once
+	## it is `opened`.
+	tools_folded : List(Shown), Str, List(Str) -> List(Shown)
+	tools_folded = |listed, session_id, opened| {
+		under_fold = |rows, run|
+			match run {
+				[first, _, ..] => {
+					cards = run.keep_oks(|entry| entry.card)
+					key = "${session_id}/tools/${first.sequence.to_str()}"
+					names = cards.map(|tool| tool.tool).fold([], |found, name| if (found.contains(name)) found else found.append(name))
+					state = if (cards.any(|tool| tool.state == Running)) Running else if (cards.any(|tool| tool.state == Failed)) Failed else Done
+					fold = { key, summary: "${run.len().to_str()} tool calls: ${Str.join_with(names, ", ")}", state, open: opened.contains(key) }
+					rows.append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) run else [])
+				}
+				_ => rows.concat(run)
+			}
+		walked = listed.fold({ rows: [], run: [] }, |so_far, entry| if (entry.card.is_ok()) { ..so_far, run: so_far.run.append(entry) } else { rows: under_fold(so_far.rows, so_far.run).append(entry), run: [] })
+		under_fold(walked.rows, walked.run)
+	}
+
+	## Opens a chat pane's fold, or closes it again.
+	toggle_fold : State, { pane_id : Str, key : Str } -> State
+	toggle_fold = |state, { pane_id, key }| {
+		opened = { pane: pane_id, key }
+		{ ..state, opened_folds: if (state.opened_folds.contains(opened)) state.opened_folds.drop_if(|fold| fold == opened) else state.opened_folds.append(opened) }
 	}
 
 	last_sequence : State, Str -> U64
@@ -753,7 +1148,7 @@ Model := [].{
 			}
 		}
 		# The panes of a widget on screen that show a context.
-		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
+		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and (Model.pane_visible(state, shown.id) or Model.main_diff(state) == shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
 		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git) else []
 		files = |shown| {
 			context = Model.context_of(state, shown)
@@ -788,9 +1183,15 @@ Model := [].{
 			{ ..state, poll: { serial: state.poll.serial + 1, subjects: followed, topics }, polling: Bool.True, poll_again: Bool.False }
 	}
 
-	## Polls each second, unless a poll is still on its way.
-	tick : State -> State
-	tick = |state| if (state.polling) state else Model.poll(state)
+	## Polls each second, unless a poll is still on its way, and takes the
+	## time `at` once a new minute begins, or each second while a chat on
+	## screen shows a turn running.
+	tick : State, I64 -> State
+	tick = |state0, at| {
+		timing = Model.panes(state0).any(|shown| shown.widget == "chat" and Model.pane_visible(state0, shown.id) and Model.working(state0, shown).is_ok())
+		state = if (at // 60_000 == state0.now // 60_000 and !timing) state0 else { ..state0, now: at }
+		if (state.polling) state else Model.poll(state)
+	}
 
 	## Polls at once when the topics the panes follow change, or once the
 	## poll on its way answers.
@@ -802,7 +1203,7 @@ Model := [].{
 	## the poll asked for meanwhile, if any.
 	polled : State, Poll, List(Protocol.Update) -> State
 	polled = |state, sent, updates| {
-		applied = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
+		answered_topics = updates.map_with_index(|update, index| (sent.subjects.get(index), update)).fold(
 			state,
 			|so_far, (subject, update)|
 				match subject {
@@ -810,7 +1211,9 @@ Model := [].{
 					_ => so_far
 				},
 		)
-		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|latest| latest.id) ?? "") else applied.focus
+		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
+		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
+		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -824,14 +1227,14 @@ Model := [].{
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
 	updated = |state, serial, subject, { capability, topic, cursor, events, .. }| {
 		cursors = state.cursors.drop_if(|known| known.capability == capability and known.topic == topic).append({ capability, topic, cursor })
-		received = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
 		match subject {
-			Timeline(session_id) if !received.timelines.any(|timeline| timeline.session_id == session_id) => { ..received, timelines: received.timelines.append({ session_id, entries: [] }) }
+			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
 			# Unchanged items still settle what was set aside.
-			Items => Model.attention_fetched(received, serial, received.attention)
+			Items => Model.attention_fetched(with_events, serial, with_events.attention)
 			# The requests its review has held since the poll they waited for.
-			Threads(context) => { ..received, reviewing: received.reviewing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial and Review.context(asked.request) == Context.to_str(context)) }
-			_ => received
+			Threads(context) => { ..with_events, reviewing: with_events.reviewing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial and Review.context(asked.request) == Context.to_str(context)) }
+			_ => with_events
 		}
 	}
 
@@ -840,7 +1243,7 @@ Model := [].{
 	received : State, Protocol.Subject, Protocol.Event -> State
 	received = |state, subject, event|
 		match (subject, event) {
-			(_, Sessions(sessions)) => { ..state, sessions }
+			(_, Sessions(sessions)) => Model.relisted({ ..state, listed: { ..state.listed, sessions } })
 			(Timeline(session_id), Entry(entry)) =>
 				if (entry.sequence <= Model.last_sequence(state, session_id))
 					state
@@ -849,7 +1252,7 @@ Model := [].{
 				else
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
-			(_, Listed(listed)) => { ..state, workspaces: listed }
+			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
@@ -914,6 +1317,26 @@ Model := [].{
 		{ ..state, outbox: { serial, request }, sent: state.sent.append(sent), notice: "" }
 	}
 
+	## How long the agent of the session a chat pane shows has worked on its
+	## turn, waiting for you too, as `Model.duration_text` says it, or "" if
+	## its provider doesn't tell; none while it is in no turn.
+	working : State, Pane -> Try(Str, [NotWorking])
+	working = |state, shown| {
+		shown_session = Model.session(state, Model.session_of(state, shown))
+		match epoch_ms(shown_session.running_since ?? "") {
+			_ if !Model.busy(shown_session.status) or Model.starting(state, shown_session.id) => Err(NotWorking)
+			Ok(since) if state.now >= since => Ok(Model.duration_text(state.now - since))
+			_ => Ok("")
+		}
+	}
+
+	## Milliseconds as "9s", "3m 46s" or "1h 2m".
+	duration_text : I64 -> Str
+	duration_text = |milliseconds| {
+		seconds = milliseconds // 1000
+		if (seconds < 60) "${seconds.to_str()}s" else if (seconds < 3600) "${(seconds // 60).to_str()}m ${(seconds % 60).to_str()}s" else "${(seconds // 3600).to_str()}h ${(seconds % 3600 // 60).to_str()}m"
+	}
+
 	## Whether a session's agent is in a turn, which Stop ends.
 	busy : Chat.Status -> Bool
 	busy = |status| status == Running or status == AwaitingPermission
@@ -929,10 +1352,10 @@ Model := [].{
 	## Stops the agent of the session a pane shows, shown as stopping at once
 	## until its status changes. A stop refused before is asked again.
 	stop : State, Str -> State
-	stop = |state, pane_id| {
-		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		{ ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
-	}
+	stop = |state, pane_id| Model.stop_session(state, Model.session_of(state, Model.pane(state, pane_id)))
+
+	stop_session : State, Str -> State
+	stop_session = |state, session_id| { ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
 
 	## Whether a session is being stopped, or why it wasn't.
 	stopping : State, Str -> [NotStopping, Stopping, NotStopped(Str)]
@@ -947,12 +1370,12 @@ Model := [].{
 	## failed with `reason`, and a permission request's prompt comes back.
 	refused : State, U64, Str -> State
 	refused = |state, serial, reason| {
-		answer = |sent|
+		answers_permission = |sent|
 			match sent.request {
 				AnswerPermission(_) => sent.serial == serial
 				_ => Bool.False
 			}
-		sent = state.sent.drop_if(answer).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
+		sent = state.sent.drop_if(answers_permission).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
 		{ ..state, sent, notice: reason }
 	}
 
@@ -995,16 +1418,15 @@ Model := [].{
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		count = (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) + 1
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), cleared: state.cleared.drop_if(|composer| composer.pane == pane_id).append({ pane: pane_id, count }) }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: state.drafts_rewritten + 1 }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
 	## follows, in the timeline or on its way.
-	pending : State, Str -> Try({ session_id : Str, request_id : Str, tool : Str, description : Str }, [NoneWaiting])
+	pending : State, Str -> Try({ session_id : Str, asked : Chat.Permission }, [NoneWaiting])
 	pending = |state, pane_id| {
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
 		timeline = Model.entries(state, session_id)
@@ -1024,17 +1446,20 @@ Model := [].{
 				},
 		)
 		match asked {
-			Ok({ event: PermissionRequested({ tool, description, .. }), .. }) => Ok({ session_id: session_id, request_id: request_id, tool: tool, description: description })
+			Ok({ event: PermissionRequested(question), .. }) => Ok({ session_id, asked: question })
 			_ => Err(NoneWaiting)
 		}
 	}
 
-	answer : State, Str, Bool -> State
-	answer = |state, pane_id, allowed|
-		match Model.pending(state, pane_id) {
-			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
-			Err(NoneWaiting) => state
-		}
+	## A permission request's choices: the provider's own, or else Allow and
+	## Deny, whose ids are "".
+	choices : Chat.Permission -> List(Chat.Choice)
+	choices = |asked| asked.choices ?? [{ id: "", label: "Allow", allows: Bool.True, style: Primary }, { id: "", label: "Deny", allows: Bool.False, style: Danger }]
+
+	## Answers a session's permission request with one of its choices, the
+	## request hidden at once until the timeline shows the answer.
+	answer : State, { session_id : Str, request_id : Str, choice : Chat.Choice } -> State
+	answer = |state, { session_id, request_id, choice }| Model.send(state, AnswerPermission({ session_id, request_id, allowed: choice.allows, choice: if (choice.id.is_empty()) Err(Missing) else Ok(choice.id) }))
 
 	## The attention items as the inbox shows them: set aside, back, read or
 	## unread as soon as asked.
@@ -1148,13 +1573,6 @@ Model := [].{
 		permissions.drop_if(|asked| answering.contains(asked.request_id)).last().map_err(|_| NoneWaiting)
 	}
 
-	answer_item : State, Str, Bool -> State
-	answer_item = |state, session_id, allowed|
-		match Model.item_permission(state, session_id) {
-			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
-			Err(NoneWaiting) => state
-		}
-
 	## Focuses a context, so panes that follow the focus show it, and shows
 	## the first chat's column, which on a narrow screen is a jump to it. A
 	## session opened is seen.
@@ -1167,18 +1585,19 @@ Model := [].{
 		}
 	}
 
-	## Whether a pane is on screen: not a tab behind another, nor in a
+	## Whether a pane is on screen: not hidden, a tab behind another, nor in a
 	## collapsed drawer.
 	pane_visible : State, Str -> Bool
 	pane_visible = |state, pane_id|
 		match state.columns.find_first(|column| column.panes.any(|shown| shown.id == pane_id)) {
-			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id))
+			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id)) and !state.hidden.contains(pane_id)
 			Err(NotFound) => Bool.False
 		}
 
-	## A Changes pane shows uncommitted changes and no file until picked.
+	## A Changes pane shows uncommitted changes, every folder open, and no
+	## file until picked, in the pane itself.
 	git_pane : State, Str -> GitPane
-	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile }
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [], in_main: Bool.False }
 
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
@@ -1187,6 +1606,46 @@ Model := [].{
 	## sends at once brings what the UI doesn't have yet.
 	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
 	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
+
+	## Shows a file of a Changes pane's tree, or folds or unfolds a folder, at
+	## once.
+	pick_changed : State, { pane_id : Str, path : Str, folder : Bool } -> State
+	pick_changed = |state, { pane_id, path, folder }| {
+		shown = Model.git_pane(state, pane_id)
+		if (folder) Model.set_git_pane(state, { ..shown, folded: if (shown.folded.contains(path)) shown.folded.drop_if(|folded| folded == path) else shown.folded.append(path) }) else Model.show_git(state, pane_id, shown.scope, Selected(path))
+	}
+
+	## The pane a Workbench's main area shows, which a diff opened there
+	## takes the place of; "" in another shell.
+	main_area_pane : State -> Str
+	main_area_pane = |state|
+		match (state.shell, state.columns.get(1)) {
+			(Workbench, Ok(column)) => if (column.tabbed) column.active else column.panes.first().map_ok(|shown| shown.id) ?? ""
+			_ => ""
+		}
+
+	## The Changes pane whose file's diff the main area shows, "" for none.
+	main_diff : State -> Str
+	main_diff = |state| {
+		main = Model.main_area_pane(state)
+		state.git_panes.find_first(|shown| shown.in_main and shown.file != NoFile and shown.pane != main and !main.is_empty() and Model.pane(state, shown.pane).widget == "changes").map_ok(|shown| shown.pane) ?? ""
+	}
+
+	## Shows a Changes pane's diffs in the main area, its panel on a phone, or
+	## in the pane again, at once.
+	show_in_main : State, Str, Bool -> State
+	show_in_main = |state, pane_id, in_main| {
+		shown = Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main })
+		if (in_main) Model.show_column(shown, state.columns.get(1).map_ok(|column| column.id) ?? "") else shown
+	}
+
+	## The files of the scope a Changes pane shows, as its tree's rows.
+	changed_tree : State, Pane -> List(ChangedRow)
+	changed_tree = |state, shown|
+		match Model.git_files(state, shown) {
+			Files(files) => changed_rows(files, Model.git_pane(state, shown.id).folded, "", 0)
+			Loading => []
+		}
 
 	git_changes_of : State, Context.Id, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
 	git_changes_of = |state, context, scope| state.git_changes.find_first(|known| known.context == context and known.changes.scope == scope).map_ok(|known| known.changes)
@@ -1289,12 +1748,21 @@ Model := [].{
 	## session in that. `key` is the context a workspace or session row
 	## focuses (`Context.to_str`), or `group:` and the group's. A row is
 	## `creatable` when + on it starts an agent there, or creates a workspace
-	## of its project.
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+	## of its project. `counts` are a group's members, or a workspace's
+	## uncommitted lines added and removed, as "+3" and "−1". `age` is how
+	## long ago a session or workspace last changed (`Model.age`). A
+	## workspace `pinned`, or its one session, lists first.
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, pinned : Bool, depth : U64 }
 
-	## A Workspaces pane's rows, as its options group, filter and order them,
-	## each workspace marked as urgent as its most urgent session, and unread
-	## while one is.
+	Counts : { members : Str, added : Str, removed : Str }
+
+	no_counts : Counts
+	no_counts = { members: "", added: "", removed: "" }
+
+	## A Workspaces pane's rows, as its options group, filter and order them:
+	## a workspace's one session in its place, with its branch if it is a
+	## worktree and its changes, or a workspace of none or several, marked as
+	## urgent as its most urgent session and unread while one is, over them.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
@@ -1307,30 +1775,39 @@ Model := [].{
 			Model.ordered(listed_sessions, order, |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title)
 		}
 		workspace_changed = |workspace| if (Model.starting(state, workspace.id)) Model.newest else sessions_in(workspace).map(|listed_session| Model.changed(state, listed_session)).fold(0, U64.max)
-		listed = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
+		in_order = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
+		listed = in_order.keep_if(|workspace| workspace.pinned).concat(in_order.drop_if(|workspace| workspace.pinned))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
-				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
+				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: sentence_case(attention_word(rank)), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
-				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
-				Model.ordered(projects, order, |group| group.members.first().map_ok(workspace_changed) ?? 0, |group| group.title)
+				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
+				Model.ordered(projects, order, |group| group.members.map(workspace_changed).fold(0, U64.max), |group| group.title)
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
-		workspace_row = |workspace| {
+		workspace_rows_of = |workspace| {
+			sessions = sessions_in(workspace)
 			branch = match workspace.branch {
 				Branch(name) if name != workspace.name => name
 				Detached => "detached"
 				_ => ""
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
-			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+			newest_age = Model.ordered(sessions, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|latest_session| Model.age(state, latest_session)) ?? ""
+			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: state.focus == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
+			match sessions.first() {
+				Ok(lone) if sessions.len() == 1 => {
+					lone_row = Model.session_row(state, lone)
+					[mark({ ..lone_row, detail: if (workspace.kind == Worktree) branch_name(workspace.branch) else "", counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True, pinned: workspace.pinned })]
+				}
+				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
+			}
 		}
 		groups.join_map(
 			|group| {
-				header = { ..blank, key: group.key, title: group.title, counts: group.members.len().to_str(), folded: folded.contains(group.key), creatable: group.creatable }
-				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(sessions_in(workspace).map(|listed_session| mark(Model.session_row(state, listed_session)))))
-				if (header.folded) [header] else members.prepend(header)
+				header = { ..blank, key: group.key, title: group.title, counts: { ..Model.no_counts, members: group.members.len().to_str() }, folded: folded.contains(group.key), creatable: group.creatable }
+				if (header.folded) [header] else group.members.join_map(workspace_rows_of).prepend(header)
 			},
 		)
 	}
@@ -1340,7 +1817,7 @@ Model := [].{
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
 		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -1353,6 +1830,20 @@ Model := [].{
 	changed : State, Chat.Session -> U64
 	changed = |state, listed_session|
 		if (Model.starting(state, listed_session.id)) Model.newest else Attention.recency(state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? ""))
+
+	## How long ago a session last changed, as its row says it: "now", "3m",
+	## "2h", "4d" or "1w"; "" if unknown.
+	age : State, Chat.Session -> Str
+	age = |state, listed_session| {
+		last_change = state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? "")
+		match epoch_ms(last_change) {
+			Ok(at) if state.now > 0 and !Model.starting(state, listed_session.id) => {
+				minutes = (state.now - at) // 60_000
+				if (minutes < 1) "now" else if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else if (minutes < 10080) "${(minutes // 1440).to_str()}d" else "${(minutes // 10080).to_str()}w"
+			}
+			_ => ""
+		}
+	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64
@@ -1369,10 +1860,10 @@ Model := [].{
 		keyed.sort_with(|left, right| [by(left, right), compared(left.index, right.index)].find_first(|so_far| so_far != Same) ?? Same).map(|kept| kept.item)
 	}
 
-	## A workspace's uncommitted changes as "+3 −1": as its provider counts
-	## them, else as a Changes pane last saw them; "changed" when they are
-	## there but uncounted, and nothing when they are none or unknown.
-	change_counts : State, Workspaces.Workspace -> Str
+	## A workspace's uncommitted lines added and removed: as its provider
+	## counts them, else as a Changes pane last saw them; nothing when they
+	## are none or unknown.
+	change_counts : State, Workspaces.Workspace -> Counts
 	change_counts = |state, workspace| {
 		seen = workspace.session_ids.map(|session_id| Session(session_id)).prepend(Workspace(workspace.id)).keep_oks(|context| Model.git_changes_of(state, context, Uncommitted)).first()
 		counted =
@@ -1382,10 +1873,20 @@ Model := [].{
 				_ => Err(Unknown)
 			}
 		match counted {
-			Ok({ additions, deletions }) if additions + deletions > 0 => "+${additions.to_str()} −${deletions.to_str()}"
-			_ if workspace.dirty => "changed"
-			_ => ""
+			Ok({ additions, deletions }) if additions + deletions > 0 => { members: "", added: "+${additions.to_str()}", removed: "−${deletions.to_str()}" }
+			_ => Model.no_counts
 		}
+	}
+
+	## The uncommitted lines added and removed in the workspace of what a
+	## pane shows, for the right drawer's button to show.
+	workspace_changes : State, Pane -> Counts
+	workspace_changes = |state, shown| {
+		workspace_id = match Model.context_of(state, shown) {
+			Workspace(id) => id
+			Session(session_id) => state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| listed.id) ?? (Model.session(state, session_id).workspace.map_ok(|placed| placed.id ?? "") ?? "")
+		}
+		state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| Model.change_counts(state, listed)) ?? Model.no_counts
 	}
 
 	## Folds or unfolds a group of a Workspaces pane, which the snapshot
@@ -1532,7 +2033,7 @@ Model := [].{
 			Ok({ path, scope }) => {
 				composer = state.composer
 				threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| Review.shows(thread.anchor, path, scope) and !thread.outdated)
-				composing = composer.pane == shown.id and composer.path == path and composer.scope == scope
+				composing_here = composer.pane == shown.id and composer.path == path and composer.scope == scope
 				on = |picks, side, start, end| picks.any(|picked| picked.side == side and picked.line >= start and picked.line <= end)
 				composer_row = { ..Model.code_row, key: "composer", kind: Composer }
 				notes = |thread| {
@@ -1541,18 +2042,18 @@ Model := [].{
 					shown_notes = listed.map_with_index(
 						|comment, index| {
 							note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft }
-							if (composing and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
+							if (composing_here and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
 						},
 					)
-					if (composing and composer.thread == thread.id) shown_notes.append(composer_row) else shown_notes
+					if (composing_here and composer.thread == thread.id) shown_notes.append(composer_row) else shown_notes
 				}
 				rows.join_map(
 					|row| {
 						picks = [row.old_pick, row.new_pick].keep_if(|picked| picked.line > 0)
-						picked = composing and on(picks, composer.side, composer.start, composer.end)
+						picked = composing_here and on(picks, composer.side, composer.start, composer.end)
 						marked = threads.any(|thread| on(picks, thread.anchor.side, thread.anchor.start_line, thread.anchor.end_line))
 						ending = threads.keep_if(|thread| on(picks, thread.anchor.side, thread.anchor.end_line, thread.anchor.end_line))
-						opened = composing and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
+						opened = composing_here and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
 						class = Str.join_with([if (picked) "picked" else "", if (marked) "marked" else "", if (row.right_class == "hunk-header") "hunk" else ""].drop_if(Str.is_empty), " ")
 						ending.join_map(notes).concat(if (opened) [composer_row] else []).prepend({ ..row, class })
 					},
@@ -1704,16 +2205,17 @@ Model := [].{
 			}
 		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
 		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
-		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: "", dot: status, status, focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
-	## What a review panel says of its review: its drafts and rounds sent.
+	## What a review panel says of its review: its drafts and rounds sent,
+	## each left out while none.
 	review_summary : State, Pane -> Str
 	review_summary = |state, shown| {
 		review = Model.review_of(state, Model.context_of(state, shown))
 		drafts = Review.drafts(review)
-		Str.join_with([if (drafts == 0) "no drafts" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
+		Str.join_with([if (drafts == 0) "" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
 	}
 
 	## Adds a pane's comment on the whole review, shown at once as a draft.
@@ -1764,14 +2266,16 @@ Model := [].{
 		}
 	}
 
-	## Opens a Workspaces pane's form: from a workspace's row, to start an
-	## agent there of the first kind its provider starts; from a project's,
+	## Opens a Workspaces pane's form: from a workspace's row, or a session's
+	## alone in its workspace, to start an agent there of the first kind its
+	## provider starts; from a project's,
 	## to create a workspace of it, and from the pane's header (`key` ""), of
 	## the first project. Other rows open none.
 	open_form : State, { pane_id : Str, key : Str } -> State
 	open_form = |state, { pane_id, key }| {
 		project = if (key.is_empty()) state.workspaces.projects.first() else state.workspaces.projects.find_first(|listed| "group:${listed.id}" == key)
-		match (Context.from_str(key), project) {
+		placed = |session_id| state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| Workspace(listed.id)) ?? Session(session_id)
+		match (Context.from_str(key).map_ok(|context| if (context == Session(key)) placed(key) else context), project) {
 			(Ok(Workspace(workspace_id)), _) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Agent, place: workspace_id, agent: Model.agent_kinds(state, workspace_id).first() ?? "" } }
 			(_, Ok(picked)) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Workspace, place: picked.id } }
 			_ => state
@@ -1843,8 +2347,9 @@ Model := [].{
 	}
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
-	## or a placeholder naming what is missing.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing]
+	## a placeholder naming what is missing, or in the main area, a diff
+	## opened there from Changes.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -1857,6 +2362,8 @@ Model := [].{
 			Connecting
 		else if (!Model.missing(state, shown).is_empty())
 			Missing
+		else if (shown.id == Model.main_area_pane(state) and !Model.main_diff(state).is_empty())
+			MainDiff
 		else
 			match shown.widget {
 				"sessions" => Sessions
@@ -1886,12 +2393,19 @@ expect {
 	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]
 }
 
+# An answer names the provider's choice taken, and Allow or Deny none.
+expect {
+	plan = { ..Chat.permission({ request_id: "p", tool: "ExitPlanMode", description: "Plan" }), choices: Ok([{ id: "implement", label: "Implement", allows: Bool.True, style: Primary }]) }
+	sent = |asked| Model.choices(asked).map(|choice| Model.answer(Model.initial(""), { session_id: "s", request_id: "p", choice }).outbox.request)
+	sent(plan) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Ok("implement") })] and sent({ ..plan, choices: Err(Missing) }) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Err(Missing) }), AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.False, choice: Err(Missing) })]
+}
+
 # One poll at a time: what is asked meanwhile is sent once it answers.
 expect {
 	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
 	meanwhile = Model.follow({ ..sent, focus: Session("b") })
 	answered = Model.polled(meanwhile, sent.poll, [])
-	Model.tick(sent).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
+	Model.tick(sent, 0).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
 }
 
 expect {
@@ -1901,7 +2415,7 @@ expect {
 }
 
 expect {
-	saved = Json.to_str(Model.snapshot(Model.toggle_tabs(Model.initial(""), "column-2")))
+	saved = Json.to_str(Model.snapshot(Model.toggle_tabs(Model.initial(""), "pane-2")))
 	Json.to_str(Model.snapshot(Model.initial(saved))) == saved
 }
 
@@ -1924,7 +2438,7 @@ expect Model.set_up(Model.initial(""), Setup.offered(Setup.empty)).presets == De
 expect {
 	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
 	chat = { id: "pane-7", widget: "chat", pinned: "", options: [] }
-	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [] }) and Model.initial(saved).next_id == 8
+	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [], hidden: [] }) and Model.initial(saved).next_id == 8
 }
 
 expect {
@@ -1996,7 +2510,7 @@ expect {
 # 1 to 9 show the presets in order, however the one shown was changed.
 expect {
 	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session
@@ -2041,13 +2555,14 @@ expect {
 	keys = |shown| Model.workspace_rows(shown, Model.pane(shown, "pane-4")).map(|row| row.key)
 	folded = Model.pick_row(state, { pane_id: "pane-4", key: "group:p1" })
 	by_status = Model.set_option(state, "pane-4", "group_by", "Status")
-	keys(state) == ["group:p1", "workspace:w1", "s1", "workspace:w2"]
+	keys(state) == ["group:p1", "s1", "workspace:w2"]
 		and keys(folded) == ["group:p1"]
 		and keys(Model.pick_row(folded, { pane_id: "pane-4", key: "group:p1" })) == keys(state)
-		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "workspace:w1", "s1"]
+		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "s1"]
+		and keys({ ..state, sessions: state.sessions.append(Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Docs", status: Idle })), workspaces: { ..listed, workspaces: [workspace("w1", Idle, ["s1", "s2"])] } }) == ["group:p1", "workspace:w1", "s1", "s2"]
 		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
 		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == Workspace("w1")
-		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == ["2", "+2 −1", "", "+2 −1"]
+		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == [{ ..Model.no_counts, members: "2" }, { members: "", added: "+2", removed: "−1" }, { members: "", added: "+2", removed: "−1" }]
 		and Model.subjects(state).contains(WorkspaceList)
 }
 
@@ -2055,7 +2570,7 @@ expect {
 ## open in it.
 folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
 folder_rows = |state, context, shown, folder, depth| {
-	blank = { key: "", kind: File, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
+	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth }
 	entries =
 		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
 			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))
@@ -2071,6 +2586,25 @@ folder_rows = |state, context, shown, folder, depth| {
 			}
 		},
 	)
+}
+
+## The rows of the changed `files` in `folder`, `depth` folders deep: its
+## folders first, each over its own rows unless folded, then its files.
+changed_rows : List(WorkspaceGit.File), List(Str), Str, U64 -> List(Model.ChangedRow)
+changed_rows = |files, folded, folder, depth| {
+	inside = files.keep_if(|file| folder.is_empty() or file.path.starts_with("${folder}/"))
+	rest = |file| if (folder.is_empty()) file.path else file.path.drop_prefix("${folder}/")
+	child = |name| if (folder.is_empty()) name else "${folder}/${name}"
+	names = inside.keep_oks(|file| rest(file).split_first("/").map_ok(|parts| parts.before)).fold([], |found, name| if (found.contains(name)) found else found.append(name))
+	folders = names.join_map(
+		|name| {
+			path = child(name)
+			under = files.keep_if(|file| file.path.starts_with("${path}/"))
+			row = { path, folder: Bool.True, folded: folded.contains(path), depth, file: { path, change: Modified, additions: under.fold(0, |sum, file| file.additions + sum), deletions: under.fold(0, |sum, file| file.deletions + sum), body: Text } }
+			if (row.folded) [row] else changed_rows(files, folded, path, depth + 1).prepend(row)
+		},
+	)
+	folders.concat(inside.keep_if(|file| rest(file).split_first("/").is_err()).map(|file| { path: file.path, folder: Bool.False, folded: Bool.False, depth, file }))
 }
 
 ## A size in bytes, as "4 KB" or "1.2 MB".
@@ -2090,6 +2624,53 @@ comment_state = |state|
 	match state {
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
+	}
+
+## A UTC time such as `2026-01-01T08:00:00.000Z` in milliseconds since
+## 1970, to the second.
+epoch_ms : Str -> Try(I64, [NotTime])
+epoch_ms = |time| {
+	bytes = time.to_utf8()
+	number = |from, length| bytes.sublist({ start: from, len: length }).fold(0, |sum, digit| sum * 10 + (digit - '0').to_i64())
+	shaped = bytes.len() >= 19 and bytes.get(4) == Ok('-') and bytes.get(10) == Ok('T') and bytes.get(13) == Ok(':')
+	if shaped {
+		(month, day) = (number(5, 2), number(8, 2))
+		year = if (month <= 2) number(0, 4) - 1 else number(0, 4)
+		year_of_era = year % 400
+		day_of_year = (153 * (if (month > 2) month - 3 else month + 9) + 2) // 5 + day - 1
+		days = (year // 400) * 146_097 + year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year - 719_468
+		Ok(((days * 24 + number(11, 2)) * 60 + number(14, 2)) * 60_000 + number(17, 2) * 1000)
+	} else {
+		Err(NotTime)
+	}
+}
+
+# A row says how long ago its session changed, from the minute last begun.
+expect {
+	state = { ..Model.initial(""), now: epoch_ms("2026-01-01T10:00:59Z") ?? 0 }
+	changed_at = |updated| Model.age(state, { ..Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Idle }), updated: Ok(updated) })
+	[changed_at("2026-01-01T10:00:30.000Z"), changed_at("2026-01-01T09:57:00Z"), changed_at("2026-01-01T07:00:00Z"), changed_at("2025-12-30T10:00:00Z"), changed_at("2025-12-01T10:00:00Z"), changed_at("")] == ["now", "3m", "3h", "2d", "4w", ""]
+}
+
+expect epoch_ms("1970-01-01T00:00:00Z") == Ok(0) and epoch_ms("2026-01-01T08:00:30.000Z") == Ok(1_767_254_430_000) and epoch_ms("2000-03-01T00:00:00Z") == Ok(951_868_800_000) and epoch_ms("") == Err(NotTime)
+
+## Text with its first letter a capital, as a group's title is written.
+sentence_case : Str -> Str
+sentence_case = |text| {
+	bytes = text.to_utf8()
+	match bytes.first() {
+		Ok(first) if first >= 'a' and first <= 'z' => Str.from_utf8(bytes.drop_first(1).prepend(first - 32)) ?? text
+		_ => text
+	}
+}
+
+## A branch's name, "detached", or "" outside git.
+branch_name : [Branch(Str), Detached, NotGit] -> Str
+branch_name = |branch|
+	match branch {
+		Branch(name) => name
+		Detached => "detached"
+		NotGit => ""
 	}
 
 ## Byte strings in order, as a dictionary orders words.

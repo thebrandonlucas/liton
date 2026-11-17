@@ -86,7 +86,7 @@ Protocol := [].{
 				offering = Manifest.offering(offered, id)
 				match provider {
 					_ if offering.is_empty() => Err({ code: Unsupported, message: "the daemon offers no ${capability}" })
-					Ok(named) if !offering.contains(named) => Err({ code: NotFound, message: "no provider ${named} offers ${capability}" })
+					Ok(provider_name) if !offering.contains(provider_name) => Err({ code: NotFound, message: "no provider ${provider_name} offers ${capability}" })
 					_ => Ok(id)
 				}
 			}

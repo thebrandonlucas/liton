@@ -1,20 +1,24 @@
 (test "Liton — in Tiling, a pane moved into its neighbour's column can share it as a tab"
   (steps
     (click (role button :name "Settings"))
+    (expect-visible (role region :name "Settings"))
     (click (role button :name "Tiling preset"))
     (expect-attr (role button :name "Tiling preset") aria-pressed "true")
     (click (role button :name "Settings"))
     (expect-absent (role region :name "Settings"))
     (click (role button :name "Chat menu"))
-    (click (role button :name "Move Chat left"))
+    (click (role button :name "Move to the column on the left"))
     ; Chat joined the Sessions column, and the Capabilities column is next.
     (expect-visible (role button :name "Sessions · Chat"))
     (expect-visible (role button :name "Capabilities"))
     (expect-attr (role region :name "Sessions") class "pane")
     ; Clicking in a pane focuses it, which its edge shows.
     (expect-attr (role region :name "Chat") class "pane focused")
-    (click (role button :name "Tabs"))
-    (expect-visible (role button :name "Stack"))
+    (click (role button :name "Chat menu"))
+    (click (role button :name "Show this column as tabs"))
+    (click (role button :name "Chat menu"))
+    (expect-visible (role button :name "Stack this column"))
+    (click (role button :name "Chat menu"))
     ; Only the active tab, the pane just moved in, shows.
     (expect-attr (role button :name "Chat") aria-pressed "true")
     (expect-attr (role region :name "Chat") class "pane focused")

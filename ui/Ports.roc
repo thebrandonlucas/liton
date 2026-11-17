@@ -1,5 +1,6 @@
 ## What the UI asks of the page's JavaScript (ui/ports.mjs) that
-## roc-signals 0.5.0 does not model: copying text to the clipboard, and
+## roc-signals does not model: copying text where the clipboard API is not
+## offered (a page served over plain HTTP from another machine), and
 ## voice (ui/Speech.roc).
 import pf.Engine
 import pf.Port
@@ -12,5 +13,5 @@ Ports := [].{
 	copy = Port.call({ name: "liton/copy", timeout: Ms(5000) })
 
 	registrations : List(Engine.PortRegistration)
-	registrations = [Ports.copy.registration()].concat(Speech.registrations)
+	registrations = Port.registrations({ copy: Ports.copy, capture: Speech.capture, order: Speech.order, voices: Speech.voices })
 }

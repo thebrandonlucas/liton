@@ -21,9 +21,10 @@ Setup := [].{
 	Column : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(Pane) }
 
 	## A layout as deterministic JSON others can load. `collapsed` are the
-	## Workbench drawers hidden. `theme` names the theme it shows, or is "" for
+	## Workbench drawers hidden, and `hidden` the ids of the panes it hides,
+	## which their column's ⋯ menus show again. `theme` names the theme it shows, or is "" for
 	## the setup's default; a preset's "" keeps the theme shown.
-	Snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot), theme : Str }
+	Snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot), hidden : List(Str), theme : Str }
 
 	Preset : { name : Str, snapshot : Snapshot }
 
@@ -31,7 +32,9 @@ Setup := [].{
 	## focused tile's edge fades into `accent_to` along; the text colors; how
 	## much of the accent, in percent, the tiles' faint `edge` and the focused
 	## one's `edge_active` hold; the tiles' `glass`, a tint, its opacity in
-	## percent and its blur in pixels (0 for none); what is behind the tiles;
+	## percent and its blur in pixels (0 for none); what is behind the tiles: a
+	## gradient, a color, or an image at a URL dimmed by `dim` percent at its
+	## centre and more towards its edges;
 	## the gap between them and their corners' radius in pixels; the font
 	## stacks of text, of the monospace chrome and of the display face; and
 	## whether things move. Colors are CSS colors.
@@ -45,7 +48,7 @@ Setup := [].{
 		edge : U8,
 		edge_active : U8,
 		glass : { tint : Str, opacity : U8, blur : U8 },
-		background : [Gradient({ base : Str, from : Str, to : Str, glow : Str }), Flat(Str)],
+		background : [Gradient({ base : Str, from : Str, to : Str, glow : Str }), Flat(Str), Image({ url : Str, dim : U8 })],
 		gap : U8,
 		radius : U8,
 		fonts : { ui : Str, mono : Str, display : Str },
@@ -64,7 +67,7 @@ Setup := [].{
 
 	## The version of the snapshots this layout describes.
 	snapshot_version : U32
-	snapshot_version = 5
+	snapshot_version = 6
 
 	empty : Declared
 	empty = { remotes: [], transformers: [], presets: [], default_preset: "", themes: [], default_theme: "" }
@@ -129,17 +132,21 @@ Setup := [].{
 	to_json : Declared -> Str
 	to_json = |setup| Json.to_str(setup)
 
-	## Reads a setup. One evaluated before setups held themes offers none, and
-	## its presets keep the theme shown.
+	## Reads a setup. One evaluated before snapshots hid panes hides none; one
+	## from before setups held themes offers none, and its presets keep the
+	## theme shown.
 	from_json : Str -> Try(Declared, [Invalid])
 	from_json = |text| {
 		parsed : Try(Declared, _)
 		parsed = Json.parse(text)
+		before_hidden : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot), theme : Str } }), default_preset : Str, themes : List(Theme), default_theme : Str }, _)
+		before_hidden = Json.parse(text)
 		before_themes : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) } }), default_preset : Str }, _)
 		before_themes = Json.parse(text)
-		match (parsed, before_themes) {
-			(Ok(setup), _) => Ok(setup)
-			(_, Ok({ remotes, transformers, presets, default_preset })) => Ok({ remotes, transformers, default_preset, presets: presets.map(|{ name, snapshot }| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, columns: snapshot.columns, collapsed: snapshot.collapsed, theme: "" } }), themes: [], default_theme: "" })
+		match (parsed, before_hidden, before_themes) {
+			(Ok(setup), _, _) => Ok(setup)
+			(_, Ok({ remotes, transformers, presets, default_preset, themes, default_theme }), _) => Ok({ remotes, transformers, default_preset, presets: presets.map(|{ name, snapshot }| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, columns: snapshot.columns, collapsed: snapshot.collapsed, hidden: [], theme: snapshot.theme } }), themes, default_theme })
+			(_, _, Ok({ remotes, transformers, presets, default_preset })) => Ok({ remotes, transformers, default_preset, presets: presets.map(|{ name, snapshot }| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, columns: snapshot.columns, collapsed: snapshot.collapsed, hidden: [], theme: "" } }), themes: [], default_theme: "" })
 			_ => Err(Invalid)
 		}
 	}
@@ -154,7 +161,7 @@ replaced = |items, item, same|
 	}
 
 layout : Str -> Setup.Snapshot
-layout = |widget| { version: Setup.snapshot_version, shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }], collapsed: [], theme: "" }
+layout = |widget| { version: Setup.snapshot_version, shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }], collapsed: [], hidden: [], theme: "" }
 
 chat : Setup.Preset
 chat = { name: "Chat", snapshot: layout("chat") }
@@ -209,7 +216,14 @@ expect {
 expect {
 	setup = { remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
 	text = Setup.to_json(setup)
-	text == "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":5}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
+	text == "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":6}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
+}
+
+# A setup evaluated before snapshots hid panes hides none.
+expect {
+	setup = { remotes: [echo], transformers: ["attention"], presets: [{ ..chat, snapshot: { ..chat.snapshot, version: 5 } }], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
+	text = "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":5}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}"
+	Setup.from_json(text) == Ok(setup)
 }
 
 # A setup evaluated before setups held themes offers none.

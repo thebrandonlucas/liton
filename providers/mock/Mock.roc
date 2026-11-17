@@ -39,33 +39,60 @@ Mock := [].{
 				StatusChanged(Running),
 				ToolCall({ call_id: "seed-2", tool: "bash", input: "zig build test --summary all" }),
 				ToolResult({ call_id: "seed-2", output: "test.timeline_order... FAIL (expected 3, got 2)", failed: Bool.True }),
-				PermissionRequested({ request_id: "seed-3", tool: "edit", description: "Sort entries by sequence in tests/timeline.roc" }),
+				PermissionRequested(Chat.permission({ request_id: "seed-3", tool: "edit", description: "Sort entries by sequence in tests/timeline.roc" })),
 				StatusChanged(AwaitingPermission),
 			],
 		},
 		{ id: "notes", agent: "claude", title: "Scratch", events: [StatusChanged(Idle)] },
 	]
 
+	## The plan a message asking for one gets, and its choices, as Claude's
+	## in Paseo.
+	plan : Str
+	plan =
+		\\## Plan
+		\\
+		\\1. Find where an empty list reaches `first` in `src/Main.roc`.
+		\\2. Return **an empty result** there instead of crashing.
+		\\3. Add a test for the empty case, and run `zig build test`.
+
+	plan_choices : List(Chat.Choice)
+	plan_choices = [
+		{ id: "reject", label: "Reject", allows: Bool.False, style: Danger },
+		{ id: "implement", label: "Implement", allows: Bool.True, style: Primary },
+		{ id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary },
+	]
+
 	## What follows a message. `next` is the timeline's next sequence number,
-	## which makes the ids of the calls and requests unique.
+	## which makes the ids of the calls and requests unique. A message that
+	## asks for a plan gets one to approve, in Markdown with its own choices.
 	on_message : Str, U64 -> List(Scheduled)
 	on_message = |text, next| {
 		call_id = "call-${next.to_str()}"
+		request_id = "permission-${next.to_str()}"
+		asked : Chat.Permission
+		asked =
+			if text.with_ascii_lowercased().contains("plan") {
+				{ ..Chat.permission({ request_id, tool: "ExitPlanMode", description: "Plan: handle the empty case" }), body: Ok(Mock.plan), choices: Ok(Mock.plan_choices) }
+			} else {
+				Chat.permission({ request_id, tool: "edit", description: "Edit src/Main.roc to handle the empty case" })
+			}
 		[
 			{ delay_ms: 0, event: UserMessage({ text: text }) },
 			{ delay_ms: 400, event: StatusChanged(Running) },
 			{ delay_ms: 1200, event: AgentMessage({ text: "Looking into it: \"${text}\"" }) },
 			{ delay_ms: 2000, event: ToolCall({ call_id, tool: "bash", input: "rg -n TODO src" }) },
 			{ delay_ms: 3200, event: ToolResult({ call_id, output: "src/Main.roc:12: # TODO handle the empty case", failed: Bool.False }) },
-			{ delay_ms: 4000, event: PermissionRequested({ request_id: "permission-${next.to_str()}", tool: "edit", description: "Edit src/Main.roc to handle the empty case" }) },
+			{ delay_ms: 4000, event: PermissionRequested(asked) },
 			{ delay_ms: 4000, event: StatusChanged(AwaitingPermission) },
 		]
 	}
 
-	## What follows an answer to a pending permission request.
-	on_answer : Str, Bool, U64 -> List(Scheduled)
-	on_answer = |request_id, allowed, next| {
-		answered = { delay_ms: 0, event: PermissionAnswered({ request_id, allowed }) }
+	## What follows an answer to a pending permission request, with the
+	## choice taken, if it offered its own.
+	on_answer : Str, Bool, Try(Str, [Missing]), U64 -> List(Scheduled)
+	on_answer = |request_id, allowed, choice, next| {
+		answered = { delay_ms: 0, event: PermissionAnswered({ request_id, allowed, choice }) }
 		if allowed {
 			call_id = "call-${next.to_str()}"
 			[
@@ -91,16 +118,61 @@ Mock := [].{
 	on_cancel : List(Chat.Entry) -> List(Scheduled)
 	on_cancel = |timeline|
 		if [Running, AwaitingPermission].contains(Mock.status(timeline)) {
-			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
+			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False, choice: Err(Missing) }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
 		} else {
 			[]
 		}
 
 	## What follows starting an agent with a first prompt: it runs at once,
 	## as `on_message` goes on. Without a prompt it waits, idle.
+	## Matched, not compared with `==`: compared, Roc nightly-2026-11-07 says
+	## its is_eq "never resolved to a concrete type" once an event can hold a
+	## plan's choices (near https://github.com/roc-lang/roc/issues/12883).
+	## nightly-2026-11-15 compiles it: compare again once .roc-version moves
+	## there, with basic-webserver.
 	on_create : Str -> List(Scheduled)
 	on_create = |prompt|
-		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(|scheduled| if (scheduled.event == StatusChanged(Running)) { ..scheduled, delay_ms: 0 } else scheduled)
+		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(
+			|scheduled| match scheduled.event {
+				StatusChanged(Running) => { ..scheduled, delay_ms: 0 }
+				_ => scheduled
+			},
+		)
+
+	## `scheduled`, run from `at` (ms since the epoch), with each turn's end
+	## before the status that ends it: a turn starts when the agent runs, or
+	## at `started` if it was already working, and ends when it is idle,
+	## finished or failed.
+	ended : Try(I64, [Missing]), I64, List(Scheduled) -> List(Scheduled)
+	ended = |started, at, scheduled| {
+		walked = scheduled.fold(
+			{ open: started, so_far: [] },
+			|{ open, so_far }, item|
+				match (item.event, open) {
+					(StatusChanged(Running), Err(Missing)) => { open: Ok(at + item.delay_ms.to_i64_wrap()), so_far: so_far.append(item) }
+					(StatusChanged(Idle), Ok(since)) | (StatusChanged(Finished), Ok(since)) | (StatusChanged(Failed(_)), Ok(since)) => {
+						turn_ended = { delay_ms: item.delay_ms, event: TurnEnded({ started: Ok(Chat.timestamp(since)), ended: Chat.timestamp(at + item.delay_ms.to_i64_wrap()) }) }
+						{ open: Err(Missing), so_far: so_far.append(turn_ended).append(item) }
+					}
+					_ => { open, so_far: so_far.append(item) }
+				},
+		)
+		walked.so_far
+	}
+
+	## When the turn a timeline is working on started: its last run, unless
+	## it went idle, finished or failed since.
+	turn_started : List({ visible_at : I64, event : Chat.Event }) -> Try(I64, [Missing])
+	turn_started = |timed|
+		timed.fold(
+			Err(Missing),
+			|open, shown|
+				match (shown.event, open) {
+					(StatusChanged(Running), Err(Missing)) => Ok(shown.visible_at)
+					(StatusChanged(Idle), _) | (StatusChanged(Finished), _) | (StatusChanged(Failed(_)), _) => Err(Missing)
+					_ => open
+				},
+		)
 
 	## The kinds of agent the mock provider starts.
 	agents : List(Chat.Agent)
@@ -117,18 +189,13 @@ Mock := [].{
 
 	## A session from its timeline's visible events, each with when it became
 	## visible (ms since the epoch): its status, its agent's model, the
-	## workspace of `workspaces` it works in and its branch, when its running
-	## turn started and when it last changed.
+	## workspace of `workspaces` it works in and its branch, when the turn it
+	## is working on started, waiting for you or not, and when it last
+	## changed.
 	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
 	session = |{ id, agent, title }, workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
 		placed = workspaces.find_first(|shown| shown.session_ids.contains(id))
-		last_status = timed.keep_if(
-			|shown| match shown.event {
-				StatusChanged(_) => Bool.True
-				_ => Bool.False
-			},
-		).last()
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
 			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),
@@ -139,7 +206,7 @@ Mock := [].{
 					_ => Err(Missing)
 				},
 			) ?? Err(Missing),
-			running_since: if (current == Running) last_status.map_ok(|shown| Chat.timestamp(shown.visible_at)).map_err(|_| Missing) else Err(Missing),
+			running_since: Mock.turn_started(timed).map_ok(Chat.timestamp),
 			updated: timed.last().map_ok(|shown| Chat.timestamp(shown.visible_at)).map_err(|_| Missing),
 		}
 	}
@@ -167,6 +234,18 @@ Mock := [].{
 		{ id: "fix-auth", provider: "mock", project_id: "liton", name: "fix-auth", directory: "/mock/liton-fix-auth", kind: Worktree, branch: Branch("fix-auth"), state: Idle, dirty: Bool.True, changes: Counted({ additions: 1, deletions: 1 }), pinned: Bool.True, labels: ["auth"], session_ids: ["fix-auth"] },
 		{ id: "main", provider: "mock", project_id: "liton", name: "main", directory: "/mock/liton", kind: Checkout, branch: Branch("main"), state: Idle, dirty: Bool.False, changes: Counted({ additions: 0, deletions: 0 }), pinned: Bool.False, labels: [], session_ids: ["flaky-ci", "notes"] },
 	]
+
+	## The mock's workspaces as the daemon keeps their changes: each seeded
+	## one as it was changed last, if it was, then those made since, without
+	## those archived.
+	with_changes : List({ id : Str, workspace : Try(Workspaces.Workspace, [Archived]) }) -> List(Workspaces.Workspace)
+	with_changes = |stored| {
+		seeded = Mock.workspaces.map(|shown| shown.id)
+		Mock.workspaces
+			.map(|shown| stored.find_first(|changed| changed.id == shown.id).map_ok(|changed| changed.workspace) ?? Ok(shown))
+			.concat(stored.drop_if(|changed| seeded.contains(changed.id)).map(|changed| changed.workspace))
+			.keep_oks(|shown| shown)
+	}
 
 	## A workspace's git. fix-auth's has the login fix uncommitted and one
 	## commit ahead of main; main is clean.
@@ -272,13 +351,24 @@ expect {
 }
 
 expect Mock.on_message("hi", 7).len() == 7
-expect Mock.on_answer("p", Bool.False, 3).len() == 3
+expect Mock.on_answer("p", Bool.False, Err(Missing), 3).len() == 3
+expect {
+	asked = |text| Mock.on_message(text, 7).keep_oks(
+		|scheduled| match scheduled.event {
+			PermissionRequested(question) => Ok(question)
+			_ => Err(NotAsked)
+		},
+	)
+	asked("Plan the fix").map(|question| (question.tool, question.body, question.choices.map_ok(|choices| choices.map(|choice| choice.id)))) == [("ExitPlanMode", Ok(Mock.plan), Ok(["reject", "implement", "implement_resume"]))]
+		and asked("Fix it").map(|question| (question.body, question.choices)) == [(Err(Missing), Err(Missing))]
+		and Mock.on_answer("permission-7", Bool.True, Ok("implement"), 9).first().map_ok(|scheduled| scheduled.event) == Ok(PermissionAnswered({ request_id: "permission-7", allowed: Bool.True, choice: Ok("implement") }))
+}
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
 
 expect {
-	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested({ request_id: "p1", tool: "edit", description: "" }) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
-	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
+	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested(Chat.permission({ request_id: "p1", tool: "edit", description: "" })) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
+	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False, choice: Err(Missing) }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
 		and Mock.on_cancel([{ sequence: 1, event: StatusChanged(Idle) }]) == []
 }
 expect Mock.git("main", Uncommitted, NoFile).diff == []
@@ -313,4 +403,27 @@ expect Mock.on_create("").map(|scheduled| scheduled.event) == [StatusChanged(Idl
 expect {
 	project = Mock.projects.first() ?? { id: "", provider: "", name: "", directory: "" }
 	(Mock.made_workspace(project, "w1", Worktree, "docs").directory, Mock.made_workspace(project, "w2", Checkout, "docs").branch) == ("/mock/liton-docs", Branch("main"))
+}
+
+# A turn runs from the agent's run, through a wait for you, to its idle.
+expect {
+	timed = [{ visible_at: 1_000, event: StatusChanged(Running) }, { visible_at: 2_000, event: StatusChanged(AwaitingPermission) }]
+	answered = Mock.ended(Mock.turn_started(timed), 1_767_258_000_000, Mock.on_answer("p", Bool.False, Err(Missing), 3))
+	Mock.turn_started(timed) == Ok(1_000)
+		and Mock.turn_started(timed.append({ visible_at: 3_000, event: StatusChanged(Idle) })) == Err(Missing)
+		and Mock.session({ id: "notes", agent: "claude", title: "" }, Mock.workspaces, timed).running_since == Ok("1970-01-01T00:00:01.000Z")
+		and answered.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:01.000Z"), ended: "2026-01-01T09:00:00.500Z" }), StatusChanged(Idle)]
+}
+
+expect {
+	seeded = Mock.ended(Err(Missing), 0, [UserMessage({ text: "Hi" }), StatusChanged(Running), AgentMessage({ text: "Hello" }), StatusChanged(Idle)].map(|event| { delay_ms: 0, event }))
+	seeded.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:00.000Z"), ended: "1970-01-01T00:00:00.000Z" }), StatusChanged(Idle)]
+		and Mock.ended(Err(Missing), 0, Mock.on_create("")) == Mock.on_create("")
+}
+
+expect {
+	made = { ..Mock.workspaces.first() ?? Mock.made_workspace({ id: "", provider: "", name: "", directory: "" }, "", Checkout, ""), id: "workspace-1", name: "docs" }
+	renamed = { ..(Mock.workspaces.first() ?? made), name: "login", pinned: Bool.False }
+	Mock.with_changes([]) == Mock.workspaces
+		and Mock.with_changes([{ id: "main", workspace: Err(Archived) }, { id: "fix-auth", workspace: Ok(renamed) }, { id: "workspace-1", workspace: Ok(made) }]).map(|shown| (shown.id, shown.name)) == [("fix-auth", "login"), ("workspace-1", "docs")]
 }

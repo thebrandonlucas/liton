@@ -6,7 +6,7 @@
     (run-effect 2)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[{\"Status\":{\"stt\":\"Ready\"}}]}]}")
     (run-effect 3)
-    (expect-no-attr (role button :name "Dictate") "aria-disabled")
+    (expect-no-attr (role button :name "Dictate") "aria-disabled" :never-written)
     (fill (label "Message") "Please now")
     (click (role button :name "Dictate"))
     ; Listening before the page has the microphone.

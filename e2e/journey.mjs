@@ -57,7 +57,8 @@ try {
   const base = `http://127.0.0.1:${port}`;
   await until("the manifest", async () => (await fetch(`${base}/liton/v1/manifest`)).ok);
 
-  const browser = await launch({ executablePath: process.env.CHROME || "chromium" });
+  // A laptop's window, not headless Chrome's small default, in which a drawer is too short to show a file.
+  const browser = await launch({ executablePath: process.env.CHROME || "chromium", args: ["--window-size=1280,800"] });
   const page = await browser.newPage();
   await page.goto(`${base}/`);
   // Whether an element matching `selector` in the pane named `pane` contains `text`.
@@ -81,12 +82,14 @@ try {
   };
 
   await step("the three preset panes render, with Capabilities left to Settings", async () => {
-    for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header", "⋯");
+    for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header .menu-toggle");
     await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
   await step("the mock's project, its workspaces and their seeded sessions appear in Workspaces", async () => {
-    await see("Workspaces", ".tree-group button", "liton");
-    for (const name of ["fix-auth", "main"]) await see("Workspaces", ".tree-workspace button", name);
+    await see("Workspaces", ".tree-group button", "Liton");
+    // fix-auth holds one session, which stands in its place with its branch.
+    await see("Workspaces", ".tree-workspace button", "main");
+    await see("Workspaces", ".tree-session .branch", "fix-auth");
     for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Workspaces", ".tree-session button", title);
   });
   await step("the flaky CI session is waiting for you", () =>
@@ -128,7 +131,7 @@ try {
   await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
     await click("Workspaces", ".tree-session button", "Fix the login redirect");
     await see("Changes", ".git-status", "fix-auth");
-    await click("Changes", ".git-file button", "src/Auth.roc");
+    await click("Changes", '.git-file button[aria-label="src/Auth.roc"]', "Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
     await see("Changes", ".code-row .added", "redirect_to = request.came_from");
     await see("Chat", ".markdown .code", "/login");
@@ -151,7 +154,7 @@ try {
     await see("Chat", ".entry.user", "src/Auth.roc:2-3");
     await see("Chat", ".entry.user", "Fall back to");
     await see("Chat", ".markdown", "Looking into it", 8000);
-    await see("Files", '[data-testid="review-summary"]', "no drafts · 1 round sent");
+    await see("Files", '[data-testid="review-summary"]', "1 round sent");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Workspaces", ".tree-session button", "Find the flaky CI test");
@@ -184,7 +187,9 @@ try {
   });
   await step("a new permission prompt asks to edit", () => see("Chat", "div.permission", "Allow edit: Edit src/Main.roc to handle the empty case?", 8000));
   await step("Stop ends the turn: the prompt goes, and the agent says it stopped", async () => {
-    await click("Chat", ".pane-header button", "Stop");
+    // The round button stops only once nothing is typed; with "Next" in the composer it sends.
+    for (const _ of "Next") await page.keyboard.press("Backspace");
+    await click("Chat", '.composer button[aria-label="Stop"]', "");
     await see("Chat", ".markdown", "Stopped.", 8000);
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
     await see("Chat", '.pane-header [data-testid="session-status"]', "idle");
@@ -196,7 +201,7 @@ try {
       const starting = () => [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.textContent.includes("starting…"));
       new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
-    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent in fix-auth"]');
+    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Fix the login redirect"]');
     await see("Workspaces", ".create-form", "New agent in fix-auth");
     await (await page.$('section[aria-label="Workspaces"] input[aria-label="First prompt"]')).type("Write the docs");
     await click("Workspaces", ".create-form button", "Start");

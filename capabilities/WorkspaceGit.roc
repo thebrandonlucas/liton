@@ -58,7 +58,7 @@ WorkspaceGit := [].{
 	snapshot : Scope, Try(Found, [Unknown]) -> Snapshot
 	snapshot = |scope, found|
 		match found {
-			Ok({ workspace, status, fingerprint, diff, commits }) => { workspace: Known(workspace), status, changes: { scope, fingerprint, files: diff.map(|shown| shown.file) }, commits }
+			Ok({ workspace, status, fingerprint: found_fingerprint, diff, commits }) => { workspace: Known(workspace), status, changes: { scope, fingerprint: found_fingerprint, files: diff.map(|shown| shown.file) }, commits }
 			Err(Unknown) => { workspace: Unknown, status: NoStatus, changes: { scope, fingerprint: WorkspaceGit.fingerprint(scope, []), files: [] }, commits: [] }
 		}
 

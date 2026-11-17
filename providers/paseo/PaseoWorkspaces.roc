@@ -2,8 +2,8 @@ import cap.Workspaces
 import Paseo
 
 ## Paseo's projects and workspaces as workspaces.v1's, from its WebSocket, and
-## the workspaces liton creates there. Of Paseo's other workspace writes
-## (archive, rename, pin...) liton calls none.
+## the workspaces liton creates, renames, pins and archives there, and the
+## projects it renames.
 PaseoWorkspaces := [].{
 
 	## A workspace as `fetch_workspaces_response` describes it. Paseo leaves
@@ -74,6 +74,37 @@ PaseoWorkspaces := [].{
 			Err(Null) => Err(Refused(payload.error ?? "Paseo did not create the workspace"))
 		}
 	}
+
+	## Renames a workspace, or gives it back the name Paseo derives from its
+	## branch or directory with "". Paseo answers with a
+	## `workspace.title.set.response` (see `Paseo.accepted`).
+	rename_request : Str, Str, Str -> Str
+	rename_request = |workspace_id, name, request_id| Json.to_str({ type: "session", message: { type: "workspace.title.set.request", workspaceId: workspace_id, title: name, requestId: request_id } })
+
+	## Pins or unpins a workspace. Paseo answers with a
+	## `workspace.pin.set.response` (see `Paseo.accepted`).
+	pin_request : Str, Bool, Str -> Str
+	pin_request = |workspace_id, pinned, request_id| Json.to_str({ type: "session", message: { type: "workspace.pin.set.request", workspaceId: workspace_id, pinned, requestId: request_id } })
+
+	## Archives a workspace: Paseo lists it no more. It answers with an
+	## `archive_workspace_response` (see `archived`).
+	archive_request : Str, Str -> Str
+	archive_request = |workspace_id, request_id| Json.to_str({ type: "session", message: { type: "archive_workspace_request", workspaceId: workspace_id, requestId: request_id } })
+
+	archived : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	archived = |text, request_id| {
+		answered : Try({ message : { payload : { error : Try(Str, [Null]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "archive_workspace_response", request_id)?)
+		match answered?.message.payload.error {
+			Ok(reason) => Err(Refused(reason))
+			Err(Null) => Ok({})
+		}
+	}
+
+	## Renames a project, or gives it back the name Paseo derives with "".
+	## Paseo answers with a `project.rename.response` (see `Paseo.accepted`).
+	rename_project_request : Str, Str, Str -> Str
+	rename_project_request = |project_id, name, request_id| Json.to_str({ type: "session", message: { type: "project.rename.request", projectId: project_id, customName: name, requestId: request_id } })
 }
 
 workspace : PaseoWorkspaces.Descriptor -> Workspaces.Workspace
@@ -149,3 +180,20 @@ expect {
 }
 
 expect PaseoWorkspaces.created("{\"type\":\"session\",\"message\":{\"type\":\"workspace.create.response\",\"payload\":{\"requestId\":\"r1\",\"workspace\":{\"id\":\"wks_0123456789abcdef\"},\"setupTerminalId\":null,\"error\":null}}}", "r1") == Ok("wks_0123456789abcdef")
+
+expect {
+	writes = [PaseoWorkspaces.rename_request("w1", "Login", "r1"), PaseoWorkspaces.pin_request("w1", Bool.True, "r1"), PaseoWorkspaces.archive_request("w1", "r1"), PaseoWorkspaces.rename_project_request("p1", "", "r1")]
+	writes
+		== [
+			"{\"message\":{\"requestId\":\"r1\",\"title\":\"Login\",\"type\":\"workspace.title.set.request\",\"workspaceId\":\"w1\"},\"type\":\"session\"}",
+			"{\"message\":{\"pinned\":true,\"requestId\":\"r1\",\"type\":\"workspace.pin.set.request\",\"workspaceId\":\"w1\"},\"type\":\"session\"}",
+			"{\"message\":{\"requestId\":\"r1\",\"type\":\"archive_workspace_request\",\"workspaceId\":\"w1\"},\"type\":\"session\"}",
+			"{\"message\":{\"customName\":\"\",\"projectId\":\"p1\",\"requestId\":\"r1\",\"type\":\"project.rename.request\"},\"type\":\"session\"}",
+		]
+}
+
+expect {
+	answer = |error| "{\"type\":\"session\",\"message\":{\"type\":\"archive_workspace_response\",\"payload\":{\"requestId\":\"r1\",\"workspaceId\":\"w1\",\"archivedAt\":null,\"error\":${error}}}}"
+	pinned = "{\"type\":\"session\",\"message\":{\"type\":\"workspace.pin.set.response\",\"payload\":{\"requestId\":\"r1\",\"workspaceId\":\"w1\",\"accepted\":true,\"pinnedAt\":\"2026-01-01T00:00:00.000Z\",\"error\":null}}}"
+	PaseoWorkspaces.archived(answer("null"), "r1") == Ok({}) and PaseoWorkspaces.archived(answer("\"Workspace not found\""), "r1") == Err(Refused("Workspace not found")) and Paseo.accepted(pinned, "workspace.pin.set.response", "r1") == Ok({})
+}

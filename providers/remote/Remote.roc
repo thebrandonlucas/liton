@@ -66,6 +66,8 @@ Remote := [].{
 			SendMessage({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			AnswerPermission({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			Cancel({ session_id }) => Remote.owner(endpoints, session_id)
+			Rename({ session_id, .. }) => Remote.owner(endpoints, session_id)
+			Archive({ session_id }) => Remote.owner(endpoints, session_id)
 			Create({ place: Workspace(workspace_id), .. }) => Remote.owner(endpoints, workspace_id)
 			Create({ place: Directory(_), .. }) => Err(Local)
 		}
@@ -107,6 +109,8 @@ Remote := [].{
 				SendMessage(message) => SendMessage({ ..message, session_id: their_id(message.session_id) })
 				AnswerPermission(answer) => AnswerPermission({ ..answer, session_id: their_id(answer.session_id) })
 				Cancel({ session_id }) => Cancel({ session_id: their_id(session_id) })
+				Rename(renamed) => Rename({ ..renamed, session_id: their_id(renamed.session_id) })
+				Archive({ session_id }) => Archive({ session_id: their_id(session_id) })
 				Create(created) =>
 					match created.place {
 						Workspace(workspace_id) => Create({ ..created, place: Workspace(their_id(workspace_id)) })
@@ -116,12 +120,34 @@ Remote := [].{
 		{ capability: "chat.v1", provider: provider.map_ok(their_id), request }
 	}
 
-	## A workspaces.v1 Create to the remote `name`, its project and provider
-	## as the remote names them.
-	workspaces_call : Str, Try(Str, [Missing]), Workspaces.Create -> Protocol.Call(Workspaces.Request)
-	workspaces_call = |name, provider, created| {
+	## The remote whose workspace or project a workspaces.v1 request names,
+	## if any.
+	workspaces_owner : List(Endpoint), Workspaces.Request -> Try(Endpoint, [Local])
+	workspaces_owner = |endpoints, asked|
+		match asked {
+			ListWorkspaces => Err(Local)
+			Create({ project_id, .. }) => Remote.owner(endpoints, project_id)
+			Rename({ workspace_id, .. }) => Remote.owner(endpoints, workspace_id)
+			Pin({ workspace_id, .. }) => Remote.owner(endpoints, workspace_id)
+			Archive({ workspace_id }) => Remote.owner(endpoints, workspace_id)
+			RenameProject({ project_id, .. }) => Remote.owner(endpoints, project_id)
+		}
+
+	## A workspaces.v1 call to the remote `name`, its workspace or project
+	## and provider as the remote names them.
+	workspaces_call : Str, Try(Str, [Missing]), Workspaces.Request -> Protocol.Call(Workspaces.Request)
+	workspaces_call = |name, provider, asked| {
 		their_id = |id| id.drop_prefix("${name}/")
-		{ capability: "workspaces.v1", provider: provider.map_ok(their_id), request: Create({ ..created, project_id: their_id(created.project_id) }) }
+		request =
+			match asked {
+				ListWorkspaces => ListWorkspaces
+				Create(created) => Create({ ..created, project_id: their_id(created.project_id) })
+				Rename(renamed) => Rename({ ..renamed, workspace_id: their_id(renamed.workspace_id) })
+				Pin(pinned) => Pin({ ..pinned, workspace_id: their_id(pinned.workspace_id) })
+				Archive({ workspace_id }) => Archive({ workspace_id: their_id(workspace_id) })
+				RenameProject(renamed) => RenameProject({ ..renamed, project_id: their_id(renamed.project_id) })
+			}
+		{ capability: "workspaces.v1", provider: provider.map_ok(their_id), request }
 	}
 
 	## A remote's answer to a chat.v1 call, a session it started named under
@@ -247,7 +273,7 @@ expect {
 expect Remote.serves("peer", Err(Missing)) and Remote.serves("peer", Ok("peer/mock")) and !Remote.serves("peer", Ok("mock"))
 
 expect Remote.call("peer", Ok("peer/c/mock"), SendMessage({ session_id: "peer/c/s1", text: "Hi" })) == { capability: "chat.v1", provider: Ok("c/mock"), request: SendMessage({ session_id: "c/s1", text: "Hi" }) }
-expect Remote.call("peer", Err(Missing), AnswerPermission({ session_id: "peer/s1", request_id: "r1", allowed: Bool.True })).request == AnswerPermission({ session_id: "s1", request_id: "r1", allowed: Bool.True })
+expect Remote.call("peer", Err(Missing), AnswerPermission({ session_id: "peer/s1", request_id: "r1", allowed: Bool.True, choice: Ok("implement") })).request == AnswerPermission({ session_id: "s1", request_id: "r1", allowed: Bool.True, choice: Ok("implement") })
 expect Remote.call("peer", Err(Missing), Cancel({ session_id: "peer/s1" })).request == Cancel({ session_id: "s1" }) and Remote.chat_owner([echo, peer], Cancel({ session_id: "peer/s1" })) == Ok(peer)
 
 # Sessions, and the projects and workspaces that list them, are named under the remote.
@@ -279,4 +305,6 @@ expect {
 	created = { place: Workspace("peer/w1"), agent: "claude", model: Err(Missing), prompt: "Hi" }
 	Remote.chat_owner([echo, peer], Create(created)) == Ok(peer) and Remote.call("peer", Err(Missing), Create(created)).request == Create({ ..created, place: Workspace("w1") }) and Remote.chat_answer("peer", Ok(Started({ session_id: "s9" }))) == Ok(Started({ session_id: "peer/s9" }))
 }
-expect Remote.workspaces_call("peer", Ok("peer/mock"), { project_id: "peer/p1", kind: Worktree, branch: Err(Missing) }) == { capability: "workspaces.v1", provider: Ok("mock"), request: Create({ project_id: "p1", kind: Worktree, branch: Err(Missing) }) } and Remote.workspaces_answer("peer", Ok(Created({ workspace_id: "w2" }))) == Ok(Created({ workspace_id: "peer/w2" }))
+expect Remote.workspaces_call("peer", Ok("peer/mock"), Pin({ workspace_id: "peer/w1", pinned: Bool.True })).request == Pin({ workspace_id: "w1", pinned: Bool.True })
+expect Remote.call("peer", Err(Missing), Rename({ session_id: "peer/s1", title: "Login" })).request == Rename({ session_id: "s1", title: "Login" })
+expect Remote.workspaces_call("peer", Ok("peer/mock"), Create({ project_id: "peer/p1", kind: Worktree, branch: Err(Missing) })) == { capability: "workspaces.v1", provider: Ok("mock"), request: Create({ project_id: "p1", kind: Worktree, branch: Err(Missing) }) } and Remote.workspaces_answer("peer", Ok(Created({ workspace_id: "w2" }))) == Ok(Created({ workspace_id: "peer/w2" }))

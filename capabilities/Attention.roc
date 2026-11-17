@@ -10,7 +10,8 @@ Attention := [].{
 	## How urgent an item is, in this order.
 	State : [NeedsYou, Failed, Working, Done, Idle]
 
-	Permission : { request_id : Str, tool : Str, description : Str }
+	## A request as chat.v1 has it, with its body and choices, if any.
+	Permission : Chat.Permission
 
 	## `summary` is the agent's last message, or why it failed, when the daemon
 	## has the timeline. A NeedsYou item's `permissions` are the requests no answer
@@ -138,7 +139,7 @@ session : Chat.Status -> Chat.Session
 session = |status| Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status })
 
 asked : Chat.Entry
-asked = { sequence: 3, event: PermissionRequested({ request_id: "p1", tool: "bash", description: "rm -rf build" }) }
+asked = { sequence: 3, event: PermissionRequested(Chat.permission({ request_id: "p1", tool: "bash", description: "rm -rf build" })) }
 
 # What needs you first, then the latest; as recent, by state.
 expect {
@@ -160,13 +161,13 @@ expect {
 expect {
 	said = { sequence: 2, event: AgentMessage({ text: "Fixed it." }) }
 	shown = Attention.item(session(AwaitingPermission), [said, asked])
-	shown.summary == "Fixed it." and shown.permissions == [{ request_id: "p1", tool: "bash", description: "rm -rf build" }]
+	shown.summary == "Fixed it." and shown.permissions == [Chat.permission({ request_id: "p1", tool: "bash", description: "rm -rf build" })]
 }
 
 # Settled, an item stays aside until something new happens to it.
 expect {
 	waiting = Attention.item(session(AwaitingPermission), [asked])
-	answered = Attention.item(session(Running), [asked, { sequence: 4, event: PermissionAnswered({ request_id: "p1", allowed: Bool.True }) }])
+	answered = Attention.item(session(Running), [asked, { sequence: 4, event: PermissionAnswered({ request_id: "p1", allowed: Bool.True, choice: Err(Missing) }) }])
 	settled = [{ session_id: "s1", signature: waiting.signature, snoozed_until: 0 }]
 	Attention.ranked([waiting], settled, [], 5).map(|shown| shown.set_aside) == [Settled] and Attention.ranked([answered], settled, [], 5).map(|shown| shown.set_aside) == [No]
 }

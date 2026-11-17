@@ -7,8 +7,8 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
     (run-effect 3)
     (fill (label "Message") "Find the TODOs")
-    ; Enter submits the form, the box still focused.
-    (submit (label "Send a message"))
+    ; Enter sends, the box still focused.
+    (press (label "Message") "Enter")
     (expect-text (test-id "sent-status") "Sending…")
     (expect-value (label "Message") "")
     (fill (label "Message") "Then the FIXMEs")

@@ -4,9 +4,12 @@
     (run-effect 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}},{\"agent\":\"codex\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Write docs\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"fix-tests\"},\"changes\":{\"Counted\":{\"additions\":3,\"deletions\":1}},\"directory\":\"/src/app\",\"dirty\":true,\"id\":\"w1\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\",\"s2\"],\"state\":\"NeedsYou\"}]}}]}]}")
     (run-effect 2)
-    (expect-visible (role button :name "app"))
+    (expect-visible (role button :name "App"))
     (expect-visible (text "fix-tests"))
-    (expect-visible (text "+3 −1"))
+    (expect-visible (text "+3"))
+    (expect-visible (text "−1"))
+    ; The right drawer's button shows the changes of the chat's workspace.
+    (expect-text (label "Right drawer") "+3−1")
     (expect-visible (role button :name "Fix tests"))
     (expect-visible (text "waiting for you"))
     ; The chat follows the first session until a workspace is picked.
@@ -23,7 +26,7 @@
     ; Clicking its other session focuses that one.
     (click (role button :name "Fix tests"))
     (expect-text (test-id "session-title") "Fix tests")
-    (click (role button :name "app"))
+    (click (role button :name "App"))
     (expect-absent (role button :name "main"))
   )
 )

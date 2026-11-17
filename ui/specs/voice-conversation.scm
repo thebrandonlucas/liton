@@ -38,7 +38,7 @@
     (expect-text (test-id "voice-status") "Listening")
     (expect-visible (role button :name "End the conversation"))
     (expect-port-sent "liton/voice/order" 3 "{\"hush\":\"1\",\"picked\":\"Unknown\",\"replies\":[{\"sequence\":\"3\",\"text\":\"All 12 tests pass.\"}],\"session\":\"s1\",\"stop\":\"0\"}")
-    (expect-absent (test-id "stop-status"))
+    (expect-absent (test-id "stop-status") :never-drawn)
     (click (role button :name "End the conversation"))
     (expect-attr (role button :name "Conversation") "aria-pressed" "false")
     (expect-port-subscriptions "liton/voice/capture" 0)

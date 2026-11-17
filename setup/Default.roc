@@ -22,6 +22,7 @@ Default := [].{
 				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }] },
 			],
 			collapsed: [],
+			hidden: [],
 			theme: "",
 		},
 	}
@@ -55,12 +56,14 @@ Default := [].{
 				{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "", options: [] }] },
 			],
 			collapsed: [],
+			hidden: [],
 			theme: "",
 		},
 	}
 
-	## Gold on a dark gradient with a faint warm glow, glass tiles and a serif
-	## display face: the default.
+	## Gold over Thomas Cole's "The Arcadian or Pastoral State" (1834, public
+	## domain), dimmed under dark glass tiles, with a serif display face: the
+	## default. The painting is served from the daemon's static files.
 	pastoral : Setup.Theme
 	pastoral = {
 		name: "Pastoral",
@@ -71,8 +74,8 @@ Default := [].{
 		muted: "#a8a08a",
 		edge: 22,
 		edge_active: 70,
-		glass: { tint: "#0c0c0c", opacity: 46, blur: 5 },
-		background: Gradient({ base: "#0a0907", from: "#282114", to: "#15211b", glow: "#e8c872" }),
+		glass: { tint: "#0c0c0c", opacity: 55, blur: 5 },
+		background: Image({ url: "/ui/backgrounds/pastoral.webp", dim: 45 }),
 		gap: 10,
 		radius: 10,
 		fonts: { ui: Default.system_font, mono: Default.mono_font, display: "\"EB Garamond\", \"Iowan Old Style\", \"Palatino Linotype\", Palatino, Georgia, serif" },

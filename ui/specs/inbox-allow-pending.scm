@@ -22,6 +22,7 @@
     (expect-visible (text "no pending permission request p1"))
     (click (role button :name "Allow Fix tests"))
     (expect-text (test-id "answer-status") "Allowing…")
+    (expect-visible (text "Allowing…"))
     (stub-http "answer" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
     (run-effect 5)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i2\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"Working 1\",\"state\":\"Working\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"}]}]}]}")

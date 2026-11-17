@@ -24,6 +24,7 @@ review = {
 			{ id: "column-3", size: 2, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [{ key: "diff_layout", value: "Split" }] }] },
 		],
 		collapsed: [],
+		hidden: [],
 		theme: "",
 	},
 }

@@ -9,6 +9,7 @@ import pf.Html
 import cap.Capability
 import Model
 import Speech
+import Dropdown
 
 Microphone := [].{
 
@@ -166,9 +167,8 @@ Microphone := [].{
 				Model.submit(Model.set_draft(changed_to(done), voice.pane, Speech.insert(draft, end, end, text)), voice.pane)
 			}
 			Ok(Transcript({ text, from, to })) if voice.mode == Dictation => {
-				count = (state.cleared.find_first(|composer| composer.pane == voice.pane).map_ok(|composer| composer.count) ?? 0) + 1
 				typed = Model.set_draft(state, voice.pane, Speech.insert(Model.draft(state, voice.pane), from, to, text))
-				{ ..typed, cleared: typed.cleared.drop_if(|composer| composer.pane == voice.pane).append({ pane: voice.pane, count }), voice: done }
+				{ ..typed, drafts_rewritten: typed.drafts_rewritten + 1, voice: done }
 			}
 			Ok(Transcript({ text, .. })) if Speech.echoes(text, Microphone.replies(state).last().map_ok(|reply| reply.text) ?? "") => { ..changed_to(done), notice: "Not sent: it sounded like the reply read back" }
 			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim() }))
@@ -186,8 +186,8 @@ Microphone := [].{
 	order : Model.State -> Speech.Order
 	order = |state| {
 		voice = state.voice
-		replies = if (voice.mode != Conversation or voice.phase != Listening) [] else Microphone.replies(state)
-		{ stop: voice.stopping, hush: voice.hush, session: voice.session, replies, picked: voice.picked }
+		spoken = if (voice.mode != Conversation or voice.phase != Listening) [] else Microphone.replies(state)
+		{ stop: voice.stopping, hush: voice.hush, session: voice.session, replies: spoken, picked: voice.picked }
 	}
 
 	## The agent's messages in a conversation's session since it started.
@@ -220,18 +220,18 @@ Microphone := [].{
 			model.signal().map(Microphone.recording),
 			|asked_for|
 				match asked_for {
-					Recording(asked) => [Speech.capture.subscribe(asked)]
+					Recording(asked) => [Speech.capture.ask(asked)]
 					NotRecording => []
 				},
-			model.on_result(|state, _, res| Microphone.heard(state, Speech.capture.message(res))),
+			model.on_result(|state, _, res| Microphone.heard(state, res)),
 		),
-		Engine.watch_changes(model.signal().map(Microphone.order), |asked| [Speech.order.send(asked)], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(Microphone.order), |asked| [Engine.command(Speech.order.send(asked))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.show_settings and state.capabilities.contains(Capability.voice_v1)),
-			|shown| if (shown) [Speech.voices.request({})] else [],
+			|shown| if (shown) [Speech.voices.ask({})] else [],
 			model.on_result(
 				|state, _, res|
-					match Speech.voices.result(res) {
+					match res {
 						Ok({ voices, voice, rate }) => { ..state, voice: { ..state.voice, voices, picked: Picked({ voice, rate: if (rate.is_empty()) "1" else rate }) } }
 						Err(_) => state
 					},
@@ -246,7 +246,7 @@ Microphone := [].{
 	controls = |model, id| {
 		looks = id.map2(model.signal(), |pane_id, state| Microphone.look(state, pane_id))
 		Html.div_attrs(
-			[Engine.class("voice"), Engine.test_id("voice"), Html.flag_maybe("hidden", looks.map(|shown| shown.hidden))],
+			[Engine.class("voice"), Engine.test_id("voice"), Html.boolean("hidden", looks.map(|shown| shown.hidden))],
 			[
 				Html.span_s(looks.map(|shown| shown.status), [Engine.class("voice-status"), Engine.test_id("voice-status"), Engine.attr("aria-live", "polite")]),
 				Engine.element(
@@ -264,7 +264,7 @@ Microphone := [].{
 						Engine.on("pointerup", model.update(Microphone.release)),
 						Engine.on("pointerout", model.update(Microphone.release)),
 						Engine.on("pointercancel", model.update(Microphone.cancel_press)),
-						Engine.on("contextmenu:prevent", model.update(|state| state)),
+						Engine.on_with("contextmenu", { prevent: Bool.True }, model.update(|state| state)),
 					],
 					[],
 				),
@@ -289,15 +289,14 @@ Microphone := [].{
 	## `choices`, and the rate.
 	settings : State(ctx, Model.State), (Signal(ctx, List({ value : Str, label : Str })) -> List(Elem(ctx))) -> Elem(ctx)
 	settings = |model, choices| {
-		keeps_keys = Engine.on("keydown", model.set_value(|state, _| state))
 		picked = model.signal().map(Microphone.voice_picked)
 		set = |change| model.set_value(|state, text| { ..state, voice: { ..state.voice, picked: Picked(change(Microphone.voice_picked(state), text)) } })
 		Html.div_attrs(
-			[Engine.class("voice-settings"), Html.flag_maybe("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.voice_v1)))],
+			[Engine.class("voice-settings"), Html.boolean("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.voice_v1)))],
 			[
 				Html.h3("Voice", ""),
-				Engine.element("label", [Engine.class("setting")], [Engine.text("Speaking voice"), Html.select(Engine.const("Speaking voice"), picked.map(|shown| shown.voice), [keeps_keys], choices(model.signal().map(Microphone.voice_choices)), set(|shown, voice| { ..shown, voice }))]),
-				Engine.element("label", [Engine.class("setting")], [Engine.text("Speaking rate"), Html.select(Engine.const("Speaking rate"), picked.map(|shown| shown.rate), [keeps_keys], ["0.75", "1", "1.25", "1.5", "2"].map(|rate| Html.option(rate, "${rate}×")), set(|shown, rate| { ..shown, rate }))]),
+				Engine.element("label", [Engine.class("setting")], [Engine.text("Speaking voice"), Dropdown.select(Engine.const("Speaking voice"), picked.map(|shown| shown.voice), [], choices(model.signal().map(Microphone.voice_choices)), set(|shown, voice| { ..shown, voice }))]),
+				Engine.element("label", [Engine.class("setting")], [Engine.text("Speaking rate"), Dropdown.select(Engine.const("Speaking rate"), picked.map(|shown| shown.rate), [], ["0.75", "1", "1.25", "1.5", "2"].map(|rate| Dropdown.option(rate, "${rate}×")), set(|shown, rate| { ..shown, rate }))]),
 				Html.p("A conversation speaks the agent's replies in this voice. An on-device voice keeps them on this device; an online one sends their text to its provider.", "help"),
 			],
 		)
