@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -105,7 +105,9 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
 `Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
 `Finish` and `Cancel` (Audio, below); `rooms.v1`'s `ListRooms`, `Send`,
-`React`, `Unreact`, `Join` and `Leave` (Rooms, below).
+`React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
+`ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
+and `Unlink` (Tickets, below).
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
@@ -235,6 +237,9 @@ events when nothing changed:
 | `rooms.v1` | `members/<room_id>` | snapshot | `{"Members": [Member]}` |
 | `rooms.v1` | `messages/<room_id>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the room's top level and its threads' summaries |
 | `rooms.v1` | `thread/<room_id>/<root>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: a thread's replies |
+| `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
+| `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
+| `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -423,6 +428,73 @@ room or no longer one. Each answers `Accepted`, or `Rejected` with why, such
 as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
 The mock provider keeps three rooms, one a forum, where its agents type and
 then answer when a message mentions them.
+
+### Tickets
+
+`tickets.v1` is the issues and tickets of the trackers providers reach,
+GitHub Issues and Linear first, merged: every ticket names its `provider`,
+its `source` (a repository's issues, a team's tickets) and its `url` back
+there. A source tells whom it knows the user as, the people its tickets can
+be assigned to, and the statuses they move between, each of a `kind`,
+`Open`, `Started`, `Done` or `Canceled`, whatever the source calls it:
+
+```json
+{ "id": "thebrandonlucas/liton", "provider": "github", "name": "thebrandonlucas/liton", "url": "https://github.com/thebrandonlucas/liton",
+  "me": { "id": "ada", "name": "Ada" }, "people": [{ "id": "ada", "name": "Ada" }],
+  "statuses": [{ "id": "open", "name": "Open", "kind": "Open" }, { "id": "closed", "name": "Closed", "kind": "Done" }] }
+```
+
+The `list` topic holds the sources and their tickets, each a summary:
+
+```json
+{ "id": "liton#3", "provider": "github", "source": "thebrandonlucas/liton", "key": "#3", "title": "Track issues and tickets",
+  "url": "https://github.com/thebrandonlucas/liton/issues/3", "status": { "id": "open", "name": "Open", "kind": "Open" },
+  "assignees": [{ "id": "ada", "name": "Ada" }], "labels": ["enhancement"], "waiting_on": [], "updated": "2026-01-01T09:00:00.000Z" }
+```
+
+`key` is how its source names it (`#3`, `LIN-12`); `waiting_on` the ids of
+the people it waits on, such as for an answer or a review; `branch`, left out
+when the source suggests none, the branch to work on it in. A ticket's
+`ticket/<ticket_id>` topic adds its `body` and its `comments`, oldest first,
+each `{"id", "author", "body", "created"}`, bodies in Markdown.
+
+```json
+{ "capability": "tickets.v1", "request": { "ListTickets": { "sources": [], "kinds": ["Open", "Started"], "assignee": "Me", "label": "", "text": "login" } } }
+{ "capability": "tickets.v1", "request": { "GetTicket": { "ticket_id": "liton#3" } } }
+{ "capability": "tickets.v1", "request": { "Comment": { "ticket_id": "liton#3", "body": "On it." } } }
+{ "capability": "tickets.v1", "request": { "SetStatus": { "ticket_id": "liton#3", "status_id": "closed" } } }
+{ "capability": "tickets.v1", "request": { "SetAssignees": { "ticket_id": "liton#3", "person_ids": ["ada"] } } }
+{ "capability": "tickets.v1", "request": { "Link": { "session_id": "fix-auth", "ticket_id": "liton#3" } } }
+{ "capability": "tickets.v1", "request": { "Unlink": { "session_id": "fix-auth" } } }
+```
+
+`ListTickets` answers `{"Listed": {"sources", "tickets"}}`, the tickets that
+pass its filter: of the `sources` named (all for none), of the `kinds` named
+(any for none), assigned to `"Anyone"`, `"Me"`, `"Nobody"` or
+`{"Person": id}`, with the `label` (`""` for any), and whose key or title has
+`text`, ignoring case (`Tickets.matches`, which clients use on the `list`
+topic too). `GetTicket` answers `{"Ticket": ticket}`. `Comment`, `SetStatus`
+(one of its source's statuses) and `SetAssignees` (of its source's people,
+none to unassign) change a ticket where its source keeps it and answer
+`Accepted`; the next poll of its topics shows it. A status or person its
+source hasn't is `BadRequest`, a ticket no provider has `NotFound`. Creating
+tickets comes later.
+
+`links` links each session to the ticket it works for: one linked by hand,
+`Link`, or else the one its branch names (`"inferred": true`), the ticket
+its source suggests the branch for, or else the first whose key is in it:
+`lin-12-fix-login` for LIN-12, `3-tickets`, `issue-3` or `gh-3` for #3
+(`Tickets.inferred`). `Unlink` unlinks a session by hand, so no branch links
+it either; `Link` links it again. The daemon keeps the links set by hand,
+whichever provider has the session or the ticket.
+
+The mock provider offers it with scripted tickets of two sources, one
+shaped as GitHub's issues and one as a Linear team's, and keeps the changes
+calls make; its LIT-12 suggests the branch the mock's fix-auth session works
+on, so that session links to it.
+
+A provider's credentials are the daemon's alone, read from its environment
+as Paseo's password is, and never reach a client.
 
 ### Audio
 

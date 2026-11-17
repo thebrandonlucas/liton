@@ -3,11 +3,13 @@
 import Chat
 import Fixtures
 import Manifest
+import Tickets
 
 import "tests/manifest.json" as manifest_json : Str
 import "tests/requests.json" as requests_json : Str
 import "tests/responses.json" as responses_json : Str
 import "tests/timeline.json" as timeline_json : Str
+import "tests/tickets.json" as tickets_json : Str
 
 Golden := [].{}
 
@@ -38,4 +40,11 @@ expect {
 	decoded : Try(List(Chat.Entry), _)
 	decoded = Json.parse(timeline_json)
 	decoded == Ok(Fixtures.timeline)
+}
+
+expect {
+	tickets = { requests: Fixtures.ticket_requests, responses: Fixtures.ticket_responses }
+	decoded : Try({ requests : List(Tickets.Request), responses : List(Tickets.Response) }, _)
+	decoded = Json.parse(tickets_json)
+	Json.to_str(tickets) == tickets_json.trim() and decoded == Ok(tickets)
 }

@@ -7,7 +7,7 @@ import cap.Workspaces
 
 Mock := [].{
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1] }
 
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }

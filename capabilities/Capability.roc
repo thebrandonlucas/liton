@@ -21,6 +21,9 @@ Capability := [].{
 	review_v1 : Id
 	review_v1 = { name: "review", version: 1 }
 
+	tickets_v1 : Id
+	tickets_v1 = { name: "tickets", version: 1 }
+
 	voice_v1 : Id
 	voice_v1 = { name: "voice", version: 1 }
 

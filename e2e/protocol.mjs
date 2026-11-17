@@ -88,7 +88,6 @@ try {
     assert.equal(await code("chat.v1", "ListSessions", "elsewhere"), "NotFound");
     assert.equal(await code("chat.v1", "Bogus"), "BadRequest");
     assert.equal(await code("workspace.git.v1", "Anything"), "Unsupported");
-    assert.equal(await code("tickets.v1", "ListTickets"), "Unsupported");
     assert.equal((await post("call", { nothing: 1 })).Err.code, "BadRequest");
   });
   await step("a poll answers each topic, and again after its cursors with nothing new", async () => {
@@ -224,6 +223,24 @@ try {
     assert.deepEqual((await threads()).threads[0].comments[0].state, { Sent: 1 });
     const sent = (await call("chat.v1", { WatchSession: { session_id: "notes", after: 0 } })).Ok.Entries.map((e) => e.event.UserMessage?.text ?? "").find((text) => text.startsWith("# Review"));
     assert.ok(sent.startsWith("# Review, round 1") && sent.includes("## src/Auth.roc:3\n\n```roc\n\tSession.start(redirect_to)\n```\n\nWhy here?") && sent.endsWith("## Overall\n\nOtherwise fine."), sent);
+  });
+  await step("tickets.v1 lists the mock's tickets, keeps what calls change, and links sessions by branch or by hand", async () => {
+    const ticket = (id) => ({ capability: "tickets.v1", topic: `ticket/${id}`, after: "" });
+    const links = async () => (await post("poll", { topics: [{ capability: "tickets.v1", topic: "links", after: "" }] })).topics[0].events[0].Links;
+    const mine = { sources: [], kinds: ["Open", "Started"], assignee: "Me", label: "", text: "" };
+    assert.deepEqual((await call("tickets.v1", { ListTickets: mine })).Ok.Listed.tickets.map((t) => t.key), ["LIT-12", "#7"]);
+    assert.deepEqual(await links(), [{ session_id: "fix-auth", ticket_id: "LIT-12", inferred: true }]);
+    assert.deepEqual(await call("tickets.v1", { Comment: { ticket_id: "mock/liton#9", body: "Rounds too." } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("tickets.v1", { SetStatus: { ticket_id: "mock/liton#7", status_id: "closed" } }), { Ok: "Accepted" });
+    assert.deepEqual((await call("tickets.v1", { ListTickets: mine })).Ok.Listed.tickets.map((t) => t.key), ["LIT-12"]);
+    const [nine, nope] = (await post("poll", { topics: [ticket("mock/liton#9"), ticket("nope")] })).topics;
+    assert.deepEqual(nine.events[0].Ticket.comments.map((c) => [c.author.name, c.body]).at(-1), ["Ada", "Rounds too."]);
+    assert.equal(nope.error.code, "NotFound");
+    assert.equal((await call("tickets.v1", { SetStatus: { ticket_id: "mock/liton#7", status_id: "done" } })).Err.code, "BadRequest");
+    assert.deepEqual(await call("tickets.v1", { Unlink: { session_id: "fix-auth" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("tickets.v1", { Link: { session_id: "notes", ticket_id: "mock/liton#9" } }), { Ok: "Accepted" });
+    assert.deepEqual(await links(), [{ session_id: "notes", ticket_id: "mock/liton#9", inferred: false }]);
+    assert.equal((await call("tickets.v1", { Link: { session_id: "notes", ticket_id: "nope" } })).Err.code, "NotFound");
   });
   await step("Create makes a workspace of the mock's project and starts an agent in it, which its listing has", async () => {
     const made = (await call("workspaces.v1", { Create: { project_id: "liton", kind: "Worktree", branch: "docs" } })).Ok.Created.workspace_id;
