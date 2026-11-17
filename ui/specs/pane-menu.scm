@@ -9,8 +9,9 @@
     (click (role button :name "Chat menu"))
     (expect-attr (role button :name "Chat menu") aria-expanded "true")
     (expect-visible (text "following Fix tests"))
+    (expect-visible (role button :name "Close pane"))
     ; A Workbench's slots don't move panes.
-    (expect-absent (role button :name "Move Chat left"))
+    (expect-absent (role button :name "Move Chat left") :never-drawn)
     (click (role button :name "Pin"))
     (expect-absent (role button :name "Close pane"))
     (expect-visible (text "pinned"))

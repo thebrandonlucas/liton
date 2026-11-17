@@ -118,7 +118,7 @@ Widgets := [].{
 	default = |option|
 		match option.kind {
 			Bool(on) => if (on) "true" else "false"
-			Choice({ default, .. }) => default
+			Choice({ default: chosen, .. }) => chosen
 		}
 
 	## The value of option `key` of `widget` among `values`, or its default.

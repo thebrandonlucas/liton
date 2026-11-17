@@ -174,7 +174,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // The UI's platform's release bundle, the one ui/main.roc names, for the
-    // runtime.mjs and worker.mjs the page loads.
+    // runtime.mjs, environment.mjs and worker.mjs the page loads.
     const roc_signals = b.dependency("roc_signals_platform", .{});
 
     const check_step = b.step("check", "Run formatting and static checks");
@@ -228,12 +228,13 @@ pub fn build(b: *std.Build) void {
         "sh", "-c",
         \\set -e
         \\mkdir -p zig-out/www
-        \\"$1" build --opt=size $4 --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
-        \\cp ui/index.html ui/style.css ui/ports.mjs ui/voice.mjs ui/voice-worklet.js "$2" "$3" zig-out/www/
+        \\"$1" build --opt=size $5 --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
+        \\cp ui/index.html ui/style.css ui/ports.mjs ui/voice.mjs ui/voice-worklet.js "$2" "$3" "$4" zig-out/www/
         ,
         "sh", roc_ui,
     });
     build_ui.addFileArg(roc_signals.path("runtime.mjs"));
+    build_ui.addFileArg(roc_signals.path("environment.mjs"));
     build_ui.addFileArg(roc_signals.path("worker.mjs"));
     build_ui.addArg(if (fast) "--specialize=no" else "");
     build_ui.has_side_effects = true;

@@ -14,6 +14,7 @@
     (click (role button :name "Settle Write docs"))
     ; Shown before the daemon answers.
     (expect-visible (text "Later (1)"))
+    (expect-visible (test-id "later"))
     (expect-absent (role button :name "Settle Write docs"))
     (stub-http "settle" :url "/liton/v1/call" :status 200 :body "{\"Err\":{\"code\":\"NotFound\",\"message\":\"no session s1\"}}")
     (run-effect 4)

@@ -11,7 +11,7 @@
     (expect-visible (role button :name "app"))
     (expect-visible (role button :name "main"))
     (expect-visible (role region :name "Chat"))
-    (expect-absent (role region :name "Capabilities"))
+    (expect-absent (role region :name "Capabilities") :never-drawn)
     (expect-visible (role button :name "Fix tests"))
     (expect-visible (role button :name "Write docs"))
     (expect-text (test-id "session-status") "running")

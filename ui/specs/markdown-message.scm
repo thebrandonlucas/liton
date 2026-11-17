@@ -9,7 +9,7 @@
     ; Inline code and strong text are elements of their own.
     (expect-visible (text "zig build"))
     (expect-visible (text "first"))
-    (expect-absent (text "`zig build`"))
+    (expect-absent (text "`zig build`") :never-drawn)
     ; The code block, highlighted, with its language and Copy.
     (expect-visible (text "sh"))
     (expect-visible (text "echo"))

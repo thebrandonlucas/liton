@@ -267,7 +267,7 @@ Model := [].{
 				composer: Model.closed_composer,
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
-				theme: restored.map_ok(|snapshot| snapshot.theme) ?? "",
+				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
 				glass: Bool.True,
 				focused_pane: "",
 				menu: "",
@@ -289,7 +289,7 @@ Model := [].{
 	## Workbench shows the panel the URL names first, or its main area.
 	layout : State, Layout -> State
 	layout = |state, { shell, columns, collapsed }| {
-		ids = columns.join_map(|column| column.panes.map(|pane| pane.id).append(column.id))
+		ids = columns.join_map(|column| column.panes.map(|listed_pane| listed_pane.id).append(column.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
 		slot = if (shell == Workbench) Model.slot_hashed(state.url_hash) else Free
 		shown = columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 0)
@@ -331,17 +331,17 @@ Model := [].{
 			(Ok({ version, shell, columns, collapsed }), _, _, _) if (version == 4 or version == 5) and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed }), theme: if (version == 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [] }))
 			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
-			(_, _, _, Ok({ version: 1, panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(panes.map_with_index(|pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] })))))
+			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
 			_ => Err(Invalid)
 		}
 	}
 
 	with_options : List(OldColumn) -> List(Column)
-	with_options = |columns| columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned, options: [] }) })
+	with_options = |columns| columns.map(|{ id, size, tabbed, active, panes: column_panes }| { id, size, tabbed, active, panes: column_panes.map(|listed_pane| { id: listed_pane.id, widget: listed_pane.widget, pinned: listed_pane.pinned, options: [] }) })
 
 	migrated : List(Column) -> Layout
 	migrated = |columns|
-		if (columns.map(|column| column.panes.map(|pane| pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [] }
+		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [] }
 
 	load_snapshot : State -> State
 	load_snapshot = |state|
@@ -362,7 +362,7 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(starting) => { ..Model.use_preset({ ..state, presets: offered.presets }, starting.name), kept_layout: Bool.True }
+			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets }, preset.name), kept_layout: Bool.True }
 		}
 	}
 
@@ -395,8 +395,8 @@ Model := [].{
 	pressed : State, Str -> State
 	pressed = |state, key| {
 		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
-		option = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
-		match (numbered, option, state.presets.get(numbered ?? (option ?? 9))) {
+		option_glyph = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
+		match (numbered, option_glyph, state.presets.get(numbered ?? (option_glyph ?? 9))) {
 			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
 			_ if key == "Escape" => { ..state, show_settings: Bool.False, menu: "" }
 			_ => state
@@ -406,7 +406,7 @@ Model := [].{
 	## Marks the pane clicked or focused in, and shows its column on a narrow
 	## screen. Another pane's menu closes.
 	focus_pane : State, { pane : Str, column : Str } -> State
-	focus_pane = |state, { pane, column }| { ..state, focused_pane: pane, active_column: column, menu: if (state.menu == pane) pane else "" }
+	focus_pane = |state, { pane: pane_id, column }| { ..state, focused_pane: pane_id, active_column: column, menu: if (state.menu == pane_id) pane_id else "" }
 
 	toggle_menu : State, Str -> State
 	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
@@ -454,7 +454,7 @@ Model := [].{
 
 	## How many sessions are running.
 	running : State -> U64
-	running = |state| state.sessions.keep_if(|session| session.status == Running).len()
+	running = |state| state.sessions.keep_if(|listed_session| listed_session.status == Running).len()
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
@@ -468,10 +468,10 @@ Model := [].{
 	## its own at the end in Tiling.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
-		pane = { id: "pane-${state.next_id.to_str()}", widget, pinned: "", options: [] }
-		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: pane.id, panes: [pane] }
+		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
+		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
 		if (state.shell == Workbench)
-			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: pane.id, panes: main.panes.append(pane) } else main), next_id: state.next_id + 1 }
+			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), next_id: state.next_id + 1 }
 		else
 			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
 	}
@@ -503,7 +503,7 @@ Model := [].{
 	move_to_slot = |state, id, slot| {
 		moved = Model.pane(state, id)
 		to = state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? ""
-		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) })
+		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 		columns = left_behind.map(|column| if (column.id == to) { ..column, active: id, panes: column.panes.append(moved) } else column)
 		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot) })
 	}
@@ -514,7 +514,7 @@ Model := [].{
 
 	set_option : State, Str, Str, Str -> State
 	set_option = |state, id, key, value| {
-		set = |pane| if (pane.id == id) { ..pane, options: pane.options.drop_if(|old| old.key == key).append({ key, value }) } else pane
+		set = |listed_pane| if (listed_pane.id == id) { ..listed_pane, options: listed_pane.options.drop_if(|old| old.key == key).append({ key, value }) } else listed_pane
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(set) }) }
 	}
 
@@ -563,7 +563,7 @@ Model := [].{
 	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
 	close_pane : State, Str -> State
-	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) }) })
+	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }) })
 
 	## Drops columns left without panes, apart from a Workbench's slots, and
 	## points a tab group or the narrow screen that showed what is gone at what
@@ -573,7 +573,7 @@ Model := [].{
 		columns =
 			state.columns
 				.drop_if(|column| column.panes.is_empty() and state.shell == Tiling)
-				.map(|column| if (column.panes.any(|pane| pane.id == column.active)) column else { ..column, active: column.panes.first().map_ok(|pane| pane.id) ?? "" })
+				.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == column.active)) column else { ..column, active: column.panes.first().map_ok(|listed_pane| listed_pane.id) ?? "" })
 		active_column = if (columns.any(|column| column.id == state.active_column)) state.active_column else columns.first().map_ok(|column| column.id) ?? ""
 		{ ..state, columns, active_column }
 	}
@@ -582,11 +582,11 @@ Model := [].{
 	## its own, unless it is already alone there.
 	move_pane : State, Str, [Left, Right] -> State
 	move_pane = |state, id, direction|
-		match state.columns.find_first_index(|column| column.panes.any(|pane| pane.id == id)) {
+		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
 			Err(NotFound) => state
 			Ok(from) => {
 				moved = Model.pane(state, id)
-				left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|pane| pane.id == id) })
+				left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 				at_edge = if (direction == Left) from == 0 else from + 1 == state.columns.len()
 				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
 				if (at_edge and alone)
@@ -614,12 +614,12 @@ Model := [].{
 
 	## Shows a pane in its tab group.
 	activate_tab : State, Str -> State
-	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|pane| pane.id == id)) { ..column, active: id } else column) }
+	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, active: id } else column) }
 
 	## Pins a following pane to the focused context, or lets a pinned one follow.
 	toggle_pin : State, Str -> State
 	toggle_pin = |state, id| {
-		pin = |pane| if (pane.id != id) pane else if (pane.pinned.is_empty()) { ..pane, pinned: Context.to_str(state.focus) } else { ..pane, pinned: "" }
+		pin = |listed_pane| if (listed_pane.id != id) listed_pane else if (listed_pane.pinned.is_empty()) { ..listed_pane, pinned: Context.to_str(state.focus) } else { ..listed_pane, pinned: "" }
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(pin) }) }
 	}
 
@@ -638,7 +638,7 @@ Model := [].{
 		match Model.context_of(state, shown) {
 			Session(session_id) => session_id
 			Workspace(workspace_id) => {
-				placed = Model.workspace_sessions(state, workspace_id).map(|session| (session.id, Attention.item(session, []).state))
+				placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
 				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
 			}
 		}
@@ -647,7 +647,7 @@ Model := [].{
 	workspace_sessions : State, Str -> List(Chat.Session)
 	workspace_sessions = |state, workspace_id| {
 		listed = state.workspaces.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.session_ids) ?? []
-		state.sessions.keep_if(|session| listed.contains(session.id) or (session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
+		state.sessions.keep_if(|listed_session| listed.contains(listed_session.id) or (listed_session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
 	}
 
 	## What a pane's context is called: its session's title, or its
@@ -810,7 +810,7 @@ Model := [].{
 					_ => so_far
 				},
 		)
-		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|latest| latest.id) ?? "") else applied.focus
+		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -824,14 +824,14 @@ Model := [].{
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
 	updated = |state, serial, subject, { capability, topic, cursor, events, .. }| {
 		cursors = state.cursors.drop_if(|known| known.capability == capability and known.topic == topic).append({ capability, topic, cursor })
-		received = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
 		match subject {
-			Timeline(session_id) if !received.timelines.any(|timeline| timeline.session_id == session_id) => { ..received, timelines: received.timelines.append({ session_id, entries: [] }) }
+			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
 			# Unchanged items still settle what was set aside.
-			Items => Model.attention_fetched(received, serial, received.attention)
+			Items => Model.attention_fetched(with_events, serial, with_events.attention)
 			# The requests its review has held since the poll they waited for.
-			Threads(context) => { ..received, reviewing: received.reviewing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial and Review.context(asked.request) == Context.to_str(context)) }
-			_ => received
+			Threads(context) => { ..with_events, reviewing: with_events.reviewing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial and Review.context(asked.request) == Context.to_str(context)) }
+			_ => with_events
 		}
 	}
 
@@ -947,12 +947,12 @@ Model := [].{
 	## failed with `reason`, and a permission request's prompt comes back.
 	refused : State, U64, Str -> State
 	refused = |state, serial, reason| {
-		answer = |sent|
+		answers_permission = |sent|
 			match sent.request {
 				AnswerPermission(_) => sent.serial == serial
 				_ => Bool.False
 			}
-		sent = state.sent.drop_if(answer).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
+		sent = state.sent.drop_if(answers_permission).map(|kept| if (kept.serial == serial) { ..kept, failed: reason } else kept)
 		{ ..state, sent, notice: reason }
 	}
 
@@ -1532,7 +1532,7 @@ Model := [].{
 			Ok({ path, scope }) => {
 				composer = state.composer
 				threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| Review.shows(thread.anchor, path, scope) and !thread.outdated)
-				composing = composer.pane == shown.id and composer.path == path and composer.scope == scope
+				composing_here = composer.pane == shown.id and composer.path == path and composer.scope == scope
 				on = |picks, side, start, end| picks.any(|picked| picked.side == side and picked.line >= start and picked.line <= end)
 				composer_row = { ..Model.code_row, key: "composer", kind: Composer }
 				notes = |thread| {
@@ -1541,18 +1541,18 @@ Model := [].{
 					shown_notes = listed.map_with_index(
 						|comment, index| {
 							note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft }
-							if (composing and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
+							if (composing_here and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
 						},
 					)
-					if (composing and composer.thread == thread.id) shown_notes.append(composer_row) else shown_notes
+					if (composing_here and composer.thread == thread.id) shown_notes.append(composer_row) else shown_notes
 				}
 				rows.join_map(
 					|row| {
 						picks = [row.old_pick, row.new_pick].keep_if(|picked| picked.line > 0)
-						picked = composing and on(picks, composer.side, composer.start, composer.end)
+						picked = composing_here and on(picks, composer.side, composer.start, composer.end)
 						marked = threads.any(|thread| on(picks, thread.anchor.side, thread.anchor.start_line, thread.anchor.end_line))
 						ending = threads.keep_if(|thread| on(picks, thread.anchor.side, thread.anchor.end_line, thread.anchor.end_line))
-						opened = composing and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
+						opened = composing_here and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
 						class = Str.join_with([if (picked) "picked" else "", if (marked) "marked" else "", if (row.right_class == "hunk-header") "hunk" else ""].drop_if(Str.is_empty), " ")
 						ending.join_map(notes).concat(if (opened) [composer_row] else []).prepend({ ..row, class })
 					},

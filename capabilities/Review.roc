@@ -52,7 +52,7 @@ Review := [].{
 	context : Request -> Str
 	context = |request|
 		match request {
-			AddComment({ context, .. }) | EditComment({ context, .. }) | DeleteComment({ context, .. }) | Resolve({ context, .. }) | Reopen({ context, .. }) | Send({ context, .. }) => context
+			AddComment({ context: request_context, .. }) | EditComment({ context: request_context, .. }) | DeleteComment({ context: request_context, .. }) | Resolve({ context: request_context, .. }) | Reopen({ context: request_context, .. }) | Send({ context: request_context, .. }) => request_context
 		}
 
 	## A review as a request changes it, numbering what it adds by `next`,

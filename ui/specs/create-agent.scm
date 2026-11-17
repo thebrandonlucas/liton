@@ -15,6 +15,7 @@
     (expect-visible (role button :name "Write the docs"))
     (expect-text (test-id "session-title") "Write the docs")
     (expect-text (test-id "session-status") "starting…")
+    (expect-visible (text "starting…"))
     (stub-http "create" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Started\":{\"session_id\":\"s9\"}}}")
     (run-effect 4)
     (expect-text (test-id "session-status") "starting…")

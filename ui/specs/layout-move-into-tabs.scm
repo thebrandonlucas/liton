@@ -1,6 +1,7 @@
 (test "Liton — in Tiling, a pane moved into its neighbour's column can share it as a tab"
   (steps
     (click (role button :name "Settings"))
+    (expect-visible (role region :name "Settings"))
     (click (role button :name "Tiling preset"))
     (expect-attr (role button :name "Tiling preset") aria-pressed "true")
     (click (role button :name "Settings"))

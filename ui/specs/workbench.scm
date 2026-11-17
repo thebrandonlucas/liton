@@ -10,9 +10,9 @@
     (expect-attr (role region :name "Changes") class "pane")
     (expect-visible (text "This widget needs workspace.git.v1, which no connected provider supplies. Connect one that does, and it fills in here."))
     ; Slots have no Tiling controls.
-    (expect-absent (role button :name "Tabs"))
-    (expect-absent (label "Move Chat left"))
-    (expect-absent (label "Make column wider"))
+    (expect-absent (role button :name "Tabs") :never-drawn)
+    (expect-absent (label "Move Chat left") :never-drawn)
+    (expect-absent (label "Make column wider") :never-drawn)
     (click (role button :name "Left drawer"))
     (expect-attr (role button :name "Left drawer") aria-expanded "false")
     (expect-attr (test-id "slot-left") class "column slot slot-left tabbed collapsed")

@@ -17,6 +17,7 @@ import Ports
 import Themes
 import Model
 import Widgets
+import Dropdown
 
 Liton := [].{
 	Ctx : In(Root, Model.State)
@@ -40,10 +41,8 @@ Liton := [].{
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
-	## stylesheet alone uses. Keys pressed outside a text field reach the root
-	## (`Model.pressed`): roc-signals 0.5.0 delivers none at the document and
-	## no modifiers, so text fields stop theirs with a handler that does
-	## nothing (roc-issues RS-004, lukewilliamboswell/roc-signals#212).
+	## stylesheet alone uses. Keys pressed inside the root, outside a text
+	## field, reach `Model.pressed`.
 	page : State(Ctx, Model.State) -> Elem(Ctx)
 	page = |model|
 		Engine.element(
@@ -53,7 +52,7 @@ Liton := [].{
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Model.theme_shown(state), state.glass))),
 				Engine.attr("tabindex", "-1"),
 				Engine.ref("app"),
-				Engine.on("keydown", model.set_value(Model.pressed)),
+				Engine.on_key({ keymap: Engine.const(Engine.Keymap.every.outside_text()) }, model.set_value(|state, key| Model.pressed(state, key.key))),
 			],
 			[
 				Liton.bar(model),
@@ -75,7 +74,7 @@ Liton := [].{
 											[
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_column)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
-												Engine.attr_s("data-badge", row.field(|column| column).map2(model.signal().lift_row(), |column, state| if (Model.slot_of(state, column.id) != Left or column.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) "" else Model.needs_you(state).to_str())),
+												Engine.attr_presence("data-badge", row.field(|column| column).map2(model.signal().lift_row(), |column, state| if (Model.slot_of(state, column.id) != Left or column.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
 											],
 											model.lift_row().update_by(row.key(), Model.show_column),
 										),
@@ -108,10 +107,10 @@ Liton := [].{
 	effects = |model| [
 		Engine.watch(
 			Engine.const({}),
-			|_| [Http({ method: "GET", url: "/liton/v1/manifest", headers: [], body: "", timeout_ms: 5000 })],
+			|_| [Engine.http_body({ url: "/liton/v1/manifest", timeout: Ms(5000) })],
 			model.on_result(
 				|state, _, res| {
-					text = Engine.http_text(res) ?? ""
+					text = res ?? ""
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
 					# The setup's presets and themes, which a daemon may leave out.
@@ -124,15 +123,15 @@ Liton := [].{
 				},
 			),
 		),
-		Engine.watch(Engine.const({}), |_| [Interval(1000)], model.on_result(|state, _, _| Model.tick(state))),
-		Engine.watch(model.signal().map(Model.subjects), |_| [Self], model.on_result(|state, _, _| Model.follow(state))),
+		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, _| Model.tick(state))),
+		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
 			model.signal().map(|state| state.poll),
-			|poll| [Http({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout_ms: 10000 })],
+			|poll| [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
 			model.on_result(
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
-					decoded = Json.parse(Engine.http_text(res) ?? "")
+					decoded = Json.parse(res ?? "")
 					match decoded {
 						Ok(answer) => Model.polled(state, poll, answer.topics)
 						Err(_) => Model.poll_failed(state)
@@ -146,19 +145,19 @@ Liton := [].{
 			model.on_result(
 				|state, outbox, res| {
 					decoded : Try(Protocol.Answer(Attention.Response), _)
-					decoded = Json.parse(Engine.http_text(res) ?? "")
+					decoded = Json.parse(res ?? "")
 					Model.attention_answered(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
 		),
-		Engine.watch(model.signal().map(Model.needs_you), |count| [Title(if (count == 0) "liton" else "(${count.to_str()}) liton")], Engine.ignore({})),
+		Engine.watch(model.signal().map(Model.needs_you), |count| [Engine.command(Title(if (count == 0) "liton" else "(${count.to_str()}) liton"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.outbox),
 			|outbox| [Liton.call(Json.to_str({ capability: "chat.v1", request: outbox.request }))],
 			model.on_result(
 				|state, outbox, res| {
 					decoded : Try(Protocol.Answer(Chat.Response), _)
-					decoded = Json.parse(Engine.http_text(res) ?? "")
+					decoded = Json.parse(res ?? "")
 					Model.called(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
@@ -167,43 +166,43 @@ Liton := [].{
 		# while, or a review.v1 request.
 		Engine.watch_changes(
 			model.signal().map(|state| state.call_outbox),
-			|outbox| [Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout_ms: 60000 })],
-			model.on_result(|state, outbox, res| if (outbox.key == "review.v1") Model.reviewed(state, outbox.serial, Engine.http_text(res) ?? "") else Model.created(state, outbox.serial, Engine.http_text(res) ?? "")),
+			|outbox| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout: Ms(60000) })],
+			model.on_result(|state, outbox, res| if (outbox.key == "review.v1") Model.reviewed(state, outbox.serial, res ?? "") else Model.created(state, outbox.serial, res ?? "")),
 		),
 		# Keys reach the root only from inside it.
-		Engine.watch(Engine.const({}), |_| [Focus("app")], Engine.ignore({})),
-		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, request)| request), Engine.ignore({})),
+		Engine.watch(Engine.const({}), |_| [Engine.command(Focus("app"))], Engine.ignore({})),
+		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, command)| Engine.command(command)), Engine.ignore({})),
 		# The browser's back and forward show the panel the URL names.
 		Engine.watch(
 			Engine.const({}),
-			|_| [Popstate],
+			|_| [Engine.popstate({})],
 			model.on_result(
 				|state, _, res|
 					match res {
-						Location(url) => Model.went(state, url)
-						_ => state
+						Ok(url) => Model.went(state, url)
+						Err(_) => state
 					},
 			),
 		),
 		# A composer cleared by sending is built anew, out of focus: focus it.
-		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Focus("composer")], Engine.ignore({})),
-		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Focus("latest")], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Engine.command(Focus("composer"))], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Engine.command(Focus("latest"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
-			|clipboard| [Ports.copy.request(clipboard.text)],
-			model.on_result(|state, clipboard, res| Model.copy_answered(state, clipboard.serial, Ports.copy.result(res) == Ok(Bool.True))),
+			|clipboard| [Ports.copy.ask(clipboard.text)],
+			model.on_result(|state, clipboard, res| Model.copy_answered(state, clipboard.serial, res == Ok(Bool.True))),
 		),
 		Engine.watch_changes(
 			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
-			|text| [StorageSet(Liton.snapshot_key, text)],
+			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
-		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [StorageSet(Liton.glass_key, if (glass) "on" else "off")], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
 	## A call, its JSON `body` naming the capability and holding the request.
-	call : Str -> Engine.Request
-	call = |body| Http({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout_ms: 5000 })
+	call : Str -> Engine.Ask(Str, Engine.HttpError)
+	call = |body| Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout: Ms(5000) })
 
 	## A bar over the tiles: liton's name and, as status modules, what needs
 	## you, the agents running, the Workbench's drawers and Settings, which
@@ -231,10 +230,6 @@ Liton := [].{
 				),
 			],
 		)
-
-	## Keeps a text field's keys from the root's shortcuts (`Liton.page`).
-	keeps_keys : State(ctx, Model.State) -> Engine.Attr(ctx)
-	keeps_keys = |model| Engine.on("keydown", model.set_value(|state, _| state))
 
 	## A count and what it counts, marked while it isn't 0.
 	count_module : Signal(Ctx, U64), Str, Str -> Elem(Ctx)
@@ -302,7 +297,7 @@ Liton := [].{
 								),
 							],
 						),
-						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked == "true" })), Engine.text("Glass")]),
+						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked })), Engine.text("Glass")]),
 						Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
 						Microphone.settings(model, Liton.choices),
 						Html.h3("Layout", ""),
@@ -326,7 +321,7 @@ Liton := [].{
 						),
 						Html.h3("Snapshot", ""),
 						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
-						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [Liton.keeps_keys(model)], model.set_value(|state, text| { ..state, snapshot_text: text })),
+						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
 						Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 					],
 				),
@@ -376,11 +371,11 @@ Liton := [].{
 						Engine.when(
 							model.signal().map(|state| state.shell == Workbench),
 							||
-								Html.select(
+								Dropdown.select(
 									title.map(|name| "Move ${name} to"),
 									slot.lift_row().map(Model.slot_name),
-									[Liton.keeps_keys(model)],
-									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.attr_s("value", choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
+									[],
+									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.prop_s(Engine.Prop.value, choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
 									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text(Model.move_to_slot(state, pane_id, Model.slot_named(name)))),
 								),
 							|| Engine.text(""),
@@ -399,10 +394,12 @@ Liton := [].{
 	option_control = |model0, pane0, row| {
 		model = model0.lift_row()
 		pane = pane0.lift_row()
-		label = row.field(|option| option.label)
+		option_label = row.field(|option| option.label)
 		value = pane.map2(row.key(), Model.option)
-		set = model.set_value_by(pane.map2(row.key(), |shown, key| { pane_id: shown.id, key }), |state, { pane_id, key }, text| Model.with_snapshot_text(Model.set_option(state, pane_id, key, text)))
-		choices = row.field(
+		option_of = pane.map2(row.key(), |shown, key| { pane_id: shown.id, key })
+		set = model.set_value_by(option_of, |state, { pane_id, key }, text| Model.with_snapshot_text(Model.set_option(state, pane_id, key, text)))
+		set_checked = model.set_value_by(option_of, |state, { pane_id, key }, checked| Model.with_snapshot_text(Model.set_option(state, pane_id, key, if (checked) "true" else "false")))
+		option_choices = row.field(
 			|option|
 				match option.kind {
 					Choice({ choices: listed, .. }) => listed
@@ -421,8 +418,8 @@ Liton := [].{
 			[
 				Engine.when(
 					checkbox,
-					|| Engine.element("label", [], [Html.checkbox(label, value.map(|shown| shown == "true"), [], set), Engine.text_s(label)]),
-					|| Engine.element("label", [], [Engine.text_s(label), Html.select(label, value, [Liton.keeps_keys(model)], [Engine.each(choices, |choice| choice, |choice| Html.option_s(choice.key()))], set)]),
+					|| Engine.element("label", [], [Html.checkbox(option_label, value.map(|shown| shown == "true"), [], set_checked), Engine.text_s(option_label)]),
+					|| Engine.element("label", [], [Engine.text_s(option_label), Dropdown.select(option_label, value, [], [Engine.each(option_choices, |choice| choice, |choice| Dropdown.option_s(choice.key()))], set)]),
 				),
 				Html.p_s(row.field(|option| option.help), [Engine.class("help")]),
 			],
@@ -897,21 +894,20 @@ Liton := [].{
 	create_form = |model, id| {
 		form = id.map2(model.signal(), |pane_id, state| if (state.form.pane == pane_id) state.form else Model.closed_form)
 		set = |change| model.set_value(|state, text| { ..state, form: change(state.form, text) })
-		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", form.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part), Liton.keeps_keys(model)], set(change))
-		option = |value, text| Engine.element("option", [Engine.attr("value", value)], [Engine.text(text)])
+		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", form.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part)], set(change))
 		Engine.when(
 			form.map(|shown| shown.kind != Closed),
 			||
 				Html.form(
 					"New agent or workspace",
-					[Engine.class_s(form.map(|shown| if (shown.kind == Agent) "create-form for-agent" else "create-form for-workspace")), Engine.on("submit:prevent", model.update(Model.submit_form))],
+					[Engine.class_s(form.map(|shown| if (shown.kind == Agent) "create-form for-agent" else "create-form for-workspace")), Engine.on("submit", model.update(Model.submit_form))],
 					[
 						Html.p_s(form.map2(model.signal(), |shown, state| if (shown.kind == Agent) "New agent in ${state.workspaces.workspaces.find_first(|listed| listed.id == shown.place).map_ok(|listed| listed.name) ?? shown.place}" else "New workspace"), [Engine.class("create-title")]),
-						Html.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field"), Liton.keeps_keys(model)], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| { ..shown, agent: text })),
+						Dropdown.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field")], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| { ..shown, agent: text })),
 						field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
 						field("First prompt", "agent-field", "First prompt (optional)", |shown| shown.prompt, |shown, text| { ..shown, prompt: text }),
-						Html.select(Engine.const("Project"), form.map(|shown| shown.place), [Engine.class("workspace-field"), Liton.keeps_keys(model)], Liton.choices(model.signal().map(|state| state.workspaces.projects.map(|project| { value: project.id, label: project.name }))), set(|shown, text| { ..shown, place: text })),
-						Html.select(Engine.const("Kind"), form.map(|shown| if (shown.worktree) "Worktree" else "Checkout"), [Engine.class("workspace-field"), Liton.keeps_keys(model)], [option("Worktree", "Worktree on a new branch"), option("Checkout", "Checkout of the project")], set(|shown, text| { ..shown, worktree: text == "Worktree" })),
+						Dropdown.select(Engine.const("Project"), form.map(|shown| shown.place), [Engine.class("workspace-field")], Liton.choices(model.signal().map(|state| state.workspaces.projects.map(|project| { value: project.id, label: project.name }))), set(|shown, text| { ..shown, place: text })),
+						Dropdown.select(Engine.const("Kind"), form.map(|shown| if (shown.worktree) "Worktree" else "Checkout"), [Engine.class("workspace-field")], [Dropdown.option("Worktree", "Worktree on a new branch"), Dropdown.option("Checkout", "Checkout of the project")], set(|shown, text| { ..shown, worktree: text == "Worktree" })),
 						field("Branch", "workspace-field", "Branch (optional)", |shown| shown.branch, |shown, text| { ..shown, branch: text }),
 						Html.p_s(form.map(|shown| shown.failed), [Engine.class("create-failed"), Engine.test_id("create-failed")]),
 						Html.div(
@@ -935,7 +931,7 @@ Liton := [].{
 	choices = |listed| {
 		slot = |index| {
 			choice = listed.map(|shown| shown.get(index) ?? { value: "", label: "" })
-			Engine.element("option", [Engine.attr_s("value", choice.map(|shown| shown.value)), Html.flag_maybe("hidden", choice.map(|shown| shown.value.is_empty()))], [Engine.text_s(choice.map(|shown| shown.label))])
+			Engine.element("option", [Engine.prop_s(Engine.Prop.value, choice.map(|shown| shown.value)), Html.boolean("hidden", choice.map(|shown| shown.value.is_empty()))], [Engine.text_s(choice.map(|shown| shown.label))])
 		}
 		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
 	}
@@ -1026,7 +1022,7 @@ Liton := [].{
 				),
 				Html.form(
 					"Send a message",
-					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model0.update_by(id, Microphone.send))],
+					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
 					[
 						# roc-signals 0.5.0 writes a new value into a focused text box only
 						# once it loses focus, so a draft cleared by pressing Enter would
@@ -1048,7 +1044,7 @@ Liton := [].{
 	## A box that grows with the draft to a few lines. Enter sends it, from
 	## ui/ports.mjs, which sees the Shift key that inserts a line instead.
 	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	composer_input = |model, id| Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Liton.keeps_keys(model)], model.set_value_by(id, Model.set_draft))
+	composer_input = |model, id| Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer")], model.set_value_by(id, Model.set_draft))
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls
@@ -1154,7 +1150,7 @@ Liton := [].{
 	review_panel = |model, id, pane| {
 		key = id.map(|pane_id| "${pane_id}/review")
 		Html.div_attrs(
-			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.flag_maybe("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.review_v1)))],
+			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.boolean("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.review_v1)))],
 			[
 				Engine.element(
 					"details",
@@ -1164,9 +1160,9 @@ Liton := [].{
 						Liton.tree(model, id, pane.map2(model.signal(), |shown, state| Model.review_rows(state, shown))),
 						Html.form(
 							"Comment on the whole review",
-							[Engine.class("review-overall"), Engine.on("submit:prevent", model.update_by(id, Model.comment_overall))],
+							[Engine.class("review-overall"), Engine.on("submit", model.update_by(id, Model.comment_overall))],
 							[
-								Html.textarea(Engine.const("Comment on the whole review"), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "2"), Engine.attr("placeholder", "On the whole review, in Markdown"), Liton.keeps_keys(model)], model.set_value_by(key, Model.set_draft)),
+								Html.textarea(Engine.const("Comment on the whole review"), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "2"), Engine.attr("placeholder", "On the whole review, in Markdown")], model.set_value_by(key, Model.set_draft)),
 								Html.submit_button("Add", []),
 							],
 						),
@@ -1253,10 +1249,10 @@ Liton := [].{
 	comment_composer = |model|
 		Html.form(
 			"Comment",
-			[Engine.class("comment-composer"), Engine.attr("data-part", "composer"), Engine.on("submit:prevent", model.update(Model.submit_comment))],
+			[Engine.class("comment-composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update(Model.submit_comment))],
 			[
 				Html.p_s(model.signal().map(|state| Liton.composing(state.composer)), [Engine.class("composer-title")]),
-				Html.textarea(Engine.const("Your comment"), model.signal().map(|state| state.composer.text), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown"), Engine.ref("comment"), Liton.keeps_keys(model)], model.set_value(|state, text| { ..state, composer: { ..state.composer, text } })),
+				Html.textarea(Engine.const("Your comment"), model.signal().map(|state| state.composer.text), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown"), Engine.ref("comment")], model.set_value(|state, text| { ..state, composer: { ..state.composer, text } })),
 				Html.div("comment-actions", [Html.submit_button("Comment", []), Html.button("Cancel", [], model.update(|state| { ..state, composer: Model.closed_composer }))]),
 			],
 		)
@@ -1338,7 +1334,7 @@ Liton := [].{
 		Html.div(
 			"file-diff",
 			[
-				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.flag_maybe("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file))]),
+				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.boolean("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file))]),
 				Engine.when(rows.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
 				Liton.code_view(model, id, pane.map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), rows),
 			],

@@ -4,7 +4,6 @@
 ## to the daemon's audio route (docs/protocol.md, Audio), asks voice.v1 for
 ## its transcript, and tells the app only what changed.
 import cap.Voice
-import pf.Engine
 import pf.Port
 
 Speech := [].{
@@ -96,9 +95,6 @@ Speech := [].{
 	## picked before.
 	voices : Port.Call({}, { voices : List({ name : Str, local : Bool }), voice : Str, rate : Str })
 	voices = Port.call({ name: "liton/voice/voices", timeout: Ms(5000) })
-
-	registrations : List(Engine.PortRegistration)
-	registrations = [Speech.capture.registration(), Speech.order.registration(), Speech.voices.registration()]
 
 	## Whether the microphone is in use.
 	active : State -> Bool
