@@ -715,6 +715,12 @@ Model := [].{
 				StatusChanged(_) => Bool.True
 				_ => Bool.False
 			}
+		# Shown once the timeline folds turns (docs/research/ux-sweep-paseo.md, to-do 9).
+		turn_end = |entry|
+			match entry.event {
+				TurnEnded(_) => Bool.True
+				_ => Bool.False
+			}
 		card = |tool|
 			match Model.option(shown, "tool_output") {
 				"Full" => { ..tool, output: if (tool.folded.is_empty()) tool.output else "${tool.output}\n${tool.folded}", folded: "" }
@@ -724,7 +730,7 @@ Model := [].{
 		timeline = Model.entries(state, Model.session_of(state, shown))
 		count = Model.window_of(state, shown)
 		Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
-			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
+			.drop_if(|entry| turn_end(entry) or (Model.option(shown, "show_status") == "false" and status(entry)))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
 	}
 

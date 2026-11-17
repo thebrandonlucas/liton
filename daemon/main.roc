@@ -1028,7 +1028,7 @@ seed! = |db| {
 	if count.count == 0 {
 		for (seed, position) in Mock.seeds.map_with_index(|seed, position| (seed, position)) {
 			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'mock', :agent, :title, :position);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap() } })?
-			insert_events!(db, seed.id, 1, seed.events.map(|event| { delay_ms: 0, event }), now_ms!())?
+			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!(), seed.events.map(|event| { delay_ms: 0, event })), now_ms!())?
 		}
 	}
 	Ok({})
@@ -1047,14 +1047,29 @@ insert_events! = |db, session_id, first, scheduled, start| {
 }
 
 ## Stores what the provider schedules after a session's last event, so the
-## events become visible in sequence order.
+## events become visible in sequence order, each turn that ends with its end.
 schedule! : Sqlite.Db, Str, (U64 -> List(Mock.Scheduled)) => Try({}, _)
 schedule! = |db, session_id, plan| {
 	last : { sequence : I64, visible_at : I64 }
 	last = Sqlite.query!({ db, query: "SELECT coalesce(max(sequence), 0) AS sequence, coalesce(max(visible_at), 0) AS visible_at FROM entries WHERE session_id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	next = last.sequence.to_u64_wrap() + 1
 	now = now_ms!()
-	insert_events!(db, session_id, next, plan(next), if (now > last.visible_at) now else last.visible_at)
+	start = if (now > last.visible_at) now else last.visible_at
+	insert_events!(db, session_id, next, Mock.ended(Mock.turn_started(timed!(db, session_id, start)?), start, plan(next)), start)
+}
+
+## A session's events, each with when it becomes visible, up to `until`.
+timed! : Sqlite.Db, Str, I64 => Try(List({ visible_at : I64, event : Chat.Event }), _)
+timed! = |db, session_id, until| {
+	rows : List({ visible_at : I64, event : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT visible_at, event FROM entries WHERE session_id = :session_id AND visible_at <= :until ORDER BY sequence;", params: { session_id, until }, limits: Sqlite.default_query_limits })?
+	rows.map_try(
+		|{ visible_at, event }| {
+			parsed : Try(Chat.Event, _)
+			parsed = Json.parse(event)
+			parsed.map_ok(|known| { visible_at, event: known })
+		},
+	)
 }
 
 ## The enabled provider a session belongs to.
@@ -1113,16 +1128,7 @@ sessions! = |context| {
 	mock_listed = if (mock_enabled) mock_workspaces!(db)? else []
 	var $sessions = []
 	for row in if (mock_enabled) rows else [] {
-		timed : List({ visible_at : I64, event : Str })
-		timed = Sqlite.query_many!({ db, query: "SELECT visible_at, event FROM entries WHERE session_id = :session_id AND visible_at <= :now ORDER BY sequence;", params: { session_id: row.id, now: now_ms!() }, limits: Sqlite.default_query_limits })?
-		events = timed.map_try(
-			|{ visible_at, event }| {
-				parsed : Try(Chat.Event, _)
-				parsed = Json.parse(event)
-				parsed.map_ok(|known| { visible_at, event: known })
-			},
-		)?
-		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, mock_listed, events))
+		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, mock_listed, timed!(db, row.id, now_ms!())?))
 	}
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?

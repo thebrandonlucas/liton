@@ -139,6 +139,41 @@ Mock := [].{
 			},
 		)
 
+	## `scheduled`, run from `at` (ms since the epoch), with each turn's end
+	## before the status that ends it: a turn starts when the agent runs, or
+	## at `started` if it was already working, and ends when it is idle,
+	## finished or failed.
+	ended : Try(I64, [Missing]), I64, List(Scheduled) -> List(Scheduled)
+	ended = |started, at, scheduled| {
+		walked = scheduled.fold(
+			{ open: started, so_far: [] },
+			|{ open, so_far }, item|
+				match (item.event, open) {
+					(StatusChanged(Running), Err(Missing)) => { open: Ok(at + item.delay_ms.to_i64_wrap()), so_far: so_far.append(item) }
+					(StatusChanged(Idle), Ok(since)) | (StatusChanged(Finished), Ok(since)) | (StatusChanged(Failed(_)), Ok(since)) => {
+						turn_ended = { delay_ms: item.delay_ms, event: TurnEnded({ started: Ok(Chat.timestamp(since)), ended: Chat.timestamp(at + item.delay_ms.to_i64_wrap()) }) }
+						{ open: Err(Missing), so_far: so_far.append(turn_ended).append(item) }
+					}
+					_ => { open, so_far: so_far.append(item) }
+				},
+		)
+		walked.so_far
+	}
+
+	## When the turn a timeline is working on started: its last run, unless
+	## it went idle, finished or failed since.
+	turn_started : List({ visible_at : I64, event : Chat.Event }) -> Try(I64, [Missing])
+	turn_started = |timed|
+		timed.fold(
+			Err(Missing),
+			|open, shown|
+				match (shown.event, open) {
+					(StatusChanged(Running), Err(Missing)) => Ok(shown.visible_at)
+					(StatusChanged(Idle), _) | (StatusChanged(Finished), _) | (StatusChanged(Failed(_)), _) => Err(Missing)
+					_ => open
+				},
+		)
+
 	## The kinds of agent the mock provider starts.
 	agents : List(Chat.Agent)
 	agents = [{ provider: "mock", agent: "claude" }, { provider: "mock", agent: "codex" }]
@@ -154,18 +189,13 @@ Mock := [].{
 
 	## A session from its timeline's visible events, each with when it became
 	## visible (ms since the epoch): its status, its agent's model, the
-	## workspace of `workspaces` it works in and its branch, when its running
-	## turn started and when it last changed.
+	## workspace of `workspaces` it works in and its branch, when the turn it
+	## is working on started, waiting for you or not, and when it last
+	## changed.
 	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
 	session = |{ id, agent, title }, workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
 		placed = workspaces.find_first(|shown| shown.session_ids.contains(id))
-		last_status = timed.keep_if(
-			|shown| match shown.event {
-				StatusChanged(_) => Bool.True
-				_ => Bool.False
-			},
-		).last()
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
 			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),
@@ -176,7 +206,7 @@ Mock := [].{
 					_ => Err(Missing)
 				},
 			) ?? Err(Missing),
-			running_since: if (current == Running) last_status.map_ok(|shown| Chat.timestamp(shown.visible_at)).map_err(|_| Missing) else Err(Missing),
+			running_since: Mock.turn_started(timed).map_ok(Chat.timestamp),
 			updated: timed.last().map_ok(|shown| Chat.timestamp(shown.visible_at)).map_err(|_| Missing),
 		}
 	}
@@ -361,4 +391,20 @@ expect Mock.on_create("").map(|scheduled| scheduled.event) == [StatusChanged(Idl
 expect {
 	project = Mock.projects.first() ?? { id: "", provider: "", name: "", directory: "" }
 	(Mock.made_workspace(project, "w1", Worktree, "docs").directory, Mock.made_workspace(project, "w2", Checkout, "docs").branch) == ("/mock/liton-docs", Branch("main"))
+}
+
+# A turn runs from the agent's run, through a wait for you, to its idle.
+expect {
+	timed = [{ visible_at: 1_000, event: StatusChanged(Running) }, { visible_at: 2_000, event: StatusChanged(AwaitingPermission) }]
+	answered = Mock.ended(Mock.turn_started(timed), 1_767_258_000_000, Mock.on_answer("p", Bool.False, Err(Missing), 3))
+	Mock.turn_started(timed) == Ok(1_000)
+		and Mock.turn_started(timed.append({ visible_at: 3_000, event: StatusChanged(Idle) })) == Err(Missing)
+		and Mock.session({ id: "notes", agent: "claude", title: "" }, Mock.workspaces, timed).running_since == Ok("1970-01-01T00:00:01.000Z")
+		and answered.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:01.000Z"), ended: "2026-01-01T09:00:00.500Z" }), StatusChanged(Idle)]
+}
+
+expect {
+	seeded = Mock.ended(Err(Missing), 0, [UserMessage({ text: "Hi" }), StatusChanged(Running), AgentMessage({ text: "Hello" }), StatusChanged(Idle)].map(|event| { delay_ms: 0, event }))
+	seeded.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:00.000Z"), ended: "1970-01-01T00:00:00.000Z" }), StatusChanged(Idle)]
+		and Mock.ended(Err(Missing), 0, Mock.on_create("")) == Mock.on_create("")
 }

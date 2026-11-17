@@ -166,7 +166,8 @@ try {
     }
     assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "fix-auth" } }), { Ok: "Accepted" });
     const stopped = await events();
-    assert.deepEqual(stopped.slice(-2), [{ AgentMessage: { text: "Stopped." } }, { StatusChanged: "Idle" }]);
+    assert.deepEqual(stopped.filter((e) => !e.TurnEnded).slice(-2), [{ AgentMessage: { text: "Stopped." } }, { StatusChanged: "Idle" }]);
+    assert.ok(stopped.at(-2).TurnEnded?.started, "the stopped turn ends with when it started");
     await pause(4200);
     assert.equal((await events()).length, stopped.length);
     assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "fix-auth" } }), { Ok: "Accepted" });

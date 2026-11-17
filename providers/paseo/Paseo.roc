@@ -48,8 +48,9 @@ Paseo := [].{
 	Action : { id : Str, label : Str, behavior : Str, variant : Try(Str, [Missing]) }
 
 	## An agent's state, from `get_agent_status` or a timeline page's `agent`.
-	## `status` is initializing, idle, running, error or closed.
-	Snapshot : { status : Str, pending_permissions : List(Permission), last_error : Try(Str, [Missing]) }
+	## `status` is initializing, idle, running, error or closed. Its
+	## `active_turn` is the turn it is working on, if any.
+	Snapshot : { status : Str, pending_permissions : List(Permission), last_error : Try(Str, [Missing]), updated_at : Try(Str, [Missing]), active_turn : Try(Try({ started_at : Try(Str, [Null]) }, [Null]), [Missing]) }
 
 	Detail : {
 		type : Str,
@@ -79,8 +80,8 @@ Paseo := [].{
 	}
 
 	## Paseo merges an assistant message's chunks, and a tool call's updates,
-	## into one entry that keeps its `seq_start`.
-	Entry : { seq_start : U64, item : Item }
+	## into one entry that keeps its `seq_start`, and its `timestamp`.
+	Entry : { seq_start : U64, item : Item, timestamp : Try(Str, [Missing]) }
 
 	## A `fetch_agent_timeline_response`. `reset` means Paseo ignored a cursor
 	## from another epoch (Paseo restarted or rebuilt the timeline) or past
@@ -100,11 +101,15 @@ Paseo := [].{
 	## encodes to JSON). The next fetch starts after `cursor` in `epoch` ("" until
 	## the first). `emitted_through` is the `seq_start` of the last entry turned
 	## into events, `open_calls` the tool calls emitted without a result yet,
-	## `permissions` the requests emitted without an answer.
-	State : { epoch : Str, cursor : U64, emitted_through : U64, open_calls : List(Str), permissions : List(Str), status : Chat.Status }
+	## `permissions` the requests emitted without an answer, `turn` the turn
+	## emitted without its end, if any.
+	State : { epoch : Str, cursor : U64, emitted_through : U64, open_calls : List(Str), permissions : List(Str), status : Chat.Status, turn : Try(Turn, [Missing]) }
+
+	## A turn: when it started, if liton saw, and its last entry's time.
+	Turn : { started : Try(Str, [Missing]), last : Str }
 
 	initial : State
-	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle }
+	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle, turn: Err(Missing) }
 
 	## Prompts an agent, interrupting it if it is running, as Paseo's own app
 	## does. Paseo answers once the agent took the prompt (see `sent`).
@@ -336,7 +341,7 @@ Paseo := [].{
 
 	listed_status : ListedAgent -> Chat.Status
 	listed_status = |agent|
-		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: agent.pending_permissions, last_error: agent.last_error })) {
+		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: agent.pending_permissions, last_error: agent.last_error, updated_at: Ok(agent.updated_at), active_turn: agent.active_turn })) {
 			(Ok(Ok("permission")), _) => AwaitingPermission
 			(Ok(Ok("finished")), Idle) => Finished
 			(_, status) => status
@@ -356,7 +361,7 @@ Paseo := [].{
 	}
 
 	chat_status : Snapshot -> Chat.Status
-	chat_status = |{ status: paseo_status, pending_permissions, last_error }|
+	chat_status = |{ status: paseo_status, pending_permissions, last_error, .. }|
 		if !pending_permissions.is_empty() {
 			AwaitingPermission
 		} else {
@@ -470,6 +475,8 @@ Paseo := [].{
 	## - a permission request when it appears in the snapshot, and an answer
 	##   when it disappears. Paseo doesn't say how a request was answered, so
 	##   an answer liton didn't give counts as allowed (see `answered`);
+	## - a turn's end before a user message that follows it, and once the
+	##   agent stopped working;
 	## - the status, when it changes.
 	##
 	## After a `reset` the page's entries count as emitted, so nothing repeats,
@@ -488,9 +495,24 @@ Paseo := [].{
 				state.emitted_through
 			}
 		walked = page.entries.map_with_index(|entry, index| (entry, final(index))).fold_until(
-			{ through: start, open_calls: state.open_calls, events: [], holding: Err(NotHolding) },
-			|walk, (entry, is_final)| step(walk, entry, is_final),
+			{ through: start, open_calls: state.open_calls, events: [], holding: Err(NotHolding), turn: state.turn },
+			|walk, (entry, is_final)| timed_step(walk, entry, is_final),
 		)
+		working = status == Running or status == AwaitingPermission
+		active = snapshot.active_turn.map_ok(|turn| turn.map_ok(|active_now| active_now.started_at) ?? Err(Null)) ?? Err(Null)
+		turn =
+			match (walked.turn, active) {
+				(Err(Missing), Ok(started)) if working => Ok({ started: Ok(started), last: started })
+				(open, _) => open
+			}
+		# A turn seen working ended about when the agent last changed; one
+		# first seen over, at its last entry.
+		was_working = state.status == Running or state.status == AwaitingPermission
+		ended =
+			match turn {
+				Ok(open) if !working => [TurnEnded({ started: open.started, ended: if (was_working) snapshot.updated_at ?? open.last else open.last })]
+				_ => []
+			}
 		cursor =
 			match walked.holding {
 				Ok(seq_start) => seq_start - 1
@@ -503,8 +525,8 @@ Paseo := [].{
 				.drop_if(|permission| state.permissions.contains(permission.id))
 				.map(|permission| PermissionRequested(Paseo.requested(permission)))
 		{
-			state: { epoch: page.epoch, cursor, emitted_through: walked.through, open_calls: walked.open_calls, permissions: ids, status },
-			events: walked.events.concat(answers).concat(requests).concat(if (status == state.status) [] else [StatusChanged(status)]),
+			state: { epoch: page.epoch, cursor, emitted_through: walked.through, open_calls: walked.open_calls, permissions: ids, status, turn: if (working) turn else Err(Missing) },
+			events: walked.events.concat(answers).concat(requests).concat(ended).concat(if (status == state.status) [] else [StatusChanged(status)]),
 		}
 	}
 
@@ -515,7 +537,26 @@ Paseo := [].{
 	answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
 }
 
-Walk : { through : U64, open_calls : List(Str), events : List(Chat.Event), holding : Try(U64, [NotHolding]) }
+Walk : { through : U64, open_calls : List(Str), events : List(Chat.Event), holding : Try(U64, [NotHolding]), turn : Try(Paseo.Turn, [Missing]) }
+
+## A step that also follows the turns: a new user message ends the turn
+## before it, if any, at its last entry, and starts its own; any other new
+## entry goes on the turn, or one whose start liton didn't see.
+timed_step : Walk, Paseo.Entry, Bool -> [Continue(Walk), Break(Walk)]
+timed_step = |walk, entry, is_final| {
+	fresh = entry.seq_start > walk.through
+	at = entry.timestamp ?? ""
+	asked = fresh and entry.item.type == "user_message"
+	before =
+		match walk.turn {
+			Ok(open) if asked => { ..walk, events: walk.events.append(TurnEnded({ started: open.started, ended: open.last })), turn: Err(Missing) }
+			_ => walk
+		}
+	match step(before, entry, is_final) {
+		Continue(next) if fresh and at != "" => Continue({ ..next, turn: Ok({ started: next.turn.map_ok(|open| open.started) ?? (if (asked) Ok(at) else Err(Missing)), last: at }) })
+		stepped => stepped
+	}
+}
 
 step : Walk, Paseo.Entry, Bool -> [Continue(Walk), Break(Walk)]
 step = |walk, entry, is_final| {
@@ -626,7 +667,7 @@ loose_text = |value|
 
 entry : U64, Str -> Str
 entry = |seq_start, item|
-	\\{"provider":"claude","item":${item},"timestamp":"2026-01-01T00:00:00.000Z","seqStart":${seq_start.to_str()},"seqEnd":${seq_start.to_str()},"sourceSeqRanges":[],"collapsed":[]}
+	\\{"provider":"claude","item":${item},"timestamp":"2026-01-01T00:00:0${seq_start.to_str()}.000Z","seqStart":${seq_start.to_str()},"seqEnd":${seq_start.to_str()},"sourceSeqRanges":[],"collapsed":[]}
 
 shell : Str, Str, Str -> Str
 shell = |call_id, status, output|
@@ -635,7 +676,7 @@ shell = |call_id, status, output|
 response : { epoch : Str, reset : Str, end : Str, status : Str, permissions : Str, entries : List(Str) } -> Str
 response = |{ epoch, reset, end, status, permissions, entries }|
 	\\{"type":"session","message":{"type":"fetch_agent_timeline_response","payload":{"requestId":"r1","agentId":"a1",
-	\\"agent":{"id":"a1","provider":"claude","status":"${status}","pendingPermissions":[${permissions}],"capabilities":{"supportsStreaming":true},"title":null,"labels":{}},
+	\\"agent":{"id":"a1","provider":"claude","status":"${status}","updatedAt":"2026-01-01T00:00:30.000Z","pendingPermissions":[${permissions}],"capabilities":{"supportsStreaming":true},"title":null,"labels":{}},
 	\\"direction":"after","projection":"projected","epoch":"${epoch}","reset":${reset},"staleCursor":${reset},"gap":false,"window":{"minSeq":1,"maxSeq":9,"nextSeq":10},
 	\\"startCursor":null,"endCursor":${end},"hasOlder":false,"hasNewer":false,"entries":[${Str.join_with(entries, ",")}],"error":null}}}
 
@@ -643,7 +684,7 @@ response = |{ epoch, reset, end, status, permissions, entries }|
 fetched : Paseo.State, Str -> { state : Paseo.State, events : List(Chat.Event) }
 fetched = |state, text|
 	match Paseo.timeline_page(text, "r1") {
-		Ok(page) => Paseo.update(state, page, page.agent ?? { status: "", pending_permissions: [], last_error: Err(Missing) })
+		Ok(page) => Paseo.update(state, page, page.agent ?? { status: "", pending_permissions: [], last_error: Err(Missing), updated_at: Err(Missing), active_turn: Err(Missing) })
 		Err(_) => { state, events: [UserMessage({ text: "unparsed" })] }
 	}
 
@@ -680,9 +721,9 @@ answered_elsewhere : List(Str) -> { state : Paseo.State, events : List(Chat.Even
 answered_elsewhere = |permissions| fetched(asked.state, response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: Str.join_with(permissions, ","), entries: [] }))
 
 expect first.events == [UserMessage({ text: "Rename load_config" }), ToolCall({ call_id: "c1", tool: "Bash", input: "rg -n load_config" }), StatusChanged(Running)]
-expect first.state == { epoch: "e1", cursor: 3, emitted_through: 2, open_calls: ["c1"], permissions: [], status: Running }
-expect second.events == [ToolResult({ call_id: "c1", output: "src/Config.roc:3", failed: Bool.False }), AgentMessage({ text: "Renaming it: done." }), StatusChanged(Idle)]
-expect second.state == { epoch: "e1", cursor: 6, emitted_through: 4, open_calls: [], permissions: [], status: Idle }
+expect first.state == { epoch: "e1", cursor: 3, emitted_through: 2, open_calls: ["c1"], permissions: [], status: Running, turn: Ok({ started: Ok("2026-01-01T00:00:01.000Z"), last: "2026-01-01T00:00:02.000Z" }) }
+expect second.events == [ToolResult({ call_id: "c1", output: "src/Config.roc:3", failed: Bool.False }), AgentMessage({ text: "Renaming it: done." }), TurnEnded({ started: Ok("2026-01-01T00:00:01.000Z"), ended: "2026-01-01T00:00:30.000Z" }), StatusChanged(Idle)]
+expect second.state == { epoch: "e1", cursor: 6, emitted_through: 4, open_calls: [], permissions: [], status: Idle, turn: Err(Missing) }
 expect asked.events == [PermissionRequested(Chat.permission({ request_id: "p1", tool: "Edit", description: "Edit src/Config.roc" })), StatusChanged(AwaitingPermission)]
 expect asked.state.cursor == 6
 expect answered_elsewhere([]).events == [PermissionAnswered({ request_id: "p1", allowed: Bool.True, choice: Err(Missing) }), StatusChanged(Running)]
@@ -695,6 +736,24 @@ expect {
 	planned.events.first() == Ok(PermissionRequested({ ..Chat.permission({ request_id: "permission-1", tool: "ExitPlanMode", description: "Plan" }), body: Ok("## Plan\n1. Rename it"), choices: Ok(choices) }))
 }
 expect fetched(Paseo.answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
+
+# An idle agent's history: each turn ends before the next one's message, and the last at its last entry.
+expect {
+	said = |text| "{\"type\":\"assistant_message\",\"text\":\"${text}\"}"
+	prompted = |text| "{\"type\":\"user_message\",\"text\":\"${text}\"}"
+	history = fetched(Paseo.initial, response({ epoch: "e1", reset: "false", end: "{\"epoch\":\"e1\",\"seq\":4}", status: "idle", permissions: "", entries: [entry(1, prompted("Hi")), entry(2, said("Hello")), entry(3, prompted("Bye")), entry(4, said("Bye"))] }))
+	history.events
+		== [UserMessage({ text: "Hi" }), AgentMessage({ text: "Hello" }), TurnEnded({ started: Ok("2026-01-01T00:00:01.000Z"), ended: "2026-01-01T00:00:02.000Z" }), UserMessage({ text: "Bye" }), AgentMessage({ text: "Bye" }), TurnEnded({ started: Ok("2026-01-01T00:00:03.000Z"), ended: "2026-01-01T00:00:04.000Z" })]
+		and history.state.turn == Err(Missing)
+}
+
+# A turn no message started, as Paseo's active turn tells it, ends once the agent stops.
+expect {
+	working = response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] }).replace_first("\"status\":\"running\",", "\"status\":\"running\",\"activeTurn\":{\"turnId\":\"t2\",\"startedAt\":\"2026-01-01T00:00:20.000Z\"},")
+	started = fetched(second.state, working)
+	stopped = fetched(started.state, response({ epoch: "e1", reset: "false", end: "null", status: "idle", permissions: "", entries: [] }))
+	started.events == [StatusChanged(Running)] and stopped.events == [TurnEnded({ started: Ok("2026-01-01T00:00:20.000Z"), ended: "2026-01-01T00:00:30.000Z" }), StatusChanged(Idle)]
+}
 
 # Paseo restarted: the same timeline in a new epoch repeats nothing, but closes the open call.
 expect {
@@ -709,7 +768,7 @@ expect {
 			entries: [entry(1, "{\"type\":\"user_message\",\"text\":\"Rename load_config\"}"), entry(2, shell("c1", "failed", "")), entry(3, "{\"type\":\"assistant_message\",\"text\":\"Renaming\"}")],
 		}),
 	)
-	replayed.events == [ToolResult({ call_id: "c1", output: "", failed: Bool.True }), StatusChanged(Idle)] and replayed.state.cursor == 3 and replayed.state.epoch == "e2"
+	replayed.events == [ToolResult({ call_id: "c1", output: "", failed: Bool.True }), TurnEnded({ started: Ok("2026-01-01T00:00:01.000Z"), ended: "2026-01-01T00:00:30.000Z" }), StatusChanged(Idle)] and replayed.state.cursor == 3 and replayed.state.epoch == "e2"
 }
 
 expect Paseo.timeline_page("{\"type\":\"session\",\"message\":{\"type\":\"status\",\"payload\":{\"status\":\"server_info\"}}}", "r1").map_ok(|_| {}) == Err(OtherMessage)

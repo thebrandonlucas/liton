@@ -37,5 +37,7 @@ Fixtures := [].{
 		{ sequence: 8, event: StatusChanged(Failed("context limit")) },
 		{ sequence: 9, event: PermissionRequested({ ..Chat.permission({ request_id: "p2", tool: "ExitPlanMode", description: "Plan" }), body: Ok("1. Sort the entries"), choices: Ok([{ id: "reject", label: "Reject", allows: Bool.False, style: Danger }, { id: "implement", label: "Implement", allows: Bool.True, style: Primary }]) }) },
 		{ sequence: 10, event: PermissionAnswered({ request_id: "p2", allowed: Bool.True, choice: Ok("implement") }) },
+		{ sequence: 11, event: TurnEnded({ started: Ok("2026-01-01T09:00:00.000Z"), ended: "2026-01-01T09:00:09.000Z" }) },
+		{ sequence: 12, event: TurnEnded({ started: Err(Missing), ended: "2026-01-01T09:01:00.000Z" }) },
 	]
 }

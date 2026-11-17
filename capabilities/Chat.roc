@@ -33,7 +33,10 @@ Chat := [].{
 	Choice : { id : Str, label : Str, allows : Bool, style : [Primary, Secondary, Danger] }
 
 	## A permission's answer names the choice taken, when the request offered
-	## its own.
+	## its own. `TurnEnded` follows the last event of a turn, the agent's
+	## work on what it was asked, once it finished, failed or was stopped or
+	## interrupted: when the turn started, if the provider tells, and when it
+	## ended, as times such as 2026-01-01T09:00:00.000Z.
 	Event : [
 		UserMessage({ text : Str }),
 		AgentMessage({ text : Str }),
@@ -42,6 +45,7 @@ Chat := [].{
 		PermissionRequested(Permission),
 		PermissionAnswered({ request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		StatusChanged(Status),
+		TurnEnded({ started : Try(Str, [Missing]), ended : Str }),
 	]
 
 	## One event in a session's timeline. Sequence numbers start at 1 and

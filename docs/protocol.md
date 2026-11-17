@@ -215,7 +215,18 @@ provider has no such workspace), the `branch` checked out there, and when its
 running turn started (`running_since`) and it last changed (`updated`), as
 times such as `2026-01-01T09:00:00.000Z`. Paseo's come from its agent list
 (the model, `activeTurn.startedAt`, `updatedAt`, and the branch it placed the
-agent on), so they cost no request of their own.
+agent on), so they cost no request of their own. `running_since` holds
+while its agent works on a turn, waiting for you too, for a client to show
+how long it has been working.
+
+Where a turn ends, a timeline has a `{"TurnEnded": {"started", "ended"}}`
+after the turn's last event: once its agent finished, failed or was stopped,
+and before a message that interrupts it, with when the turn started, left
+out when the provider doesn't tell, and when it ended, for a client to fold
+the turn and say how long it worked. From Paseo, a turn starts at its user
+message, or its `activeTurn.startedAt`, and ends at the agent's `updatedAt`
+once liton sees it stop, or at the turn's last entry in history fetched
+after it ended. The mock times its own.
 
 A `changes` or `file` context is a session id, or `workspace:<id>`; its scope
 is `Uncommitted`, `AgainstBase` or `Commit:<sha>`. A `changes` event holds the
