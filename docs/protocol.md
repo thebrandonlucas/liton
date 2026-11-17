@@ -52,7 +52,7 @@ capability as patterns:
   "setup": {
     "default_preset": "Developer",
     "default_theme": "Pastoral",
-    "presets": [{ "name": "Developer", "snapshot": { "version": 5, "shell": "Workbench", "columns": […], "collapsed": [], "theme": "" } }, …],
+    "presets": [{ "name": "Developer", "snapshot": { "version": 6, "shell": "Workbench", "columns": […], "collapsed": [], "hidden": [], "theme": "" } }, …],
     "themes": [{ "name": "Pastoral", "scheme": "Dark", "accent": "#e8c872", … }, …]
   }
 }
