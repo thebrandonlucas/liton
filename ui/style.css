@@ -14,7 +14,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --glass-deep: color-mix(in srgb, var(--glass-tint) min(100%, calc(var(--glass-alpha) + 18%)), transparent);
   --sheet: color-mix(in srgb, var(--glass-tint) var(--sheet-alpha), transparent);
   --field: color-mix(in srgb, var(--text) 6%, transparent);
-  --user: color-mix(in srgb, var(--accent) 14%, transparent);
+  --user: color-mix(in srgb, var(--text) 9%, transparent);
   --tool: color-mix(in srgb, var(--text) 5%, transparent);
   --selected: color-mix(in srgb, var(--text) 11%, transparent);
   --on-accent: light-dark(#ffffff, #12100a);
@@ -290,10 +290,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
-.timeline { list-style: none; margin: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+/* The timeline is a column centred at 820px, at 15px as on a phone. */
+.timeline { list-style: none; box-sizing: border-box; width: 100%; max-width: 820px; margin: 0 auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.4; }
 .entry pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
 .entry { padding: 6px 10px; border-radius: var(--small-radius); }
-.entry.user { background: var(--user); border: 1px solid var(--edge); align-self: flex-end; max-width: 85%; }
+.entry.user { padding: 8px 14px; border-radius: 16px 2px 16px 16px; background: var(--user); align-self: flex-end; max-width: 85%; }
 .entry.agent { max-width: 95%; }
 .entry.result { background: var(--tool); }
 .entry.tool, .entry.fold { padding: 0 10px; }
@@ -611,7 +612,6 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .git-file { min-height: 44px; }
   .changes .choices button { min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
-  .entry { font-size: 15px; }
   .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
   /* The composer: round, above the tab bar, a thumb's Send or Stop beside it. */
   .composer { gap: 8px; padding: 8px; }
