@@ -30,8 +30,8 @@ Model := [].{
 
 	Shell : Setup.Shell
 
-	## `collapsed` are the Workbench drawers hidden.
-	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot) }
+	## `collapsed` are the Workbench drawers hidden, `hidden` its panes hidden.
+	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot), hidden : List(Str) }
 
 	Slot : Setup.Slot
 
@@ -67,6 +67,7 @@ Model := [].{
 		shell : Shell,
 		columns : List(Column),
 		collapsed : List(Slot),
+		hidden : List(Str),
 
 		## The column a narrow screen shows.
 		active_column : Str,
@@ -239,7 +240,7 @@ Model := [].{
 
 	## The layout of a preset or snapshot.
 	layout_of : Snapshot -> Layout
-	layout_of = |{ shell, columns, collapsed, .. }| { shell, columns, collapsed }
+	layout_of = |{ shell, columns, collapsed, hidden, .. }| { shell, columns, collapsed, hidden }
 
 	## liton's own presets (setup/Default.roc): Developer, the default,
 	## Inbox and Tiling.
@@ -269,6 +270,7 @@ Model := [].{
 				shell: Tiling,
 				columns: [],
 				collapsed: [],
+				hidden: [],
 				active_column: "",
 				jump: { serial: 0, panel: "", replace: "", push: "" },
 				url_hash: "",
@@ -327,38 +329,41 @@ Model := [].{
 	## Shows a layout, counting ids on from the numbers ending theirs. A
 	## Workbench shows the panel the URL names first, or its main area.
 	layout : State, Layout -> State
-	layout = |state, { shell, columns, collapsed }| {
+	layout = |state, { shell, columns, collapsed, hidden }| {
 		ids = columns.join_map(|column| column.panes.map(|listed_pane| listed_pane.id).append(column.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
 		slot = if (shell == Workbench) Model.slot_hashed(state.url_hash) else Free
 		shown = columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 0)
 		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(slot), replace: "", push: "" }
-		{ ..state, shell, columns, next_id, collapsed, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
+		{ ..state, shell, columns, next_id, collapsed, hidden, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, theme: state.theme }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
-	snapshot_of = |{ shell, columns, collapsed }| { version: Setup.snapshot_version, shell, columns, collapsed, theme: "" }
+	snapshot_of = |{ shell, columns, collapsed, hidden }| { version: Setup.snapshot_version, shell, columns, collapsed, hidden, theme: "" }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 5, it shows the setup's default theme;
-	## before version 4, panes have their options' defaults and the drawers
-	## show. A version 1 or 2 one loads in Tiling, a version 1 one with a
+	## Reads a snapshot. Before version 6, it hides no panes; before version
+	## 5, it shows the setup's default theme; before version 4, panes have
+	## their options' defaults and the drawers show. A version 1 or 2 one loads in Tiling, a version 1 one with a
 	## column for each pane, unless it holds just the old default's widgets:
 	## then it loads the Developer preset.
 	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		# Since version 4 a snapshot is laid out alike; version 5 names its theme.
+		# Since version 4 a snapshot is laid out alike; version 5 names its
+		# theme, and version 6 the panes it hides.
 		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
 		laid = Json.parse(text)
 		themed : Try({ theme : Str }, _)
 		themed = Json.parse(text)
+		hiding : Try({ hidden : List(Str) }, _)
+		hiding = Json.parse(text)
 		third : Try({ version : U32, shell : Shell, columns : List(OldColumn) }, _)
 		third = Json.parse(text)
 		second : Try({ version : U32, columns : List(OldColumn) }, _)
@@ -367,8 +372,8 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (laid, third, second, first) {
-			(Ok({ version, shell, columns, collapsed }), _, _, _) if (version == 4 or version == 5) and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed }), theme: if (version == 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
-			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [] }))
+			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 6 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed, hidden: if (version == 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [], hidden: [] }))
 			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
 			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
 			_ => Err(Invalid)
@@ -380,7 +385,7 @@ Model := [].{
 
 	migrated : List(Column) -> Layout
 	migrated = |columns|
-		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [] }
+		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [], hidden: [] }
 
 	load_snapshot : State -> State
 	load_snapshot = |state|
@@ -647,7 +652,7 @@ Model := [].{
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
-	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed })
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden })
 
 	## Every pane, column by column.
 	panes : State -> List(Pane)
@@ -745,7 +750,7 @@ Model := [].{
 	went : State, Str -> State
 	went = |state0, url| {
 		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
-		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed }) else state
+		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 
 	toggle_drawer : State, Slot -> State
@@ -2309,7 +2314,7 @@ expect Model.set_up(Model.initial(""), Setup.offered(Setup.empty)).presets == De
 expect {
 	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
 	chat = { id: "pane-7", widget: "chat", pinned: "", options: [] }
-	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [] }) and Model.initial(saved).next_id == 8
+	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [], hidden: [] }) and Model.initial(saved).next_id == 8
 }
 
 expect {

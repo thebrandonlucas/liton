@@ -22,6 +22,7 @@ Default := [].{
 				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }] },
 			],
 			collapsed: [],
+			hidden: [],
 			theme: "",
 		},
 	}
@@ -55,6 +56,7 @@ Default := [].{
 				{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "", options: [] }] },
 			],
 			collapsed: [],
+			hidden: [],
 			theme: "",
 		},
 	}
