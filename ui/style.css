@@ -119,7 +119,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   opacity: 0; transition: opacity var(--slow) ease; }
 .pane.focused { border-color: transparent; }
 .pane.focused::after { opacity: var(--edge-active-alpha); }
-.columns:has(.pane.focused) .pane:not(.focused) { opacity: .86; }
+.columns.focusing .pane:not(.focused) { opacity: .86; }
 .pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--edge); font: 12px/1.2 var(--font-mono); }
 .pane-heading { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; }
 .pane-title { font-weight: 600; color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -399,7 +399,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .code-row .added { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .code-row .removed { background: color-mix(in srgb, var(--fail) 16%, transparent); }
 .code-row .empty { background: var(--tool); }
-.code-row:has(.hunk-header) > :not(.hunk-header) { display: none; }
+.code-row.hunk > :not(.hunk-header) { display: none; }
 .code-row .hunk-header { grid-column: 1 / -1; padding: 2px 8px; color: var(--muted); background: var(--tool); }
 .code-row .sign { color: var(--muted); }
 
@@ -465,6 +465,9 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 @media (max-width: 640px) {
   .liton { --gap: 6px; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   input, select, textarea { font-size: 16px; }
+  /* No blur behind the panes, which fill a phone's screen: its GPU would blur
+     that much on every frame that scrolls or changes, and lag. */
+  .pane { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--sheet); }
   /* The bar slims to the brand, what needs you and Settings; the presets are in Settings. */
   .bar { flex-basis: 48px; gap: .25rem; padding: 0 2px 0 .4rem; }
   .brand { font-size: 20px; }

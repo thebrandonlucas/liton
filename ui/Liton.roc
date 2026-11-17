@@ -82,8 +82,10 @@ Liton := [].{
 								),
 							],
 						),
+						# `focusing` dims the panes not focused (style.css): a class, as
+						# a :has() selector there restyled every pane on each change.
 						Html.div_s(
-							model.signal().map(|state| if (state.shell == Workbench) "columns workbench" else "columns tiling"),
+							model.signal().map(|state| "columns ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}"),
 							[Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))],
 						),
 						Liton.settings(model),

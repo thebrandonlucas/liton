@@ -1273,7 +1273,7 @@ Model := [].{
 				lines.map(|line| { ..new(blank, line), old: number(line.old_line), old_pick: pick(line), right: tokens(line).prepend({ class: "sign", text: sign(line) }) })
 			}
 		header = |hunk| "@@ -${hunk.old_start.to_str()},${hunk.old_count.to_str()} +${hunk.new_start.to_str()},${hunk.new_count.to_str()} @@"
-		hunks.map_with_index(|hunk, at| rows_of(hunk.lines).map_with_index(|row, index| { ..row, key: "${at.to_str()}/${index.to_str()}" }).prepend({ ..blank, key: at.to_str(), right: [{ class: "", text: header(hunk) }], right_class: "hunk-header" })).join_map(|rows| rows)
+		hunks.map_with_index(|hunk, at| rows_of(hunk.lines).map_with_index(|row, index| { ..row, key: "${at.to_str()}/${index.to_str()}" }).prepend({ ..blank, key: at.to_str(), right: [{ class: "", text: header(hunk) }], right_class: "hunk-header", class: "hunk" })).join_map(|rows| rows)
 	}
 
 	## The diff of the file a Changes pane shows, as rows of the code view.
@@ -1553,7 +1553,7 @@ Model := [].{
 						marked = threads.any(|thread| on(picks, thread.anchor.side, thread.anchor.start_line, thread.anchor.end_line))
 						ending = threads.keep_if(|thread| on(picks, thread.anchor.side, thread.anchor.end_line, thread.anchor.end_line))
 						opened = composing and composer.thread.is_empty() and composer.editing.is_empty() and on(picks, composer.side, composer.end, composer.end)
-						class = Str.join_with([if (picked) "picked" else "", if (marked) "marked" else ""].drop_if(Str.is_empty), " ")
+						class = Str.join_with([if (picked) "picked" else "", if (marked) "marked" else "", if (row.right_class == "hunk-header") "hunk" else ""].drop_if(Str.is_empty), " ")
 						ending.join_map(notes).concat(if (opened) [composer_row] else []).prepend({ ..row, class })
 					},
 				)

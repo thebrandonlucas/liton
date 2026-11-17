@@ -86,6 +86,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Sending a message by pressing Enter clears the message box, so the next message no longer starts with the text of the last.
 - A message with a blank line inside a code block no longer freezes the page.
 - Clicks, keys and scrolling no longer lag while a long session is open: a chat shows the latest 50 entries of its timeline, and earlier ones as you scroll up to them (or press Show earlier). Jump to latest shows only the latest again.
+- On a phone, scrolling and taps no longer stutter: panes there no longer blur what is behind them, which a phone redrew on every frame.
 
 ### Removed
 
