@@ -540,7 +540,6 @@ Liton := [].{
 								Html.div(
 									"column-controls",
 									[
-										Html.button_s(row.field(|shown| if (shown.tabbed) "Stack" else "Tabs"), [], model.update_by(id, Model.toggle_tabs)),
 										Html.icon_button("−", Engine.const("Make column narrower"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Narrower))),
 										Html.icon_button("+", Engine.const("Make column wider"), "resize", model.update_by(id, |state, column_id| Model.resize(state, column_id, Wider))),
 									],
@@ -706,7 +705,7 @@ Liton := [].{
 	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
 
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, the moves
-	## Tiling allows, and Close; in a Workbench, Hide, and Show for each pane
+	## Tiling allows, stacking or tabbing its column there, and Close; in a Workbench, Hide, and Show for each pane
 	## its column hides. Each closes the menu.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	pane_menu = |model, id, title, shown| {
@@ -749,6 +748,11 @@ Liton := [].{
 												Html.button_s(title.map(|name| "Move ${name} right →"), [Html.aria_label_s(title.map(|name| "Move ${name} right"))], model.update_by(id, closing(|state, pane_id| Model.move_pane(state, pane_id, Right)))),
 											],
 										),
+									|| Engine.text(""),
+								),
+								Engine.when(
+									id.map2(model.signal(), |pane_id, state| state.shell == Tiling and state.columns.any(|column| column.panes.len() > 1 and column.panes.any(|pane| pane.id == pane_id))),
+									|| Html.button_s(id.map2(model.signal(), |pane_id, state| if (state.columns.any(|column| column.tabbed and column.panes.any(|pane| pane.id == pane_id))) "Stack this column" else "Show this column as tabs"), [], model.update_by(id, closing(Model.toggle_tabs))),
 									|| Engine.text(""),
 								),
 								Engine.when(model.signal().map(|state| state.shell == Tiling), || Html.button("Close pane", [Engine.class("close")], model.update_by(id, closing(Model.close_pane))), || Engine.text("")),

@@ -845,8 +845,9 @@ Model := [].{
 	change_column : State, Str, (Column -> Column) -> State
 	change_column = |state, column_id, change| { ..state, columns: state.columns.map(|column| if (column.id == column_id) change(column) else column) }
 
+	## Switches the column of pane `id` between a stack and tabs.
 	toggle_tabs : State, Str -> State
-	toggle_tabs = |state, column_id| Model.change_column(state, column_id, |column| { ..column, tabbed: !column.tabbed })
+	toggle_tabs = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, tabbed: !column.tabbed } else column) }
 
 	resize : State, Str, [Narrower, Wider] -> State
 	resize = |state, column_id, change| Model.change_column(state, column_id, |column| { ..column, size: if (change == Wider) column.size + 1 else if (column.size > 1) column.size - 1 else 1 })
@@ -2336,7 +2337,7 @@ expect {
 }
 
 expect {
-	saved = Json.to_str(Model.snapshot(Model.toggle_tabs(Model.initial(""), "column-2")))
+	saved = Json.to_str(Model.snapshot(Model.toggle_tabs(Model.initial(""), "pane-2")))
 	Json.to_str(Model.snapshot(Model.initial(saved))) == saved
 }
 
@@ -2431,7 +2432,7 @@ expect {
 # 1 to 9 show the presets in order, however the one shown was changed.
 expect {
 	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "column-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session

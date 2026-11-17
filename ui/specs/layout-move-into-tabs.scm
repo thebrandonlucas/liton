@@ -14,8 +14,11 @@
     (expect-attr (role region :name "Sessions") class "pane")
     ; Clicking in a pane focuses it, which its edge shows.
     (expect-attr (role region :name "Chat") class "pane focused")
-    (click (role button :name "Tabs"))
-    (expect-visible (role button :name "Stack"))
+    (click (role button :name "Chat menu"))
+    (click (role button :name "Show this column as tabs"))
+    (click (role button :name "Chat menu"))
+    (expect-visible (role button :name "Stack this column"))
+    (click (role button :name "Chat menu"))
     ; Only the active tab, the pane just moved in, shows.
     (expect-attr (role button :name "Chat") aria-pressed "true")
     (expect-attr (role region :name "Chat") class "pane focused")
