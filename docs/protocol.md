@@ -431,6 +431,11 @@ its source suggests the branch for, or else the first whose key is in it:
 it either; `Link` links it again. The daemon keeps the links set by hand,
 whichever provider has the session or the ticket.
 
+The mock provider offers it with scripted tickets of two sources, one
+shaped as GitHub's issues and one as a Linear team's, and keeps the changes
+calls make; its LIT-12 suggests the branch the mock's fix-auth session works
+on, so that session links to it.
+
 A provider's credentials are the daemon's alone, read from its environment
 as Paseo's password is, and never reach a client.
 

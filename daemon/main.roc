@@ -60,10 +60,12 @@ import cap.Context as Focus
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Tickets
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
+import mock.MockTickets
 import paseo.Paseo
 import paseo.PaseoFiles
 import paseo.PaseoGit
@@ -281,6 +283,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("tickets.v1", provider)) => {
+				decoded : Try(Protocol.Call(Tickets.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Tickets.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => tickets_call!(context, provider, asked)?
+					Err(_) => Err(unanswered("tickets.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("voice.v1", _)) => {
 				decoded : Try(Protocol.Call(Voice.Request), _)
 				decoded = Json.parse(body)
@@ -357,7 +369,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) => Ok({})
+		VoiceStatus | Threads(_) | TicketList | TicketDetail(_) => Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -422,7 +434,13 @@ update! = |context, wanted, subject| {
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
-		TicketList | TicketDetail(_) | TicketLinks => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
+		TicketList => Ok(Protocol.snapshot(wanted, Tickets(MockTickets.listing(tickets!(context)?))))
+		TicketDetail(ticket_id) =>
+			match tickets!(context)?.find_first(|shown| shown.summary.id == ticket_id) {
+				Ok(shown) => Ok(Protocol.snapshot(wanted, Ticket(shown)))
+				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
+			}
+		TicketLinks => Ok(Protocol.snapshot(wanted, Links(ticket_links!(context)?)))
 	}
 }
 
@@ -714,6 +732,59 @@ agents! = |context| {
 	from_paseo : Try(List(Chat.Agent), _)
 	from_paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
 	Ok((if (context.mock_enabled) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
+}
+
+## tickets.v1's tickets: the mock's, as calls changed them.
+tickets! : Context => Try(List(Tickets.Ticket), _)
+tickets! = |context|
+	if context.mock_enabled {
+		rows : List({ value : Str })
+		rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
+		Ok(MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))))
+	} else {
+		Ok([])
+	}
+
+## Each session's ticket: linked by hand, or named by its branch.
+ticket_links! : Context => Try(List(Tickets.Link), _)
+ticket_links! = |context| {
+	by_hand : List(Tickets.Linked)
+	by_hand = Sqlite.query_many!({ db: context.db, query: "SELECT session_id, ticket_id FROM ticket_links;", params: {}, limits: Sqlite.default_query_limits })?
+	sessions = sessions!(context)?.map(|session| { id: session.id, branch: session.branch })
+	Ok(Tickets.links(sessions, by_hand, tickets!(context)?.map(|shown| shown.summary)))
+}
+
+## Answers a tickets.v1 request. The mock's tickets keep their changes;
+## links set by hand are the daemon's, whoever has the session or ticket.
+tickets_call! : Context, Try(Str, [Missing]), Tickets.Request => Try(Protocol.Answer(Tickets.Response), _)
+tickets_call! = |context, provider, asked| {
+	db = context.db
+	tickets = if (Protocol.serves(provider, Mock.provider.id)) tickets!(context)? else []
+	listing = MockTickets.listing(tickets)
+	no_ticket = |ticket_id| Err({ code: NotFound, message: Tickets.refusal(NotFound(ticket_id)) })
+	linked! = |session_id, ticket_id| {
+		Sqlite.execute!({ db, query: "INSERT INTO ticket_links (session_id, ticket_id) VALUES (:session_id, :ticket_id) ON CONFLICT (session_id) DO UPDATE SET ticket_id = excluded.ticket_id;", params: { session_id, ticket_id } })?
+		Ok(Ok(Accepted))
+	}
+	match asked {
+		ListTickets(filter) => Ok(Ok(Listed(Tickets.filtered(listing, filter))))
+		GetTicket({ ticket_id }) =>
+			match tickets.find_first(|shown| shown.summary.id == ticket_id) {
+				Ok(shown) => Ok(Ok(Ticket(shown)))
+				Err(_) => Ok(no_ticket(ticket_id))
+			}
+		Link({ session_id, ticket_id }) => if (tickets.any(|shown| shown.summary.id == ticket_id)) linked!(session_id, ticket_id) else Ok(no_ticket(ticket_id))
+		Unlink({ session_id }) => linked!(session_id, "")
+		_ =>
+			match MockTickets.changed(tickets, asked, Chat.timestamp(now_ms!())) {
+				Ok(changed) => {
+					Sqlite.execute!({ db, query: "INSERT INTO mock_tickets (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: changed.summary.id, value: Json.to_str(changed) } })?
+					Ok(Ok(Accepted))
+				}
+				Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
+				Err(problem) => Ok(Err({ code: BadRequest, message: Tickets.refusal(problem) }))
+			}
+	}
 }
 
 ## review.v1, which the daemon hosts itself (see `offered`).
@@ -1097,6 +1168,8 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
