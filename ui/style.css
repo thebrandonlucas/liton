@@ -351,7 +351,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .tool-more { margin-left: 18px; }
 .tool-more summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .entry.permission { background: var(--warn-tint); }
-.entry.status, .entry.answer { color: var(--muted); font: 11px var(--font-mono); padding: 0 10px; }
+.entry.status, .entry.answer, .entry.turn-end { color: var(--muted); font: 11px var(--font-mono); padding: 0 10px; }
 .entry.pending { opacity: .6; }
 .entry.working { display: flex; gap: 8px; align-items: center; color: var(--muted); font: 12px var(--font-mono); }
 .entry.working .loader { width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px dotted currentColor; animation: spin calc(var(--motion) * 1600ms + 1ms) linear infinite; }

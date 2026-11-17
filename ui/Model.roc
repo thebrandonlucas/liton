@@ -788,7 +788,7 @@ Model := [].{
 	## show them: tool output in full, folded or hidden; status lines or not;
 	## and folded as Collapse says: nothing, tool calls in a row, or those
 	## and finished turns. A result before the window is its call's, before
-	## it too.
+	## it too. A turn's end shows how long it worked, if its provider tells.
 	chat_entries : State, Pane -> List(Shown)
 	chat_entries = |state, shown| {
 		status = |entry|
@@ -796,10 +796,9 @@ Model := [].{
 				StatusChanged(_) => Bool.True
 				_ => Bool.False
 			}
-		# Shown once the timeline folds turns (docs/research/ux-sweep-paseo.md, to-do 9).
-		turn_end = |entry|
+		untimed = |entry|
 			match entry.event {
-				TurnEnded(_) => Bool.True
+				TurnEnded({ started: Err(Missing), .. }) => Bool.True
 				_ => Bool.False
 			}
 		card = |tool|
@@ -813,21 +812,32 @@ Model := [].{
 		count = Model.window_of(state, shown)
 		opened = state.opened_folds.keep_if(|fold| fold.pane == shown.id).map(|fold| fold.key)
 		listed = Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
-			.drop_if(|entry| turn_end(entry) or (Model.option(shown, "show_status") == "false" and status(entry)))
+			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
 		session_running = [Running, AwaitingPermission].contains(Model.session(state, session_id).status)
-		match Model.option(shown, "collapse") {
+		folded = match Model.option(shown, "collapse") {
 			"Full" => listed
 			"Turns" => Model.tools_folded(Model.turns_folded(listed, session_id, opened, session_running), session_id, opened)
 			_ => Model.tools_folded(listed, session_id, opened)
 		}
+		folded.drop_if(untimed)
 	}
+
+	## "Worked for 2m 14s", from when a turn started to when it ended, or ""
+	## if either isn't a time.
+	worked : Str, Str -> Str
+	worked = |started, ended|
+		match (epoch_ms(started), epoch_ms(ended)) {
+			(Ok(from), Ok(to)) if to >= from => "Worked for ${Model.duration_text(to - from)}"
+			_ => ""
+		}
 
 	## Each finished turn's work under one fold, between its message and the
 	## agent's last reply, shown only once it is `opened`. A turn starts with
-	## a message of the user's, so one is finished once another follows, and
-	## the last once `session_running` is false; entries before the first
-	## message are a turn begun earlier.
+	## a message of the user's and ends at its `TurnEnded`, or, where its
+	## provider marks none, once another message follows, the last once
+	## `session_running` is false; entries before the first message are a
+	## turn begun earlier.
 	turns_folded : List(Shown), Str, List(Str), Bool -> List(Shown)
 	turns_folded = |listed, session_id, opened, session_running| {
 		is_user = |entry|
@@ -840,7 +850,16 @@ Model := [].{
 				AgentMessage(_) => Bool.True
 				_ => Bool.False
 			}
-		under_fold = |rows, turn, finished| {
+		is_end = |entry|
+			match entry.event {
+				TurnEnded(_) => Bool.True
+				_ => Bool.False
+			}
+		under_fold = |rows, whole_turn, finished| {
+			(turn, ending) = match whole_turn {
+				[.. as rest, last] if is_end(last) => (rest, [last])
+				_ => (whole_turn, [])
+			}
 			(asked, after_message) = match turn {
 				[first, .. as rest] if is_user(first) => ([first], rest)
 				_ => ([], turn)
@@ -855,12 +874,22 @@ Model := [].{
 					summary = Str.join_with([Model.how_many(cards.len(), "tool call"), Model.how_many(messages, "message")].drop_if(Str.is_empty), ", ")
 					state = if (cards.any(|tool| tool.state == Failed)) Failed else Done
 					fold = { key, summary, state, open: opened.contains(key) }
-					rows.concat(asked).append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) work else []).concat(reply)
+					rows.concat(asked).append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) work else []).concat(reply).concat(ending)
 				}
-				_ => rows.concat(turn)
+				_ => rows.concat(whole_turn)
 			}
 		}
-		walked = listed.fold({ rows: [], turn: [] }, |so_far, entry| if (is_user(entry)) { rows: under_fold(so_far.rows, so_far.turn, Bool.True), turn: [entry] } else { ..so_far, turn: so_far.turn.append(entry) })
+		walked = listed.fold(
+			{ rows: [], turn: [] },
+			|so_far, entry|
+				if is_user(entry) {
+					{ rows: under_fold(so_far.rows, so_far.turn, Bool.True), turn: [entry] }
+				} else if is_end(entry) {
+					{ rows: under_fold(so_far.rows, so_far.turn.append(entry), Bool.True), turn: [] }
+				} else {
+					{ ..so_far, turn: so_far.turn.append(entry) }
+				},
+		)
 		under_fold(walked.rows, walked.turn, !session_running)
 	}
 

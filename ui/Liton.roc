@@ -1814,7 +1814,7 @@ Liton := [].{
 			PermissionRequested({ tool, description, .. }) => "asks to ${tool}: ${description}"
 			PermissionAnswered({ allowed, .. }) => if (allowed) "allowed" else "denied"
 			StatusChanged(status) => Liton.status_text(status)
-			TurnEnded(_) => "turn ended"
+			TurnEnded({ started, ended }) => Model.worked(started ?? "", ended)
 		}
 
 	sent_text : Chat.Request -> Str
@@ -1850,6 +1850,6 @@ Liton := [].{
 			PermissionRequested(_) => "entry permission"
 			PermissionAnswered(_) => "entry answer"
 			StatusChanged(_) => "entry status"
-			TurnEnded(_) => "entry status"
+			TurnEnded(_) => "entry turn-end"
 		}
 }
