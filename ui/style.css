@@ -306,6 +306,8 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 }
 @keyframes jump-shown { 0%, 2% { opacity: 0; visibility: hidden; } 6%, 100% { opacity: 1; visibility: visible; } }
 .latest-anchor { display: block; height: 0; outline: none; }
+.earlier { display: flex; justify-content: center; padding: 8px 0 0; }
+.show-earlier { font-size: 12px; }
 
 /* Markdown: a message's blocks, flat, nested by --indent and quoted. */
 .markdown { display: flex; flex-direction: column; gap: .45em; overflow-wrap: anywhere; }

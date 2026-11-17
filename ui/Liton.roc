@@ -995,6 +995,13 @@ Liton := [].{
 								),
 							],
 						),
+						# Last, so shown first: the timeline is reversed. ui/ports.mjs
+						# presses it as it scrolls into view.
+						Engine.when(
+							shown.map(|{ pane, state }| Model.has_earlier(state, pane)),
+							|| Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier")], model0.update_by(id, Model.show_earlier))]),
+							|| Engine.text(""),
+						),
 					],
 				),
 				Engine.when(

@@ -155,6 +155,10 @@ Model := [].{
 		## How many times each chat pane jumped to its latest entry.
 		jumps : List({ pane : Str, count : U64 }),
 
+		## How many of its session's latest entries each chat pane shows,
+		## for the panes shown more than `Model.window` (`Model.show_earlier`).
+		windows : List({ pane : Str, session_id : Str, count : U64 }),
+
 		## What voice in the composers is doing (ui/Microphone.roc).
 		voice : Speech.State,
 
@@ -270,6 +274,7 @@ Model := [].{
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
+				windows: [],
 				voice: Speech.initial,
 				form: Model.closed_form,
 				creating: [],
@@ -417,9 +422,35 @@ Model := [].{
 	jumps_of : State, Str -> U64
 	jumps_of = |state, pane_id| state.jumps.find_first(|jumped| jumped.pane == pane_id).map_ok(|jumped| jumped.count) ?? 0
 
-	## Scrolls a chat pane's timeline to its latest entry.
+	## Scrolls a chat pane's timeline to its latest entry, and shows only
+	## the latest of it again.
 	jump_to_latest : State, Str -> State
-	jump_to_latest = |state, pane_id| { ..state, jumps: state.jumps.drop_if(|jumped| jumped.pane == pane_id).append({ pane: pane_id, count: Model.jumps_of(state, pane_id) + 1 }) }
+	jump_to_latest = |state, pane_id| { ..state, jumps: state.jumps.drop_if(|jumped| jumped.pane == pane_id).append({ pane: pane_id, count: Model.jumps_of(state, pane_id) + 1 }), windows: state.windows.drop_if(|shown| shown.pane == pane_id) }
+
+	## How many of a timeline's latest entries a chat pane shows at first;
+	## `Model.show_earlier` adds half as many, few enough to draw while
+	## scrolling. Each change of the state refreshes what a pane shows, so a
+	## whole long timeline would make every click slow.
+	window : U64
+	window = 50
+
+	## How many of its session's latest entries a chat pane shows.
+	window_of : State, Pane -> U64
+	window_of = |state, shown| {
+		session_id = Model.session_of(state, shown)
+		state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
+	}
+
+	## Whether a chat pane leaves out earlier entries of its timeline.
+	has_earlier : State, Pane -> Bool
+	has_earlier = |state, shown| Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
+
+	## Shows half of `Model.window` more of a chat pane's earlier entries.
+	show_earlier : State, Str -> State
+	show_earlier = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		{ ..state, windows: state.windows.drop_if(|kept| kept.pane == pane_id).append({ pane: pane_id, session_id: Model.session_of(state, shown), count: Model.window_of(state, shown) + Model.window // 2 }) }
+	}
 
 	## How many sessions are running.
 	running : State -> U64
@@ -674,8 +705,9 @@ Model := [].{
 		)
 	}
 
-	## A chat pane's entries, as its options show them: tool output in full,
-	## folded or hidden, and status lines or not.
+	## A chat pane's entries, the latest its window holds, as its options
+	## show them: tool output in full, folded or hidden, and status lines or
+	## not. A result before the window is its call's, before it too.
 	chat_entries : State, Pane -> List(Shown)
 	chat_entries = |state, shown| {
 		status = |entry|
@@ -689,7 +721,9 @@ Model := [].{
 				"Hidden" => { ..tool, output: "", folded: "" }
 				_ => tool
 			}
-		Model.with_tool_cards(Model.entries(state, Model.session_of(state, shown)))
+		timeline = Model.entries(state, Model.session_of(state, shown))
+		count = Model.window_of(state, shown)
+		Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
 			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
 	}

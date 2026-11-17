@@ -14,6 +14,14 @@ document.addEventListener("keydown", (event) => {
   box.form.requestSubmit();
 }, true);
 
+// A chat shows its latest entries; scrolling up to within a screen of its
+// Show earlier button presses it, so earlier entries come as they are read.
+document.addEventListener("scroll", (event) => {
+  const box = event.target;
+  const earlier = box.matches?.(".timeline-scroll") && box.querySelector(":scope > .earlier > .show-earlier");
+  if (earlier && earlier.getBoundingClientRect().bottom > box.getBoundingClientRect().top - box.clientHeight) earlier.click();
+}, { capture: true, passive: true });
+
 // Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
 const voice = () => import("./voice.mjs");
 
