@@ -113,6 +113,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Clicks, keys and scrolling no longer lag while a long session is open: a chat shows the latest 50 entries of its timeline, and earlier ones as you scroll up to them (or press Show earlier). Jump to latest shows only the latest again.
 - On a phone, scrolling and taps no longer stutter: panes there no longer blur what is behind them, which a phone redrew on every frame.
 - The inbox shows the latest message of your three most recently active Paseo sessions, even those you haven't opened since, instead of the last one you saw.
+- In a narrow Inbox, such as the one in the left drawer, an item's Mark read, Settle and Snooze show under it as you hover it, instead of over its title, so clicking the title opens it rather than settling it.
 
 ### Removed
 

@@ -308,11 +308,14 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .inbox-item .permission { border: none; border-radius: var(--small-radius); flex-wrap: wrap; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .inbox-actions button { font-size: 12px; white-space: nowrap; }
-/* With a pointer, an item's actions show over its corner while it is hovered or focused, so the list stays one line or two an item. */
+/* With a pointer, an item's actions show only while it is hovered or focused, so the list stays one line or two an item: over its corner in a wide pane, and under it in a narrow one, where over its corner they would cover the title that opens it. */
+.inbox { container-type: inline-size; }
 @media (hover: hover) {
   .inbox-item:not(:hover, :focus-within) > .inbox-actions { display: none; }
-  .inbox-item > .inbox-actions { position: absolute; top: 4px; right: 6px; padding: 2px; border-radius: var(--small-radius); background: var(--sheet); box-shadow: var(--shadow); }
   .inbox-actions button { padding: 1px 8px; }
+  @container (min-width: 480px) {
+    .inbox-item > .inbox-actions { position: absolute; top: 4px; right: 6px; padding: 2px; border-radius: var(--small-radius); background: var(--sheet); box-shadow: var(--shadow); }
+  }
 }
 .inbox-item.working .mark { display: none; }
 .badge { font: 11px/1.5 var(--font-mono); padding: 0 6px; border: 1px solid var(--edge); border-radius: 999px; color: var(--muted); white-space: nowrap; }
