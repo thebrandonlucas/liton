@@ -77,12 +77,13 @@ All notable changes to liton are documented in this file. The format is based on
 - The Inbox reads like an email inbox: what needs you on top, then every other session in one list, the latest first, each with its state and the agent's last message, rather than a section for each state. It lists idle sessions too, unless you turn that option off.
 - Workspaces and Sessions list the latest first: sessions by when they last changed, workspaces by their latest session and projects by their latest workspace. Their new Order option lists them by name instead. A browser opens on the latest session.
 - The presets are no longer in the top bar: pick one in Settings, or press Alt+1 to Alt+9.
-- In a conversation, liton no longer hears its own replies from your speakers as you talking: it stops listening while it speaks a reply and for a moment after, and drops anything it hears that is mostly the last reply read back, saying so. Tap the mic, which shows a stop while it speaks, to stop speaking and listen at once; the agent keeps working, and Stop in its header stops it.
+- In a conversation, liton no longer hears its own replies from your speakers as you talking: it stops listening while it speaks a reply and for a moment after, and drops anything it hears that is mostly the last reply read back, saying so. Tap the mic, which shows a stop while it speaks, to stop speaking and listen at once; the agent keeps working, and Stop beside the message box stops it.
 - A selected row, in Workspaces, Sessions, the Inbox or Changes, shows as a lighter surface rather than a gold tint and bar.
 - Status has colours of its own in every theme: blue for running, green for done, amber for what needs you and red for failed, and a diff's added and removed lines are green and red. The theme's accent, gold in Pastoral, is left for focus and the main action.
 - A workspace's uncommitted changes show their lines added in green and removed in red, and nothing until they are counted, rather than "changed".
 - A session's or workspace's status, in a row or a chat's header, is an icon rather than a word: a blue ring turning while it runs, an amber alert when it needs you, a red triangle when it failed, a green dot when it is done and unread, a faint one once read, and nothing while idle. Hover it for the word, which screen readers read. Unread sessions no longer have a gold ring, only a bolder title.
 - Settings, the drawer buttons, a pane's menu and + are icons rather than words and glyphs, with the same names for screen readers.
+- Send and Stop are one round button at the end of the message box: an arrow that sends, which turns into a red Stop while the agent works and nothing is typed, and a turning ring once pressed until the agent stops. Stop is no longer in a chat's header.
 
 ### Fixed
 

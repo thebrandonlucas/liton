@@ -506,7 +506,7 @@ Liton := [].{
 					[
 						Engine.when(
 							shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
-							|| Liton.agent_header(model, id, shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
+							|| Liton.agent_header(shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
 							||
 								Html.div(
 									"pane-heading",
@@ -570,9 +570,9 @@ Liton := [].{
 	}
 
 	## What a chat pane's header tells of its session's agent: its status as a
-	## dot and a word, its kind and model, where it works, and whether Stop
-	## shows, is on its way or was refused (`not_stopped`).
-	Agent : { title : Str, status : Str, dot : Str, reason : Str, kind : Str, place : Str, stop : [Hidden, Stop, Stopping], not_stopped : Str }
+	## dot and a word, its kind and model, where it works, and why a stop was
+	## refused (`not_stopped`).
+	Agent : { title : Str, status : Str, dot : Str, reason : Str, kind : Str, place : Str, not_stopped : Str }
 
 	agent_of : Model.State, Model.Pane -> Agent
 	agent_of = |state, pane| {
@@ -589,10 +589,9 @@ Liton := [].{
 		}
 		model = session.model.map_ok(|name| name.drop_prefix("${session.agent}-")) ?? ""
 		directory = session.workspace.map_ok(|workspace| workspace.directory.drop_suffix("/").split_last("/").map_ok(|parts| parts.after) ?? workspace.directory) ?? ""
-		(stop, not_stopped) = match Model.stopping(state, session.id) {
-			Stopping => (Stopping, "")
-			NotStopped(reason) if Model.busy(session.status) => (Stop, "Not stopped: ${reason}")
-			_ => (if (Model.busy(session.status)) Stop else Hidden, "")
+		not_stopped = match Model.stopping(state, session.id) {
+			NotStopped(reason) if Model.busy(session.status) => "Not stopped: ${reason}"
+			_ => ""
 		}
 		{
 			title: session.title,
@@ -604,15 +603,14 @@ Liton := [].{
 			},
 			kind: Str.join_with([session.agent, model].drop_if(Str.is_empty), " · "),
 			place: Str.join_with([directory, session.branch ?? ""].drop_if(Str.is_empty), " · "),
-			stop,
 			not_stopped,
 		}
 	}
 
-	## A chat pane's header: its session's title and status, Stop while its
-	## agent works, and under them the agent and where it works.
-	agent_header : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Agent) -> Elem(PaneCtx)
-	agent_header = |model, id, agent|
+	## A chat pane's header: its session's title and status, and under them
+	## the agent and where it works.
+	agent_header : Signal(PaneCtx, Agent) -> Elem(PaneCtx)
+	agent_header = |agent|
 		Html.div(
 			"agent-header",
 			[
@@ -623,16 +621,6 @@ Liton := [].{
 						Html.span_s(agent.map(|shown| shown.title), [Engine.class("pane-title"), Engine.attr_s("title", agent.map(|shown| shown.title)), Engine.test_id("session-title")]),
 						Html.span_s(agent.map(|shown| shown.status), [Engine.class_s(agent.map(|shown| "status-word ${shown.dot}")), Engine.attr_s("title", agent.map(|shown| shown.reason)), Engine.test_id("session-status")]),
 						Html.span_s(agent.map(|shown| shown.not_stopped), [Engine.class("stop-status failed"), Engine.test_id("stop-failed")]),
-						Engine.switch(
-							agent.map(|shown| shown.stop),
-							[Hidden, Stop, Stopping],
-							|stop|
-								match stop {
-									Hidden => Engine.text("")
-									Stop => Html.button("Stop", [Engine.class("stop"), Engine.attr("title", "Stop the agent")], model.update_by(id, Model.stop))
-									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("stop-status"), Engine.test_id("stop-status")])
-								},
-						),
 					],
 				),
 				Html.div("agent-meta", [Html.span_s(agent.map(|shown| shown.kind), [Engine.class("agent-kind")]), Html.span_s(agent.map(|shown| shown.place), [Engine.class("agent-place")])]),
@@ -1037,11 +1025,34 @@ Liton := [].{
 							|| Liton.composer_input(model0, id),
 						),
 						Microphone.controls(model0, id),
-						Html.submit_button("Send", []),
+						# One round button: Send, or Stop while the agent works and
+						# nothing is typed, then a ring until it stops.
+						Engine.switch(
+							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+							[Send, Stop, Stopping],
+							|action|
+								match action {
+									Send => Html.submit_button("", [Engine.class("send"), Html.aria_label("Send")])
+									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+								},
+						),
 					],
 				),
 			],
 		)
+	}
+
+	## What a composer's round button does: send, or stop its session's agent
+	## while it works and nothing is typed, or nothing while it stops.
+	composer_action : Model.State, Model.Pane -> [Send, Stop, Stopping]
+	composer_action = |state, pane| {
+		session = Model.session(state, Model.session_of(state, pane))
+		match Model.stopping(state, session.id) {
+			Stopping => Stopping
+			_ if Model.busy(session.status) and Model.draft(state, pane.id).is_empty() => Stop
+			_ => Send
+		}
 	}
 
 	## A box that grows with the draft to a few lines. Enter sends it, from

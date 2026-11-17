@@ -7,6 +7,12 @@
     (expect-text (test-id "session-title") "Fix tests")
     (expect-visible (text "claude · opus-4"))
     (expect-visible (text "liton · main"))
+    ; Stop takes Send's place while the agent works, until something is typed.
+    (expect-visible (role button :name "Stop"))
+    (fill (label "Message") "And the docs")
+    (expect-visible (role button :name "Send"))
+    (expect-absent (role button :name "Stop"))
+    (fill (label "Message") "")
     (click (role button :name "Stop"))
     ; Shown before the daemon answers.
     (expect-absent (role button :name "Stop"))

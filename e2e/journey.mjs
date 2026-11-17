@@ -184,7 +184,7 @@ try {
   });
   await step("a new permission prompt asks to edit", () => see("Chat", "div.permission", "Allow edit: Edit src/Main.roc to handle the empty case?", 8000));
   await step("Stop ends the turn: the prompt goes, and the agent says it stopped", async () => {
-    await click("Chat", ".pane-header button", "Stop");
+    await click("Chat", '.composer button[aria-label="Stop"]', "");
     await see("Chat", ".markdown", "Stopped.", 8000);
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
     await see("Chat", '.pane-header [data-testid="session-status"]', "idle");

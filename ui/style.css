@@ -47,6 +47,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-settings: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></svg>");
   --icon-ellipsis: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='19' cy='12' r='1'/><circle cx='5' cy='12' r='1'/></svg>");
   --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
+  --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-circle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='12' x2='12' y1='8' y2='12'/><line x1='12' x2='12.01' y1='16' y2='16'/></svg>");
   --icon-triangle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
   --shadow: 0 10px 40px light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 45%));
@@ -58,7 +59,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   font: 14px/1.45 var(--font-ui);
   scrollbar-color: var(--edge) transparent;
 }
-@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting, .composer .stopping::before { animation: none; } }
 .liton * { scrollbar-width: thin; }
 button { font: inherit; color: inherit; background: var(--field); border: 1px solid var(--edge);
   border-radius: var(--small-radius); padding: 3px 10px; cursor: pointer;
@@ -181,8 +182,6 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .stop-status { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .stop-status:empty { display: none; }
 .stop-status.failed { color: var(--fail); }
-.pane-header .stop { margin-left: auto; flex: none; border-color: color-mix(in srgb, var(--fail) 50%, transparent); color: var(--fail); }
-.pane-header .stop:hover { border-color: var(--fail); color: var(--fail); background: color-mix(in srgb, var(--fail) 10%, transparent); }
 .agent-meta { display: flex; gap: 6px; padding-left: 16px; color: var(--muted); font-size: 11px; min-width: 0; white-space: nowrap; overflow: hidden; }
 .agent-meta span { overflow: hidden; text-overflow: ellipsis; }
 .agent-meta span:empty, .agent-meta:has(> span:empty + span:empty) { display: none; }
@@ -300,6 +299,15 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .composer textarea { flex: 1; min-width: 0; max-height: 9em; padding: 6px 10px; resize: none; field-sizing: content; transition: border-color var(--fast) ease; }
 .composer textarea:focus { outline: none; border-color: var(--edge-active); }
 .composer button { min-height: calc(1.45em + 14px); color: var(--accent); }
+/* Send, the main action, and Stop in its place: one round button. */
+.composer .send { --size: calc(1.45em + 14px); flex: none; display: grid; place-items: center; width: var(--size); height: var(--size); padding: 0; border-radius: 50%;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font-size: 0; }
+.composer .send::before { content: ""; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--icon-arrow-up) center / contain no-repeat; mask: var(--icon-arrow-up) center / contain no-repeat; }
+.composer .stop { border-color: var(--fail); background: var(--fail); }
+.composer .stop::before { width: 10px; height: 10px; border-radius: 2px; -webkit-mask: none; mask: none; }
+.composer .stopping { border-color: var(--edge); background: var(--field); color: var(--fail); }
+.composer .stopping::before { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; background: none; -webkit-mask: none; mask: none;
+  animation: spin calc(var(--motion) * 900ms) linear infinite; }
 /* Voice in the composer (ui/Microphone.roc): the mic, whose ring follows the
    input's level while it listens and pulses through a conversation, showing
    a stop while a reply is spoken, the conversation toggle, and a word over
@@ -550,10 +558,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .pane-menu { align-self: center; }
   .pane-header .icon { --icon-size: 20px; }
   .pane-header .menu button { min-height: 44px; font-size: 14px; }
-  /* A chat's header: its title, status dot and Stop, the agent and where it works below them. */
+  /* A chat's header: its title and status, the agent and where it works below them. */
   .agent-line .pane-title { font-size: 15.5px; }
   .agent-meta { font-size: 11.5px; }
-  .pane-header .stop { min-height: 34px; padding: 0 14px; border-radius: 999px; }
   .tree { padding: 4px 4px 8px; }
   .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
   .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
@@ -569,10 +576,10 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
   .entry { font-size: 15px; }
   .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
-  /* The composer: round, above the tab bar, a thumb's Send beside it. */
+  /* The composer: round, above the tab bar, a thumb's Send or Stop beside it. */
   .composer { gap: 8px; padding: 8px; }
   .composer textarea { min-height: 44px; padding: 10px 16px; border-radius: 22px; }
-  .composer button { min-width: 64px; min-height: 44px; border-radius: 22px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .composer .send { --size: 44px; }
 }
 /* A phone's keyboard takes the tab bar's place while you type. */
 @media (max-width: 640px) and (pointer: coarse) {
