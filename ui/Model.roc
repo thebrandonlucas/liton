@@ -227,7 +227,7 @@ Model := [].{
 
 	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
-	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str) }
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str), in_main : Bool }
 
 	## A row of a Changes pane's tree: a changed file, or a folder of them
 	## with the lines they add and remove as its `file`'s.
@@ -1068,7 +1068,7 @@ Model := [].{
 			}
 		}
 		# The panes of a widget on screen that show a context.
-		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
+		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and (Model.pane_visible(state, shown.id) or Model.main_diff(state) == shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
 		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git) else []
 		files = |shown| {
 			context = Model.context_of(state, shown)
@@ -1515,9 +1515,9 @@ Model := [].{
 		}
 
 	## A Changes pane shows uncommitted changes, every folder open, and no
-	## file until picked.
+	## file until picked, in the pane itself.
 	git_pane : State, Str -> GitPane
-	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [] }
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [], in_main: Bool.False }
 
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
@@ -1533,6 +1533,30 @@ Model := [].{
 	pick_changed = |state, { pane_id, path, folder }| {
 		shown = Model.git_pane(state, pane_id)
 		if (folder) Model.set_git_pane(state, { ..shown, folded: if (shown.folded.contains(path)) shown.folded.drop_if(|folded| folded == path) else shown.folded.append(path) }) else Model.show_git(state, pane_id, shown.scope, Selected(path))
+	}
+
+	## The pane a Workbench's main area shows, which a diff opened there
+	## takes the place of; "" in another shell.
+	main_area_pane : State -> Str
+	main_area_pane = |state|
+		match (state.shell, state.columns.get(1)) {
+			(Workbench, Ok(column)) => if (column.tabbed) column.active else column.panes.first().map_ok(|shown| shown.id) ?? ""
+			_ => ""
+		}
+
+	## The Changes pane whose file's diff the main area shows, "" for none.
+	main_diff : State -> Str
+	main_diff = |state| {
+		main = Model.main_area_pane(state)
+		state.git_panes.find_first(|shown| shown.in_main and shown.file != NoFile and shown.pane != main and !main.is_empty() and Model.pane(state, shown.pane).widget == "changes").map_ok(|shown| shown.pane) ?? ""
+	}
+
+	## Shows a Changes pane's diffs in the main area, its panel on a phone, or
+	## in the pane again, at once.
+	show_in_main : State, Str, Bool -> State
+	show_in_main = |state, pane_id, in_main| {
+		shown = Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main })
+		if (in_main) Model.show_column(shown, state.columns.get(1).map_ok(|column| column.id) ?? "") else shown
 	}
 
 	## The files of the scope a Changes pane shows, as its tree's rows.
@@ -2243,8 +2267,9 @@ Model := [].{
 	}
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
-	## or a placeholder naming what is missing.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing]
+	## a placeholder naming what is missing, or in the main area, a diff
+	## opened there from Changes.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2257,6 +2282,8 @@ Model := [].{
 			Connecting
 		else if (!Model.missing(state, shown).is_empty())
 			Missing
+		else if (shown.id == Model.main_area_pane(state) and !Model.main_diff(state).is_empty())
+			MainDiff
 		else
 			match shown.widget {
 				"sessions" => Sessions

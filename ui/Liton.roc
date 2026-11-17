@@ -593,7 +593,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -603,6 +603,7 @@ Liton := [].{
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Capabilities => Liton.capabilities(model)
+							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
 								Html.p_s(
@@ -1245,7 +1246,6 @@ Liton := [].{
 		git = shown.map(|{ pane: pane_shown, state }| Model.git_of(state, pane_shown))
 		scope = id.map2(model.signal(), |pane_id, state| Model.git_pane(state, pane_id).scope)
 		files = shown.map(|{ pane: pane_shown, state }| Model.git_files(state, pane_shown))
-		hunks = shown.map(|{ pane: pane_shown, state }| Model.git_hunks_of(state, pane_shown))
 		Html.div(
 			"changes",
 			[
@@ -1274,23 +1274,7 @@ Liton := [].{
 										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
 										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
 										Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(shown.map(|{ pane: pane_shown, state }| Model.changed_tree(state, pane_shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.changed_row(model, id, row))]),
-										Engine.switch(
-											hunks.map(
-												|asked|
-													match asked {
-														Hunks(_) => Shown
-														Loading => Loading
-														NoFile => NoFile
-													},
-											),
-											[Shown, Loading, NoFile],
-											|hunks_shown|
-												match hunks_shown {
-													NoFile => Engine.text("")
-													Loading => Html.p("Loading…", "missing")
-													Shown => Liton.git_diff(model, id, pane)
-												},
-										),
+										Engine.when(id.map2(model.signal(), |pane_id, state| Model.main_diff(state) != pane_id), || Liton.file_diff(model, id, pane), || Engine.text("")),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
 									],
 								)
@@ -1525,8 +1509,45 @@ Liton := [].{
 		)
 	}
 
+	## The diff of a Changes pane's file picked, once its hunks are known.
+	file_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	file_diff = |model, id, pane|
+		Engine.switch(
+			pane.map2(
+				model.signal(),
+				|shown, state|
+					match Model.git_hunks_of(state, shown) {
+						Hunks(_) => Shown
+						Loading => Loading
+						NoFile => NoFile
+					},
+			),
+			[Shown, Loading, NoFile],
+			|hunks_shown|
+				match hunks_shown {
+					NoFile => Engine.text("")
+					Loading => Html.p("Loading…", "missing")
+					Shown => Liton.git_diff(model, id, pane)
+				},
+		)
+
+	## The main area's pane while a Changes pane's diff shows in its place:
+	## Back to it, and the diff.
+	main_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	main_diff = |model, id| {
+		changes_id = model.signal().map(Model.main_diff)
+		Html.div(
+			"changes main-diff",
+			[
+				Html.button_s(id.map2(model.signal(), |pane_id, state| "Back to ${Widgets.find(Model.pane(state, pane_id).widget).title}"), [Engine.class("back")], model.update_by(changes_id, |state, pane_id| Model.show_in_main(state, pane_id, Bool.False))),
+				Liton.file_diff(model, changes_id, changes_id.map2(model.signal(), |pane_id, state| Model.pane(state, pane_id))),
+			],
+		)
+	}
+
 	## A file's diff in the code view, in one column or old beside new, under
-	## its path, which Open in Files shows in the Files pane.
+	## its path, which Open in Files shows in the Files pane and Open in main
+	## area in the main area, in place of the chat, until Back.
 	git_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	git_diff = |model, id, pane| {
 		rows = pane.map2(model.signal(), |shown, state| Model.git_code(state, shown))
@@ -1541,7 +1562,7 @@ Liton := [].{
 		Html.div(
 			"file-diff",
 			[
-				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.boolean("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file))]),
+				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.boolean("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file)), Html.button("Open in main area", [Html.boolean("hidden", id.map2(model.signal(), |pane_id, state| Model.main_area_pane(state).is_empty() or Model.main_area_pane(state) == pane_id or Model.main_diff(state) == pane_id))], model.update_by(id, |state, pane_id| Model.show_in_main(state, pane_id, Bool.True)))]),
 				Engine.when(rows.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
 				Liton.code_view(model, id, pane.map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), rows),
 			],

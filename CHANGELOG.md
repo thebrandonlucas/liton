@@ -106,6 +106,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Changes picks its scope, uncommitted or against the base, from a drop-down rather than two buttons, and shows the lines its files add and remove in green and red beside it.
 - The review over Changes and Files shows only while it has drafts or threads still open, rather than always saying "no drafts", and Send review only while there are drafts to send.
 - Changes lists its files as a tree of folders, each with the lines its files add and remove, which fold away when clicked; a coloured square says whether a file was added, modified or deleted.
+- A file's diff in Changes opens in the main area, in place of the chat, with Open in main area; files picked then show there too, until Back to Chat.
 
 ### Fixed
 

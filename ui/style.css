@@ -565,6 +565,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .diff-path { position: sticky; left: 0; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--edge); }
 .diff-path .file-path { position: static; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; }
 .diff-path button { flex: none; margin-right: 4px; padding: 0 8px; font-size: 12px; }
+.main-diff { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 12px; }
+.main-diff .file-diff { align-self: stretch; }
+.main-diff .back { padding: 2px 10px; font-size: 12px; }
 
 /* A pane's review: its drafts and rounds, Send review, and opened, its threads and a comment on the whole review. */
 .review-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; padding: 6px 10px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--tool); font-size: 12.5px; }
