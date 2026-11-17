@@ -211,6 +211,27 @@ try {
       [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.querySelector('[data-testid="row-status"]')?.textContent === "running")), 8000);
     await see("Chat", '.pane-header [data-testid="session-status"]', "running");
   });
+  await step("dragging the Files tab onto the chat moves it to the main area, and dragging it back returns it", async () => {
+    const centre = (selector) => page.evaluate((selector) => {
+      const box = document.querySelector(selector).getBoundingClientRect();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }, selector);
+    const mouse = (type, { x, y }) => page.send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+    const drag = async (from, to) => {
+      const start = await centre(from), end = await centre(to);
+      await mouse("mouseMoved", start);
+      await mouse("mousePressed", start);
+      for (let step = 1; step <= 8; step++) await mouse("mouseMoved", { x: start.x + (end.x - start.x) * step / 8, y: start.y + (end.y - start.y) * step / 8 });
+      await until(`a drop target over ${to}`, () => page.evaluate(() => !!document.querySelector(".column.drop-into")));
+      await mouse("mouseReleased", end);
+    };
+    const tabs = (slot) => page.evaluate((slot) => [...document.querySelectorAll(`[data-testid="slot-${slot}"] .tab-select`)].map((b) => b.textContent).join(), slot);
+    await drag('[data-testid="slot-right"] .tab-select.widget-files', 'section[aria-label="Chat"]');
+    await until("Files in the main area", async () => (await tabs("main")).endsWith("Files") && !(await tabs("right")).includes("Files"));
+    await until("no drop target left", () => page.evaluate(() => !document.querySelector(".drop-into, .dragged")));
+    await drag('[data-testid="slot-main"] .tab-select.widget-files', '[data-testid="slot-right"]');
+    await until("Files back in the right drawer", async () => (await tabs("right")).includes("Files") && !(await tabs("main")).includes("Files"));
+  });
   await step("on a phone, the Workbench opens on the chat, and the strip scrolls to the workspaces", async () => {
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: true });
     await page.goto(`${base}/`);
