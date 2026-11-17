@@ -45,8 +45,9 @@ Liton := [].{
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
-	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`), anywhere,
-	## and other keys outside a text field reach `Model.pressed`.
+	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`) with Cmd
+	## anywhere, and with Ctrl or other keys outside a text field, whose
+	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Model.pressed`.
 	page : State(Ctx, Model.State) -> Elem(Ctx)
 	page = |model|
 		Engine.element(
@@ -54,7 +55,7 @@ Liton := [].{
 			[
 				Engine.class("liton"),
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
-				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord)).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value(|state, key| Model.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord == key.heard).map_ok(|(_, name)| name) ?? key.key))),
+				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_meta())).concat(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_ctrl())).outside_text()).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value(|state, key| Model.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord.primary().any(|alternative| alternative == key.heard)).map_ok(|(_, name)| name) ?? key.key))),
 			],
 			[
 				# A Workbench has no bar: its drawers' buttons are in the main
@@ -216,11 +217,10 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
-	## The chords heard in a text field too, by the names `Model.pressed`
-	## takes: Ctrl+B and Ctrl+E show or hide the drawers, as in Paseo, and
-	## Ctrl+, Settings.
+	## The keys heard with Ctrl or Cmd, by the names `Model.pressed` takes:
+	## B and E show or hide the drawers, as in Paseo, and comma Settings.
 	shortcuts : List((Engine.Chord, Str))
-	shortcuts = [(Engine.Chord.plain("b").with_ctrl(), "Ctrl+B"), (Engine.Chord.plain("e").with_ctrl(), "Ctrl+E"), (Engine.Chord.plain(",").with_ctrl(), "Ctrl+,")]
+	shortcuts = [(Engine.Chord.plain("b"), "Ctrl+B"), (Engine.Chord.plain("e"), "Ctrl+E"), (Engine.Chord.plain(","), "Ctrl+,")]
 
 	## A call, its JSON `body` naming the capability and holding the request.
 	call : Str -> Engine.Ask(Str, Engine.HttpError)
@@ -249,7 +249,7 @@ Liton := [].{
 
 	## Opens or closes Settings.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+, or ⌘,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
 
 	## What went wrong last, over the tiles until dismissed or replaced.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
@@ -274,7 +274,7 @@ Liton := [].{
 	## stylesheet's, as are those of every button of class `icon`.
 	drawer_toggle : State(ctx, Model.State), Model.Slot, Signal(ctx, Model.Counts) -> Elem(ctx)
 	drawer_toggle = |model, drawer, workspace_changes| {
-		key = if (drawer == Left) "Ctrl+B" else "Ctrl+E"
+		key = if (drawer == Left) "Ctrl+B or ⌘B" else "Ctrl+E or ⌘E"
 		panes = model.signal().map(|state| Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| column.panes.map(|pane| Liton.label(state, pane))), " · "))
 		Engine.element(
 			"button",
@@ -334,7 +334,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box. Ctrl+B and Ctrl+E show or hide the drawers, Ctrl+, opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",
