@@ -78,6 +78,10 @@ Model := [].{
 		## How many times a draft changed other than by typing, sent or
 		## dictated, so `Liton.effects` writes it into its box though focused.
 		drafts_rewritten : U64,
+
+		## Whether the pointer is coarse, a touch screen's, whose keyboard has
+		## no Shift+Enter: Enter in a composer then starts a new line.
+		coarse_pointer : Bool,
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
 		attention : List(Attention.Item),
@@ -241,6 +245,7 @@ Model := [].{
 				next_id: 1,
 				drafts: [],
 				drafts_rewritten: 0,
+				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],
