@@ -127,9 +127,9 @@ Mock := [].{
 	## as `on_message` goes on. Without a prompt it waits, idle.
 	## Matched, not compared with `==`: compared, Roc nightly-2026-11-07 says
 	## its is_eq "never resolved to a concrete type" once an event can hold a
-	## plan's choices (not reported upstream yet; near
-	## https://github.com/roc-lang/roc/issues/12883). Compare again once a
-	## Roc upgrade compiles it.
+	## plan's choices (near https://github.com/roc-lang/roc/issues/12883).
+	## nightly-2026-11-15 compiles it: compare again once .roc-version moves
+	## there, with basic-webserver.
 	on_create : Str -> List(Scheduled)
 	on_create = |prompt|
 		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(
