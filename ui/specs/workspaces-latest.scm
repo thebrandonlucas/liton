@@ -1,12 +1,13 @@
-(test "Liton — Workspaces lists the latest first, projects by their latest workspace, or by name as its option says"
+(test "Liton — Workspaces lists a workspace's one session in its place, the latest first with how long ago each changed, projects by their latest workspace, or by name as its option says"
+  (setup (initial-time "2026-01-01T10:05:00Z"))
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix login\",\"updated\":\"2026-01-01T08:00:00.000Z\",\"workspace\":{\"directory\":\"/src\",\"id\":\"w1\"}},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write post\",\"updated\":\"2026-01-01T09:00:00.000Z\",\"workspace\":{\"directory\":\"/src\",\"id\":\"w2\"}},{\"agent\":\"claude\",\"id\":\"s3\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Edit guide\",\"updated\":\"2026-01-01T10:00:00.000Z\",\"workspace\":{\"directory\":\"/src\",\"id\":\"w3\"}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"},{\"directory\":\"/src/site\",\"id\":\"p2\",\"name\":\"site\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\"],\"state\":\"Idle\"},{\"branch\":{\"Branch\":\"blog\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w2\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"blog\",\"pinned\":false,\"project_id\":\"p2\",\"provider\":\"mock\",\"session_ids\":[\"s2\"],\"state\":\"Idle\"},{\"branch\":{\"Branch\":\"docs\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w3\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"docs\",\"pinned\":false,\"project_id\":\"p2\",\"provider\":\"mock\",\"session_ids\":[\"s3\"],\"state\":\"Idle\"}]}}]}]}")
     (run-effect 2)
-    (expect-text (test-id "slot-left") "WorkspacesWorkspacessite2docsEdit guideidleblogWrite postidleapp1mainFix loginidle")
+    (expect-text (test-id "slot-left") "WorkspacesWorkspacesSite2Edit guidedocsidle5mWrite postblogidle1hApp1Fix loginmainidle2h")
     (click (role button :name "Settings"))
     (select-option (label "Order") "Name")
-    (expect-text (test-id "slot-left") "WorkspacesWorkspacesapp1mainFix loginidlesite2blogWrite postidledocsEdit guideidle")
+    (expect-text (test-id "slot-left") "WorkspacesWorkspacesApp1Fix loginmainidle2hSite2Write postblogidle1hEdit guidedocsidle5m")
   )
 )

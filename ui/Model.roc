@@ -155,6 +155,10 @@ Model := [].{
 		## The pane whose ⋯ menu is open, or "".
 		menu : Str,
 
+		## The time, in milliseconds since 1970, as of the last minute that
+		## began: what rows count the time since their last activity from.
+		now : I64,
+
 		## The code block last copied, by its key, and the copy asked of the
 		## clipboard; `copied` is "" again if the clipboard refused it.
 		copied : Str,
@@ -284,6 +288,7 @@ Model := [].{
 				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
 				menu: "",
+				now: 0,
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
@@ -889,9 +894,13 @@ Model := [].{
 			{ ..state, poll: { serial: state.poll.serial + 1, subjects: followed, topics }, polling: Bool.True, poll_again: Bool.False }
 	}
 
-	## Polls each second, unless a poll is still on its way.
-	tick : State -> State
-	tick = |state| if (state.polling) state else Model.poll(state)
+	## Polls each second, unless a poll is still on its way, and takes the
+	## time `at` once a new minute begins.
+	tick : State, I64 -> State
+	tick = |state0, at| {
+		state = if (at // 60_000 == state0.now // 60_000) state0 else { ..state0, now: at }
+		if (state.polling) state else Model.poll(state)
+	}
 
 	## Polls at once when the topics the panes follow change, or once the
 	## poll on its way answers.
@@ -1390,17 +1399,19 @@ Model := [].{
 	## focuses (`Context.to_str`), or `group:` and the group's. A row is
 	## `creatable` when + on it starts an agent there, or creates a workspace
 	## of its project. `counts` are a group's members, or a workspace's
-	## uncommitted lines added and removed, as "+3" and "−1".
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+	## uncommitted lines added and removed, as "+3" and "−1". `age` is how
+	## long ago a session or workspace last changed (`Model.age`).
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
 
 	Counts : { members : Str, added : Str, removed : Str }
 
 	no_counts : Counts
 	no_counts = { members: "", added: "", removed: "" }
 
-	## A Workspaces pane's rows, as its options group, filter and order them,
-	## each workspace marked as urgent as its most urgent session, and unread
-	## while one is.
+	## A Workspaces pane's rows, as its options group, filter and order them:
+	## a workspace's one session in its place, with its branch if it is a
+	## worktree and its changes, or a workspace of none or several, marked as
+	## urgent as its most urgent session and unread while one is, over them.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
@@ -1416,27 +1427,35 @@ Model := [].{
 		listed = Model.ordered(state.workspaces.workspaces.concat(placeholders), order, workspace_changed, |workspace| workspace.name).drop_if(|workspace| Model.option(shown, "show_idle") == "false" and workspace.state == Idle and !Model.starting(state, workspace.id))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
-				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: attention_word(rank), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
+				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: sentence_case(attention_word(rank)), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
-				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
+				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 				Model.ordered(projects, order, |group| group.members.first().map_ok(workspace_changed) ?? 0, |group| group.title)
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
-		workspace_row = |workspace| {
+		workspace_rows_of = |workspace| {
+			sessions = sessions_in(workspace)
 			branch = match workspace.branch {
 				Branch(name) if name != workspace.name => name
 				Detached => "detached"
 				_ => ""
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
-			mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+			newest_age = Model.ordered(sessions, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|latest_session| Model.age(state, latest_session)) ?? ""
+			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: state.focus == Workspace(workspace.id), creatable: Bool.True })
+			match sessions.first() {
+				Ok(lone) if sessions.len() == 1 => {
+					lone_row = Model.session_row(state, lone)
+					[mark({ ..lone_row, detail: if (workspace.kind == Worktree) branch_name(workspace.branch) else "", counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True })]
+				}
+				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
+			}
 		}
 		groups.join_map(
 			|group| {
 				header = { ..blank, key: group.key, title: group.title, counts: { ..Model.no_counts, members: group.members.len().to_str() }, folded: folded.contains(group.key), creatable: group.creatable }
-				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(sessions_in(workspace).map(|listed_session| mark(Model.session_row(state, listed_session)))))
-				if (header.folded) [header] else members.prepend(header)
+				if (header.folded) [header] else group.members.join_map(workspace_rows_of).prepend(header)
 			},
 		)
 	}
@@ -1446,7 +1465,7 @@ Model := [].{
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
 		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -1459,6 +1478,20 @@ Model := [].{
 	changed : State, Chat.Session -> U64
 	changed = |state, listed_session|
 		if (Model.starting(state, listed_session.id)) Model.newest else Attention.recency(state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? ""))
+
+	## How long ago a session last changed, as its row says it: "now", "3m",
+	## "2h", "4d" or "1w"; "" if unknown.
+	age : State, Chat.Session -> Str
+	age = |state, listed_session| {
+		last_change = state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? "")
+		match epoch_ms(last_change) {
+			Ok(at) if state.now > 0 and !Model.starting(state, listed_session.id) => {
+				minutes = (state.now - at) // 60_000
+				if (minutes < 1) "now" else if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else if (minutes < 10080) "${(minutes // 1440).to_str()}d" else "${(minutes // 10080).to_str()}w"
+			}
+			_ => ""
+		}
+	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64
@@ -1809,7 +1842,7 @@ Model := [].{
 			}
 		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
 		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
-		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
@@ -1869,14 +1902,16 @@ Model := [].{
 		}
 	}
 
-	## Opens a Workspaces pane's form: from a workspace's row, to start an
-	## agent there of the first kind its provider starts; from a project's,
+	## Opens a Workspaces pane's form: from a workspace's row, or a session's
+	## alone in its workspace, to start an agent there of the first kind its
+	## provider starts; from a project's,
 	## to create a workspace of it, and from the pane's header (`key` ""), of
 	## the first project. Other rows open none.
 	open_form : State, { pane_id : Str, key : Str } -> State
 	open_form = |state, { pane_id, key }| {
 		project = if (key.is_empty()) state.workspaces.projects.first() else state.workspaces.projects.find_first(|listed| "group:${listed.id}" == key)
-		match (Context.from_str(key), project) {
+		placed = |session_id| state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| Workspace(listed.id)) ?? Session(session_id)
+		match (Context.from_str(key).map_ok(|context| if (context == Session(key)) placed(key) else context), project) {
 			(Ok(Workspace(workspace_id)), _) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Agent, place: workspace_id, agent: Model.agent_kinds(state, workspace_id).first() ?? "" } }
 			(_, Ok(picked)) => { ..state, form: { ..Model.closed_form, pane: pane_id, kind: Workspace, place: picked.id } }
 			_ => state
@@ -1996,7 +2031,7 @@ expect {
 	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
 	meanwhile = Model.follow({ ..sent, focus: Session("b") })
 	answered = Model.polled(meanwhile, sent.poll, [])
-	Model.tick(sent).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
+	Model.tick(sent, 0).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
 }
 
 expect {
@@ -2146,13 +2181,14 @@ expect {
 	keys = |shown| Model.workspace_rows(shown, Model.pane(shown, "pane-4")).map(|row| row.key)
 	folded = Model.pick_row(state, { pane_id: "pane-4", key: "group:p1" })
 	by_status = Model.set_option(state, "pane-4", "group_by", "Status")
-	keys(state) == ["group:p1", "workspace:w1", "s1", "workspace:w2"]
+	keys(state) == ["group:p1", "s1", "workspace:w2"]
 		and keys(folded) == ["group:p1"]
 		and keys(Model.pick_row(folded, { pane_id: "pane-4", key: "group:p1" })) == keys(state)
-		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "workspace:w1", "s1"]
+		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "s1"]
+		and keys({ ..state, sessions: state.sessions.append(Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Docs", status: Idle })), workspaces: { ..listed, workspaces: [workspace("w1", Idle, ["s1", "s2"])] } }) == ["group:p1", "workspace:w1", "s1", "s2"]
 		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
 		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == Workspace("w1")
-		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == [{ ..Model.no_counts, members: "2" }, { members: "", added: "+2", removed: "−1" }, Model.no_counts, { members: "", added: "+2", removed: "−1" }]
+		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == [{ ..Model.no_counts, members: "2" }, { members: "", added: "+2", removed: "−1" }, { members: "", added: "+2", removed: "−1" }]
 		and Model.subjects(state).contains(WorkspaceList)
 }
 
@@ -2160,7 +2196,7 @@ expect {
 ## open in it.
 folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
 folder_rows = |state, context, shown, folder, depth| {
-	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
+	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
 	entries =
 		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
 			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))
@@ -2195,6 +2231,53 @@ comment_state = |state|
 	match state {
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
+	}
+
+## A UTC time such as `2026-01-01T08:00:00.000Z` in milliseconds since
+## 1970, to the second.
+epoch_ms : Str -> Try(I64, [NotTime])
+epoch_ms = |time| {
+	bytes = time.to_utf8()
+	number = |from, length| bytes.sublist({ start: from, len: length }).fold(0, |sum, digit| sum * 10 + (digit - '0').to_i64())
+	shaped = bytes.len() >= 19 and bytes.get(4) == Ok('-') and bytes.get(10) == Ok('T') and bytes.get(13) == Ok(':')
+	if shaped {
+		(month, day) = (number(5, 2), number(8, 2))
+		year = if (month <= 2) number(0, 4) - 1 else number(0, 4)
+		year_of_era = year % 400
+		day_of_year = (153 * (if (month > 2) month - 3 else month + 9) + 2) // 5 + day - 1
+		days = (year // 400) * 146_097 + year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year - 719_468
+		Ok(((days * 24 + number(11, 2)) * 60 + number(14, 2)) * 60_000 + number(17, 2) * 1000)
+	} else {
+		Err(NotTime)
+	}
+}
+
+# A row says how long ago its session changed, from the minute last begun.
+expect {
+	state = { ..Model.initial(""), now: epoch_ms("2026-01-01T10:00:59Z") ?? 0 }
+	changed_at = |updated| Model.age(state, { ..Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Idle }), updated: Ok(updated) })
+	[changed_at("2026-01-01T10:00:30.000Z"), changed_at("2026-01-01T09:57:00Z"), changed_at("2026-01-01T07:00:00Z"), changed_at("2025-12-30T10:00:00Z"), changed_at("2025-12-01T10:00:00Z"), changed_at("")] == ["now", "3m", "3h", "2d", "4w", ""]
+}
+
+expect epoch_ms("1970-01-01T00:00:00Z") == Ok(0) and epoch_ms("2026-01-01T08:00:30.000Z") == Ok(1_767_254_430_000) and epoch_ms("2000-03-01T00:00:00Z") == Ok(951_868_800_000) and epoch_ms("") == Err(NotTime)
+
+## Text with its first letter a capital, as a group's title is written.
+sentence_case : Str -> Str
+sentence_case = |text| {
+	bytes = text.to_utf8()
+	match bytes.first() {
+		Ok(first) if first >= 'a' and first <= 'z' => Str.from_utf8(bytes.drop_first(1).prepend(first - 32)) ?? text
+		_ => text
+	}
+}
+
+## A branch's name, "detached", or "" outside git.
+branch_name : [Branch(Str), Detached, NotGit] -> Str
+branch_name = |branch|
+	match branch {
+		Branch(name) => name
+		Detached => "detached"
+		NotGit => ""
 	}
 
 ## Byte strings in order, as a dictionary orders words.

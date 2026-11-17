@@ -41,7 +41,7 @@ Liton := [].{
 	program : Engine.Program
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Liton.page),
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Liton.page),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -127,7 +127,7 @@ Liton := [].{
 				},
 			),
 		),
-		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, _| Model.tick(state))),
+		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, at| Model.tick(state, at ?? state.now))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
 			model.signal().map(|state| state.poll),
@@ -840,7 +840,8 @@ Liton := [].{
 
 	## Rows of a tree, Workspaces', Sessions', Files' or a review's threads: a
 	## dot for each one's state (a workspace's is its most urgent session's),
-	## its title, its branch or agent, its changes, its status, and +, on a
+	## its title, its branch or agent, its changes, its status, how long ago
+	## it last changed, and +, on a
 	## workspace's to start an agent there and on a project's to create a
 	## workspace of it. A group folds, as a folder does, indented by its
 	## depth; a workspace, a session or a file is focused, and a thread jumps
@@ -883,7 +884,8 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
-								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
+								Html.span_s(row.field(|shown| shown.age), [Engine.class("age"), Engine.test_id("row-age")]),
+								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else if (shown.kind == Session) "New agent beside ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
 							],
 						)
 					},

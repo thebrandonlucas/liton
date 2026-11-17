@@ -88,6 +88,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A tool call is one muted line, its tool and what it ran, that opens on its input and output. It shimmers while it runs and turns red if it failed.
 - Tool calls one after another fold into one line, how many and which tools, that opens on them.
 - A chat pane's new Collapse option, in Settings, shows every tool call open (Full), folds tool calls in a row into one line (Tools, the default), or also folds each finished turn's work into one line between your message and the agent's last reply (Turns). A turn ends where your next message starts, or once the agent stops.
+- Workspaces lists one row per session, which says how long ago it last changed ("now", "3m", "2h", "4d"). A workspace with one session is that session's row, with its branch if it is a worktree and its changes, and its + starts another agent beside it; a workspace with several still has a row of its own over them. Projects are written in sentence case rather than capitals.
 
 ### Fixed
 

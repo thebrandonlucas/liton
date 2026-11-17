@@ -231,21 +231,23 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .tree-row:hover { background: var(--tool); }
 .tree-row.focused { background: var(--selected); }
 .tree-row .row-title { flex: 0 1 auto; min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word { flex: none; font: 11px var(--font-mono); color: var(--muted); }
+.tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word, .tree-row .age { flex: none; font: 11px var(--font-mono); color: var(--muted); }
 .tree-row .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .added { margin-left: auto; color: var(--added); }
 .tree-row .removed { color: var(--removed); }
+.tree-row .age { margin-left: auto; }
+.tree-row .added:not(:empty) ~ .age { margin-left: 0; }
 .tree-row span:not(.status-dot):empty { display: none; }
 .tree-group { margin-top: 8px; padding-left: 4px; }
 .tree-group .status-dot { display: none; }
-.tree-group .row-title { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.tree-group .row-title { font: 600 12px var(--font-ui); color: var(--muted); }
 .tree-group .row-title::before { content: "▾ " / ""; }
 .tree-group.folded .row-title::before { content: "▸ " / ""; }
 .tree-workspace .row-title { font-weight: 600; }
-.tree-workspace ~ .tree-session { padding-left: 24px; }
+.tree-session { padding-left: calc(8px + var(--depth, 0) * 16px); }
 .workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tree-row .new-agent { flex: none; margin-left: auto; padding: 2px 5px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
-.tree-row .added:not(:empty) ~ .new-agent { margin-left: 0; }
+.tree-row .added:not(:empty) ~ .new-agent, .tree-row .age:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }
 .tree-group .counts:not(:empty) ~ .new-agent { margin-left: auto; }
 .tree-row:hover .new-agent, .tree-row .new-agent:focus-visible, .tree-row.focused .new-agent { opacity: 1; }
@@ -601,11 +603,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .tree { padding: 4px 4px 8px; }
   .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
   .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
-  .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word { font-size: 12px; }
+  .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word, .tree-row .age { font-size: 12px; }
   .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; --icon-size: 18px; opacity: 1; }
   .tree-group { margin-top: 10px; }
-  .tree-group .row-title { font-size: 12px; }
-  .tree-workspace ~ .tree-session { padding-left: 30px; }
+  .tree-group .row-title { font-size: 13px; }
+  .tree-session { padding-left: calc(12px + var(--depth, 0) * 18px); }
   .create-form input, .create-form select, .create-actions button { min-height: 44px; }
   .inbox-item > button, .inbox-actions button, .permission button { min-height: 44px; }
   .git-file { min-height: 44px; }
