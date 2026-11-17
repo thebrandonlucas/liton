@@ -16,6 +16,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --field: color-mix(in srgb, var(--text) 6%, transparent);
   --user: color-mix(in srgb, var(--accent) 14%, transparent);
   --tool: color-mix(in srgb, var(--text) 5%, transparent);
+  --selected: color-mix(in srgb, var(--text) 11%, transparent);
   --on-accent: light-dark(#ffffff, #12100a);
   --fail: light-dark(#b42318, #ff8f85);
   --ok: light-dark(#1a7f37, #6fdc8c);
@@ -165,13 +166,13 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .missing { padding: 12px; color: var(--muted); }
 
 .inbox-item:hover { background: var(--tool); }
-.inbox-item.focused { background: var(--user); box-shadow: inset 2px 0 var(--accent); }
+.inbox-item.focused { background: var(--selected); }
 .session-meta { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
 /* Workspaces and Sessions: projects (or states), their workspaces and sessions, a tree in one list. */
 .tree { list-style: none; margin: 0; padding: 4px 6px; overflow-y: auto; }
 .tree-row { display: flex; gap: 7px; align-items: center; min-width: 0; padding: 4px 8px; border-radius: var(--small-radius); font-size: 13px; transition: background-color var(--fast) ease; }
 .tree-row:hover { background: var(--tool); }
-.tree-row.focused { background: var(--user); box-shadow: inset 2px 0 var(--accent); }
+.tree-row.focused { background: var(--selected); }
 .tree-row .row-title { flex: 0 1 auto; min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .branch, .tree-row .counts, .tree-row .status-word { flex: none; font: 11px var(--font-mono); color: var(--muted); }
 .tree-row .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -361,7 +362,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .git-file { display: flex; gap: 6px; align-items: center; padding: 2px 4px; border-radius: var(--small-radius); }
 .git-file button { flex: 1; min-width: 0; border: none; padding: 0; background: none; text-align: left; font: 12px var(--font-mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-file:has([aria-pressed="true"]) { background: var(--user); }
+.git-file:has([aria-pressed="true"]) { background: var(--selected); }
 .git-file .lines { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
 .file-diff { font: 12px var(--font-mono); tab-size: 2; border: 1px solid var(--edge); border-radius: var(--small-radius); overflow-x: auto; }
 .git-commits summary { cursor: pointer; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
