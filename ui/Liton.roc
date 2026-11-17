@@ -968,7 +968,7 @@ Liton := [].{
 							].concat(if (menus == Menus) [Engine.on_with("contextmenu", { prevent: Bool.True }, model.update_by(asked, |state, at| if (Model.row_menu(state, at.key).is_empty()) state else { ..state, menu: Model.row_menu_key(at) }))] else []),
 							[
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
-								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
+								if (menus == Menus) Liton.row_title(model, asked, row.field(|shown| shown.title)) else Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
 								Html.span_s(row.field(|shown| shown.counts.members), [Engine.class("counts")]),
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
@@ -981,6 +981,16 @@ Liton := [].{
 					},
 				),
 			],
+		)
+
+	## A row's title, which picks it, or while it is being renamed, a field
+	## of its name, which Enter saves and Escape leaves.
+	row_title : State(ctx, Model.State), Signal(ctx, { pane_id : Str, key : Str }), Signal(ctx, Str) -> Elem(ctx)
+	row_title = |model, asked, title|
+		Engine.when(
+			asked.map2(model.signal(), |at, state| state.renaming.pane == at.pane_id and state.renaming.key == at.key),
+			|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
+			|| Html.button_s(title, [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
 		)
 
 	## Whether a row has a ⋮ menu: a project's, a workspace's, or a session's

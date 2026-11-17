@@ -251,6 +251,8 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .tree-row.focused { background: var(--selected); }
 .tree-row .row-title { flex: 0 1 auto; min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word, .tree-row .age { flex: none; font: 11px var(--font-mono); color: var(--muted); }
+.tree-row .rename-form { flex: 1 1 auto; min-width: 0; display: flex; }
+.tree-row .rename { flex: 1; min-width: 0; padding: 1px 4px; font-size: 13px; }
 .tree-row.pinned .row-title::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 4px; vertical-align: -1px; background: var(--muted); -webkit-mask: var(--icon-pin) center / contain no-repeat; mask: var(--icon-pin) center / contain no-repeat; }
 .tree-row .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .added { margin-left: auto; color: var(--added); }

@@ -163,6 +163,10 @@ Model := [].{
 		## `Model.row_menu_key` names it, or "".
 		menu : Str,
 
+		## The row of a pane being renamed, by its key ("" for none), and the
+		## name typed.
+		renaming : { pane : Str, key : Str, text : Str },
+
 		## The time, in milliseconds since 1970, as of the last minute that
 		## began, or second while a chat on screen shows a turn running: what
 		## rows count the time since their last activity from, and the chat
@@ -303,6 +307,7 @@ Model := [].{
 				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
 				menu: "",
+				renaming: Model.not_renaming,
 				now: 0,
 				copied: "",
 				clipboard: { serial: 0, key: "", text: "" },
@@ -426,9 +431,9 @@ Model := [].{
 	## A key pressed outside a text field: 1 to 9, with or without Alt (or
 	## Option, which types ¡ to ª on a Mac), shows that preset. Anywhere:
 	## Ctrl+B and Ctrl+E show or hide a Workbench's drawers, Ctrl+, opens or
-	## closes Settings, and Escape closes a menu or Settings, else a
-	## Workspaces pane's form, else stops the agent of the chat focused, or
-	## of the first chat.
+	## closes Settings, and Escape leaves a row's renaming, else closes a
+	## menu or Settings, else a Workspaces pane's form, else stops the agent
+	## of the chat focused, or of the first chat.
 	pressed : State, Str -> State
 	pressed = |state, key| {
 		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
@@ -437,6 +442,7 @@ Model := [].{
 		chat = chats.find_first(|shown| shown.id == state.focused_pane) ?? (chats.first() ?? Model.pane(state, ""))
 		chat_session = Model.session(state, Model.session_of(state, chat))
 		match (numbered, option_glyph, state.presets.get(numbered ?? (option_glyph ?? 9))) {
+			_ if key == "Escape" and !state.renaming.key.is_empty() => { ..state, renaming: Model.not_renaming }
 			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
 			_ if key == "Escape" and (state.show_settings or !state.menu.is_empty()) => { ..state, show_settings: Bool.False, menu: "" }
 			_ if key == "Escape" and state.form.kind != Closed => { ..state, form: Model.closed_form }
@@ -460,27 +466,29 @@ Model := [].{
 	row_menu_key : { pane_id : Str, key : Str } -> Str
 	row_menu_key = |{ pane_id, key }| "${pane_id} ${key}"
 
-	## What a row's ⋮ menu offers: on a project, a new workspace of it; on a
-	## workspace, a new agent there, and pinning or unpinning and archiving
-	## it; on a session, a new agent beside it, stopping it while it works,
-	## marking it read or unread unless it works, pinning or unpinning its
-	## workspace, copying its id and archiving it. Each edit is offered where
-	## its capability is.
-	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Pin, CopyId, Archive]
+	## What a row's ⋮ menu offers: on a project, a new workspace of it and
+	## renaming it; on a workspace, a new agent there, and renaming, pinning
+	## or unpinning and archiving it; on a session, a new agent beside it,
+	## stopping it while it works, marking it read or unread unless it works,
+	## renaming it, pinning or unpinning its workspace, copying its id and
+	## archiving it. Each edit is offered where its capability is.
+	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Rename, Pin, CopyId, Archive]
 
 	row_menu : State, Str -> List({ label : Str, action : RowAction })
 	row_menu = |state, key| {
 		offered = |capability, items| if (state.capabilities.contains(capability)) items else []
 		pin = Model.row_workspace(state, key).map_ok(|workspace| offered(Capability.workspaces_v1, [{ label: if (workspace.pinned) "Unpin" else "Pin", action: Pin }])) ?? []
+		rename = |capability| offered(capability, [{ label: "Rename", action: Rename }])
 		match Context.from_str(key) {
-			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }] else []
-			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive", action: Archive }]))
+			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }].concat(rename(Capability.workspaces_v1)) else []
+			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(rename(Capability.workspaces_v1)).concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive", action: Archive }]))
 			Ok(Session(session_id)) if !Model.starting(state, session_id) => {
 				listed_session = Model.session(state, session_id)
 				read = state.attention.find_first(|item| item.session_id == session_id and item.state != Working).map_ok(|_| if (Model.unread(state, session_id)) [{ label: "Mark read", action: MarkRead }] else [{ label: "Mark unread", action: MarkUnread }]) ?? []
 				(if (Model.row_workspace(state, key).is_ok()) [{ label: "New agent beside it", action: NewAgent }] else [])
 					.concat(if (Model.busy(listed_session.status)) [{ label: "Stop agent", action: Stop }] else [])
 					.concat(read)
+					.concat(rename(Capability.chat_v1))
 					.concat(pin)
 					.append({ label: "Copy id", action: CopyId })
 					.concat(offered(Capability.chat_v1, [{ label: "Archive", action: Archive }]))
@@ -503,6 +511,7 @@ Model := [].{
 			MarkRead => Model.mark_seen(state, [key], Bool.True)
 			MarkUnread => Model.mark_seen(state, [key], Bool.False)
 			CopyId => Model.copy(state, { key: "id:${key}", text: key })
+			Rename => { ..state, renaming: { pane: pane_id, key, text: Model.row_name(state, key) }, jump: { serial: state.jump.serial + 1, panel: "rename", replace: "", push: "" } }
 			Pin => Model.row_workspace(state, key).map_ok(|workspace| Model.edit(state, Workspaces(Pin({ workspace_id: workspace.id, pinned: !workspace.pinned })))) ?? state
 			Archive =>
 				match Context.from_str(key) {
@@ -510,6 +519,36 @@ Model := [].{
 					Ok(Session(session_id)) => Model.edit(state, Chat(Archive({ session_id: session_id })))
 					Err(_) => state
 				}
+		}
+	}
+
+	not_renaming : { pane : Str, key : Str, text : Str }
+	not_renaming = { pane: "", key: "", text: "" }
+
+	## The name of the project, workspace or session a row names, as its
+	## provider has it.
+	row_name : State, Str -> Str
+	row_name = |state, key|
+		match Context.from_str(key) {
+			_ if key.starts_with("group:") => state.workspaces.projects.find_first(|project| "group:${project.id}" == key).map_ok(|project| project.name) ?? ""
+			Ok(Workspace(workspace_id)) => state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.name) ?? ""
+			Ok(Session(session_id)) => Model.session(state, session_id).title
+			Err(_) => ""
+		}
+
+	## Renames the row being renamed to the name typed, shown at once, unless
+	## it is empty or the same.
+	rename_row : State -> State
+	rename_row = |state0| {
+		{ key, text, .. } = state0.renaming
+		state = { ..state0, renaming: Model.not_renaming }
+		name = text.trim()
+		match Context.from_str(key) {
+			_ if name.is_empty() or name == Model.row_name(state, key) => state
+			_ if key.starts_with("group:") => Model.edit(state, Workspaces(RenameProject({ project_id: key.drop_prefix("group:"), name })))
+			Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Rename({ workspace_id, name })))
+			Ok(Session(session_id)) => Model.edit(state, Chat(Rename({ session_id, title: name })))
+			Err(_) => state
 		}
 	}
 
@@ -551,6 +590,9 @@ Model := [].{
 		listed = state.workspaces
 		each_workspace = |change_one| { ..state, workspaces: { ..listed, workspaces: listed.workspaces.map(change_one) } }
 		match change {
+			Chat(Rename({ session_id, title })) => { ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, title } else listed_session) }
+			Workspaces(Rename({ workspace_id, name })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, name } else workspace)
+			Workspaces(RenameProject({ project_id, name })) => { ..state, workspaces: { ..listed, projects: listed.projects.map(|project| if (project.id == project_id) { ..project, name } else project) } }
 			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
 			Workspaces(Pin({ workspace_id, pinned })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, pinned } else workspace)
 			Workspaces(Archive({ workspace_id })) => { ..state, workspaces: { ..listed, workspaces: listed.workspaces.drop_if(|workspace| workspace.id == workspace_id) } }

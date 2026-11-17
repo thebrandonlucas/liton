@@ -66,6 +66,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Where a turn ends, the chat says how long the agent worked on it, as "Worked for 2m 14s", when its provider tells when the turn started.
 - A permission request shows as a card: what the agent asks, the plan or other text its provider sends with it, as Markdown, and the provider's own choices as buttons, such as Reject, Implement and Implement with Auto for a plan, or else Allow and Deny. In the chat and in the Inbox alike, a choice hides the card at once, and a refused one brings it back with why.
 - Pin a workspace from its ⋮ menu, or a session's, which pins its workspace, as in Paseo: it lists first in its project, marked with a pin, until you unpin it. Archive a workspace or a session from its ⋮ menu, which removes it from the list. Each shows at once, and is undone with why if the provider refuses it.
+- Rename a project, a workspace or a session from its ⋮ menu: its title becomes a field, Enter saves the new name, which shows at once, and Escape leaves it as it was. A rename the provider refuses is undone, with why.
 
 ### Changed
 
