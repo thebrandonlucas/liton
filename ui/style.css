@@ -42,8 +42,9 @@ html, body { margin: 0; height: 100%; background: Canvas; }
      profits, whether in an action of contract, negligence or other
      tortious action, arising out of or in connection with the use or
      performance of this software.
-     Of these, arrow-up, plus, ellipsis, chevron-right, circle-alert and
-     triangle-alert derive from Feather: The MIT License (MIT), Copyright (c) 2013-present
+     Of these, arrow-up, plus, ellipsis, chevron-right, circle-alert,
+     triangle-alert, list, folder, message-square, inbox, git-branch, file
+     and circle-play derive from Feather: The MIT License (MIT), Copyright (c) 2013-present
      Cole Bemis. Permission is hereby granted, free of charge, to any person
      obtaining a copy of this software and associated documentation files
      (the "Software"), to deal in the Software without restriction,
@@ -71,6 +72,14 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
   --icon-circle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='12' x2='12' y1='8' y2='12'/><line x1='12' x2='12.01' y1='16' y2='16'/></svg>");
   --icon-triangle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
+  --icon-list: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 6h.01'/><path d='M3 12h.01'/><path d='M3 18h.01'/><path d='M8 6h13'/><path d='M8 12h13'/><path d='M8 18h13'/></svg>");
+  --icon-folder: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'/></svg>");
+  --icon-message-square: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/></svg>");
+  --icon-inbox: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='22 12 16 12 14 15 10 15 8 12 2 12'/><path d='M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z'/></svg>");
+  --icon-git-branch: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' x2='6' y1='3' y2='15'/><circle cx='18' cy='6' r='3'/><circle cx='6' cy='18' r='3'/><path d='M18 9a9 9 0 0 1-9 9'/></svg>");
+  --icon-file: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/><path d='M14 2v4a2 2 0 0 0 2 2h4'/></svg>");
+  --icon-circle-play: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><polygon points='10 8 16 12 10 16 10 8'/></svg>");
+  --icon-plug: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22v-5'/><path d='M9 8V2'/><path d='M15 8V2'/><path d='M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z'/></svg>");
   --shadow: 0 10px 40px light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 45%));
   --small-radius: max(4px, calc(var(--radius) - 4px));
   --fast: calc(var(--motion) * 140ms);
@@ -169,6 +178,21 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .column-header button, .column-tabs button { padding: 1px 9px; font: 12px var(--font-mono); color: var(--muted); background: var(--glass); }
 .column-header [aria-pressed="true"], .column-tabs [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); }
 .column:not(.tabbed) .tab, .pane.hidden { display: none; }
+/* A tab: its widget's icon and title, and a × that shows on hover. */
+.column-header .tab { display: inline-flex; align-items: center; }
+.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+.widget-sessions { --icon: var(--icon-list); }
+.widget-workspaces { --icon: var(--icon-folder); }
+.widget-chat { --icon: var(--icon-message-square); }
+.widget-inbox { --icon: var(--icon-inbox); }
+.widget-changes { --icon: var(--icon-git-branch); }
+.widget-files { --icon: var(--icon-file); }
+.widget-ci { --icon: var(--icon-circle-play); }
+.widget-capabilities { --icon: var(--icon-plug); }
+.column-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
+.tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
+@media (hover: none) { .column-header .tab-close { opacity: 1; } }
 .pane { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; outline: none;
   background: var(--glass); backdrop-filter: var(--backdrop); -webkit-backdrop-filter: var(--backdrop);
   border: 1px solid var(--edge); border-radius: var(--radius); box-shadow: var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent);

@@ -759,6 +759,10 @@ Model := [].{
 	close_pane : State, Str -> State
 	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
 
+	## A tab's ×: in a Workbench it hides the pane, in Tiling it closes it.
+	close_tab : State, Str -> State
+	close_tab = |state, id| if (state.shell == Workbench) Model.hide_pane(state, id) else Model.close_pane(state, id)
+
 	## A column's panes a Workbench doesn't hide.
 	shown_panes : State, Column -> List(Pane)
 	shown_panes = |state, column| column.panes.drop_if(|listed_pane| state.hidden.contains(listed_pane.id))

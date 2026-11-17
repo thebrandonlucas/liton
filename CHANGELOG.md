@@ -104,6 +104,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A chat reads as a centred column at most 820px wide, in 15px text, with your own messages in a neutral grey bubble rather than a gold one.
 - The message box is one rounded box under the chat's column: what you type on top, and a row below it with a chip naming the session's model (or its agent, when the provider doesn't say which model), the mic and conversation buttons, and Send.
 - In the Developer, Inbox and Chat presets a pane's menu hides the pane rather than closing it, or hides its drawer when it is the last pane the drawer shows; Show in the menu of a pane beside it brings it back. Hidden panes stay hidden after a reload. Settings' Remove still closes a pane, and Tiling's menus still offer Close pane.
+- Tabs show their widget's icon beside its title, and a × on hover that hides the tab in the Developer, Inbox and Chat presets and closes it in Tiling.
 
 ### Fixed
 

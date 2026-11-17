@@ -1,0 +1,23 @@
+(test "Liton — a tab shows its widget's icon, and its × hides it at once in a Workbench and closes it in Tiling"
+  (steps
+    (expect-attr (role button :name "Files") class "tab-select widget-files")
+    (expect-attr (role region :name "Files") class "pane hidden")
+    (click (role button :name "Files"))
+    (expect-attr (role region :name "Files") class "pane")
+    (click (role button :name "Hide the Files tab"))
+    (expect-attr (role region :name "Files") class "pane hidden")
+    (expect-attr (role button :name "Changes") aria-pressed "true")
+    (expect-absent (role button :name "Hide the Files tab"))
+    ; In Tiling it closes.
+    (click (role button :name "Settings"))
+    (click (role button :name "Tiling preset"))
+    (click (role button :name "Settings"))
+    (click (role button :name "Chat menu"))
+    (click (role button :name "Move Chat left"))
+    (click (role button :name "Tabs"))
+    (expect-attr (role region :name "Chat") class "pane focused")
+    (click (role button :name "Close the Chat tab"))
+    (expect-absent (role region :name "Chat"))
+    (expect-attr (role region :name "Sessions") class "pane")
+  )
+)

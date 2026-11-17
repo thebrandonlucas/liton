@@ -488,7 +488,8 @@ Liton := [].{
 		)
 	}
 
-	## A column: a bar of its tabs, when tabbed, and its controls, over its
+	## A column: a bar of its tabs, when tabbed, each with a × that hides it
+	## in a Workbench and closes it in Tiling, and its controls, over its
 	## panes. In a Workbench it is a slot, without the controls.
 	column_view : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)
 	column_view = |model0, row| {
@@ -520,10 +521,17 @@ Liton := [].{
 							column.map2(model.signal(), |shown, state| Model.shown_panes(state, shown)),
 							|pane| pane.id,
 							|tab|
-								Html.button_s(
-									tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
-									[Engine.class("tab"), Html.flag("aria-pressed", tab.key().map2(column.lift_row(), |key, shown| key == shown.active))],
-									model.lift_row().update_by(tab.key(), Model.activate_tab),
+								Engine.element(
+									"span",
+									[Engine.class("tab")],
+									[
+										Html.button_s(
+											tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
+											[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(column.lift_row(), |key, shown| key == shown.active))],
+											model.lift_row().update_by(tab.key(), Model.activate_tab),
+										),
+										Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
+									],
 								),
 						),
 						Engine.when(
