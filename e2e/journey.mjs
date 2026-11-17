@@ -187,6 +187,8 @@ try {
   });
   await step("a new permission prompt asks to edit", () => see("Chat", "div.permission", "Allow edit: Edit src/Main.roc to handle the empty case?", 8000));
   await step("Stop ends the turn: the prompt goes, and the agent says it stopped", async () => {
+    // The round button stops only once nothing is typed; with "Next" in the composer it sends.
+    for (const _ of "Next") await page.keyboard.press("Backspace");
     await click("Chat", '.composer button[aria-label="Stop"]', "");
     await see("Chat", ".markdown", "Stopped.", 8000);
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
