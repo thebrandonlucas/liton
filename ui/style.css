@@ -89,6 +89,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .theme-choice { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--edge); }
 .settings textarea { font: 12px var(--font-mono); min-height: 90px; padding: 6px; }
+.wallpaper { display: grid; gap: 6px; }
 
 /* The tiles: glass with even gaps, the focused one's edge bright. */
 .column-tabs { display: none; }
