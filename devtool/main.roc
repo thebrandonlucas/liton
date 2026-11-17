@@ -12,6 +12,7 @@ import Cli
 import Exec
 import Paseo
 import Speech
+import Ui
 
 main! : List(OsStr) => Try({}, _)
 main! = |arguments| {
@@ -22,6 +23,8 @@ main! = |arguments| {
 			Stderr.line!("liton-devtool: ${problem}\n\n${Cli.usage}")?
 			Err(Exit(2))
 		}
+		Ui({ roc_ui, runtime_files, flags }) => Ui.build!(roc_ui, runtime_files, flags)
+		Specs({ roc_ui, target }) => Ui.specs!(roc_ui, target)
 		Paseo(command) => {
 			Exec.needs!("node", "nodejs", given)?
 			settings = Paseo.settings!()?

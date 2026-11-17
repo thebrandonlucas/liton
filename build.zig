@@ -154,6 +154,21 @@ fn addRocRoot(
     test_step.dependOn(&test_roc.step);
 }
 
+// Runs the development tool with args, every time: what it does reads and
+// writes files the build doesn't track.
+fn addDevtoolCommand(
+    b: *std.Build,
+    devtool: std.Build.LazyPath,
+    name: []const u8,
+    args: []const []const u8,
+) *std.Build.Step.Run {
+    const run = std.Build.Step.Run.create(b, b.fmt("run devtool {s}", .{name}));
+    run.addFileArg(devtool);
+    run.addArgs(args);
+    run.has_side_effects = true;
+    return run;
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
@@ -198,49 +213,6 @@ pub fn build(b: *std.Build) void {
         if (shared or isUi(root)) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
 
-    // The UI's .scm specs, in the native runner roc-signals's release builds
-    // the UI into for the machine running the build. Without lambda-set
-    // specialization it builds in about a minute rather than ten after a UI
-    // change, and the specs check behaviour, not speed; the e2e step drives
-    // the specialized module the browser gets.
-    const spec_step = b.step("spec", "Run the UI's specs natively");
-    const run_specs = b.addSystemCommand(&.{
-        "sh",               "-c",
-        \\set -e
-        \\mkdir -p zig-out/bin
-        \\"$1" build --specialize=no --target="$2" ui/main.roc --output=zig-out/bin/liton-specs
-        \\zig-out/bin/liton-specs ui/specs/*.scm
-        ,
-        "sh",               roc_ui,
-        nativeRocTarget(b),
-    });
-    run_specs.has_side_effects = true;
-    spec_step.dependOn(&run_specs.step);
-    test_step.dependOn(&run_specs.step);
-
-    // The browser UI, its page and the roc-signals runtime, into zig-out/www.
-    // Built for size: the wasm's download is most of a cold load (bench/).
-    // Specialized still: --specialize=no makes it a quarter of the size, but
-    // a long chat (200 messages with code blocks) takes seconds to open or
-    // leave, against a third of a second. -Dfast trades that for build time.
-    const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const build_ui = b.addSystemCommand(&.{
-        "sh", "-c",
-        \\set -e
-        \\mkdir -p zig-out/www
-        \\"$1" build --opt=size $5 --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
-        \\cp ui/index.html ui/style.css ui/ports.mjs ui/voice.mjs ui/voice-worklet.js "$2" "$3" "$4" zig-out/www/
-        \\cp -R ui/backgrounds zig-out/www/
-        ,
-        "sh", roc_ui,
-    });
-    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
-    build_ui.addFileArg(roc_signals.path("environment.mjs"));
-    build_ui.addFileArg(roc_signals.path("worker.mjs"));
-    build_ui.addArg(if (fast) "--specialize=no" else "");
-    build_ui.has_side_effects = true;
-    ui_step.dependOn(&build_ui.step);
-
     // liton's development tool (devtool/), on the daemon's compiler, which
     // runs the tasks that would otherwise be shell scripts, as kai's does.
     const build_devtool = b.addSystemCommand(&.{ roc, "build", "--opt=dev" });
@@ -250,11 +222,30 @@ pub fn build(b: *std.Build) void {
     }
     const devtool = build_devtool.addPrefixedOutputFileArg("--output=", "liton-devtool");
     const devtool_step = b.step("devtool", "Run liton's development tool: zig build devtool -- help");
-    const run_devtool = std.Build.Step.Run.create(b, "run devtool");
-    run_devtool.addFileArg(devtool);
-    if (b.args) |args| run_devtool.addArgs(args);
-    run_devtool.has_side_effects = true;
-    devtool_step.dependOn(&run_devtool.step);
+    devtool_step.dependOn(&addDevtoolCommand(b, devtool, "devtool", b.args orelse &.{}).step);
+
+    // The UI's .scm specs, in the native runner roc-signals's release builds
+    // the UI into for the machine running the build. Without lambda-set
+    // specialization it builds in about a minute rather than ten after a UI
+    // change, and the specs check behaviour, not speed; the e2e step drives
+    // the specialized module the browser gets.
+    const spec_step = b.step("spec", "Run the UI's specs natively");
+    const run_specs = addDevtoolCommand(b, devtool, "spec", &.{ "spec", roc_ui, nativeRocTarget(b) });
+    spec_step.dependOn(&run_specs.step);
+    test_step.dependOn(&run_specs.step);
+
+    // The browser UI, its page and the roc-signals runtime, into zig-out/www.
+    // Built for size: the wasm's download is most of a cold load (bench/).
+    // Specialized still: --specialize=no makes it a quarter of the size, but
+    // a long chat (200 messages with code blocks) takes seconds to open or
+    // leave, against a third of a second. -Dfast trades that for build time.
+    const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
+    const build_ui = addDevtoolCommand(b, devtool, "ui", &.{ "ui", roc_ui });
+    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
+    build_ui.addFileArg(roc_signals.path("environment.mjs"));
+    build_ui.addFileArg(roc_signals.path("worker.mjs"));
+    if (fast) build_ui.addArg("--specialize=no");
+    ui_step.dependOn(&build_ui.step);
 
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build daemon/main.roc --output=zig-out/bin/liton-daemon", "sh", roc });
