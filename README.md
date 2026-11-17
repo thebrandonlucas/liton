@@ -6,6 +6,8 @@ A modular, capability-driven UI for working with AI agents across daemon backend
 
 `kai shell` enters the development environment ([Kai](https://github.com/thebrandonlucas/kai)), with the Roc compilers `.roc-version` (the daemon's, as `roc`) and `ui/.roc-version` (the UI's, as `roc-ui`) pin, and Zig. Then `zig build test` runs the checks and tests, and `zig build fmt` formats the sources.
 
+`zig build devtool -- <command>` runs liton's development tool (`devtool/`), the Roc program that does what would otherwise be shell scripts; `zig build devtool -- help` lists its commands.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

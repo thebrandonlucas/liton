@@ -699,12 +699,62 @@ Model := [].{
 	## Moves a pane to the end of a Workbench slot, as its active tab, and
 	## shows it and the slot's drawer.
 	move_to_slot : State, Str, Slot -> State
-	move_to_slot = |state, id, slot| {
+	move_to_slot = |state, id, slot| Model.place(state, id, { column: state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? "", at: End })
+
+	## Where a pane goes: into column `column` at its end or beside one of its
+	## panes, or into a new column on either side of it. "" is nowhere.
+	Place : { column : Str, at : [End, Before(Str), After(Str), NewLeft, NewRight] }
+
+	nowhere : Place
+	nowhere = { column: "", at: End }
+
+	## Moves a pane to `place` as its column's active tab, showing it and its
+	## slot's drawer. In Tiling, the narrow screen shows its column.
+	place : State, Str, Place -> State
+	place = |state, id, { column: to, at }| {
 		moved = Model.pane(state, id)
-		to = state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? ""
 		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
-		columns = left_behind.map(|column| if (column.id == to) { ..column, active: id, panes: column.panes.append(moved) } else column)
-		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+		added = { id: "column-${state.next_id.to_str()}", size: 1, tabbed: Bool.False, active: id, panes: [moved] }
+		inserted = |listed_panes, beside, after| {
+			index = (listed_panes.find_first_index(|listed_pane| listed_pane.id == beside) ?? listed_panes.len()) + (if (after) 1 else 0)
+			listed_panes.take_first(index).append(moved).concat(listed_panes.drop_first(index))
+		}
+		columns = left_behind.join_map(
+			|column|
+				match at {
+					_ if column.id != to => [column]
+					NewLeft => [added, column]
+					NewRight => [column, added]
+					Before(beside) => [{ ..column, active: id, panes: inserted(column.panes, beside, Bool.False) }]
+					After(beside) => [{ ..column, active: id, panes: inserted(column.panes, beside, Bool.True) }]
+					End => [{ ..column, active: id, panes: column.panes.append(moved) }]
+				},
+		)
+		new_column = at == NewLeft or at == NewRight
+		shown = if (new_column) added.id else to
+		slot = Model.slot_of(state, to)
+		if (!state.columns.any(|column| column.id == to))
+			state
+		else
+			Model.drop_empty_columns({ ..state, columns, next_id: if (new_column) state.next_id + 1 else state.next_id, active_column: if (state.shell == Tiling) shown else state.active_column, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+	}
+
+	## Where dropping pane `id` places it, nowhere unless it moves it: a
+	## Workbench's slot must fit its widget, and Tiling's new column must not
+	## hold it alone already.
+	drop_place : State, Str, Place -> Place
+	drop_place = |state, id, wanted| {
+		from = state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)).map_ok(|column| column.id) ?? ""
+		alone = state.columns.any(|column| column.id == from and column.panes.len() == 1)
+		fits = Widgets.fits(Widgets.find(Model.pane(state, id).widget), Model.slot_of(state, wanted.column))
+		allowed =
+			match wanted.at {
+				_ if from.is_empty() or !fits or !state.columns.any(|column| column.id == wanted.column) => Bool.False
+				Before(beside) | After(beside) => beside != id
+				End => wanted.column != from
+				NewLeft | NewRight => state.shell == Tiling and !(alone and wanted.column == from)
+			}
+		if (allowed) wanted else Model.nowhere
 	}
 
 	## The value of a pane's option `key`, or its widget's default.
@@ -829,21 +879,10 @@ Model := [].{
 		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
 			Err(NotFound) => state
 			Ok(from) => {
-				moved = Model.pane(state, id)
-				left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 				at_edge = if (direction == Left) from == 0 else from + 1 == state.columns.len()
 				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
-				if (at_edge and alone)
-					state
-				else if at_edge {
-					column = { id: "column-${state.next_id.to_str()}", size: 1, tabbed: Bool.False, active: id, panes: [moved] }
-					columns = if (direction == Left) left_behind.prepend(column) else left_behind.append(column)
-					Model.drop_empty_columns({ ..state, columns, active_column: column.id, next_id: state.next_id + 1 })
-				} else {
-					to = if (direction == Left) from - 1 else from + 1
-					columns = left_behind.map_with_index(|column, index| if (index == to) { ..column, active: id, panes: column.panes.append(moved) } else column)
-					Model.drop_empty_columns({ ..state, columns, active_column: columns.get(to).map_ok(|column| column.id) ?? state.active_column })
-				}
+				beside = state.columns.get(if (at_edge) from else if (direction == Left) from - 1 else from + 1).map_ok(|column| column.id) ?? ""
+				if (at_edge and alone) state else Model.place(state, id, { column: beside, at: if (!at_edge) End else if (direction == Left) NewLeft else NewRight })
 			}
 		}
 
@@ -2476,6 +2515,38 @@ expect {
 	state = Model.layout(Model.initial(""), Model.tiling)
 	split = Model.move_pane(Model.move_pane(state, "pane-2", Left), "pane-2", Left)
 	Model.move_pane(state, "pane-1", Left).columns == state.columns and split.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-2"], ["pane-1"], ["pane-3"]]
+}
+
+# A drop reorders a slot's tabs or moves a pane to another slot it fits, and
+# in Tiling into a column or a new one beside it.
+expect {
+	state = Model.initial("")
+	ids = |placed| placed.columns.map(|column| column.panes.map(|pane| pane.id))
+	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
+	tiling = Model.layout(state, Model.tiling)
+	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
+	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3"]]
+		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
+		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3"]]
+		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
+		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
+		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
+}
+
+# Only a drop that moves a pane where it fits places it.
+expect {
+	state = Model.initial("")
+	tiling = Model.layout(state, Model.tiling)
+	allowed = |placed, id, wanted| Model.drop_place(placed, id, wanted) == wanted
+	allowed(state, "pane-4", { column: "column-3", at: Before("pane-3") })
+		and allowed(state, "pane-4", { column: "column-2", at: End })
+		and !allowed(state, "pane-2", { column: "column-1", at: End })
+		and !allowed(state, "pane-4", { column: "column-3", at: End })
+		and !allowed(state, "pane-4", { column: "column-3", at: After("pane-4") })
+		and !allowed(state, "pane-4", { column: "column-3", at: NewLeft })
+		and allowed(tiling, "pane-1", { column: "column-3", at: NewRight })
+		and !allowed(tiling, "pane-1", { column: "column-1", at: NewRight })
+		and !allowed(tiling, "pane-1", { column: "column-9", at: End })
 }
 
 expect {
