@@ -55,6 +55,7 @@ Widgets := [].{
 			options: [
 				{ key: "tool_output", label: "Tool output", help: "How much of a tool call's output its card shows.", kind: Choice({ default: "Folded", choices: ["Full", "Folded", "Hidden"] }) },
 				{ key: "show_status", label: "Show status lines", help: "Show when the agent starts, stops or waits.", kind: Bool(Bool.True) },
+				{ key: "collapse", label: "Collapse", help: "Show every tool call open, fold tool calls in a row into one line, or also fold each finished turn's work into one.", kind: Choice({ default: "Tools", choices: ["Full", "Tools", "Turns"] }) },
 			],
 			parts: ["header", "timeline", "bubble", "tool-card", "permission", "composer"],
 		},

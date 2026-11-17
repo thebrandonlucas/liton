@@ -963,7 +963,7 @@ Liton := [].{
 													|kind|
 														match kind {
 															Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
-															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }))
+															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }), shown.lift_row().map(|{ pane, .. }| Model.option(pane, "collapse") == "Full"))
 															Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
 															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
 														},
@@ -1505,15 +1505,16 @@ Liton := [].{
 
 	## A tool call as one muted line, its tool and the first line of its
 	## input, which opens on the rest of its input and its output, all but
-	## the output's first lines folded away. It shimmers while running and is
-	## red once failed; the state's word is for screen readers.
-	tool_card : Signal(ctx, Model.ToolCard) -> Elem(ctx)
-	tool_card = |card| {
+	## the output's first lines folded away, and is `open` at first or not.
+	## It shimmers while running and is red once failed; the state's word is
+	## for screen readers.
+	tool_card : Signal(ctx, Model.ToolCard), Signal(ctx, Bool) -> Elem(ctx)
+	tool_card = |card, open| {
 		state = card.map(|shown| Liton.tool_state(shown.state))
 		input = card.map(|shown| shown.input.split_first("\n") ?? { before: shown.input, after: "" })
 		Engine.element(
 			"details",
-			[Engine.class_s(state.map(|name| "tool-card ${name}")), Engine.attr("data-part", "tool-card")],
+			[Engine.class_s(state.map(|name| "tool-card ${name}")), Engine.attr("data-part", "tool-card"), Html.boolean("open", open)],
 			[
 				Engine.element(
 					"summary",

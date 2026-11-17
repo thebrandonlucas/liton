@@ -715,8 +715,10 @@ Model := [].{
 	}
 
 	## A chat pane's entries, the latest its window holds, as its options
-	## show them: tool output in full, folded or hidden, and status lines or
-	## not. A result before the window is its call's, before it too.
+	## show them: tool output in full, folded or hidden; status lines or not;
+	## and folded as Collapse says: nothing, tool calls in a row, or those
+	## and finished turns. A result before the window is its call's, before
+	## it too.
 	chat_entries : State, Pane -> List(Shown)
 	chat_entries = |state, shown| {
 		status = |entry|
@@ -737,8 +739,58 @@ Model := [].{
 		listed = Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
 			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
-		Model.tools_folded(listed, session_id, opened)
+		session_running = [Running, AwaitingPermission].contains(Model.session(state, session_id).status)
+		match Model.option(shown, "collapse") {
+			"Full" => listed
+			"Turns" => Model.tools_folded(Model.turns_folded(listed, session_id, opened, session_running), session_id, opened)
+			_ => Model.tools_folded(listed, session_id, opened)
+		}
 	}
+
+	## Each finished turn's work under one fold, between its message and the
+	## agent's last reply, shown only once it is `opened`. A turn starts with
+	## a message of the user's, so one is finished once another follows, and
+	## the last once `session_running` is false; entries before the first
+	## message are a turn begun earlier.
+	turns_folded : List(Shown), Str, List(Str), Bool -> List(Shown)
+	turns_folded = |listed, session_id, opened, session_running| {
+		is_user = |entry|
+			match entry.event {
+				UserMessage(_) => Bool.True
+				_ => Bool.False
+			}
+		is_reply = |entry|
+			match entry.event {
+				AgentMessage(_) => Bool.True
+				_ => Bool.False
+			}
+		under_fold = |rows, turn, finished| {
+			(asked, after_message) = match turn {
+				[first, .. as rest] if is_user(first) => ([first], rest)
+				_ => ([], turn)
+			}
+			reply = after_message.find_last(is_reply).map_ok(|entry| [entry]) ?? []
+			work = after_message.drop_if(|entry| reply.contains(entry))
+			cards = work.keep_oks(|entry| entry.card)
+			messages = work.keep_if(is_reply).len()
+			match work {
+				[first, ..] if finished and (!cards.is_empty() or messages > 0) => {
+					key = "${session_id}/turn/${first.sequence.to_str()}"
+					summary = Str.join_with([Model.how_many(cards.len(), "tool call"), Model.how_many(messages, "message")].drop_if(Str.is_empty), ", ")
+					state = if (cards.any(|tool| tool.state == Failed)) Failed else Done
+					fold = { key, summary, state, open: opened.contains(key) }
+					rows.concat(asked).append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) work else []).concat(reply)
+				}
+				_ => rows.concat(turn)
+			}
+		}
+		walked = listed.fold({ rows: [], turn: [] }, |so_far, entry| if (is_user(entry)) { rows: under_fold(so_far.rows, so_far.turn, Bool.True), turn: [entry] } else { ..so_far, turn: so_far.turn.append(entry) })
+		under_fold(walked.rows, walked.turn, !session_running)
+	}
+
+	## "3 tool calls", "1 message", or "" for none.
+	how_many : U64, Str -> Str
+	how_many = |count, thing| if (count == 0) "" else if (count == 1) "1 ${thing}" else "${count.to_str()} ${thing}s"
 
 	## Runs of two or more tool calls, each under one fold, shown only once
 	## it is `opened`.

@@ -86,6 +86,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Send and Stop are one round button at the end of the message box: an arrow that sends, which turns into a red Stop while the agent works and nothing is typed, and a turning ring once pressed until the agent stops. Stop is no longer in a chat's header.
 - A tool call is one muted line, its tool and what it ran, that opens on its input and output. It shimmers while it runs and turns red if it failed.
 - Tool calls one after another fold into one line, how many and which tools, that opens on them.
+- A chat pane's new Collapse option, in Settings, shows every tool call open (Full), folds tool calls in a row into one line (Tools, the default), or also folds each finished turn's work into one line between your message and the agent's last reply (Turns). A turn ends where your next message starts, or once the agent stops.
 
 ### Fixed
 
