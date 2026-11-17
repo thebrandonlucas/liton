@@ -593,7 +593,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -603,6 +603,7 @@ Liton := [].{
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Capabilities => Liton.capabilities(model)
+							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							Missing =>
 								Html.p_s(
@@ -1245,7 +1246,6 @@ Liton := [].{
 		git = shown.map(|{ pane: pane_shown, state }| Model.git_of(state, pane_shown))
 		scope = id.map2(model.signal(), |pane_id, state| Model.git_pane(state, pane_id).scope)
 		files = shown.map(|{ pane: pane_shown, state }| Model.git_files(state, pane_shown))
-		hunks = shown.map(|{ pane: pane_shown, state }| Model.git_hunks_of(state, pane_shown))
 		Html.div(
 			"changes",
 			[
@@ -1271,52 +1271,10 @@ Liton := [].{
 												Html.span_s(git.map(|known| if (Liton.dirty(known.status)) "uncommitted changes" else ""), [Engine.class("badge dirty")]),
 											],
 										),
-										Html.div(
-											"choices",
-											[
-												Liton.scope_button(model, id, scope, "Uncommitted", Uncommitted),
-												Liton.scope_button(model, id, scope, "Against base", AgainstBase),
-												Html.span_s(scope.map2(git, Liton.commit_text), [Engine.class("badge")]),
-											],
-										),
+										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
 										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
-										Html.ul(
-											[Engine.class("git-files"), Engine.attr("data-part", "files")],
-											[
-												Engine.each(
-													files.map(
-														|listed|
-															match listed {
-																Files(shown_files) => shown_files
-																Loading => []
-															},
-													),
-													|file| file.path,
-													|row| {
-														asked = row.key().map2(id.lift_row(), |path, pane_id| { path, pane_id })
-														picked = asked.map2(model.signal().lift_row(), |{ path, pane_id }, state| Model.git_pane(state, pane_id).file == Selected(path))
-														Liton.git_file(row.field(|file| file), picked, model.lift_row().update_by(asked, |state, { path, pane_id }| Model.show_git(state, pane_id, Model.git_pane(state, pane_id).scope, Selected(path))))
-													},
-												),
-											],
-										),
-										Engine.switch(
-											hunks.map(
-												|asked|
-													match asked {
-														Hunks(_) => Shown
-														Loading => Loading
-														NoFile => NoFile
-													},
-											),
-											[Shown, Loading, NoFile],
-											|hunks_shown|
-												match hunks_shown {
-													NoFile => Engine.text("")
-													Loading => Html.p("Loading…", "missing")
-													Shown => Liton.git_diff(model, id, pane)
-												},
-										),
+										Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(shown.map(|{ pane: pane_shown, state }| Model.changed_tree(state, pane_shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.changed_row(model, id, row))]),
+										Engine.when(id.map2(model.signal(), |pane_id, state| Model.main_diff(state) != pane_id), || Liton.file_diff(model, id, pane), || Engine.text("")),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
 									],
 								)
@@ -1326,21 +1284,37 @@ Liton := [].{
 		)
 	}
 
-	## Shows a scope's files at once, pressed while shown. Top-level because,
-	## as a closure inside `changes`, it keeps `roc check` (nightly-2026-11-07)
-	## from ever finishing; not reported upstream yet.
-	scope_button : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Str, WorkspaceGit.Scope -> Elem(PaneCtx)
-	scope_button = |model, id, scope, name, picked| Html.button(name, [Html.flag("aria-pressed", scope.map(|current| current == picked))], model.update_by(id, |state, pane_id| Model.show_git(state, pane_id, picked, NoFile)))
+	## The scope a Changes pane shows, uncommitted or against the base, or the
+	## commit picked below; another shows its files at once. Top-level
+	## because, as a closure inside `changes`, it keeps `roc check`
+	## (nightly-2026-11-07) from ever finishing; not reported upstream yet.
+	scope_picker : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, WorkspaceGit.Scope), Signal(PaneCtx, Model.Git) -> Elem(PaneCtx)
+	scope_picker = |model, id, scope, git| {
+		value = scope.map(|current| if (current == Uncommitted) "Uncommitted" else if (current == AgainstBase) "AgainstBase" else "Commit")
+		pick = |state, pane_id, picked| Model.show_git(state, pane_id, if (picked == "Uncommitted") Uncommitted else if (picked == "AgainstBase") AgainstBase else Model.git_pane(state, pane_id).scope, NoFile)
+		commit = Engine.element("option", [Engine.prop(Engine.Prop.value, "Commit"), Html.boolean("hidden", value.map(|shown| shown != "Commit"))], [Engine.text_s(scope.map2(git, Liton.commit_text))])
+		Dropdown.select(Engine.const("Scope"), value, [Engine.class("scope")], [Dropdown.option("Uncommitted", "Uncommitted"), Dropdown.option("AgainstBase", "Against base"), commit], model.set_value_by(id, pick))
+	}
 
-	## A pane's review, over its files or changes: its drafts and the rounds
-	## sent, Send review, which sends the drafts to the agent as one message,
+	## The lines a scope's files add and remove, as "+14" and "−3".
+	total_lines : [Files(List(WorkspaceGit.File)), Loading] -> { added : Str, removed : Str }
+	total_lines = |listed|
+		match listed {
+			Files(files) if !files.is_empty() => { added: "+${files.fold(0, |sum, file| file.additions + sum).to_str()}", removed: "−${files.fold(0, |sum, file| file.deletions + sum).to_str()}" }
+			_ => { added: "", removed: "" }
+		}
+
+	## A pane's review, over its files or changes, while it has drafts or
+	## threads open: its drafts and the rounds sent, Send review while it has
+	## drafts, which sends the drafts to the agent as one message,
 	## and, opened, its threads, each jumping to its lines, and a comment on
 	## the whole review.
 	review_panel : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	review_panel = |model, id, pane| {
 		key = id.map(|pane_id| "${pane_id}/review")
+		review = pane.map2(model.signal(), |shown, state| Model.review_of(state, Model.context_of(state, shown)))
 		Html.div_attrs(
-			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.boolean("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.review_v1)))],
+			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.boolean("hidden", review.map2(model.signal(), |shown, state| !state.capabilities.contains(Capability.review_v1) or (Review.drafts(shown) == 0 and shown.threads.all(|thread| thread.resolved))))],
 			[
 				Engine.element(
 					"details",
@@ -1358,7 +1332,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.button("Send review", [Engine.class("send-review"), Engine.attr("title", "Send the drafts to the agent as one message")], model.update_by(id, Model.send_review)),
+				Engine.when(review.map(|shown| Review.drafts(shown) > 0), || Html.button("Send review", [Engine.class("send-review"), Engine.attr("title", "Send the drafts to the agent as one message")], model.update_by(id, Model.send_review)), || Engine.text("")),
 			],
 		)
 	}
@@ -1508,8 +1482,72 @@ Liton := [].{
 			],
 		)
 
+	## A row of a Changes pane's tree, indented by its depth: a folder, which
+	## folds, or a file, which shows its diff; its name, named by its path to
+	## a screen reader, how it changed as a coloured square, and by how many
+	## lines. Top-level for the reason `scope_picker` is.
+	changed_row : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.ChangedRow) -> Elem(Row(PaneCtx, Model.ChangedRow))
+	changed_row = |model, id, row| {
+		shown = row.field(|changed| changed)
+		asked = shown.map2(id.lift_row(), |changed, pane_id| { pane_id, path: changed.path, folder: changed.folder })
+		picked = asked.map2(model.signal().lift_row(), |{ pane_id, path, folder }, state| !folder and Model.git_pane(state, pane_id).file == Selected(path))
+		Html.li(
+			[Engine.class_s(shown.map(|changed| if (!changed.folder) "git-file" else if (changed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|changed| "--depth: ${changed.depth.to_str()}"))],
+			[
+				Html.button_s(
+					shown.map(|changed| changed.path.split_last("/").map_ok(|parts| parts.after) ?? changed.path),
+					[
+						Html.aria_label_s(shown.map(|changed| if (changed.folder) changed.path else Liton.file_label(changed.file))),
+						Engine.attr_presence("aria-pressed", shown.map2(picked, |changed, is_picked| if (changed.folder) Absent else Present(if (is_picked) "true" else "false"))),
+						Engine.attr_presence("aria-expanded", shown.map(|changed| if (changed.folder) Present(if (changed.folded) "false" else "true") else Absent)),
+					],
+					model.lift_row().update_by(asked, Model.pick_changed),
+				),
+				Html.span_s(shown.map(|changed| if (changed.folder) "" else Liton.change_text(changed.file.change)), [Engine.class_s(shown.map(|changed| "change ${Liton.change_text(changed.file.change)}"))]),
+				Html.span_s(shown.map(|changed| Liton.file_lines(changed.file)), [Engine.class("lines")]),
+			],
+		)
+	}
+
+	## The diff of a Changes pane's file picked, once its hunks are known.
+	file_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	file_diff = |model, id, pane|
+		Engine.switch(
+			pane.map2(
+				model.signal(),
+				|shown, state|
+					match Model.git_hunks_of(state, shown) {
+						Hunks(_) => Shown
+						Loading => Loading
+						NoFile => NoFile
+					},
+			),
+			[Shown, Loading, NoFile],
+			|hunks_shown|
+				match hunks_shown {
+					NoFile => Engine.text("")
+					Loading => Html.p("Loading…", "missing")
+					Shown => Liton.git_diff(model, id, pane)
+				},
+		)
+
+	## The main area's pane while a Changes pane's diff shows in its place:
+	## Back to it, and the diff.
+	main_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	main_diff = |model, id| {
+		changes_id = model.signal().map(Model.main_diff)
+		Html.div(
+			"changes main-diff",
+			[
+				Html.button_s(id.map2(model.signal(), |pane_id, state| "Back to ${Widgets.find(Model.pane(state, pane_id).widget).title}"), [Engine.class("back")], model.update_by(changes_id, |state, pane_id| Model.show_in_main(state, pane_id, Bool.False))),
+				Liton.file_diff(model, changes_id, changes_id.map2(model.signal(), |pane_id, state| Model.pane(state, pane_id))),
+			],
+		)
+	}
+
 	## A file's diff in the code view, in one column or old beside new, under
-	## its path, which Open in Files shows in the Files pane.
+	## its path, which Open in Files shows in the Files pane and Open in main
+	## area in the main area, in place of the chat, until Back.
 	git_diff : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	git_diff = |model, id, pane| {
 		rows = pane.map2(model.signal(), |shown, state| Model.git_code(state, shown))
@@ -1524,7 +1562,7 @@ Liton := [].{
 		Html.div(
 			"file-diff",
 			[
-				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.boolean("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file))]),
+				Html.div("diff-path", [Html.span_s(path, [Engine.class("file-path")]), Html.button("Open in Files", [Html.boolean("hidden", model.signal().map(|state| !Model.panes(state).any(|shown| shown.widget == "files")))], model.update_by(path, Model.open_file)), Html.button("Open in main area", [Html.boolean("hidden", id.map2(model.signal(), |pane_id, state| Model.main_area_pane(state).is_empty() or Model.main_area_pane(state) == pane_id or Model.main_diff(state) == pane_id))], model.update_by(id, |state, pane_id| Model.show_in_main(state, pane_id, Bool.True)))]),
 				Engine.when(rows.map(|listed| listed.is_empty()), || Html.p("No diff to show.", "missing"), || Engine.text("")),
 				Liton.code_view(model, id, pane.map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), rows),
 			],

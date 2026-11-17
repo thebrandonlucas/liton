@@ -103,6 +103,10 @@ All notable changes to liton are documented in this file. The format is based on
 - The right drawer's button, at the end of the chat's header, shows the lines the chat's workspace has added and removed but not committed, in green and red, so you can tell there is something to review without opening the drawer. Hovering a drawer's button names what the drawer holds, such as Changes · Files.
 - A chat reads as a centred column at most 820px wide, in 15px text, with your own messages in a neutral grey bubble rather than a gold one.
 - The message box is one rounded box under the chat's column: what you type on top, and a row below it with a chip naming the session's model (or its agent, when the provider doesn't say which model), the mic and conversation buttons, and Send.
+- Changes picks its scope, uncommitted or against the base, from a drop-down rather than two buttons, and shows the lines its files add and remove in green and red beside it.
+- The review over Changes and Files shows only while it has drafts or threads still open, rather than always saying "no drafts", and Send review only while there are drafts to send.
+- Changes lists its files as a tree of folders, each with the lines its files add and remove, which fold away when clicked; a coloured square says whether a file was added, modified or deleted.
+- A file's diff in Changes opens in the main area, in place of the chat, with Open in main area; files picked then show there too, until Back to Chat.
 
 ### Fixed
 

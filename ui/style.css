@@ -477,7 +477,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .badge.dirty, .badge.modified, .badge.renamed { border-color: var(--warn); color: var(--warn); }
 .badge.added { border-color: var(--added); color: var(--added); }
 .badge.deleted { border-color: var(--removed); color: var(--removed); }
-.changes .choices button { font-size: 12px; padding: 0 8px; color: var(--muted); }
+.changes .choices { align-items: center; font: 11px var(--font-mono); }
+.changes .scope { padding: 2px 6px; font: 12px var(--font-ui); }
+.changes .choices .added { margin-left: auto; color: var(--added); }
+.changes .choices .removed { color: var(--removed); }
+.changes .choices span:empty { display: none; }
 .changes .missing { padding: 4px 0; margin: 0; }
 .changes .missing:empty { display: none; }
 .git-files { list-style: none; margin: 0; padding: 0; }
@@ -486,6 +490,15 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-file:has([aria-pressed="true"]) { background: var(--selected); }
 .git-file .lines { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
+/* Changes' tree: folders fold, and a file's square says how it changed, its word left to screen readers. */
+.git-tree .git-file { padding-left: calc(4px + var(--depth, 0) * 12px); }
+.git-tree .change { flex: none; order: -1; width: 8px; height: 8px; border-radius: 2px; font-size: 0; background: var(--warn); }
+.git-tree .change.added { background: var(--added); }
+.git-tree .change.deleted { background: var(--removed); }
+.git-tree .git-folder .change { display: none; }
+.git-tree .git-folder button { font-family: var(--font-ui); color: var(--muted); }
+.git-tree .git-folder button::before { content: "▾ " / ""; }
+.git-tree .git-folder.folded button::before { content: "▸ " / ""; }
 .file-diff { font: 12px var(--font-mono); tab-size: 2; border: 1px solid var(--edge); border-radius: var(--small-radius); overflow-x: auto; }
 .git-commits summary { cursor: pointer; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .commits { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
@@ -555,6 +568,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .diff-path { position: sticky; left: 0; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--edge); }
 .diff-path .file-path { position: static; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; }
 .diff-path button { flex: none; margin-right: 4px; padding: 0 8px; font-size: 12px; }
+.main-diff { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 12px; }
+.main-diff .file-diff { align-self: stretch; }
+.main-diff .back { padding: 2px 10px; font-size: 12px; }
 
 /* A pane's review: its drafts and rounds, Send review, and opened, its threads and a comment on the whole review. */
 .review-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; padding: 6px 10px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--tool); font-size: 12.5px; }
@@ -661,7 +677,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .create-form input, .create-form select, .create-actions button { min-height: 44px; }
   .inbox-item > button, .inbox-actions button, .permission button { min-height: 44px; }
   .git-file { min-height: 44px; }
-  .changes .choices button { min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
+  .changes .scope { min-height: 40px; }
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
   .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
   /* The composer: the screen's width, above the tab bar, with a thumb's Send or Stop. */

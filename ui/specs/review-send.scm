@@ -1,4 +1,4 @@
-(test "Liton — Send review shows the drafts sent at once, as drafts again with why when the daemon refuses, and settles when it took them"
+(test "Liton — Send review shows the drafts sent at once, and itself only with drafts, as drafts again with why when the daemon refuses, and settles when it took them"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"files\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"review\",\"version\":1}],\"id\":\"review\",\"name\":\"Review\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -13,22 +13,26 @@
     ; Sent at once, before the daemon answers.
     (click (role button :name "Send review"))
     (expect-pending-effects 1)
-    (expect-text (test-id "review-summary") "no drafts · 1 round sent")
+    (expect-absent (role button :name "Send review"))
+    (expect-text (test-id "review-summary") "1 round sent")
     (stub-http "send" :url "/liton/v1/call" :status 200 :body "{\"Err\":{\"code\":\"Refused\",\"message\":\"the agent is busy\"}}")
     (run-effect 5)
     ; Refused, they are drafts again, with why.
     (expect-text (test-id "review-summary") "2 drafts")
     (expect-visible (text "the agent is busy"))
     (click (role button :name "Send review"))
-    (expect-text (test-id "review-summary") "no drafts · 1 round sent")
+    (expect-absent (role button :name "Send review"))
+    (expect-text (test-id "review-summary") "1 round sent")
     (stub-http "send" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Sent\":{\"round\":1}}}")
     (run-effect 6)
     ; Taken, they stay sent until the poll it asks for has them so.
     (expect-pending-effects 1)
-    (expect-text (test-id "review-summary") "no drafts · 1 round sent")
+    (expect-absent (role button :name "Send review"))
+    (expect-text (test-id "review-summary") "1 round sent")
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"files.v1\",\"topic\":\"tree/fix-auth/.\",\"cursor\":\"t1\",\"events\":[]},{\"capability\":\"review.v1\",\"topic\":\"threads/fix-auth\",\"cursor\":\"r2\",\"events\":[{\"Threads\":{\"round\":1,\"next\":4,\"threads\":[{\"id\":\"t2\",\"outdated\":false,\"resolved\":false,\"anchor\":{\"path\":\"Auth.roc\",\"scope\":\"File\",\"side\":\"New\",\"start_line\":2,\"end_line\":3,\"quote\":\"start\\ngo\"},\"comments\":[{\"id\":\"c1\",\"author\":\"Me\",\"text\":\"Why here?\",\"state\":{\"Sent\":1}}]}],\"comments\":[{\"id\":\"c3\",\"author\":\"Me\",\"text\":\"Otherwise fine.\",\"state\":{\"Sent\":1}}]}}]}]}")
     (run-effect 7)
-    (expect-text (test-id "review-summary") "no drafts · 1 round sent")
+    (expect-absent (role button :name "Send review"))
+    (expect-text (test-id "review-summary") "1 round sent")
     (expect-absent (text "the agent is busy"))
   )
 )

@@ -227,7 +227,11 @@ Model := [].{
 
 	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
-	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str), in_main : Bool }
+
+	## A row of a Changes pane's tree: a changed file, or a folder of them
+	## with the lines they add and remove as its `file`'s.
+	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -1065,7 +1069,7 @@ Model := [].{
 			}
 		}
 		# The panes of a widget on screen that show a context.
-		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and Model.pane_visible(state, shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
+		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and (Model.pane_visible(state, shown.id) or Model.main_diff(state) == shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
 		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git) else []
 		files = |shown| {
 			context = Model.context_of(state, shown)
@@ -1511,9 +1515,10 @@ Model := [].{
 			Err(NotFound) => Bool.False
 		}
 
-	## A Changes pane shows uncommitted changes and no file until picked.
+	## A Changes pane shows uncommitted changes, every folder open, and no
+	## file until picked, in the pane itself.
 	git_pane : State, Str -> GitPane
-	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile }
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [], in_main: Bool.False }
 
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
@@ -1522,6 +1527,46 @@ Model := [].{
 	## sends at once brings what the UI doesn't have yet.
 	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
 	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
+
+	## Shows a file of a Changes pane's tree, or folds or unfolds a folder, at
+	## once.
+	pick_changed : State, { pane_id : Str, path : Str, folder : Bool } -> State
+	pick_changed = |state, { pane_id, path, folder }| {
+		shown = Model.git_pane(state, pane_id)
+		if (folder) Model.set_git_pane(state, { ..shown, folded: if (shown.folded.contains(path)) shown.folded.drop_if(|folded| folded == path) else shown.folded.append(path) }) else Model.show_git(state, pane_id, shown.scope, Selected(path))
+	}
+
+	## The pane a Workbench's main area shows, which a diff opened there
+	## takes the place of; "" in another shell.
+	main_area_pane : State -> Str
+	main_area_pane = |state|
+		match (state.shell, state.columns.get(1)) {
+			(Workbench, Ok(column)) => if (column.tabbed) column.active else column.panes.first().map_ok(|shown| shown.id) ?? ""
+			_ => ""
+		}
+
+	## The Changes pane whose file's diff the main area shows, "" for none.
+	main_diff : State -> Str
+	main_diff = |state| {
+		main = Model.main_area_pane(state)
+		state.git_panes.find_first(|shown| shown.in_main and shown.file != NoFile and shown.pane != main and !main.is_empty() and Model.pane(state, shown.pane).widget == "changes").map_ok(|shown| shown.pane) ?? ""
+	}
+
+	## Shows a Changes pane's diffs in the main area, its panel on a phone, or
+	## in the pane again, at once.
+	show_in_main : State, Str, Bool -> State
+	show_in_main = |state, pane_id, in_main| {
+		shown = Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main })
+		if (in_main) Model.show_column(shown, state.columns.get(1).map_ok(|column| column.id) ?? "") else shown
+	}
+
+	## The files of the scope a Changes pane shows, as its tree's rows.
+	changed_tree : State, Pane -> List(ChangedRow)
+	changed_tree = |state, shown|
+		match Model.git_files(state, shown) {
+			Files(files) => changed_rows(files, Model.git_pane(state, shown.id).folded, "", 0)
+			Loading => []
+		}
 
 	git_changes_of : State, Context.Id, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
 	git_changes_of = |state, context, scope| state.git_changes.find_first(|known| known.context == context and known.changes.scope == scope).map_ok(|known| known.changes)
@@ -2085,12 +2130,13 @@ Model := [].{
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
-	## What a review panel says of its review: its drafts and rounds sent.
+	## What a review panel says of its review: its drafts and rounds sent,
+	## each left out while none.
 	review_summary : State, Pane -> Str
 	review_summary = |state, shown| {
 		review = Model.review_of(state, Model.context_of(state, shown))
 		drafts = Review.drafts(review)
-		Str.join_with([if (drafts == 0) "no drafts" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
+		Str.join_with([if (drafts == 0) "" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
 	}
 
 	## Adds a pane's comment on the whole review, shown at once as a draft.
@@ -2222,8 +2268,9 @@ Model := [].{
 	}
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
-	## or a placeholder naming what is missing.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing]
+	## a placeholder naming what is missing, or in the main area, a diff
+	## opened there from Changes.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2236,6 +2283,8 @@ Model := [].{
 			Connecting
 		else if (!Model.missing(state, shown).is_empty())
 			Missing
+		else if (shown.id == Model.main_area_pane(state) and !Model.main_diff(state).is_empty())
+			MainDiff
 		else
 			match shown.widget {
 				"sessions" => Sessions
@@ -2458,6 +2507,25 @@ folder_rows = |state, context, shown, folder, depth| {
 			}
 		},
 	)
+}
+
+## The rows of the changed `files` in `folder`, `depth` folders deep: its
+## folders first, each over its own rows unless folded, then its files.
+changed_rows : List(WorkspaceGit.File), List(Str), Str, U64 -> List(Model.ChangedRow)
+changed_rows = |files, folded, folder, depth| {
+	inside = files.keep_if(|file| folder.is_empty() or file.path.starts_with("${folder}/"))
+	rest = |file| if (folder.is_empty()) file.path else file.path.drop_prefix("${folder}/")
+	child = |name| if (folder.is_empty()) name else "${folder}/${name}"
+	names = inside.keep_oks(|file| rest(file).split_first("/").map_ok(|parts| parts.before)).fold([], |found, name| if (found.contains(name)) found else found.append(name))
+	folders = names.join_map(
+		|name| {
+			path = child(name)
+			under = files.keep_if(|file| file.path.starts_with("${path}/"))
+			row = { path, folder: Bool.True, folded: folded.contains(path), depth, file: { path, change: Modified, additions: under.fold(0, |sum, file| file.additions + sum), deletions: under.fold(0, |sum, file| file.deletions + sum), body: Text } }
+			if (row.folded) [row] else changed_rows(files, folded, path, depth + 1).prepend(row)
+		},
+	)
+	folders.concat(inside.keep_if(|file| rest(file).split_first("/").is_err()).map(|file| { path: file.path, folder: Bool.False, folded: Bool.False, depth, file }))
 }
 
 ## A size in bytes, as "4 KB" or "1.2 MB".
