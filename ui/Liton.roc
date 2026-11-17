@@ -184,8 +184,8 @@ Liton := [].{
 					},
 			),
 		),
-		# A composer cleared by sending is built anew, out of focus: focus it.
-		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Engine.command(Focus("composer"))], Engine.ignore({})),
+		# A draft sent or dictated replaces what its box shows, focused or not.
+		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |_| [Engine.command(ApplyValue("composer")), Engine.command(Focus("composer"))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Engine.command(Focus("latest"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
@@ -1024,15 +1024,7 @@ Liton := [].{
 					"Send a message",
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
 					[
-						# roc-signals 0.5.0 writes a new value into a focused text box only
-						# once it loses focus, so a draft cleared by pressing Enter would
-						# stay in the box. Sending builds the box anew instead, which
-						# `Liton.effects` focuses. No upstream issue yet.
-						Engine.when(
-							id.map2(model0.signal(), |pane_id, state| (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) % 2 == 0),
-							|| Liton.composer_input(model0, id),
-							|| Liton.composer_input(model0, id),
-						),
+						Liton.composer_input(model0, id),
 						Microphone.controls(model0, id),
 						Html.submit_button("Send", []),
 					],
