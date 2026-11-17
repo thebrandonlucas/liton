@@ -7,7 +7,7 @@
     (click (role button :name "Settings"))
     (expect-absent (role region :name "Settings"))
     (click (role button :name "Chat menu"))
-    (click (role button :name "Move Chat left"))
+    (click (role button :name "Move to the column on the left"))
     ; Chat joined the Sessions column, and the Capabilities column is next.
     (expect-visible (role button :name "Sessions · Chat"))
     (expect-visible (role button :name "Capabilities"))

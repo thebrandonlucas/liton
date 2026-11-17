@@ -11,8 +11,9 @@
     ; The main area's last pane neither closes nor hides.
     (expect-absent (role button :name "Close pane") :never-drawn)
     (expect-absent (role button :name "Hide Chat") :never-drawn)
-    ; A Workbench's slots don't move panes.
-    (expect-absent (role button :name "Move Chat left") :never-drawn)
+    ; It moves to the slots its widget fits.
+    (expect-visible (role button :name "Move to right drawer"))
+    (expect-absent (role button :name "Move to left drawer") :never-drawn)
     (click (role button :name "Pin"))
     (expect-attr (role button :name "Chat menu") aria-expanded "false")
     (expect-visible (text "pinned"))

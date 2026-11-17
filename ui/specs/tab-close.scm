@@ -13,7 +13,7 @@
     (click (role button :name "Tiling preset"))
     (click (role button :name "Settings"))
     (click (role button :name "Chat menu"))
-    (click (role button :name "Move Chat left"))
+    (click (role button :name "Move to the column on the left"))
     (click (role button :name "Chat menu"))
     (click (role button :name "Show this column as tabs"))
     (expect-attr (role region :name "Chat") class "pane focused")

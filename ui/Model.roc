@@ -806,13 +806,13 @@ Model := [].{
 
 	## Drops columns left without panes, apart from a Workbench's slots, and
 	## points a tab group or the narrow screen that showed what is gone at what
-	## is left.
+	## is left and shown.
 	drop_empty_columns : State -> State
 	drop_empty_columns = |state| {
 		columns =
 			state.columns
 				.drop_if(|column| column.panes.is_empty() and state.shell == Tiling)
-				.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == column.active)) column else { ..column, active: column.panes.first().map_ok(|listed_pane| listed_pane.id) ?? "" })
+				.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == column.active)) column else { ..column, active: Model.shown_panes(state, column).first().map_ok(|listed_pane| listed_pane.id) ?? "" })
 		active_column = if (columns.any(|column| column.id == state.active_column)) state.active_column else columns.first().map_ok(|column| column.id) ?? ""
 		{ ..state, columns, active_column }
 	}
@@ -840,6 +840,34 @@ Model := [].{
 					Model.drop_empty_columns({ ..state, columns, active_column: columns.get(to).map_ok(|column| column.id) ?? state.active_column })
 				}
 			}
+		}
+
+	## Where a pane's ⋯ menu moves it, each named: in a Workbench, the other
+	## slots its widget fits; in Tiling, into the column beside it each way,
+	## or past the edge into a new one unless it is alone there.
+	moves : State, Str -> List({ label : Str, move : [ToSlot(Slot), Beside([Left, Right])] })
+	moves = |state, id|
+		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(from) if state.shell == Workbench => {
+				at = state.columns.get(from).map_ok(|column| Model.slot_of(state, column.id)) ?? Free
+				[Left, Main, Right].keep_if(|to| to != at and Widgets.fits(Widgets.find(Model.pane(state, id).widget), to)).map(|to| { label: "Move to ${if (to == Main) "main area" else "${Model.slot_name(to)} drawer"}", move: ToSlot(to) })
+			}
+			Ok(from) => {
+				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
+				[(Left, "left", from == 0), (Right, "right", from + 1 == state.columns.len())]
+					.drop_if(|(_, _, at_edge)| at_edge and alone)
+					.map(|(side, name, at_edge)| { label: if (at_edge) "Move to a new column on the ${name}" else "Move to the column on the ${name}", move: Beside(side) })
+			}
+			Err(NotFound) => []
+		}
+
+	## Moves a pane where its ⋯ menu's move `label` names.
+	move : State, { pane_id : Str, label : Str } -> State
+	move = |state, { pane_id, label }|
+		match Model.moves(state, pane_id).find_first(|offered| offered.label == label) {
+			Ok({ move: ToSlot(slot), .. }) => Model.move_to_slot(state, pane_id, slot)
+			Ok({ move: Beside(side), .. }) => Model.move_pane(state, pane_id, side)
+			Err(NotFound) => state
 		}
 
 	change_column : State, Str, (Column -> Column) -> State

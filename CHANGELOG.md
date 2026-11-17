@@ -106,6 +106,7 @@ All notable changes to liton are documented in this file. The format is based on
 - In the Developer, Inbox and Chat presets a pane's menu hides the pane rather than closing it, or hides its drawer when it is the last pane the drawer shows; Show in the menu of a pane beside it brings it back. Hidden panes stay hidden after a reload. Settings' Remove still closes a pane, and Tiling's menus still offer Close pane.
 - Tabs show their widget's icon beside its title, and a × on hover that hides the tab in the Developer, Inbox and Chat presets and closes it in Tiling.
 - In Tiling, a pane's menu switches its column between a stack and tabs, in place of the column's Stack and Tabs buttons, and offers it only when the column holds more than one pane.
+- A pane's menu names where it moves the pane: "Move to right drawer" or "Move to main area" in the Developer, Inbox and Chat presets, for each place its widget fits, and "Move to the column on the left" or "Move to a new column on the right" in Tiling, rather than ← and → arrows.
 
 ### Fixed
 

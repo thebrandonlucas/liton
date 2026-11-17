@@ -704,9 +704,10 @@ Liton := [].{
 	icon_button : Signal(ctx, Str), Str, Handler(ctx) -> Elem(ctx)
 	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
 
-	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, the moves
-	## Tiling allows, stacking or tabbing its column there, and Close; in a Workbench, Hide, and Show for each pane
-	## its column hides. Each closes the menu.
+	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, where it
+	## moves, and in Tiling stacking or tabbing its column and Close; in a
+	## Workbench, Hide, and Show for each pane its column hides. Each closes
+	## the menu.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	pane_menu = |model, id, title, shown| {
 		closing = |change| |state, pane_id| { ..change(state, pane_id), menu: "" }
@@ -738,17 +739,15 @@ Liton := [].{
 									|| Html.button_s(shown.map(|{ pane, .. }| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, closing(Model.toggle_pin))),
 									|| Engine.text(""),
 								),
-								Engine.when(
-									model.signal().map(|state| state.shell == Tiling),
-									||
-										Html.div(
-											"moves",
-											[
-												Html.button_s(title.map(|name| "← Move ${name} left"), [Html.aria_label_s(title.map(|name| "Move ${name} left"))], model.update_by(id, closing(|state, pane_id| Model.move_pane(state, pane_id, Left)))),
-												Html.button_s(title.map(|name| "Move ${name} right →"), [Html.aria_label_s(title.map(|name| "Move ${name} right"))], model.update_by(id, closing(|state, pane_id| Model.move_pane(state, pane_id, Right)))),
-											],
+								Html.div(
+									"moves",
+									[
+										Engine.each(
+											id.map2(model.signal(), |pane_id, state| Model.moves(state, pane_id).map(|offered| offered.label)),
+											|move_label| move_label,
+											|move_row| Html.button_s(move_row.key(), [], model.lift_row().update_by(id.lift_row().map2(move_row.key(), |pane_id, move_label| { pane_id, label: move_label }), |state, asked| { ..Model.move(state, asked), menu: "" })),
 										),
-									|| Engine.text(""),
+									],
 								),
 								Engine.when(
 									id.map2(model.signal(), |pane_id, state| state.shell == Tiling and state.columns.any(|column| column.panes.len() > 1 and column.panes.any(|pane| pane.id == pane_id))),
