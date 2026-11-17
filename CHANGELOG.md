@@ -67,6 +67,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A permission request shows as a card: what the agent asks, the plan or other text its provider sends with it, as Markdown, and the provider's own choices as buttons, such as Reject, Implement and Implement with Auto for a plan, or else Allow and Deny. In the chat and in the Inbox alike, a choice hides the card at once, and a refused one brings it back with why.
 - Pin a workspace from its ⋮ menu, or a session's, which pins its workspace, as in Paseo: it lists first in its project, marked with a pin, until you unpin it. Archive a workspace or a session from its ⋮ menu, which removes it from the list. Each shows at once, and is undone with why if the provider refuses it.
 - Rename a project, a workspace or a session from its ⋮ menu: its title becomes a field, Enter saves the new name, which shows at once, and Escape leaves it as it was. A rename the provider refuses is undone, with why.
+- Drag a pane by its tab or header with the mouse to move it: in the Developer, Inbox and Chat presets to another drawer or the main area its widget fits, or to another place among a drawer's tabs; in Tiling into another column or its tabs, before or after a stacked pane, or past a pane's outer edge into a new column. The column it would drop into is outlined and a bar marks where it lands; Escape or letting go outside the columns leaves it where it was. On a touch screen, panes still move from their menu.
 
 ### Changed
 
