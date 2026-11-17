@@ -840,7 +840,8 @@ selected_commit_file = |poll|
 	}
 
 ## Notes that a poll watches a topic: a provider's subject, or what a
-## transformer offering it uses, as a client's poll of those would.
+## transformer offering it uses, as a client's poll of those would, and the
+## newest Paseo sessions' timelines, which it may follow (see `newest_timelines`).
 watched! : Context, Manifest.Offered, Transformer.Topic => Try({}, _)
 watched! = |context, manifest, { capability, topic }|
 	match transformer_of(context, manifest, capability) {
@@ -848,7 +849,7 @@ watched! = |context, manifest, { capability, topic }|
 			for used in part.uses {
 				watched!(context, manifest, used)?
 			}
-			Ok({})
+			if (context.paseo.is_ok()) wanted!(context.db, "newest", "") else Ok({})
 		}
 		Err(_) =>
 			match Protocol.subject(manifest, { capability, topic, after: "" }) {
@@ -1169,6 +1170,15 @@ paseo_interval_ms = 3_000
 interest_ms : I64
 interest_ms = 10_000
 
+## How many of the Paseo sessions that changed last have their timelines
+## fetched in each cycle while a transformer is watched, so that attention's
+## summaries follow them though no client watches their timelines. Each is
+## one more request on the cycle's one connection, asked after the one
+## before, two when Paseo's page leaves out the agent (see `fetch!`); one
+## a client watches costs nothing more.
+newest_timelines : U64
+newest_timelines = 3
+
 ## How long a cycle may run before another can start: Paseo answers a
 ## directory's first status in seconds, and Tcp gives up after 30.
 cycle_lease_ms : I64
@@ -1180,8 +1190,8 @@ importable_interval_ms : I64
 importable_interval_ms = 60_000
 
 ## Notes that a poll watches `subject` as `kind`: "agent_list",
-## "workspace_list", "importable" or "agent_kinds" (no subject), "timeline" (a
-## session id), "workspace",
+## "workspace_list", "importable", "agent_kinds" or "newest" (no subject),
+## "timeline" (a session id), "workspace",
 ## "uncommitted" or "base" (a directory), "commit_file", or "tree" or "file"
 ## (a directory and a path in it). What no poll watched within `interest_ms`
 ## is asked about in a cycle at once.
@@ -1289,7 +1299,8 @@ store! = |db, session_id, stored, { state, events }| {
 
 ## Asks Paseo, at most every `paseo_interval_ms`, about all that polls
 ## watched within `interest_ms`, over one WebSocket connection: its agents
-## and its workspaces, each timeline's new entries, then each directory's
+## and its workspaces, each timeline's new entries, those of the
+## `newest_timelines` sessions too while a transformer is watched, then each directory's
 ## status and, when due (see `PaseoGit.refresh`), its commits and diffs, then
 ## the commit files not cached yet, then the listings and files fetched
 ## `PaseoFiles.lifetime_ms` ago or never. Nothing watched, no connection. A
@@ -1306,8 +1317,10 @@ paseo_cycle! = |{ db, paseo, .. }|
 			} else {
 				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: now_ms!() - interest_ms } })?
 				Sqlite.execute!({ db, query: "DELETE FROM file_cache WHERE fetched_at <= :since;", params: { since: now_ms!() - file_cache_ms } })?
-				wanted : List({ kind : Str, subject : Str })
-				wanted = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
+				watched : List({ kind : Str, subject : Str })
+				watched = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
+				newest = if (watched.any(|item| item.kind == "newest")) Paseo.newest(registered!(db)?, newest_timelines).map(|session_id| { kind: "timeline", subject: session_id }) else []
+				wanted = watched.concat(newest.drop_if(|item| watched.contains(item)))
 				if !wanted.is_empty() {
 					held!(db, now_ms!() + cycle_lease_ms)?
 					match connected!(daemon, "liton-daemon") {
