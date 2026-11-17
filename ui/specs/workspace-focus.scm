@@ -6,7 +6,8 @@
     (run-effect 2)
     (expect-visible (role button :name "app"))
     (expect-visible (text "fix-tests"))
-    (expect-visible (text "+3 −1"))
+    (expect-visible (text "+3"))
+    (expect-visible (text "−1"))
     (expect-visible (role button :name "Fix tests"))
     (expect-visible (text "waiting for you"))
     ; The chat follows the first session until a workspace is picked.

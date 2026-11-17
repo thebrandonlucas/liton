@@ -1289,8 +1289,14 @@ Model := [].{
 	## session in that. `key` is the context a workspace or session row
 	## focuses (`Context.to_str`), or `group:` and the group's. A row is
 	## `creatable` when + on it starts an agent there, or creates a workspace
-	## of its project.
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Str, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+	## of its project. `counts` are a group's members, or a workspace's
+	## uncommitted lines added and removed, as "+3" and "−1".
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, counts : Counts, dot : Str, status : Str, focused : Bool, folded : Bool, creatable : Bool, depth : U64 }
+
+	Counts : { members : Str, added : Str, removed : Str }
+
+	no_counts : Counts
+	no_counts = { members: "", added: "", removed: "" }
 
 	## A Workspaces pane's rows, as its options group, filter and order them,
 	## each workspace marked as urgent as its most urgent session, and unread
@@ -1315,7 +1321,7 @@ Model := [].{
 				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: project.name, members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 				Model.ordered(projects, order, |group| group.members.first().map_ok(workspace_changed) ?? 0, |group| group.title)
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
 		workspace_row = |workspace| {
 			branch = match workspace.branch {
@@ -1328,7 +1334,7 @@ Model := [].{
 		}
 		groups.join_map(
 			|group| {
-				header = { ..blank, key: group.key, title: group.title, counts: group.members.len().to_str(), folded: folded.contains(group.key), creatable: group.creatable }
+				header = { ..blank, key: group.key, title: group.title, counts: { ..Model.no_counts, members: group.members.len().to_str() }, folded: folded.contains(group.key), creatable: group.creatable }
 				members = group.members.join_map(|workspace| [workspace_row(workspace)].concat(sessions_in(workspace).map(|listed_session| mark(Model.session_row(state, listed_session)))))
 				if (header.folded) [header] else members.prepend(header)
 			},
@@ -1340,7 +1346,7 @@ Model := [].{
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
 		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: "", dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -1369,10 +1375,10 @@ Model := [].{
 		keyed.sort_with(|left, right| [by(left, right), compared(left.index, right.index)].find_first(|so_far| so_far != Same) ?? Same).map(|kept| kept.item)
 	}
 
-	## A workspace's uncommitted changes as "+3 −1": as its provider counts
-	## them, else as a Changes pane last saw them; "changed" when they are
-	## there but uncounted, and nothing when they are none or unknown.
-	change_counts : State, Workspaces.Workspace -> Str
+	## A workspace's uncommitted lines added and removed: as its provider
+	## counts them, else as a Changes pane last saw them; nothing when they
+	## are none or unknown.
+	change_counts : State, Workspaces.Workspace -> Counts
 	change_counts = |state, workspace| {
 		seen = workspace.session_ids.map(|session_id| Session(session_id)).prepend(Workspace(workspace.id)).keep_oks(|context| Model.git_changes_of(state, context, Uncommitted)).first()
 		counted =
@@ -1382,9 +1388,8 @@ Model := [].{
 				_ => Err(Unknown)
 			}
 		match counted {
-			Ok({ additions, deletions }) if additions + deletions > 0 => "+${additions.to_str()} −${deletions.to_str()}"
-			_ if workspace.dirty => "changed"
-			_ => ""
+			Ok({ additions, deletions }) if additions + deletions > 0 => { members: "", added: "+${additions.to_str()}", removed: "−${deletions.to_str()}" }
+			_ => Model.no_counts
 		}
 	}
 
@@ -1704,7 +1709,7 @@ Model := [].{
 			}
 		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
 		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
-		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: "", dot: status, status, focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, counts: Model.no_counts, dot: status, status, focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth: 0 }
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
@@ -2047,7 +2052,7 @@ expect {
 		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "workspace:w1", "s1"]
 		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
 		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == Workspace("w1")
-		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == ["2", "+2 −1", "", "+2 −1"]
+		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == [{ ..Model.no_counts, members: "2" }, { members: "", added: "+2", removed: "−1" }, Model.no_counts, { members: "", added: "+2", removed: "−1" }]
 		and Model.subjects(state).contains(WorkspaceList)
 }
 
@@ -2055,7 +2060,7 @@ expect {
 ## open in it.
 folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
 folder_rows = |state, context, shown, folder, depth| {
-	blank = { key: "", kind: File, title: "", detail: "", counts: "", dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
+	blank = { key: "", kind: File, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, depth }
 	entries =
 		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
 			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))

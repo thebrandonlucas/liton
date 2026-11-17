@@ -180,16 +180,16 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .tree-row:hover { background: var(--tool); }
 .tree-row.focused { background: var(--selected); }
 .tree-row .row-title { flex: 0 1 auto; min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-row .branch, .tree-row .counts, .tree-row .status-word { flex: none; font: 11px var(--font-mono); color: var(--muted); }
+.tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word { flex: none; font: 11px var(--font-mono); color: var(--muted); }
 .tree-row .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-row .counts { margin-left: auto; color: var(--warn); }
+.tree-row .added { margin-left: auto; color: var(--added); }
+.tree-row .removed { color: var(--removed); }
 .tree-row span:not(.status-dot):empty { display: none; }
 .tree-group { margin-top: 8px; padding-left: 4px; }
 .tree-group .status-dot { display: none; }
 .tree-group .row-title { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .tree-group .row-title::before { content: "▾ " / ""; }
 .tree-group.folded .row-title::before { content: "▸ " / ""; }
-.tree-group .counts { margin-left: 0; color: var(--muted); }
 .tree-workspace .row-title { font-weight: 600; }
 .tree-workspace ~ .tree-session { padding-left: 24px; }
 .tree-session .status-word { margin-left: auto; }
@@ -197,7 +197,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .status-dot.done { background: var(--ok); opacity: .45; }
 .workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tree-row .new-agent { flex: none; margin-left: auto; padding: 0 6px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
-.tree-row .counts:not(:empty) ~ .new-agent { margin-left: 0; }
+.tree-row .added:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }
 .tree-group .counts:not(:empty) ~ .new-agent { margin-left: auto; }
 .tree-row:hover .new-agent, .tree-row .new-agent:focus-visible, .tree-row.focused .new-agent { opacity: 1; }
@@ -534,7 +534,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
   .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
   .tree-session .status-word { margin-right: 12px; }
   .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
-  .tree-row .branch, .tree-row .counts, .tree-row .status-word { font-size: 12px; }
+  .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word { font-size: 12px; }
   .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; font-size: 20px; opacity: 1; }
   .tree-group { margin-top: 10px; }
   .tree-group .row-title { font-size: 12px; }
