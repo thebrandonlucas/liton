@@ -68,6 +68,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Pin a workspace from its ⋮ menu, or a session's, which pins its workspace, as in Paseo: it lists first in its project, marked with a pin, until you unpin it. Archive a workspace or a session from its ⋮ menu, which removes it from the list. Each shows at once, and is undone with why if the provider refuses it.
 - Rename a project, a workspace or a session from its ⋮ menu: its title becomes a field, Enter saves the new name, which shows at once, and Escape leaves it as it was. A rename the provider refuses is undone, with why.
 - The protocol has `rooms.v1`, rooms where people and agents talk: channels, forums, direct conversations and announcements, with their members, messages, threads and reactions, from any NIP-29 relay or other source of rooms. List rooms, send a message or a reply, react, and join or leave a room with `liton call rooms.v1`, and follow a room with `liton watch rooms.v1 messages/<room>`.
+- The mock provider offers `rooms.v1`: three rooms, #general, the forum #ideas and the announcements of #releases, where you talk with Ada and the agents Scout and Patch. An agent a message mentions types and then answers in the message's thread.
 
 ### Changed
 
