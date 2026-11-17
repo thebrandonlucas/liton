@@ -309,6 +309,12 @@ Paseo := [].{
 		)
 	}
 
+	## The ids of the `count` sessions that changed last, by `updated`, the
+	## latest first: those whose timelines the daemon keeps fresh for
+	## attention, though no client watches them.
+	newest : List(Chat.Session), U64 -> List(Str)
+	newest = |sessions, count| sessions.sort_with(|left, right| compared(moment(right.updated ?? ""), moment(left.updated ?? ""))).take_first(count).map(|session| session.id)
+
 	listed_status : ListedAgent -> Chat.Status
 	listed_status = |agent|
 		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: agent.pending_permissions, last_error: agent.last_error })) {
@@ -532,20 +538,22 @@ step = |walk, entry, is_final| {
 ## active first.
 listed_order : Paseo.ListedAgent, Paseo.ListedAgent -> [Before, After, Same]
 listed_order = |left, right| {
-	compared = |earlier, later| if (earlier < later) Before else if (earlier > later) After else Same
 	wants = |agent| if (agent.requires_attention ?? Bool.False) 0 else 1
 	rank = |agent| ["running", "initializing", "idle", "error", "closed"].find_first_index(|status| status == agent.status) ?? 5
 	[compared(wants(left), wants(right)), compared(rank(left), rank(right)), compared(active_at(right), active_at(left))].find_first(|order| order != Same) ?? Same
 }
 
-## When an agent was last active, as the digits of the latest of its
-## timestamps: Paseo writes them all as `2026-01-01T00:00:00.000Z`.
+compared : U64, U64 -> [Before, After, Same]
+compared = |earlier, later| if (earlier < later) Before else if (earlier > later) After else Same
+
+## When an agent was last active, the latest of its timestamps.
 active_at : Paseo.ListedAgent -> U64
-active_at = |agent|
-	[Ok(agent.created_at), Ok(agent.updated_at), agent.last_user_message_at, agent.attention_timestamp ?? Err(Null)]
-		.keep_oks(|timestamp| timestamp)
-		.map(|timestamp| timestamp.to_utf8().keep_if(|byte| byte >= '0' and byte <= '9').fold(0, |number, digit| number * 10 + (digit - '0').to_u64()))
-		.fold(0, |latest, at| if (at > latest) at else latest)
+active_at = |agent| [Ok(agent.created_at), Ok(agent.updated_at), agent.last_user_message_at, agent.attention_timestamp ?? Err(Null)].keep_oks(|timestamp| timestamp).map(moment).fold(0, |latest, at| if (at > latest) at else latest)
+
+## A timestamp as its digits, which order as it does: Paseo writes them all
+## as `2026-01-01T00:00:00.000Z`. None is 0, the oldest.
+moment : Str -> U64
+moment = |timestamp| timestamp.to_utf8().keep_if(|byte| byte >= '0' and byte <= '9').fold(0, |number, digit| number * 10 + (digit - '0').to_u64())
 
 ## What a tool call works on: a shell command, a file, a query... or its name.
 tool_input : Paseo.Item -> Str
@@ -703,6 +711,13 @@ expect {
 			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z") }, directory: "/work", workspace_id: "w1" },
 		])
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
+}
+
+# The sessions that changed last, a session telling no time the oldest.
+expect {
+	changed = |id, updated| { ..Chat.session({ id, provider: "paseo", agent: "claude", title: id, status: Idle }), updated }
+	sessions = [changed("a1", Err(Missing)), changed("a2", Ok("2026-01-02T00:00:00.000Z")), changed("a3", Ok("2026-01-01T09:00:00.000Z")), changed("a4", Ok("2026-01-03T00:00:00.000Z"))]
+	Paseo.newest(sessions, 2) == ["a4", "a2"] and Paseo.newest(sessions, 9) == ["a4", "a2", "a3", "a1"] and Paseo.newest([], 3) == []
 }
 
 session : Str -> Str
