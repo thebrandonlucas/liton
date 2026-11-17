@@ -1,6 +1,7 @@
 ## Values the golden JSON files in tests/ hold.
 import Chat
 import Manifest
+import Tickets
 
 Fixtures := [].{
 	manifest : Manifest.Advertised
@@ -41,5 +42,45 @@ Fixtures := [].{
 		{ sequence: 10, event: PermissionAnswered({ request_id: "p2", allowed: Bool.True, choice: Ok("implement") }) },
 		{ sequence: 11, event: TurnEnded({ started: Ok("2026-01-01T09:00:00.000Z"), ended: "2026-01-01T09:00:09.000Z" }) },
 		{ sequence: 12, event: TurnEnded({ started: Err(Missing), ended: "2026-01-01T09:01:00.000Z" }) },
+	]
+
+	## A GitHub-like ticket with a comment, its source, a call of each
+	## request and each answer.
+	ticket : Tickets.Ticket
+	ticket = {
+		summary: {
+			id: "liton#3",
+			provider: "github",
+			source: "thebrandonlucas/liton",
+			key: "#3",
+			title: "Track issues and tickets",
+			url: "https://github.com/thebrandonlucas/liton/issues/3",
+			status: { id: "open", name: "Open", kind: Open },
+			assignees: [{ id: "ada", name: "Ada" }],
+			labels: ["enhancement"],
+			waiting_on: [],
+			branch: Err(Missing),
+			updated: "2026-01-01T09:00:00.000Z",
+		},
+		body: "List and filter tickets.",
+		comments: [{ id: "c1", author: { id: "bo", name: "Bo" }, body: "Linear next?", created: "2026-01-01T09:00:00.000Z" }],
+	}
+
+	ticket_requests : List(Tickets.Request)
+	ticket_requests = [
+		ListTickets({ ..Tickets.open, assignee: Me, text: "login" }),
+		GetTicket({ ticket_id: "liton#3" }),
+		Comment({ ticket_id: "liton#3", body: "On it." }),
+		SetStatus({ ticket_id: "liton#3", status_id: "closed" }),
+		SetAssignees({ ticket_id: "liton#3", person_ids: ["ada"] }),
+		Link({ session_id: "fix-auth", ticket_id: "liton#3" }),
+		Unlink({ session_id: "fix-auth" }),
+	]
+
+	ticket_responses : List(Tickets.Response)
+	ticket_responses = [
+		Listed({ sources: [{ id: "thebrandonlucas/liton", provider: "github", name: "thebrandonlucas/liton", url: "https://github.com/thebrandonlucas/liton", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }], statuses: [{ id: "open", name: "Open", kind: Open }, { id: "closed", name: "Closed", kind: Done }] }], tickets: [Fixtures.ticket.summary] }),
+		Ticket(Fixtures.ticket),
+		Accepted,
 	]
 }

@@ -77,7 +77,7 @@ A capability is a versioned, typed interface made of queries, commands and event
 | `terminal` | pty in a workspace or sandbox |
 | `workspace.git` | repos, worktrees, branches, history, diffs |
 | `ci` | run graphs (jobs and steps), logs, rerun. GitHub Actions first |
-| `tickets` | merged across providers, plus native tickets stored as Nostr events |
+| `tickets` | issues and tickets merged across providers (GitHub Issues, then Linear, then native tickets stored as Nostr events), each with its source and a URL back to it: listed and filtered, read with comments, commented on, moved between statuses and assignees, and linked to the sessions working on them, by branch name or by hand. Credentials stay in the daemon |
 | `rooms` | people and agents together. Agents speak only when @mentioned |
 | `review` | crit.md-style anchored line comments on diffs, files, agent output and docs. Comments are batched and submitted as one review, then the agent replies per thread and revises |
 | `environment` | the sandbox's static definition (Nix closure, mounts, network policy, granted credentials), live resources, denials/audit, and lifecycle (create, snapshot, destroy) |
