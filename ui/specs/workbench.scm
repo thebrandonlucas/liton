@@ -23,6 +23,10 @@
     (expect-attr (role button :name "Left drawer") aria-expanded "false")
     (expect-attr (test-id "slot-left") class "column slot slot-left tabbed collapsed")
     (expect-attr (test-id "slot-right") class "column slot slot-right tabbed")
+    ; Hidden, the left drawer leaves Settings in the main area's header.
+    (click (role button :name "Settings"))
+    (expect-visible (role region :name "Settings"))
+    (click (role button :name "Settings"))
     (click (role button :name "Left drawer"))
     (expect-attr (test-id "slot-left") class "column slot slot-left tabbed")
     ; A narrow screen's strip picks the panel shown.

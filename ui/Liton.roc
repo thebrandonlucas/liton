@@ -285,15 +285,18 @@ Liton := [].{
 
 	## Where a pane's header is in a Workbench: the main area's shown tab,
 	## with the drawers' buttons at its ends, or the left drawer's, with
-	## Settings and, on a wide screen, CSS moves Settings to its bottom left.
-	header_place : Model.State, Model.Column, Str -> [MainTab, LeftTab, Elsewhere]
-	header_place = |state, column, pane_id|
+	## Settings, which CSS moves to its bottom left on a wide screen. While
+	## the left drawer is hidden or empty, Settings is in the main area's.
+	header_place : Model.State, Model.Column, Str -> [MainTab, MainTabWithSettings, LeftTab, Elsewhere]
+	header_place = |state, column, pane_id| {
+		left_shown = !state.collapsed.contains(Left) and state.columns.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty())
 		match Model.slot_of(state, column.id) {
 			_ if state.shell != Workbench or column.active != pane_id => Elsewhere
-			Main => MainTab
+			Main => if (left_shown) MainTab else MainTabWithSettings
 			Left => LeftTab
 			_ => Elsewhere
 		}
+	}
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
 	## to move, remove or set the options of, adds widgets, and shows the
@@ -556,7 +559,7 @@ Liton := [].{
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
 					[
-						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)), || Engine.text("")),
+						Engine.when(place.map(|at| at == MainTab or at == MainTabWithSettings), || Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)), || Engine.text("")),
 						Engine.when(
 							shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
 							|| Liton.agent_header(shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
@@ -576,9 +579,9 @@ Liton := [].{
 							|| Liton.icon_button(Engine.const("New workspace"), "icon new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 							|| Engine.text(""),
 						),
-						Engine.when(place.map(|at| at == LeftTab), || Liton.settings_toggle(model, "icon settings-toggle"), || Engine.text("")),
+						Engine.when(place.map(|at| at == LeftTab or at == MainTabWithSettings), || Liton.settings_toggle(model, "icon settings-toggle"), || Engine.text("")),
 						Liton.pane_menu(model, id, title, shown),
-						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Right, shown.map(|{ pane, state }| Model.workspace_changes(state, pane))), || Engine.text("")),
+						Engine.when(place.map(|at| at == MainTab or at == MainTabWithSettings), || Liton.drawer_toggle(model, Right, shown.map(|{ pane, state }| Model.workspace_changes(state, pane))), || Engine.text("")),
 					],
 				),
 				Engine.switch(
