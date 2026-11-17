@@ -9,6 +9,7 @@ import Context
 import Files
 import Manifest
 import Review
+import Rooms
 import Voice
 import WorkspaceGit
 import Workspaces
@@ -38,7 +39,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot)]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot), Rooms(List(Rooms.Room)), Members(List(Rooms.Member)), RoomEntry(Rooms.Entry)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -62,6 +63,10 @@ Protocol := [].{
 		Contents({ context : Context.Id, path : Str }),
 		VoiceStatus,
 		Threads(Context.Id),
+		RoomList,
+		RoomMembers(Str),
+		RoomMessages(Str),
+		RoomThread({ room_id : Str, root : Str }),
 	]
 
 	## The topics of each capability providers offer, as the manifest lists
@@ -74,6 +79,7 @@ Protocol := [].{
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
 		{ capability: Capability.voice_v1, patterns: ["status"] },
 		{ capability: Capability.review_v1, patterns: ["threads/<session_id>", "threads/workspace:<workspace_id>"] },
+		{ capability: Capability.rooms_v1, patterns: ["rooms", "members/<room_id>", "messages/<room_id>", "thread/<room_id>/<root>"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -113,6 +119,7 @@ Protocol := [].{
 				"files.v1" if topic.starts_with("file/") => placed_path(topic.drop_prefix("file/")).map_ok(|placed| Contents(placed))
 				"voice.v1" if topic == "status" => Ok(VoiceStatus)
 				"review.v1" if topic.starts_with("threads/") => context_of(topic.drop_prefix("threads/")).map_ok(|context| Threads(context))
+				"rooms.v1" => room_subject(topic)
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -134,6 +141,10 @@ Protocol := [].{
 			File({ context, scope, path }) => { capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped(path)}" }
 			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${Context.to_str(context)}/${escaped(path)}" }
 			Contents({ context, path }) => { capability: "files.v1", topic: "file/${Context.to_str(context)}/${escaped(path)}" }
+			RoomList => { capability: "rooms.v1", topic: "rooms" }
+			RoomMembers(room_id) => { capability: "rooms.v1", topic: "members/${room_id}" }
+			RoomMessages(room_id) => { capability: "rooms.v1", topic: "messages/${room_id}" }
+			RoomThread({ room_id, root }) => { capability: "rooms.v1", topic: "thread/${room_id}/${root}" }
 		}
 
 	## A snapshot topic's update: its value, cursored by its fingerprint,
@@ -150,6 +161,11 @@ Protocol := [].{
 	appended = |{ capability, topic, after }, entries|
 		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| Entry(entry)), error: Err(Missing) }
 
+	## A room's messages or thread, as `appended` gives a timeline.
+	room_appended : Wanted, List(Rooms.Entry) -> Update
+	room_appended = |{ capability, topic, after }, entries|
+		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| RoomEntry(entry)), error: Err(Missing) }
+
 	failed : Wanted, Error -> Update
 	failed = |{ capability, topic, after }, error| { capability, topic, cursor: after, events: [], error: Ok(error) }
 
@@ -161,6 +177,26 @@ Protocol := [].{
 	## A 64-bit FNV-1a hash of `text`, as a snapshot's cursor.
 	fingerprint : Str -> Str
 	fingerprint = |text| text.to_utf8().fold(14695981039346656037.U64, |hash, byte| hash.bitwise_xor(byte.to_u64()).times_wrap(1099511628211)).to_str()
+}
+
+## A rooms.v1 topic's subject. A thread's root is its name's last part, so a
+## room's id may hold slashes.
+room_subject : Str -> Try(Protocol.Subject, [NoTopic])
+room_subject = |topic| {
+	named : Str -> Try(Str, [NoTopic])
+	named = |prefix| if (topic.starts_with(prefix) and topic != prefix) Ok(topic.drop_prefix(prefix)) else Err(NoTopic)
+	if topic == "rooms" {
+		Ok(RoomList)
+	} else if topic.starts_with("members/") {
+		named("members/").map_ok(|room_id| RoomMembers(room_id))
+	} else if topic.starts_with("messages/") {
+		named("messages/").map_ok(|room_id| RoomMessages(room_id))
+	} else {
+		match named("thread/")?.split_last("/") {
+			Ok({ before, after }) if before != "" and after != "" => Ok(RoomThread({ room_id: before, root: after }))
+			_ => Err(NoTopic)
+		}
+	}
 }
 
 ## A `changes/` topic's subject from the rest of its name: the context, which
@@ -227,7 +263,7 @@ offered : Manifest.Offered
 offered = {
 	protocol: 1,
 	daemon: { id: "liton", name: "liton" },
-	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1, Capability.review_v1] }],
+	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1, Capability.review_v1, Capability.rooms_v1] }],
 	transformers: [{ id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }],
 	topics: Protocol.topics,
 }
@@ -255,7 +291,7 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1"))]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1")), RoomList, RoomMembers("general"), RoomMessages("team/general"), RoomThread({ room_id: "team/general", root: "m1" })]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 
@@ -288,3 +324,4 @@ expect {
 	polled = { topics: [Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }]), Protocol.failed({ capability: "chat.v2", topic: "sessions", after: "" }, { code: Unsupported, message: "the daemon offers no chat.v2" })] }
 	Json.to_str(polled) == "{\"topics\":[{\"capability\":\"chat.v1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Running\"},\"sequence\":1}}],\"topic\":\"timeline/s1\"},{\"capability\":\"chat.v2\",\"cursor\":\"\",\"error\":{\"code\":\"Unsupported\",\"message\":\"the daemon offers no chat.v2\"},\"events\":[],\"topic\":\"sessions\"}]}"
 }
+expect ["room", "members/", "messages/", "thread/general", "thread//m1", "thread/general/"].all(|topic| Protocol.subject(offered, { capability: "rooms.v1", topic, after: "" }).map_err(|error| error.code) == Err(NotFound))

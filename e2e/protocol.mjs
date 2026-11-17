@@ -253,6 +253,29 @@ try {
     assert.ok(!(await workspaces()).workspaces.some((w) => w.id === "fix-auth"));
     assert.equal((await call("workspaces.v1", { Pin: { workspace_id: "nope", pinned: true } })).Err.code, "NotFound");
   });
+  await step("rooms.v1 keeps the mock's rooms, where an agent a message mentions types and then answers in its thread", async () => {
+    const room = (topic, after = "") => ({ capability: "rooms.v1", topic, after });
+    const poll = async (...topics) => (await post("poll", { topics })).topics;
+    const send = (room_id, text) => call("rooms.v1", { Send: { room_id, text, place: "TopLevel", mentions: [] } });
+    const rooms = async () => (await call("rooms.v1", "ListRooms")).Ok.Rooms;
+    assert.deepEqual((await rooms()).map((r) => [r.id, r.kind, r.joined]), [["general", "Channel", true], ["ideas", "Forum", true], ["releases", "Announce", false]]);
+    const [listed, members, general, thread, missing] = await poll(room("rooms"), room("members/general"), room("messages/general"), room("thread/general/general-1"), room("messages/nope"));
+    assert.deepEqual([listed.events[0].Rooms.length, members.events[0].Members.map((m) => m.id)], [3, ["you", "ada", "scout", "patch"]]);
+    assert.deepEqual([general.events.map((e) => e.RoomEntry.sequence), thread.events.map((e) => e.RoomEntry.sequence)], [[1, 3, 5], [2, 4]]);
+    assert.equal(missing.error.code, "NotFound");
+    assert.deepEqual(await send("general", "@Scout run the tests"), { Ok: { Sent: { message_id: "general-6" } } });
+    assert.deepEqual((await poll(room("messages/general", general.cursor)))[0].events.map((e) => e.RoomEntry.event.Posted.id), ["general-6"]);
+    await new Promise((r) => setTimeout(r, 1800));
+    const [answered, summary] = await poll(room("thread/general/general-6"), room("messages/general", "6"));
+    assert.deepEqual(answered.events.map((e) => Object.keys(e.RoomEntry.event)[0]), ["Typing", "Posted"]);
+    assert.equal(answered.events[1].RoomEntry.event.Posted.author, "scout");
+    assert.equal(summary.events[0].RoomEntry.event.Threaded.replies, 1);
+    assert.deepEqual(await call("rooms.v1", { React: { room_id: "general", message_id: "general-1", emoji: "+" } }), { Ok: "Accepted" });
+    assert.deepEqual(await send("releases", "Hi"), { Ok: { Rejected: "join #releases first" } });
+    assert.deepEqual(await call("rooms.v1", { Join: { room_id: "releases" } }), { Ok: "Accepted" });
+    assert.deepEqual([(await rooms()).find((r) => r.id === "releases").joined, (await send("releases", "Hi")).Ok.Rejected], [true, "only Ada announces in #releases"]);
+    assert.equal((await send("nope", "Hi")).Err.code, "NotFound");
+  });
   console.log("PASS /liton/v1");
   process.exit(0);
 } catch (error) {

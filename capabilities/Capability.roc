@@ -24,6 +24,9 @@ Capability := [].{
 	voice_v1 : Id
 	voice_v1 = { name: "voice", version: 1 }
 
+	rooms_v1 : Id
+	rooms_v1 = { name: "rooms", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"

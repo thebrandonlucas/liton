@@ -60,10 +60,12 @@ import cap.Context as Focus
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Rooms
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
+import mock.MockRooms
 import paseo.Paseo
 import paseo.PaseoFiles
 import paseo.PaseoGit
@@ -97,6 +99,7 @@ init! = || {
 	mock_enabled = env_or!("LITON_MOCK", "on") != "off"
 	if mock_enabled {
 		seed!(db) ? |_| Exit(4)
+		mock_rooms_seeded!(db) ? |_| Exit(4)
 	}
 	password = env_or!("PASEO_PASSWORD", "")
 	paseo = if (password == "") Err(Disabled) else Ok({ host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
@@ -281,6 +284,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("rooms.v1", _)) => {
+				decoded : Try(Protocol.Call(Rooms.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Rooms.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => rooms_call!(context, asked)?
+					Err(_) => Err(unanswered("rooms.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("voice.v1", _)) => {
 				decoded : Try(Protocol.Call(Voice.Request), _)
 				decoded = Json.parse(body)
@@ -357,7 +370,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) => Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) => Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -422,6 +435,7 @@ update! = |context, wanted, subject| {
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
+		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) => rooms_update!(context, wanted, subject)
 	}
 }
 
@@ -1096,6 +1110,8 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_events (room_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (room_id, sequence));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_joins (room_id TEXT PRIMARY KEY, joined INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
@@ -2152,3 +2168,138 @@ speech_status! = |context|
 	}
 
 expect transformers_named(["needs-you", " attention", ""]).map_ok(|parts| parts.map(|part| part.id)) == Ok(["attention", "needs-you"]) and transformers_named(["attention", "nope"]).is_err()
+
+## Gives a database without room events the mock rooms' seed events
+## (providers/mock/MockRooms.roc).
+mock_rooms_seeded! : Sqlite.Db => Try({}, _)
+mock_rooms_seeded! = |db| {
+	count : { count : I64 }
+	count = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM room_events;", params: {}, limits: Sqlite.default_query_limits })?
+	if count.count == 0 {
+		for room in MockRooms.rooms {
+			room_events_inserted!(db, room.id, 1, MockRooms.seed(room.id).map(|event| { delay_ms: 0, event }), 0)?
+		}
+	}
+	Ok({})
+}
+
+room_events_inserted! : Sqlite.Db, Str, U64, List(MockRooms.Scheduled), I64 => Try({}, _)
+room_events_inserted! = |db, room_id, first, scheduled, start| {
+	for ({ delay_ms, event }, index) in scheduled.map_with_index(|item, index| (item, index)) {
+		Sqlite.execute!({ db, query: "INSERT INTO room_events (room_id, sequence, visible_at, event) VALUES (:room_id, :sequence, :visible_at, :event);", params: { room_id, sequence: (first + index).to_i64_wrap(), visible_at: start + delay_ms.to_i64_wrap(), event: Json.to_str(event) } })?
+	}
+	Ok({})
+}
+
+## A mock room's events visible now, in order.
+room_log! : Sqlite.Db, Str => Try(List(Rooms.Entry), _)
+room_log! = |db, room_id| {
+	rows : List({ sequence : I64, event : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT sequence, event FROM room_events WHERE room_id = :room_id AND visible_at <= :now ORDER BY sequence;", params: { room_id, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	rows.map_try(
+		|row| {
+			event : Try(Rooms.Event, _)
+			event = Json.parse(row.event)
+			Ok({ sequence: row.sequence.to_u64_wrap(), event: event? })
+		},
+	)
+}
+
+## The mock's rooms, each joined or left as you last did, and as recent as
+## its last message visible.
+mock_rooms! : Sqlite.Db => Try(List(Rooms.Room), _)
+mock_rooms! = |db| {
+	joins : List({ room_id : Str, joined : I64 })
+	joins = Sqlite.query_many!({ db, query: "SELECT room_id, joined FROM room_joins;", params: {}, limits: Sqlite.default_query_limits })?
+	var $rooms = []
+	for room in MockRooms.rooms {
+		posted = Rooms.messages(room_log!(db, room.id)?)
+		joined = joins.find_first(|row| row.room_id == room.id).map_ok(|row| row.joined == 1) ?? room.joined
+		$rooms = $rooms.append({ ..room, joined, updated: posted.last().map_ok(|last| last.time).map_err(|_| Missing) })
+	}
+	Ok($rooms)
+}
+
+## Answers a rooms.v1 request, of the mock's rooms, the only provider of
+## rooms so far.
+rooms_call! : Context, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
+rooms_call! = |context, asked| {
+	db = context.db
+	rooms = if (context.mock_enabled) mock_rooms!(db)? else []
+	room_of = |room_id| rooms.find_first(|room| room.id == room_id).map_err(|_| { code: NotFound, message: "no room ${room_id}" })
+	# A room's next events follow its last, even one still to come.
+	following! = |room_id| {
+		last : { sequence : I64, visible_at : I64 }
+		last = Sqlite.query!({ db, query: "SELECT coalesce(max(sequence), 0) AS sequence, coalesce(max(visible_at), 0) AS visible_at FROM room_events WHERE room_id = :room_id;", params: { room_id }, limits: Sqlite.default_query_limits })?
+		now = now_ms!()
+		Ok({ next: last.sequence.to_u64_wrap() + 1, start: if (now > last.visible_at) now else last.visible_at })
+	}
+	joined! = |room_id, joined| Sqlite.execute!({ db, query: "INSERT INTO room_joins (room_id, joined) VALUES (:room_id, :joined) ON CONFLICT (room_id) DO UPDATE SET joined = excluded.joined;", params: { room_id, joined: if (joined) 1.I64 else 0 } })
+	refused = |why| Ok(Ok(Rejected(why)))
+	match asked {
+		ListRooms => Ok(Ok(Rooms(rooms)))
+		Send(sending) =>
+			match room_of(sending.room_id) {
+				Err(error) => Ok(Err(error))
+				Ok(room) => {
+					{ next, start } = following!(room.id)?
+					match MockRooms.on_send({ room, posted: Rooms.messages(room_log!(db, room.id)?), text: sending.text, place: sending.place, mentions: sending.mentions, next, at: start }) {
+						Err(why) => refused(why)
+						Ok({ message_id, scheduled }) => {
+							room_events_inserted!(db, room.id, next, scheduled, start)?
+							Ok(Ok(Sent({ message_id: message_id })))
+						}
+					}
+				}
+			}
+		React({ room_id, message_id, emoji }) | Unreact({ room_id, message_id, emoji }) =>
+			match room_of(room_id) {
+				Err(error) => Ok(Err(error))
+				Ok(room) => {
+					{ next, start } = following!(room_id)?
+					match MockRooms.on_react(room, Rooms.messages(room_log!(db, room_id)?), { message_id, emoji, added: asked == React({ room_id, message_id, emoji }) }) {
+						Err(why) => refused(why)
+						Ok(scheduled) => {
+							room_events_inserted!(db, room_id, next, scheduled, start)?
+							Ok(Ok(Accepted))
+						}
+					}
+				}
+			}
+		Join({ room_id }) | Leave({ room_id }) =>
+			match room_of(room_id) {
+				Err(error) => Ok(Err(error))
+				Ok(_) => {
+					joined!(room_id, asked == Join({ room_id: room_id }))?
+					Ok(Ok(Accepted))
+				}
+			}
+	}
+}
+
+## A rooms.v1 topic: the rooms, a room's members, or the entries of a
+## room's top level or of a thread after the cursor.
+rooms_update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
+rooms_update! = |context, wanted, subject| {
+	rooms = if (context.mock_enabled) mock_rooms!(context.db)? else []
+	missing = |room_id| Protocol.failed(wanted, { code: NotFound, message: "no room ${room_id}" })
+	known = |room_id| rooms.any(|room| room.id == room_id)
+	match subject {
+		RoomMembers(room_id) => Ok(if (known(room_id)) Protocol.snapshot(wanted, Members(MockRooms.members_of(room_id))) else missing(room_id))
+		RoomMessages(room_id) => if (known(room_id)) room_entries!(context.db, wanted, room_id, "") else Ok(missing(room_id))
+		RoomThread({ room_id, root }) => if (known(room_id)) room_entries!(context.db, wanted, room_id, root) else Ok(missing(room_id))
+		_ => Ok(Protocol.snapshot(wanted, Rooms(rooms)))
+	}
+}
+
+## A room's entries in its top level ("") or a thread after the cursor.
+room_entries! : Sqlite.Db, Protocol.Wanted, Str, Str => Try(Protocol.Update, _)
+room_entries! = |db, wanted, room_id, thread|
+	match Protocol.sequence(wanted) {
+		Err(error) => Ok(Protocol.failed(wanted, error))
+		Ok(after) => {
+			log = room_log!(db, room_id)?
+			posted = Rooms.messages(log)
+			Ok(Protocol.room_appended(wanted, log.keep_if(|entry| entry.sequence > after and Rooms.place_of(posted, entry.event) == thread)))
+		}
+	}

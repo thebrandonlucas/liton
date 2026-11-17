@@ -78,7 +78,7 @@ A capability is a versioned, typed interface made of queries, commands and event
 | `workspace.git` | repos, worktrees, branches, history, diffs |
 | `ci` | run graphs (jobs and steps), logs, rerun. GitHub Actions first |
 | `tickets` | merged across providers, plus native tickets stored as Nostr events |
-| `rooms` | people and agents together. Agents speak only when @mentioned |
+| `rooms` | people and agents together in channels, forums, direct conversations and announcements, with threads and reactions, from any NIP-29 relay or other source of rooms. Agents speak only when @mentioned |
 | `review` | crit.md-style anchored line comments on diffs, files, agent output and docs. Comments are batched and submitted as one review, then the agent replies per thread and revises |
 | `environment` | the sandbox's static definition (Nix closure, mounts, network policy, granted credentials), live resources, denials/audit, and lifecycle (create, snapshot, destroy) |
 | `attention` | derived by the daemon from `chat` and later `tickets`, `review` and `ci`: an inbox of sessions, what needs you first and then the latest, each unread until you have seen it, with the responses it allows. Settle and snooze hide an item until something new happens |
