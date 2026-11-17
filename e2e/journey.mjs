@@ -85,8 +85,10 @@ try {
     await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
   await step("the mock's project, its workspaces and their seeded sessions appear in Workspaces", async () => {
-    await see("Workspaces", ".tree-group button", "liton");
-    for (const name of ["fix-auth", "main"]) await see("Workspaces", ".tree-workspace button", name);
+    await see("Workspaces", ".tree-group button", "Liton");
+    // fix-auth holds one session, which stands in its place with its branch.
+    await see("Workspaces", ".tree-workspace button", "main");
+    await see("Workspaces", ".tree-session .branch", "fix-auth");
     for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Workspaces", ".tree-session button", title);
   });
   await step("the flaky CI session is waiting for you", () =>
@@ -196,7 +198,7 @@ try {
       const starting = () => [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.textContent.includes("starting…"));
       new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
-    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent in fix-auth"]');
+    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Fix the login redirect"]');
     await see("Workspaces", ".create-form", "New agent in fix-auth");
     await (await page.$('section[aria-label="Workspaces"] input[aria-label="First prompt"]')).type("Write the docs");
     await click("Workspaces", ".create-form button", "Start");
