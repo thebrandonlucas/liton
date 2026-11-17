@@ -99,9 +99,10 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission`, `Cancel` and `Create`; `attention.v1`'s `ListItems`,
-`Settle`, `Snooze`, `Unsettle` and `Seen`; `workspaces.v1`'s `ListWorkspaces` and
-`Create`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
+`AnswerPermission`, `Cancel`, `Create`, `Rename` and `Archive`;
+`attention.v1`'s `ListItems`, `Settle`, `Snooze`, `Unsettle` and `Seen`;
+`workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
+`RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
 `Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
 `Finish` and `Cancel` (Audio, below).
 
@@ -109,6 +110,45 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 own stop button does, and is `Accepted` once the provider stopped it (from
 Paseo, its `cancel_agent_request`). A session that isn't running is left as
 it is, and accepted too.
+
+`{"AnswerPermission": {"session_id", "request_id", "allowed"}}` answers a
+timeline's `PermissionRequested`. A request is `{"request_id", "tool",
+"description"}`, the tool and a line of what it would do, and, when its
+provider tells more, its `body` as Markdown, such as a plan to approve, and
+its own `choices`, each `{"id", "label", "allows", "style"}` with `style`
+`Primary`, `Secondary` or `Danger`; an attention.v1 item's `permissions`
+are such requests. Answering one with choices may name the choice taken,
+`"choice": id`, with `allowed` as it `allows`; a choice the request doesn't
+offer is `BadRequest`. The `PermissionAnswered` that follows names it too.
+From Paseo, a plan's body is its request's `input.plan` and its choices its
+`actions`, such as Claude's Reject, Implement and Implement with the mode it
+planned from, the choice sent as `selectedActionId`. The mock asks for a
+plan when a message mentions one.
+
+Sessions, workspaces and projects are renamed, pinned and archived where
+their provider keeps them:
+
+```json
+{ "capability": "chat.v1", "request": { "Rename": { "session_id": "fix-auth", "title": "Fix the login" } } }
+{ "capability": "chat.v1", "request": { "Archive": { "session_id": "fix-auth" } } }
+{ "capability": "workspaces.v1", "request": { "Rename": { "workspace_id": "main", "name": "Main" } } }
+{ "capability": "workspaces.v1", "request": { "Pin": { "workspace_id": "main", "pinned": true } } }
+{ "capability": "workspaces.v1", "request": { "Archive": { "workspace_id": "main" } } }
+{ "capability": "workspaces.v1", "request": { "RenameProject": { "project_id": "liton", "name": "liton" } } }
+{ "Ok": "Accepted" }
+```
+
+Each answers `Accepted` once the provider took it, and the next listing
+shows it: a new title or name, a workspace's `pinned`, and an archived
+session or workspace left out. A name `""` gives back the one the provider
+derives. A session has no pin of its own, as Paseo pins workspaces and not
+agents: a client pins the workspace a session works in, a session without
+one can't be pinned, and projects can be neither pinned nor archived. From
+Paseo these are its `update_agent_request` (the agent's name),
+`archive_agent_request`, `workspace.title.set.request`,
+`workspace.pin.set.request`, `archive_workspace_request` and
+`project.rename.request`; Paseo can't unarchive an agent or a workspace
+over its protocol, and neither can liton. The mock keeps its own changes.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is
@@ -201,7 +241,18 @@ provider has no such workspace), the `branch` checked out there, and when its
 running turn started (`running_since`) and it last changed (`updated`), as
 times such as `2026-01-01T09:00:00.000Z`. Paseo's come from its agent list
 (the model, `activeTurn.startedAt`, `updatedAt`, and the branch it placed the
-agent on), so they cost no request of their own.
+agent on), so they cost no request of their own. `running_since` holds
+while its agent works on a turn, waiting for you too, for a client to show
+how long it has been working.
+
+Where a turn ends, a timeline has a `{"TurnEnded": {"started", "ended"}}`
+after the turn's last event: once its agent finished, failed or was stopped,
+and before a message that interrupts it, with when the turn started, left
+out when the provider doesn't tell, and when it ended, for a client to fold
+the turn and say how long it worked. From Paseo, a turn starts at its user
+message, or its `activeTurn.startedAt`, and ends at the agent's `updatedAt`
+once liton sees it stop, or at the turn's last entry in history fetched
+after it ended. The mock times its own.
 
 A `changes` or `file` context is a session id, or `workspace:<id>`; its scope
 is `Uncommitted`, `AgainstBase` or `Commit:<sha>`. A `changes` event holds the

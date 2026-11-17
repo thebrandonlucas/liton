@@ -1,7 +1,7 @@
 ## `workspaces.v1`: the projects agents work in and their workspaces, each a
 ## directory: a checkout, a worktree or a plain directory. Each workspace
 ## lists its sessions, and is as urgent as the most urgent of them. Listed,
-## and created; Archive, Rename and Pin are the commands to come.
+## created, renamed, pinned and archived; projects renamed.
 import Attention
 import Chat
 
@@ -30,12 +30,22 @@ Workspaces := [].{
 
 	## `Create` makes a workspace of a project: a checkout of its directory,
 	## or a worktree on a new branch, named `branch` or by the provider. It
-	## answers `Created` with the workspace's id.
-	Request : [ListWorkspaces, Create(Create)]
+	## answers `Created` with the workspace's id. `Rename` gives a workspace,
+	## or `RenameProject` a project, a name, or with "" the one its provider
+	## derives; `Pin` pins or unpins a workspace, and `Archive` lists it no
+	## more. Each answers `Accepted`.
+	Request : [
+		ListWorkspaces,
+		Create(Create),
+		Rename({ workspace_id : Str, name : Str }),
+		Pin({ workspace_id : Str, pinned : Bool }),
+		Archive({ workspace_id : Str }),
+		RenameProject({ project_id : Str, name : Str }),
+	]
 
 	Create : { project_id : Str, kind : [Checkout, Worktree], branch : Try(Str, [Missing]) }
 
-	Response : [Listed(Listed), Rejected(Str), Created({ workspace_id : Str })]
+	Response : [Listed(Listed), Rejected(Str), Created({ workspace_id : Str }), Accepted]
 
 	## The most urgent state of the sessions of `session_ids`, as attention
 	## ranks them, Idle for none.

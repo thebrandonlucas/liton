@@ -794,6 +794,12 @@ Model := [].{
 				StatusChanged(_) => Bool.True
 				_ => Bool.False
 			}
+		# Shown once the timeline folds turns (docs/research/ux-sweep-paseo.md, to-do 9).
+		turn_end = |entry|
+			match entry.event {
+				TurnEnded(_) => Bool.True
+				_ => Bool.False
+			}
 		card = |tool|
 			match Model.option(shown, "tool_output") {
 				"Full" => { ..tool, output: if (tool.folded.is_empty()) tool.output else "${tool.output}\n${tool.folded}", folded: "" }
@@ -805,7 +811,7 @@ Model := [].{
 		count = Model.window_of(state, shown)
 		opened = state.opened_folds.keep_if(|fold| fold.pane == shown.id).map(|fold| fold.key)
 		listed = Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
-			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
+			.drop_if(|entry| turn_end(entry) or (Model.option(shown, "show_status") == "false" and status(entry)))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
 		session_running = [Running, AwaitingPermission].contains(Model.session(state, session_id).status)
 		match Model.option(shown, "collapse") {
@@ -1194,7 +1200,7 @@ Model := [].{
 	answer : State, Str, Bool -> State
 	answer = |state, pane_id, allowed|
 		match Model.pending(state, pane_id) {
-			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
+			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
 			Err(NoneWaiting) => state
 		}
 
@@ -1313,7 +1319,7 @@ Model := [].{
 	answer_item : State, Str, Bool -> State
 	answer_item = |state, session_id, allowed|
 		match Model.item_permission(state, session_id) {
-			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
+			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
 			Err(NoneWaiting) => state
 		}
 

@@ -22,14 +22,30 @@ Chat := [].{
 		updated : Try(Str, [Missing]),
 	}
 
+	## A permission request: the tool asking and a line of what it would do,
+	## then what the provider tells beyond that, each left out otherwise: its
+	## `body` as Markdown, such as a plan to approve, and its `choices` when
+	## they are its own rather than allow and deny.
+	Permission : { request_id : Str, tool : Str, description : Str, body : Try(Str, [Missing]), choices : Try(List(Choice), [Missing]) }
+
+	## One of a permission request's choices, such as a plan's Implement or
+	## Reject: whether it allows, and how the provider would show it.
+	Choice : { id : Str, label : Str, allows : Bool, style : [Primary, Secondary, Danger] }
+
+	## A permission's answer names the choice taken, when the request offered
+	## its own. `TurnEnded` follows the last event of a turn, the agent's
+	## work on what it was asked, once it finished, failed or was stopped or
+	## interrupted: when the turn started, if the provider tells, and when it
+	## ended, as times such as 2026-01-01T09:00:00.000Z.
 	Event : [
 		UserMessage({ text : Str }),
 		AgentMessage({ text : Str }),
 		ToolCall({ call_id : Str, tool : Str, input : Str }),
 		ToolResult({ call_id : Str, output : Str, failed : Bool }),
-		PermissionRequested({ request_id : Str, tool : Str, description : Str }),
-		PermissionAnswered({ request_id : Str, allowed : Bool }),
+		PermissionRequested(Permission),
+		PermissionAnswered({ request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		StatusChanged(Status),
+		TurnEnded({ started : Try(Str, [Missing]), ended : Str }),
 	]
 
 	## One event in a session's timeline. Sequence numbers start at 1 and
@@ -41,13 +57,20 @@ Chat := [].{
 	## of a kind its provider offers (`Agent`) in a workspace, or in a
 	## directory of the provider the call names, with a model and a first
 	## prompt ("" for none), and answers `Started` with its session's id.
+	## `AnswerPermission` takes one of the request's `choices` by its id, if
+	## it offered any, with `allowed` as that choice allows. `Rename` gives a
+	## session a title, or with "" the one its provider gives it; `Archive`
+	## stops it, if it runs, and lists it no more. A session has no pin of
+	## its own: a client pins the workspace it works in (workspaces.v1).
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
 		SendMessage({ session_id : Str, text : Str }),
-		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool }),
+		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		Cancel({ session_id : Str }),
 		Create(Create),
+		Rename({ session_id : Str, title : Str }),
+		Archive({ session_id : Str }),
 	]
 
 	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), prompt : Str }
@@ -64,6 +87,28 @@ Chat := [].{
 	## A session the provider tells nothing more of.
 	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
 	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing) }
+
+	## A permission request the provider tells no more of.
+	permission : { request_id : Str, tool : Str, description : Str } -> Permission
+	permission = |{ request_id, tool, description }| { request_id, tool, description, body: Err(Missing), choices: Err(Missing) }
+
+	## Whether answering `request_id` in `timeline` as `allowed`, with
+	## `choice` if any, is an answer it takes: a choice must be one it offers
+	## and allow as it does.
+	answerable : List(Entry), Str, Bool, Try(Str, [Missing]) -> Bool
+	answerable = |timeline, request_id, allowed, choice| {
+		asked = timeline.keep_oks(
+			|entry|
+				match entry.event {
+					PermissionRequested(question) if question.request_id == request_id => Ok(question.choices ?? [])
+					_ => Err(Other)
+				},
+		)
+		match choice {
+			Err(Missing) => Bool.True
+			Ok(id) => asked.any(|choices| choices.any(|offered| offered.id == id and offered.allows == allowed))
+		}
+	}
 
 	## Milliseconds since the epoch as a time such as 2026-01-01T09:00:00.000Z,
 	## by the days-to-civil-date algorithm of Howard Hinnant's chrono notes.
@@ -101,11 +146,21 @@ Chat := [].{
 
 expect {
 	timeline = [
-		{ sequence: 1, event: PermissionRequested({ request_id: "a", tool: "bash", description: "rm -rf build" }) },
-		{ sequence: 2, event: PermissionRequested({ request_id: "b", tool: "edit", description: "README.md" }) },
-		{ sequence: 3, event: PermissionAnswered({ request_id: "a", allowed: Bool.True }) },
+		{ sequence: 1, event: PermissionRequested(Chat.permission({ request_id: "a", tool: "bash", description: "rm -rf build" })) },
+		{ sequence: 2, event: PermissionRequested(Chat.permission({ request_id: "b", tool: "edit", description: "README.md" })) },
+		{ sequence: 3, event: PermissionAnswered({ request_id: "a", allowed: Bool.True, choice: Err(Missing) }) },
 	]
 	Chat.pending_permissions(timeline) == ["b"]
+}
+
+expect {
+	plan = { ..Chat.permission({ request_id: "p", tool: "ExitPlanMode", description: "Plan" }), body: Ok("1. Fix it"), choices: Ok([{ id: "reject", label: "Reject", allows: Bool.False, style: Danger }, { id: "implement", label: "Implement", allows: Bool.True, style: Primary }]) }
+	timeline = [{ sequence: 1, event: PermissionRequested(plan) }, { sequence: 2, event: PermissionRequested(Chat.permission({ request_id: "q", tool: "edit", description: "" })) }]
+	Chat.answerable(timeline, "p", Bool.True, Ok("implement"))
+		and Chat.answerable(timeline, "p", Bool.False, Err(Missing))
+		and !Chat.answerable(timeline, "p", Bool.False, Ok("implement"))
+		and !Chat.answerable(timeline, "p", Bool.True, Ok("later"))
+		and !Chat.answerable(timeline, "q", Bool.True, Ok("implement"))
 }
 
 expect [0, 951_782_400_000, 1_767_258_000_123, 1_709_210_096_789].map(Chat.timestamp) == ["1970-01-01T00:00:00.000Z", "2000-02-29T00:00:00.000Z", "2026-01-01T09:00:00.123Z", "2024-02-29T12:34:56.789Z"]
