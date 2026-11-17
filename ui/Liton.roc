@@ -618,7 +618,7 @@ Liton := [].{
 				Html.div(
 					"agent-line",
 					[
-						Html.span_s(Engine.const(""), [Engine.class_s(agent.map(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+						Html.span_s(Engine.const(""), [Engine.class_s(agent.map(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", agent.map(|shown| if (shown.reason.is_empty()) shown.status else "${shown.status}: ${shown.reason}"))]),
 						Html.span_s(agent.map(|shown| shown.title), [Engine.class("pane-title"), Engine.attr_s("title", agent.map(|shown| shown.title)), Engine.test_id("session-title")]),
 						Html.span_s(agent.map(|shown| shown.status), [Engine.class_s(agent.map(|shown| "status-word ${shown.dot}")), Engine.attr_s("title", agent.map(|shown| shown.reason)), Engine.test_id("session-status")]),
 						Html.span_s(agent.map(|shown| shown.not_stopped), [Engine.class("stop-status failed"), Engine.test_id("stop-failed")]),
@@ -871,7 +871,7 @@ Liton := [].{
 								Engine.attr_s("style", row.field(|shown| "--depth: ${shown.depth.to_str()}")),
 							],
 							[
-								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
 								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
 								Html.span_s(row.field(|shown| shown.counts.members), [Engine.class("counts")]),
