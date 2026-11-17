@@ -64,6 +64,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Keys, as in Paseo, which work in the message box too: Ctrl+B and Ctrl+E show or hide the left and right drawers, Ctrl+, opens or closes Settings, and Escape stops the agent of the chat you are in, once there is no menu, Settings or new agent or workspace form left for it to close first. The drawer buttons and Settings name their keys when you hover them.
 - While an agent works on a turn, waiting for you too, its chat shows a loader at the bottom and for how long, as "3m 46s", counting each second.
 - Where a turn ends, the chat says how long the agent worked on it, as "Worked for 2m 14s", when its provider tells when the turn started.
+- A permission request shows as a card: what the agent asks, the plan or other text its provider sends with it, as Markdown, and the provider's own choices as buttons, such as Reject, Implement and Implement with Auto for a plan, or else Allow and Deny. In the chat and in the Inbox alike, a choice hides the card at once, and a refused one brings it back with why.
 
 ### Changed
 

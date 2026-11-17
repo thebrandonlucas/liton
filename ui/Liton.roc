@@ -796,7 +796,7 @@ Liton := [].{
 						model = model0.lift_row()
 						id = row.key()
 						title = row.field(|item| item.title)
-						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id))
+						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						Html.li(
 							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == state.focus) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")],
@@ -812,15 +812,7 @@ Liton := [].{
 								Html.p_s(row.field(|item| item.summary), [Engine.class("summary")]),
 								Engine.when(
 									permission.map(|asked| asked.is_ok()),
-									||
-										Html.div(
-											"permission",
-											[
-												Html.span_s(permission.map(|asked| asked.map_ok(|{ tool, description, .. }| "Allow ${tool}: ${description}?") ?? ""), []),
-												Html.button("Allow", [Engine.class("allow"), Html.aria_label_s(title.map(|name| "Allow ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.True))),
-												Html.button("Deny", [Engine.class("deny"), Html.aria_label_s(title.map(|name| "Deny ${name}"))], model.update_by(id, |state, session_id| Model.answer_item(state, session_id, Bool.False))),
-											],
-										),
+									|| Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title),
 									|| Engine.text(""),
 								),
 								Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
@@ -847,6 +839,47 @@ Liton := [].{
 				),
 			],
 		)
+
+	## A permission request waiting for an answer, as a card: what its tool
+	## would do, its body as Markdown, if any, and a button for each of its
+	## choices (`Model.choices`) as its provider styles it, named for screen
+	## readers with what it is `of`, such as an inbox item's title. An answer
+	## hides it at once (`Model.answer`).
+	permission_card : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, { session_id : Str, asked : Chat.Permission }), Signal(ctx, Str) -> Elem(ctx)
+	permission_card = |model, key, waiting, of|
+		Html.div_attrs(
+			[Engine.class("permission"), Engine.attr("data-part", "permission")],
+			[
+				Html.span_s(waiting.map(|{ asked, .. }| if (asked.choices.is_ok()) asked.description else "Allow ${asked.tool}: ${asked.description}?"), [Engine.class("permission-title")]),
+				Engine.when(waiting.map(|{ asked, .. }| asked.body.is_ok()), || Liton.markdown(model, key, waiting.map(|{ asked, .. }| Markdown.blocks(asked.body ?? ""))), || Engine.text("")),
+				Html.div(
+					"permission-choices",
+					[
+						Engine.each(
+							waiting.map(|{ asked, .. }| Model.choices(asked)),
+							|choice| choice.label,
+							|row|
+								Html.button_s(
+									row.field(|choice| choice.label),
+									[Engine.class_s(row.field(|choice| Liton.choice_class(choice.style))), Html.aria_label_s(row.field(|choice| choice.label).map2(of.lift_row(), |choice_label, name| if (name.is_empty()) choice_label else "${choice_label} ${name}"))],
+									model.lift_row().update_by(row.field(|choice| choice).map2(waiting.lift_row(), |choice, { session_id, asked }| { session_id, request_id: asked.request_id, choice }), Model.answer),
+								),
+						),
+					],
+				),
+			],
+		)
+
+	no_permission : { session_id : Str, asked : Chat.Permission }
+	no_permission = { session_id: "", asked: Chat.permission({ request_id: "", tool: "", description: "" }) }
+
+	choice_class : [Primary, Secondary, Danger] -> Str
+	choice_class = |style|
+		match style {
+			Primary => "allow"
+			Secondary => "secondary"
+			Danger => "deny"
+		}
 
 	unread_text : U64 -> Str
 	unread_text = |count| if (count == 0) "All read" else "${count.to_str()} unread"
@@ -1121,15 +1154,7 @@ Liton := [].{
 				),
 				Engine.when(
 					pending.map(|waiting| waiting.is_ok()),
-					||
-						Html.div_attrs(
-							[Engine.class("permission"), Engine.attr("data-part", "permission")],
-							[
-								Html.span_s(pending.map(|waiting| waiting.map_ok(|asked| "Allow ${asked.tool}: ${asked.description}?") ?? ""), []),
-								Html.button("Allow", [Engine.class("allow")], model0.update_by(id, |state, pane_id| Model.answer(state, pane_id, Bool.True))),
-								Html.button("Deny", [Engine.class("deny")], model0.update_by(id, |state, pane_id| Model.answer(state, pane_id, Bool.False))),
-							],
-						),
+					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
 				Html.form(

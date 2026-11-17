@@ -1225,7 +1225,7 @@ Model := [].{
 
 	## The latest permission request in the session a pane shows that no answer
 	## follows, in the timeline or on its way.
-	pending : State, Str -> Try({ session_id : Str, request_id : Str, tool : Str, description : Str }, [NoneWaiting])
+	pending : State, Str -> Try({ session_id : Str, asked : Chat.Permission }, [NoneWaiting])
 	pending = |state, pane_id| {
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
 		timeline = Model.entries(state, session_id)
@@ -1245,17 +1245,20 @@ Model := [].{
 				},
 		)
 		match asked {
-			Ok({ event: PermissionRequested({ tool, description, .. }), .. }) => Ok({ session_id: session_id, request_id: request_id, tool: tool, description: description })
+			Ok({ event: PermissionRequested(question), .. }) => Ok({ session_id, asked: question })
 			_ => Err(NoneWaiting)
 		}
 	}
 
-	answer : State, Str, Bool -> State
-	answer = |state, pane_id, allowed|
-		match Model.pending(state, pane_id) {
-			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
-			Err(NoneWaiting) => state
-		}
+	## A permission request's choices: the provider's own, or else Allow and
+	## Deny, whose ids are "".
+	choices : Chat.Permission -> List(Chat.Choice)
+	choices = |asked| asked.choices ?? [{ id: "", label: "Allow", allows: Bool.True, style: Primary }, { id: "", label: "Deny", allows: Bool.False, style: Danger }]
+
+	## Answers a session's permission request with one of its choices, the
+	## request hidden at once until the timeline shows the answer.
+	answer : State, { session_id : Str, request_id : Str, choice : Chat.Choice } -> State
+	answer = |state, { session_id, request_id, choice }| Model.send(state, AnswerPermission({ session_id, request_id, allowed: choice.allows, choice: if (choice.id.is_empty()) Err(Missing) else Ok(choice.id) }))
 
 	## The attention items as the inbox shows them: set aside, back, read or
 	## unread as soon as asked.
@@ -1368,13 +1371,6 @@ Model := [].{
 		permissions = state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| item.permissions) ?? []
 		permissions.drop_if(|asked| answering.contains(asked.request_id)).last().map_err(|_| NoneWaiting)
 	}
-
-	answer_item : State, Str, Bool -> State
-	answer_item = |state, session_id, allowed|
-		match Model.item_permission(state, session_id) {
-			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
-			Err(NoneWaiting) => state
-		}
 
 	## Focuses a context, so panes that follow the focus show it, and shows
 	## the first chat's column, which on a narrow screen is a jump to it. A
@@ -2147,6 +2143,13 @@ expect {
 	answered = Model.polled(sent, sent.poll, answer)
 	again = Model.poll(answered)
 	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]
+}
+
+# An answer names the provider's choice taken, and Allow or Deny none.
+expect {
+	plan = { ..Chat.permission({ request_id: "p", tool: "ExitPlanMode", description: "Plan" }), choices: Ok([{ id: "implement", label: "Implement", allows: Bool.True, style: Primary }]) }
+	sent = |asked| Model.choices(asked).map(|choice| Model.answer(Model.initial(""), { session_id: "s", request_id: "p", choice }).outbox.request)
+	sent(plan) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Ok("implement") })] and sent({ ..plan, choices: Err(Missing) }) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Err(Missing) }), AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.False, choice: Err(Missing) })]
 }
 
 # One poll at a time: what is asked meanwhile is sent once it answers.

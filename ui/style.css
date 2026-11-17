@@ -302,7 +302,6 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .inbox-item .summary { margin: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-item .summary:empty { display: none; }
 .inbox-item .permission { border: none; border-radius: var(--small-radius); flex-wrap: wrap; }
-.inbox-item .permission > span { flex: 1 1 12em; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .inbox-actions button { font-size: 12px; white-space: nowrap; }
 /* With a pointer, an item's actions show over its corner while it is hovered or focused, so the list stays one line or two an item. */
@@ -359,8 +358,10 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .sent-status { display: block; color: var(--muted); font-size: 12px; }
 .sent-status:empty { display: none; }
 .entry.failed .sent-status { color: var(--fail); }
-.permission { display: flex; gap: 6px; align-items: center; padding: 8px 12px; background: var(--warn-tint); border-top: 1px solid var(--edge); }
-.permission span { flex: 1; }
+.permission { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; background: var(--warn-tint); border-top: 1px solid var(--edge); }
+.permission > .permission-title { flex: 1 1 12em; }
+.permission > .markdown { order: 1; flex: 1 0 100%; max-height: 40vh; overflow-y: auto; }
+.permission-choices { order: 2; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .permission .allow { border-color: var(--ok); }
 .permission .deny { border-color: var(--fail); }
 /* The composer: one box under the timeline's column, the draft over a row
