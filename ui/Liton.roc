@@ -34,10 +34,13 @@ Liton := [].{
 	glass_key : Str
 	glass_key = "liton.glass"
 
+	coarse_pointer_query : Str
+	coarse_pointer_query = "(pointer: coarse)"
+
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], max_inflight: 32 },
-		|boot| Engine.state(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off") }, boot.url), Liton.page),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False }, boot.url), Liton.page),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -184,8 +187,13 @@ Liton := [].{
 					},
 			),
 		),
-		# A composer cleared by sending is built anew, out of focus: focus it.
-		Engine.watch_changes(model.signal().map(|state| state.cleared), |_| [Engine.command(Focus("composer"))], Engine.ignore({})),
+		Engine.watch(
+			Engine.const({}),
+			|_| [Engine.media_changes(Liton.coarse_pointer_query)],
+			model.on_result(|state, _, res| { ..state, coarse_pointer: res ?? state.coarse_pointer }),
+		),
+		# A draft sent or dictated replaces what its box shows, focused or not.
+		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |_| [Engine.command(ApplyValue("composer")), Engine.command(Focus("composer"))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Engine.command(Focus("latest"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
@@ -1021,15 +1029,7 @@ Liton := [].{
 					"Send a message",
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
 					[
-						# roc-signals 0.5.0 writes a new value into a focused text box only
-						# once it loses focus, so a draft cleared by pressing Enter would
-						# stay in the box. Sending builds the box anew instead, which
-						# `Liton.effects` focuses. No upstream issue yet.
-						Engine.when(
-							id.map2(model0.signal(), |pane_id, state| (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) % 2 == 0),
-							|| Liton.composer_input(model0, id),
-							|| Liton.composer_input(model0, id),
-						),
+						Liton.composer_input(model0, id),
 						Microphone.controls(model0, id),
 						# One round button: Send, or Stop while the agent works and
 						# nothing is typed, then a ring until it stops.
@@ -1061,10 +1061,16 @@ Liton := [].{
 		}
 	}
 
-	## A box that grows with the draft to a few lines. Enter sends it, from
-	## ui/ports.mjs, which sees the Shift key that inserts a line instead.
+	## A box that grows with the draft to a few lines. Enter sends it and
+	## Shift+Enter starts a new line, except on a touch screen, where Enter
+	## starts one and Send sends. Enter that ends an IME composition is never
+	## heard.
 	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	composer_input = |model, id| Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer")], model.set_value_by(id, Model.set_draft))
+	composer_input = |model, id| {
+		enter = Engine.Chord.plain("Enter")
+		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
+		Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Engine.on_key({ keymap: sends }, model.update_by(id, Microphone.send))], model.set_value_by(id, Model.set_draft))
+	}
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls

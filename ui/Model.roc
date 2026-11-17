@@ -75,9 +75,13 @@ Model := [].{
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
 
-		## How many times each chat pane's composer was cleared by sending its
-		## draft, which builds it anew (see `Liton.chat`).
-		cleared : List({ pane : Str, count : U64 }),
+		## How many times a draft changed other than by typing, sent or
+		## dictated, so `Liton.effects` writes it into its box though focused.
+		drafts_rewritten : U64,
+
+		## Whether the pointer is coarse, a touch screen's, whose keyboard has
+		## no Shift+Enter: Enter in a composer then starts a new line.
+		coarse_pointer : Bool,
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
 		attention : List(Attention.Item),
@@ -243,7 +247,8 @@ Model := [].{
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
-				cleared: [],
+				drafts_rewritten: 0,
+				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],
@@ -1086,11 +1091,10 @@ Model := [].{
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		count = (state.cleared.find_first(|composer| composer.pane == pane_id).map_ok(|composer| composer.count) ?? 0) + 1
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), cleared: state.cleared.drop_if(|composer| composer.pane == pane_id).append({ pane: pane_id, count }) }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: state.drafts_rewritten + 1 }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer

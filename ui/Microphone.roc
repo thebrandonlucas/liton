@@ -167,9 +167,8 @@ Microphone := [].{
 				Model.submit(Model.set_draft(changed_to(done), voice.pane, Speech.insert(draft, end, end, text)), voice.pane)
 			}
 			Ok(Transcript({ text, from, to })) if voice.mode == Dictation => {
-				count = (state.cleared.find_first(|composer| composer.pane == voice.pane).map_ok(|composer| composer.count) ?? 0) + 1
 				typed = Model.set_draft(state, voice.pane, Speech.insert(Model.draft(state, voice.pane), from, to, text))
-				{ ..typed, cleared: typed.cleared.drop_if(|composer| composer.pane == voice.pane).append({ pane: voice.pane, count }), voice: done }
+				{ ..typed, drafts_rewritten: typed.drafts_rewritten + 1, voice: done }
 			}
 			Ok(Transcript({ text, .. })) if Speech.echoes(text, Microphone.replies(state).last().map_ok(|reply| reply.text) ?? "") => { ..changed_to(done), notice: "Not sent: it sounded like the reply read back" }
 			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim() }))
