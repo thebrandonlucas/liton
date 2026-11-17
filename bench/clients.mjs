@@ -16,6 +16,9 @@ export const clients = {
     session_rows: 'section[aria-label="Workspaces"] .tree-session button',
     row_text: (k) => `Bench agent ${k}`,
     composer: 'section[aria-label="Chat"] textarea[aria-label="Message"]',
+    long_row_text: (j) => `Long agent ${j}`,
+    // On a phone, the tab that shows the session list.
+    sidebar_toggle: '[data-testid="show-left"]',
   },
   paseo: {
     origin: () => `http://127.0.0.1:${ports.paseo_for_browser}`,
@@ -27,6 +30,8 @@ export const clients = {
     session_rows: '[data-testid^="sidebar-workspace-row-"]',
     row_text: (k) => `project-${k}`,
     composer: "textarea[data-composer-input]",
+    long_row_text: (j) => `long-${j}`,
+    sidebar_toggle: '[data-testid="menu-button"]',
   },
 };
 
@@ -37,6 +42,19 @@ export const probe = `(() => {
   const B = (window.__bench = { last_input: null, waits: [], done: {} });
   for (const type of ["pointerdown", "keydown"])
     addEventListener(type, (e) => { B.last_input = { type, time: e.timeStamp }; }, true);
+  // Event timing: each input event's time to the next paint after its
+  // handlers ran, the browser's own measure of responsiveness.
+  B.event_times = [];
+  if (PerformanceObserver.supportedEntryTypes?.includes("event"))
+    new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.interactionId) B.event_times.push({ start: e.startTime, duration: e.duration }); }).observe({ type: "event", durationThreshold: 16 });
+  // Frame gaps: the time between animation frames for the time asked.
+  B.frames = (ms) => new Promise((resolve) => {
+    const gaps = [];
+    let last = performance.now();
+    const end = last + ms;
+    const frame = (now) => { gaps.push(now - last); last = now; if (now < end) requestAnimationFrame(frame); else resolve(gaps); };
+    requestAnimationFrame(frame);
+  });
   const holds = (test) => { try { return !!test(); } catch (_) { return false; } };
   let queued = false;
   const check = () => {

@@ -32,6 +32,9 @@ const { values: options, positionals } = parseArgs({
     rounds: { type: "string", default: "1" },
     sends: { type: "string", default: "3" },
     "idle-seconds": { type: "string", default: "60" },
+    "long-agents": { type: "string", default: "3" },
+    "interaction-runs": { type: "string", default: "3" },
+    sections: { type: "string", default: "load,interaction" },
     clients: { type: "string", default: "liton,paseo" },
     profiles: { type: "string", default: "desktop,phone" },
     "liton-www": { type: "string", default: path.join(repo, "zig-out/www") },
@@ -53,7 +56,7 @@ const cdp_path = positionals[0] ?? default_cdp();
 if (!fs.existsSync(cdp_path)) throw new Error(`no DevTools client at ${cdp_path}: run \`zig build --fetch\` first`);
 const { launch } = await import(pathToFileURL(cdp_path).href);
 const S = await import("./stack.mjs");
-const { clients, probe } = await import("./clients.mjs");
+const { clients, probe, end_marker } = await import("./clients.mjs");
 const { precompressed_server } = await import("./static.mjs");
 
 // Lighthouse's mobile settings: a mid-range phone on a slow 4G network.
@@ -61,6 +64,15 @@ const profiles = {
   desktop: { cpu: 1, network: null, runs: number("runs"), timeout: 60000 },
   phone: { cpu: 4, network: { offline: false, latency: 150, downloadThroughput: (1638.4 * 1024) / 8, uploadThroughput: (750 * 1024) / 8 }, runs: number("phone-runs"), timeout: 240000 },
 };
+
+// The interaction section's: no network emulation (it measures input, not
+// loading), and a phone's viewport and touch input with its slower CPU.
+const interaction_profiles = {
+  desktop: { cpu: 1, network: null, timeout: 60000, budget: 50 },
+  phone: { cpu: 4, network: null, timeout: 120000, viewport: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, touch: true, budget: 100 },
+};
+const sections = options.sections.split(",");
+const long_count = sections.includes("interaction") ? number("long-agents") : 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const scratch = S.make_scratch();
@@ -71,6 +83,17 @@ const say = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`,
 // The rig: Paseo, its seeded agents, liton's daemon and the counting proxies.
 const workspace = path.join(scratch, "workspace");
 for (let k = 0; k < agent_count; k++) fs.mkdirSync(path.join(workspace, `project-${k}`), { recursive: true });
+for (let j = 0; j < long_count; j++) fs.mkdirSync(path.join(workspace, `long-${j}`), { recursive: true });
+// long-0 is a repository with many uncommitted changes, for the Changes pane.
+if (long_count) {
+  const repository = path.join(workspace, "long-0");
+  const git = (...a) => execFileSync("git", ["-C", repository, "-c", "user.name=bench", "-c", "user.email=bench@example.com", ...a]);
+  git("init", "-q", "-b", "long-0");
+  for (let f = 0; f < 60; f++) fs.writeFileSync(path.join(repository, `file-${f}.txt`), Array.from({ length: 80 }, (_, i) => `line ${i} of file ${f}`).join("\n") + "\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "Start");
+  for (let f = 0; f < 60; f++) fs.writeFileSync(path.join(repository, `file-${f}.txt`), Array.from({ length: 80 }, (_, i) => (i % 7 === f % 7 ? `changed line ${i} of file ${f}` : `line ${i} of file ${f}`)).join("\n") + "\n");
+}
 const proxies = {
   paseo_for_browser: await S.counting_proxy(S.ports.paseo_for_browser, S.ports.paseo),
   paseo_for_liton: await S.counting_proxy(S.ports.paseo_for_liton, S.ports.paseo),
@@ -80,6 +103,21 @@ const paseo = await S.start_paseo({ repo, scratch, log });
 const list_agents = async () => JSON.parse(await paseo.cli("ls", "--json"));
 const until_idle = (timeout = 60000) =>
   S.until("the agents to finish their turns", async () => (await list_agents()).every((a) => a.status === "idle"), timeout, 500);
+// Long agents first, so agent 0 is still the one updated last: each has a
+// timeline of several hundred entries (tool calls, messages, a large tool
+// output), its prompts starting `Long task j:`, the last a short turn
+// ending with the mock's closing line.
+if (long_count) say(`seeding ${long_count} long agents`);
+for (let j = 0; j < long_count; j++) {
+  await paseo.cli("run", "--provider", "mock/e2e-fast-stream", "--no-wait", "--title", `Long agent ${j}`, "--cwd", path.join(workspace, `long-${j}`), `Long task ${j}: start`);
+  await until_idle();
+  const id = (await list_agents()).find((a) => a.name === `Long agent ${j}`).id;
+  for (const prompt of ["emit 250 tool agent stream updates", "emit 120 assistant messages before synthetic user message", "emit 6000 byte file agent stream payload", "emit 150 tool agent stream updates", "wrap up"]) {
+    await paseo.cli("send", id, `Long task ${j}: ${prompt}`, "--no-wait");
+    await sleep(300);
+    await until_idle();
+  }
+}
 // Agent 0, the one messages go to, finishes its turn last, so both clients
 // open on it: liton follows the session updated last.
 say(`seeding ${agent_count} mock agents`);
@@ -140,7 +178,8 @@ async function open_page(name, profile) {
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
   const client = clients[name];
-  await page.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await page.send("Emulation.setDeviceMetricsOverride", profile.viewport ?? { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  if (profile.touch) await page.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
   await page.send("Network.enable");
   await page.send("Performance.enable");
   if (profile.network) await page.send("Network.emulateNetworkConditions", profile.network);
@@ -291,6 +330,141 @@ async function interact(page, name, profile, run) {
   return { click_to_timeline: clicks, keystroke_to_frame: keys, send_to_message: sends };
 }
 
+// --- Interaction latency on long timelines --------------------------------
+
+// A tap on a phone profile, a click otherwise.
+const press_at = async (page, profile, at) => {
+  if (!profile.touch) return page.clickAt(at);
+  await page.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [at] });
+  await page.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+};
+
+// Like `timed`, with the browser's event timing of the input too: from the
+// input to the frame painted after its handlers ran, of the events from the
+// input on. Headless Chromium sometimes reports a paint only at a later
+// input's, so `shown`, from the page's own clock, is what budgets check.
+async function timed_paint(page, name, condition, act, timeout) {
+  const shown = await timed(page, name, condition, act, timeout);
+  await sleep(150);
+  const paint = await page.evaluate((name) => {
+    const input = window.__bench.done[name].input.time;
+    return Math.max(0, ...window.__bench.event_times.filter((e) => e.start >= input - 1).map((e) => e.duration));
+  }, name);
+  return { shown, paint };
+}
+
+// Frame gaps while a gesture of the mouse wheel scrolls the element under
+// `at` up by `distance` px; null if nothing scrolled. Headless Chromium
+// scrolls nothing by a synthesized touch gesture, so a phone wheels too.
+async function scroll_frames(page, at, distance) {
+  const offsets = () => page.evaluate(() => [...document.querySelectorAll("*")].map((e) => e.scrollTop).join());
+  const before = await offsets();
+  const frames = page.evaluate("__bench.frames(2500)");
+  await page.send("Input.synthesizeScrollGesture", { x: Math.round(at.x), y: Math.round(at.y), yDistance: distance, speed: 2000, gestureSourceType: "mouse" });
+  const gaps = (await frames).slice(1);
+  if (before === (await offsets())) return null;
+  const frames_due = (g) => Math.max(1, Math.round(g / 16.7));
+  return {
+    longest: Math.max(...gaps),
+    over_50: gaps.filter((g) => g > 50).length,
+    dropped: (100 * gaps.reduce((n, g) => n + frames_due(g) - 1, 0)) / gaps.reduce((n, g) => n + frames_due(g), 0),
+  };
+}
+
+// The center of the scrolling box around the last visible answer.
+const timeline_point = (page, client) =>
+  page.evaluate((selector) => {
+    const answers = [...document.querySelectorAll(selector)].filter((e) => e.checkVisibility());
+    let box = answers[answers.length - 1];
+    while (box && !(box.scrollHeight > box.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+    if (!box) return null;
+    const r = box.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, client.answers);
+
+// Long agent j's timeline is shown: its prompts only, and its last answer.
+const long_timeline_of = (j) =>
+  `(() => { const prompts = __bench.texts(__bench_client.user_messages).filter((t) => /Long task \\d+:/.test(t)); return prompts.length > 0 && prompts.every((t) => t.includes("Long task ${j}:")) && __bench.texts(__bench_client.answers).some((t) => t.includes(${JSON.stringify(end_marker)})); })`;
+
+async function interaction(name, profile) {
+  const client = clients[name];
+  const { page, context, url } = await open_page(name, profile);
+  const out = { tap: [], tap_paint: [], key: [], key_paint: [], control: [], control_paint: [], scroll_longest: [], scroll_over_50: [], scroll_dropped: [], menu: [], settings: [], drawer_tab: [] };
+  try {
+    // Each opens on agent 0's timeline (see `load`).
+    await page.goto(url);
+    await wait_done(page, "timeline", profile.timeout);
+    await sleep(1000);
+    for (const j of [...Array(long_count).keys(), 0]) {
+      if (profile.touch) {
+        await press_at(page, profile, await center_of(page, client.sidebar_toggle));
+        await sleep(800);
+      }
+      let at = null;
+      await S.until(`the row of long agent ${j}`, async () => (at = await center_of(page, client.session_rows, client.long_row_text(j))), profile.timeout);
+      const { shown, paint } = await timed_paint(page, "tap", long_timeline_of(j), () => press_at(page, profile, at), profile.timeout);
+      out.tap.push(shown);
+      out.tap_paint.push(paint);
+      await sleep(1500);
+    }
+    // Long agent 0's timeline is shown.
+    for (let k = 0; k < 2; k++) {
+      const at = await timeline_point(page, client);
+      if (!at) break;
+      const frames = await scroll_frames(page, at, 2500);
+      if (!frames) {
+        say(`  ${name}: the scroll gesture scrolled nothing`);
+        break;
+      }
+      out.scroll_longest.push(frames.longest);
+      out.scroll_over_50.push(frames.over_50);
+      out.scroll_dropped.push(frames.dropped);
+      await sleep(500);
+    }
+    await press_at(page, profile, await center_of(page, client.composer));
+    await sleep(300);
+    const text = "Long task 0: draft";
+    for (let i = 1; i <= text.length; i++) {
+      const { shown, paint } = await timed_paint(page, "key", `__bench.composer_has(__bench_client, ${JSON.stringify(text.slice(0, i))})`, () => page.keyboard.press(text[i - 1]), profile.timeout);
+      out.key.push(shown);
+      out.key_paint.push(paint);
+    }
+    await page.evaluate(() => document.activeElement?.blur());
+    if (name === "liton") {
+      // liton's own controls: the chat's ⋯ menu, Settings, and on a desktop
+      // the right drawer's tabs.
+      const press = async (selector, text, condition) => {
+        const { shown, paint } = await timed_paint(page, "control", `() => (${condition})`, async () => press_at(page, profile, await center_of(page, selector, text)), 15000);
+        out.control_paint.push(paint);
+        return shown;
+      };
+      const chat_menu = `document.querySelector('section[aria-label="Chat"] .menu')`;
+      const settings = `document.querySelector('section[aria-label="Settings"]')`;
+      for (let k = 0; k < 3; k++) {
+        out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `${chat_menu}`));
+        out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `!${chat_menu}`));
+        out.settings.push(await press(".settings-toggle", "", `${settings}`));
+        out.settings.push(await press(".settings-toggle", "", `!${settings}`));
+        if (!profile.touch) {
+          out.drawer_tab.push(await press('[data-testid="slot-right"] .tab', "Files", `document.querySelector('section[aria-label="Files"]:not(.hidden)')`));
+          out.drawer_tab.push(await press('[data-testid="slot-right"] .tab', "Changes", `document.querySelector('section[aria-label="Changes"]:not(.hidden)')`));
+        }
+      }
+    }
+    return out;
+  } catch (error) {
+    failures++;
+    const shot = await page.send("Page.captureScreenshot", { format: "png" }).catch(() => null);
+    const file = path.join(scratch, `failed-interaction-${name}-${profile.touch ? "phone" : "desktop"}.png`);
+    if (shot) fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+    say(`  ${name} interaction failed: ${error.message} (screenshot ${file})`);
+    say(`  rows shown: ${(await page.evaluate((c) => __bench.texts(c), client.session_rows).catch(() => [])).join(" | ")}`);
+    return { error: error.message };
+  } finally {
+    await context.close();
+  }
+}
+
 const counter_names = { liton: ["liton_for_browser", "paseo_for_liton"], paseo: ["paseo_for_browser"] };
 const snapshot = (name) => Object.fromEntries(counter_names[name].map((p) => [p, proxies[p].snapshot()]));
 const since = (name, before) => Object.fromEntries(counter_names[name].map((p) => [p, S.delta(proxies[p].snapshot(), before[p])]));
@@ -326,7 +500,8 @@ async function measure(name, profile, run) {
 
 const names = options.clients.split(",");
 const results = {};
-for (const profile_name of options.profiles.split(",")) {
+const profile_names = sections.includes("load") ? options.profiles.split(",") : [];
+for (const profile_name of profile_names) {
   const profile = profiles[profile_name];
   results[profile_name] = Object.fromEntries(names.map((n) => [n, []]));
   for (let run = 1; run <= profile.runs; run++) {
@@ -345,6 +520,7 @@ for (const profile_name of options.profiles.split(",")) {
 // open on agent 0 and left alone.
 const idle_seconds = number("idle-seconds");
 const daemon_load = {};
+if (sections.includes("load")) {
 say(`daemon load: liton's daemon alone for ${idle_seconds} s`);
 {
   const before = proxies.paseo_for_liton.snapshot();
@@ -365,6 +541,22 @@ say(`daemon load: both clients open and idle for ${idle_seconds} s`);
   for (const { name, context } of open) {
     daemon_load[`${name}_idle`] = { ...since(name, before[name]), seconds: idle_seconds };
     await context.close();
+  }
+}
+}
+
+// Interaction latency: each client on the long agents, in each profile.
+const interactions = {};
+if (long_count) {
+  for (const [profile_name, profile] of Object.entries(interaction_profiles)) {
+    if (!options.profiles.split(",").includes(profile_name)) continue;
+    interactions[profile_name] = Object.fromEntries(names.map((n) => [n, []]));
+    for (let run = 1; run <= number("interaction-runs"); run++) {
+      for (const name of run % 2 ? names : [...names].reverse()) {
+        say(`interaction, ${profile_name} run ${run}/${number("interaction-runs")}: ${name}`);
+        interactions[profile_name][name].push(await interaction(name, profile));
+      }
+    }
   }
 }
 await browser.close();
@@ -395,6 +587,31 @@ const metrics = {
   "cold download, decoded (MB)": (r) => [r.cold.download.total.decoded / 1e6],
   "cold load: requests": (r) => [r.cold.download.total.requests],
 };
+// Each with liton's budget, in ms: a press must paint its result, or the
+// state that shows it pending, within one profile's budget (README.md).
+const interaction_metrics = {
+  "tap session to its long timeline shown (ms)": (r) => r.tap,
+  "tap session: input to next paint (ms)": (r) => r.tap_paint,
+  "keystroke to frame (ms)": (r) => r.key,
+  "keystroke: input to next paint (ms)": (r) => r.key_paint,
+  "⋯ menu open/close to frame (ms)": (r) => r.menu,
+  "Settings open/close to frame (ms)": (r) => r.settings,
+  "right drawer tab to frame (ms)": (r) => r.drawer_tab,
+  "liton's controls: input to next paint (ms)": (r) => r.control_paint,
+  "scroll long timeline: longest frame (ms)": (r) => r.scroll_longest,
+  "scroll long timeline: frames over 50 ms": (r) => r.scroll_over_50,
+  "scroll long timeline: dropped frames (%)": (r) => r.scroll_dropped,
+};
+const budgeted = (metric) => /tap session: input to next paint|to frame|longest frame/.test(metric);
+const interaction_summary = {};
+for (const [profile_name, by_client] of Object.entries(interactions)) {
+  interaction_summary[profile_name] = {};
+  for (const [name, runs] of Object.entries(by_client)) {
+    const ok = runs.filter((r) => !r.error);
+    interaction_summary[profile_name][name] = Object.fromEntries(Object.entries(interaction_metrics).map(([metric, pick]) => [metric, stats(ok.flatMap(pick))]));
+    interaction_summary[profile_name][name].failed_runs = runs.length - ok.length;
+  }
+}
 const summary = {};
 for (const [profile_name, by_client] of Object.entries(results)) {
   summary[profile_name] = {};
@@ -449,7 +666,7 @@ for (const [profile_name, by_client] of Object.entries(results)) {
 
 fs.mkdirSync(options.out, { recursive: true });
 const stem = path.join(options.out, `${meta.date.slice(0, 10)}-${options.label}`);
-fs.writeFileSync(`${stem}.json`, JSON.stringify({ meta, summary, daemon_load: daemon_summary, raw: { results, daemon_load } }, null, 1) + "\n");
+fs.writeFileSync(`${stem}.json`, JSON.stringify({ meta, summary, interaction: interaction_summary, daemon_load: daemon_summary, raw: { results, daemon_load, interactions } }, null, 1) + "\n");
 
 const fmt = (s) => (s ? `${s.median < 10 ? s.median.toFixed(2) : Math.round(s.median)} / ${s.p95 < 10 ? s.p95.toFixed(2) : Math.round(s.p95)}` : "n/a");
 let md = `# liton vs Paseo: ${options.label}\n\n`;
@@ -460,6 +677,19 @@ for (const [profile_name, by_client] of Object.entries(summary)) {
   md += `| metric | ${names.join(" | ")} |\n|---|${names.map(() => "---|").join("")}\n`;
   for (const metric of Object.keys(metrics)) md += `| ${metric} | ${names.map((n) => fmt(by_client[n]?.[metric])).join(" | ")} |\n`;
   const failed = names.filter((n) => by_client[n]?.failed_runs).map((n) => `${n}: ${by_client[n].failed_runs} (${by_client[n].errors.join("; ")})`);
+  if (failed.length) md += `\nFailed runs: ${failed.join(", ")}\n`;
+}
+for (const [profile_name, by_client] of Object.entries(interaction_summary)) {
+  const p = interaction_profiles[profile_name];
+  md += `\n## Interaction latency on long timelines: ${profile_name}${p.touch ? ` (${p.viewport.width}x${p.viewport.height}, touch, CPU ${p.cpu}x slower)` : ""}, ${number("interaction-runs")} runs\n\n`;
+  md += `${long_count} agents of several hundred entries each. Budget: ${p.budget} ms (median and p95 of liton).\n\n`;
+  md += `| metric | ${names.join(" | ")} | liton within budget |\n|---|${names.map(() => "---|").join("")}---|\n`;
+  for (const metric of Object.keys(interaction_metrics)) {
+    const l = by_client.liton?.[metric];
+    const verdict = !budgeted(metric) || !l ? "" : l.p95 <= p.budget ? "yes" : l.median <= p.budget ? "median only" : "no";
+    md += `| ${metric} | ${names.map((n) => fmt(by_client[n]?.[metric])).join(" | ")} | ${verdict} |\n`;
+  }
+  const failed = names.filter((n) => by_client[n]?.failed_runs).map((n) => `${n}: ${by_client[n].failed_runs}`);
   if (failed.length) md += `\nFailed runs: ${failed.join(", ")}\n`;
 }
 md += `\n## Daemon load, per minute\n\n| traffic | HTTP requests | WS connections | WS messages up | WS messages down | WS KB down |\n|---|---|---|---|---|---|\n`;

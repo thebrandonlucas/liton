@@ -16,7 +16,7 @@ CHROME=/path/to/chromium node bench/bench.mjs
 The DevTools client is roc-signals's `tests/browser/cdp.mjs`, the one `zig build
 e2e` uses; the script finds it in `zig-pkg/` after `zig build --fetch`, or takes
 its path as its first argument. A full run (5 desktop runs, 3 phone runs, a
-minute of each client idle) takes about 15 minutes.
+minute of each client idle, 3 interaction runs) takes about 25 minutes.
 
 | option | default | |
 |---|---|---|
@@ -30,6 +30,9 @@ minute of each client idle) takes about 15 minutes.
 | `--idle-seconds` | 60 | how long each client sits idle for the daemon load |
 | `--liton-www` | `zig-out/www` | the UI liton's daemon serves, to compare builds |
 | `--precompressed` | off | serve the UI's files from their `.br` siblings (see below) |
+| `--sections` | `load,interaction` | the loading, input and daemon load runs, and the interaction latency runs (below) |
+| `--long-agents` | 3 | long agents seeded for the interaction runs |
+| `--interaction-runs` | 3 | interaction runs per client and profile |
 | `--label`, `--out` | `baseline`, `bench/results` | where the results go |
 
 ## What it sets up
@@ -105,6 +108,59 @@ Each metric reports median / p95 over the runs (p95 is the nearest rank: with
   750 kbit/s up, Lighthouse's mobile settings, to approximate a mid-range phone
   on a slow 4G network. The viewport stays desktop-sized, so both clients show
   the same layout.
+
+## Interaction latency on long timelines
+
+The `interaction` section (`--sections`) measures how fast each client answers
+input with a long session open. Before the other agents, the rig seeds
+`--long-agents` agents, each in its own directory (`long-0` is a git
+repository with 60 changed files): several turns of the mock's stress prompts
+give each a timeline of several hundred entries (tool calls, messages, a large
+tool output), its prompts starting `Long task j:`. Each run opens a fresh
+context on agent 0, then:
+
+- **tap session to its long timeline shown**: taps (on a phone, after opening
+  the sidebar) each long agent's row in turn, from the `pointerdown` to the
+  frame showing that agent's prompts only and its last answer. The first visit
+  includes fetching the timeline.
+- **input to next paint**: the browser's event timing of the input (the
+  `event` entries of `PerformanceObserver`, from the input to the frame
+  painted after its handlers ran, of the events from the input on): how long
+  before a press shows anything, its result or the state that says it is
+  pending. Event timing reports only events of 16 ms or more; faster ones
+  count as 0. Headless Chromium sometimes reports a paint only with a later
+  input's, so it is reported, but only the tap's is budgeted.
+- **keystroke to frame**: each key typed in the composer under the long
+  timeline, from the `keydown` to the frame after the composer holds it.
+- **liton's own controls, to frame**: the chat's ⋯ menu opened and closed,
+  Settings opened and closed, and on a desktop the right drawer's Files and
+  Changes tabs, each from the `pointerdown` to the frame after its result
+  shows.
+- **scroll long timeline**: twice, a scroll gesture of the mouse wheel
+  (`Input.synthesizeScrollGesture`) up 2500 px over long agent 0's timeline,
+  while the page counts animation frames: the longest frame, the frames over
+  50 ms, and the share of the 60 Hz frames dropped. A phone wheels too:
+  headless Chromium scrolls nothing by a synthesized touch gesture. A gesture
+  that scrolls nothing ends the scrolling, and the log says so.
+
+It runs in two profiles: **desktop** (1280x800, no throttling) and **phone**
+(390x844 with touch input and the phone's 4x slower CPU, but no network
+emulation: it measures input, not loading, and Paseo's client does not load
+under the phone profile's bandwidth limit).
+
+### Budget
+
+liton's UI must answer a press in the same frame (docs/design.md, Instant).
+The budget, which the report checks liton's median and p95 against, is:
+
+| profile | to frame, and a tap's input to next paint | longest scroll frame |
+|---|---|---|
+| desktop | 50 ms | 50 ms |
+| phone (4x CPU) | 100 ms | 100 ms |
+
+"tap session to its long timeline shown" has no budget: its first visit waits
+on the daemon. Its input to next paint, the frame that shows the session
+picked and loading, is budgeted.
 
 ## Caveats
 
