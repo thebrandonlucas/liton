@@ -77,7 +77,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Inbox reads like an email inbox: what needs you on top, then every other session in one list, the latest first, each with its state and the agent's last message, rather than a section for each state. It lists idle sessions too, unless you turn that option off.
 - Workspaces and Sessions list the latest first: sessions by when they last changed, workspaces by their latest session and projects by their latest workspace. Their new Order option lists them by name instead. A browser opens on the latest session.
 - The presets are no longer in the top bar: pick one in Settings, or press Alt+1 to Alt+9.
-- In a conversation, liton no longer hears its own replies from your speakers as you talking: it stops listening while it speaks a reply and for a moment after. Tap the mic, which shows a stop while it speaks, to stop speaking and listen at once; the agent keeps working, and Stop in its header stops it.
+- In a conversation, liton no longer hears its own replies from your speakers as you talking: it stops listening while it speaks a reply and for a moment after, and drops anything it hears that is mostly the last reply read back, saying so. Tap the mic, which shows a stop while it speaks, to stop speaking and listen at once; the agent keeps working, and Stop in its header stops it.
 
 ### Fixed
 

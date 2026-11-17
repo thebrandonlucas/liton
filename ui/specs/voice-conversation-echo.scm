@@ -1,0 +1,22 @@
+(test "Liton — a conversation sends nothing it heard that is mostly the reply read back, and says so"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"voice\",\"version\":1}],\"id\":\"local-speech\",\"name\":\"Local speech\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[{\"Status\":{\"stt\":\"Ready\"}}]}]}")
+    (run-effect 3)
+    (click (role button :name "Conversation"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"2\",\"events\":[{\"Entry\":{\"event\":{\"AgentMessage\":{\"text\":\"All 12 tests pass, and the build is green.\"}},\"sequence\":2}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[]}]}")
+    (tick-interval 1000)
+    (run-effect 4)
+    (emit-port "liton/voice/capture" "{\"Transcript\":{\"text\":\"all twelve tests pass and the build is green\",\"from\":0,\"to\":0}}")
+    ; Dropped, with a word why, and still listening.
+    (expect-visible (text "Not sent: it sounded like the reply read back"))
+    (expect-absent (test-id "sent-status"))
+    (expect-text (test-id "voice-status") "Listening")
+    (emit-port "liton/voice/capture" "{\"Transcript\":{\"text\":\"Then commit the build.\",\"from\":0,\"to\":0}}")
+    (expect-text (test-id "sent-status") "Sending…")
+    (expect-visible (text "Then commit the build."))
+  )
+)

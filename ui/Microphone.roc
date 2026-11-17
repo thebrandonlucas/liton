@@ -143,7 +143,8 @@ Microphone := [].{
 
 	## Takes what the page heard. A transcript dictated goes into the draft
 	## where the selection was, for editing, or, if Send stopped it, after
-	## what was typed, sent with it; one said in a conversation is sent. A
+	## what was typed, sent with it; one said in a conversation is sent,
+	## unless it is mostly the last reply, heard from the speakers. A
 	## microphone the browser refused, or that stopped, fails the recording.
 	heard : Model.State, Try(Speech.Heard, _) -> Model.State
 	heard = |state, message| {
@@ -169,6 +170,7 @@ Microphone := [].{
 				typed = Model.set_draft(state, voice.pane, Speech.insert(Model.draft(state, voice.pane), from, to, text))
 				{ ..typed, cleared: typed.cleared.drop_if(|composer| composer.pane == voice.pane).append({ pane: voice.pane, count }), voice: done }
 			}
+			Ok(Transcript({ text, .. })) if Speech.echoes(text, Microphone.replies(state).last().map_ok(|reply| reply.text) ?? "") => { ..changed_to(done), notice: "Not sent: it sounded like the reply read back" }
 			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim() }))
 			Ok(NotTranscribed(reason)) if voice.mode == Dictation => changed_to({ ..done, phase: Failed(reason) })
 			Ok(NotTranscribed(reason)) => { ..changed_to(done), notice: "Not transcribed: ${reason}" }
@@ -184,19 +186,20 @@ Microphone := [].{
 	order : Model.State -> Speech.Order
 	order = |state| {
 		voice = state.voice
-		replies =
-			if (voice.mode != Conversation or voice.phase != Listening)
-				[]
-			else
-				Model.entries(state, voice.session).keep_oks(
-					|entry|
-						match entry.event {
-							AgentMessage({ text }) if entry.sequence > voice.spoken => Ok({ sequence: entry.sequence, text })
-							_ => Err(NotReply)
-						},
-				)
+		replies = if (voice.mode != Conversation or voice.phase != Listening) [] else Microphone.replies(state)
 		{ stop: voice.stopping, hush: voice.hush, session: voice.session, replies, picked: voice.picked }
 	}
+
+	## The agent's messages in a conversation's session since it started.
+	replies : Model.State -> List({ sequence : U64, text : Str })
+	replies = |state|
+		Model.entries(state, state.voice.session).keep_oks(
+			|entry|
+				match entry.event {
+					AgentMessage({ text }) if entry.sequence > state.voice.spoken => Ok({ sequence: entry.sequence, text })
+					_ => Err(NotReply)
+				},
+		)
 
 	## The voice picked and the voices settings offer: the first on the
 	## device, "default", then the browser's, an online one said so.

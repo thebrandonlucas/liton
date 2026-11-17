@@ -116,4 +116,15 @@ Speech := [].{
 		trail = if (!after.is_empty() and !after.starts_with(" ") and !after.starts_with("\n")) " " else ""
 		"${before}${lead}${text.trim()}${trail}${after}"
 	}
+
+	## Whether `heard` is mostly `reply` read back, as a microphone near the
+	## speakers hears it: over 70% of its words, at least three, are the
+	## reply's.
+	echoes : Str, Str -> Bool
+	echoes = |heard, reply| {
+		words = |text| Str.from_utf8_lossy(text.with_ascii_lowercased().to_utf8().map(|byte| if ((byte >= 48 and byte <= 57) or (byte >= 97 and byte <= 122) or byte >= 128) byte else 32)).split_on(" ").drop_if(Str.is_empty)
+		said = words(heard)
+		replied = words(reply)
+		said.len() >= 3 and said.keep_if(|word| replied.contains(word)).len() * 10 > said.len() * 7
+	}
 }
