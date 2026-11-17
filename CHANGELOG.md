@@ -82,7 +82,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Status has colours of its own in every theme: blue for running, green for done, amber for what needs you and red for failed, and a diff's added and removed lines are green and red. The theme's accent, gold in Pastoral, is left for focus and the main action.
 - A workspace's uncommitted changes show their lines added in green and removed in red, and nothing until they are counted, rather than "changed".
 - A session's or workspace's status, in a row or a chat's header, is an icon rather than a word: a blue ring turning while it runs, an amber alert when it needs you, a red triangle when it failed, a green dot when it is done and unread, a faint one once read, and nothing while idle. Hover it for the word, which screen readers read. Unread sessions no longer have a gold ring, only a bolder title.
-- Settings, the drawer buttons, a pane's menu and + are icons rather than words and glyphs, with the same names for screen readers.
+- Settings, the drawer buttons, a pane's menu and + are icons rather than words and glyphs, with the same names for screen readers, which a pointer resting on a pane's menu or + also shows.
 - Send and Stop are one round button at the end of the message box: an arrow that sends, which turns into a red Stop while the agent works and nothing is typed, and a turning ring once pressed until the agent stops. Stop is no longer in a chat's header.
 
 ### Fixed

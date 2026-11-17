@@ -519,7 +519,7 @@ Liton := [].{
 						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
 						Engine.when(
 							row.field(|pane| pane.widget == "workspaces"),
-							|| Html.icon_button("", Engine.const("New workspace"), "icon new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
+							|| Liton.icon_button(Engine.const("New workspace"), "icon new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 							|| Engine.text(""),
 						),
 						Liton.pane_menu(model, id, title, shown),
@@ -627,6 +627,10 @@ Liton := [].{
 			],
 		)
 
+	## An icon's button, its name for screen readers also its tooltip.
+	icon_button : Signal(ctx, Str), Str, Handler(ctx) -> Elem(ctx)
+	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
+
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, the moves
 	## Tiling allows, and Close. Each closes the menu.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
@@ -641,6 +645,7 @@ Liton := [].{
 						Engine.attr("type", "button"),
 						Engine.class("icon menu-toggle"),
 						Html.aria_label_s(title.map(|name| "${name} menu")),
+						Engine.attr_s("title", title.map(|name| "${name} menu")),
 						Engine.attr("aria-haspopup", "true"),
 						Html.flag("aria-expanded", id.map2(model.signal(), |pane_id, state| state.menu == pane_id)),
 						Engine.on_click(model.update_by(id, Model.toggle_menu)),
@@ -867,7 +872,7 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
-								Html.icon_button("", row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
+								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
 							],
 						)
 					},
