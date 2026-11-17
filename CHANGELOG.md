@@ -93,6 +93,8 @@ All notable changes to liton are documented in this file. The format is based on
 - Workspaces lists one row per session, which says how long ago it last changed ("now", "3m", "2h", "4d"). A workspace with one session is that session's row, with its branch if it is a worktree and its changes, and its + starts another agent beside it; a workspace with several still has a row of its own over them. Projects are written in sentence case rather than capitals.
 - The Developer, Inbox and Chat presets have no top bar. The drawer buttons are at the two ends of the chat's header, Settings is a gear at the bottom left of the left drawer (or in the chat's header while that drawer is hidden), and how many sessions need you shows in the Workspaces header as well as the browser tab's title. On a phone the bar with liton's name is gone too, and the gear is in the Workspaces header. What went wrong shows as a toast at the bottom until you dismiss it. Tiling keeps its bar.
 - The right drawer's button, at the end of the chat's header, shows the lines the chat's workspace has added and removed but not committed, in green and red, so you can tell there is something to review without opening the drawer. Hovering a drawer's button names what the drawer holds, such as Changes · Files.
+- A chat reads as a centred column at most 820px wide, in 15px text, with your own messages in a neutral grey bubble rather than a gold one.
+- The message box is one rounded box under the chat's column: what you type on top, and a row below it with a chip naming the session's model (or its agent, when the provider doesn't say which model), the mic and conversation buttons, and Send.
 
 ### Fixed
 

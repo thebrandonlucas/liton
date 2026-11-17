@@ -14,7 +14,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --glass-deep: color-mix(in srgb, var(--glass-tint) min(100%, calc(var(--glass-alpha) + 18%)), transparent);
   --sheet: color-mix(in srgb, var(--glass-tint) var(--sheet-alpha), transparent);
   --field: color-mix(in srgb, var(--text) 6%, transparent);
-  --user: color-mix(in srgb, var(--accent) 14%, transparent);
+  --user: color-mix(in srgb, var(--text) 9%, transparent);
   --tool: color-mix(in srgb, var(--text) 5%, transparent);
   --selected: color-mix(in srgb, var(--text) 11%, transparent);
   --on-accent: light-dark(#ffffff, #12100a);
@@ -319,10 +319,11 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
-.timeline { list-style: none; margin: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+/* The timeline is a column centred at 820px, at 15px as on a phone. */
+.timeline { list-style: none; box-sizing: border-box; width: 100%; max-width: 820px; margin: 0 auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.4; }
 .entry pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
 .entry { padding: 6px 10px; border-radius: var(--small-radius); }
-.entry.user { background: var(--user); border: 1px solid var(--edge); align-self: flex-end; max-width: 85%; }
+.entry.user { padding: 8px 14px; border-radius: 16px 2px 16px 16px; background: var(--user); align-self: flex-end; max-width: 85%; }
 .entry.agent { max-width: 95%; }
 .entry.result { background: var(--tool); }
 .entry.tool, .entry.fold { padding: 0 10px; }
@@ -360,12 +361,19 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .permission span { flex: 1; }
 .permission .allow { border-color: var(--ok); }
 .permission .deny { border-color: var(--fail); }
-.composer { display: flex; align-items: flex-end; gap: 6px; padding: 8px; border-top: 1px solid var(--edge); }
-.composer textarea { flex: 1; min-width: 0; max-height: 9em; padding: 6px 10px; resize: none; field-sizing: content; transition: border-color var(--fast) ease; }
-.composer textarea:focus { outline: none; border-color: var(--edge-active); }
-.composer button { min-height: calc(1.45em + 14px); color: var(--accent); }
+/* The composer: one box under the timeline's column, the draft over a row
+   of the model, the voice controls and Send. */
+.composer { position: relative; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; width: calc(100% - 24px); max-width: 796px; margin: 0 auto 10px; padding: 8px;
+  border: 1px solid var(--edge); border-radius: 16px; background: var(--field); transition: border-color var(--fast) ease; }
+.composer:focus-within { border-color: var(--edge-active); }
+.composer textarea { min-width: 0; max-height: 9em; padding: 4px 6px; border: none; background: none; resize: none; field-sizing: content; font-size: 15px; }
+.composer textarea:focus { outline: none; }
+.composer-row { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.model-chip { margin-right: auto; min-width: 0; padding: 2px 10px; border: 1px solid var(--edge); border-radius: 999px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-chip:empty { display: none; }
+.composer button { color: var(--accent); }
 /* Send, the main action, and Stop in its place: one round button. */
-.composer .send { --size: calc(1.45em + 14px); flex: none; display: grid; place-items: center; width: var(--size); height: var(--size); padding: 0; border-radius: 50%;
+.composer .send { --size: 30px; flex: none; display: grid; place-items: center; width: var(--size); height: var(--size); padding: 0; border-radius: 50%;
   border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font-size: 0; }
 .composer .send::before { content: ""; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--icon-arrow-up) center / contain no-repeat; mask: var(--icon-arrow-up) center / contain no-repeat; }
 .composer .stop { border-color: var(--fail); background: var(--fail); }
@@ -377,10 +385,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
    input's level while it listens and pulses through a conversation, showing
    a stop while a reply is spoken, the conversation toggle, and a word over
    them saying what they are doing. */
-.composer { position: relative; }
 .voice { display: flex; gap: 6px; }
 .voice[hidden], .voice-settings[hidden], .voice-status:empty { display: none; }
-.composer .mic, .composer .talk { --size: calc(1.45em + 14px); position: relative; width: var(--size); min-width: var(--size); height: var(--size); padding: 0; border-radius: 50%; transition: background var(--fast) ease, box-shadow var(--fast) linear; }
+.composer .mic, .composer .talk { --size: 30px; position: relative; border-color: transparent; background: none; width: var(--size); min-width: var(--size); height: var(--size); padding: 0; border-radius: 50%; transition: background var(--fast) ease, box-shadow var(--fast) linear; }
 .composer .mic::before, .composer .talk::before { content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; background: currentColor; mask: var(--icon) center / contain no-repeat; }
 .composer .mic { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><rect x='9' y='3' width='6' height='11' rx='3'/><path d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/></svg>"); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .composer .talk { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/></svg>"); }
@@ -399,7 +406,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 @keyframes mic-pulse { from { transform: scale(1); opacity: .9; } to { transform: scale(1.45); opacity: 0; } }
 @keyframes mic-busy { from { opacity: 1; } to { opacity: .35; } }
 @media (max-width: 640px) {
-  .composer .mic, .composer .talk { --size: 44px; background: transparent; border-color: var(--edge); color: var(--accent); }
+  .composer .mic, .composer .talk { --size: 44px; }
 }
 /* Jump to latest: shown once the timeline is scrolled up from its newest
    entry, where the browser has scroll-driven animations. */
@@ -646,11 +653,10 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .git-file { min-height: 44px; }
   .changes .choices button { min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
-  .entry { font-size: 15px; }
   .entry .md-code pre, .entry.result pre, .tool-card pre { font-size: 12.5px; }
-  /* The composer: round, above the tab bar, a thumb's Send or Stop beside it. */
-  .composer { gap: 8px; padding: 8px; }
-  .composer textarea { min-height: 44px; padding: 10px 16px; border-radius: 22px; }
+  /* The composer: the screen's width, above the tab bar, with a thumb's Send or Stop. */
+  .composer { width: calc(100% - 12px); margin-bottom: 6px; border-radius: 22px; }
+  .composer textarea { font-size: 16px; }
   .composer .send { --size: 44px; }
 }
 /* A phone's keyboard takes the tab bar's place while you type. */
