@@ -59,7 +59,9 @@ Liton := [].{
 				Engine.on_key({ keymap: Engine.const(Engine.Keymap.every.outside_text()) }, model.set_value(|state, key| Model.pressed(state, key.key))),
 			],
 			[
-				Liton.bar(model),
+				# A Workbench has no bar: its drawers' buttons are in the main
+				# area's header, Settings and what needs you in the left drawer's.
+				Engine.when(model.signal().map(|state| state.shell != Workbench), || Liton.bar(model), || Engine.text("")),
 				Html.div(
 					"work",
 					[
@@ -92,6 +94,7 @@ Liton := [].{
 							[Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.column_view(model, row))],
 						),
 						Liton.settings(model),
+						Liton.toast(model),
 					],
 				),
 				# Under an open ⋯ menu's pane, or a phone's Settings sheet: a click
@@ -213,9 +216,9 @@ Liton := [].{
 	call : Str -> Engine.Ask(Str, Engine.HttpError)
 	call = |body| Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout: Ms(5000) })
 
-	## A bar over the tiles: liton's name and, as status modules, what needs
-	## you, the agents running, the Workbench's drawers and Settings, which
-	## picks the preset (as Alt+1 to 9 do).
+	## Tiling's bar over the tiles: liton's name and, as status modules, what
+	## needs you, the agents running and Settings, which picks the preset (as
+	## Alt+1 to 9 do).
 	bar : State(Ctx, Model.State) -> Elem(Ctx)
 	bar = |model|
 		Engine.element(
@@ -223,21 +226,28 @@ Liton := [].{
 			[Engine.class("bar")],
 			[
 				Html.span_s(Engine.const("liton"), [Engine.class("brand")]),
-				Html.span_s(model.signal().map(|state| state.notice), [Engine.class("notice")]),
 				Html.div(
 					"modules",
 					[
 						Liton.count_module(model.signal().map(Model.needs_you), "needs-you", "need you"),
 						Liton.count_module(model.signal().map(Model.running), "running", "running"),
-						Engine.when(
-							model.signal().map(|state| state.shell == Workbench),
-							|| Html.div("drawer-toggles", [Liton.drawer_toggle(model, Left, "Left drawer"), Liton.drawer_toggle(model, Right, "Right drawer")]),
-							|| Engine.text(""),
-						),
-						Html.button("", [Engine.class("module icon settings-toggle"), Html.aria_label("Settings"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings }))),
+						Liton.settings_toggle(model, "module icon settings-toggle"),
 					],
 				),
 			],
+		)
+
+	## Opens or closes Settings.
+	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+
+	## What went wrong last, over the tiles until dismissed or replaced.
+	toast : State(Ctx, Model.State) -> Elem(Ctx)
+	toast = |model|
+		Engine.when(
+			model.signal().map(|state| !state.notice.is_empty()),
+			|| Html.div_attrs([Engine.class("toast"), Engine.attr("role", "status")], [Html.span_s(model.signal().map(|state| state.notice), [Engine.test_id("notice")]), Liton.icon_button(Engine.const("Dismiss"), "icon dismiss", model.update(|state| { ..state, notice: "" }))]),
+			|| Engine.text(""),
 		)
 
 	## A count and what it counts, marked while it isn't 0.
@@ -251,9 +261,21 @@ Liton := [].{
 
 	## Shows or hides a drawer. Its icon is the stylesheet's, as are those of
 	## every button of class `icon`.
-	drawer_toggle : State(Ctx, Model.State), Model.Slot, Str -> Elem(Ctx)
+	drawer_toggle : State(ctx, Model.State), Model.Slot, Str -> Elem(ctx)
 	drawer_toggle = |model, drawer, name|
-		Html.button("", [Engine.class("module icon drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+		Html.button("", [Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+
+	## Where a pane's header is in a Workbench: the main area's shown tab,
+	## with the drawers' buttons at its ends, or the left drawer's, with
+	## Settings and, on a wide screen, CSS moves Settings to its bottom left.
+	header_place : Model.State, Model.Column, Str -> [MainTab, LeftTab, Elsewhere]
+	header_place = |state, column, pane_id|
+		match Model.slot_of(state, column.id) {
+			_ if state.shell != Workbench or column.active != pane_id => Elsewhere
+			Main => MainTab
+			Left => LeftTab
+			_ => Elsewhere
+		}
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
 	## to move, remove or set the options of, adds widgets, and shows the
@@ -502,6 +524,7 @@ Liton := [].{
 		id = row.key()
 		title = row.field(|pane| Widgets.find(pane.widget).title)
 		shown = row.field(|pane| pane).map2(model.signal(), |pane, state| { pane: pane, state: state })
+		place = id.map2(column.lift_row(), |pane_id, group| { pane_id, group }).map2(model.signal(), |{ pane_id, group }, state| Liton.header_place(state, group, pane_id))
 		Engine.element(
 			"section",
 			[
@@ -515,6 +538,7 @@ Liton := [].{
 				Html.div_attrs(
 					[Engine.class("pane-header"), Engine.attr("data-part", "header")],
 					[
+						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Left, "Left drawer"), || Engine.text("")),
 						Engine.when(
 							shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
 							|| Liton.agent_header(shown.map(|{ pane, state }| Liton.agent_of(state, pane))),
@@ -528,12 +552,15 @@ Liton := [].{
 								),
 						),
 						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
+						Html.span_s(shown.map(|{ pane, state }| if ((pane.widget == "workspaces" or pane.widget == "sessions") and Model.needs_you(state) > 0) Model.needs_you(state).to_str() else ""), [Engine.class("needs-you-count"), Engine.attr("title", "Need you"), Engine.test_id("header-needs-you")]),
 						Engine.when(
 							row.field(|pane| pane.widget == "workspaces"),
 							|| Liton.icon_button(Engine.const("New workspace"), "icon new-workspace", model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 							|| Engine.text(""),
 						),
+						Engine.when(place.map(|at| at == LeftTab), || Liton.settings_toggle(model, "icon settings-toggle"), || Engine.text("")),
 						Liton.pane_menu(model, id, title, shown),
+						Engine.when(place.map(|at| at == MainTab), || Liton.drawer_toggle(model, Right, "Right drawer"), || Engine.text("")),
 					],
 				),
 				Engine.switch(

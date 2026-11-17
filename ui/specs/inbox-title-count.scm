@@ -7,6 +7,7 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s3\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"i1\",\"events\":[{\"Items\":[{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s1\",\"set_aside\":\"No\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Fix tests\",\"unread\":false,\"updated\":\"\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s2\",\"set_aside\":\"Settled\",\"signature\":\"NeedsYou 1\",\"state\":\"NeedsYou\",\"summary\":\"\",\"title\":\"Write docs\",\"unread\":false,\"updated\":\"\"},{\"agent\":\"claude\",\"permissions\":[],\"provider\":\"mock\",\"session_id\":\"s3\",\"set_aside\":\"No\",\"signature\":\"Idle 1\",\"state\":\"Idle\",\"summary\":\"\",\"title\":\"Scratch\",\"unread\":false,\"updated\":\"\"}]}]}]}")
     (run-effect 2)
     (expect-document-title "(1) liton")
+    (expect-text (test-id "header-needs-you") "1")
     (click (role button :name "Settings"))
     (click (role button :name "Inbox preset"))
     (expect-document-title "(1) liton")

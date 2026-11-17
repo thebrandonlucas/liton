@@ -13,6 +13,12 @@
     (expect-absent (role button :name "Tabs") :never-drawn)
     (expect-absent (label "Move Chat left") :never-drawn)
     (expect-absent (label "Make column wider") :never-drawn)
+    ; No bar: the drawers' buttons are at the ends of the chat's header,
+    ; and Settings is in the left drawer.
+    (expect-absent (test-id "running") :never-drawn)
+    (expect-visible (role button :name "Left drawer"))
+    (expect-visible (role button :name "Right drawer"))
+    (expect-visible (role button :name "Settings"))
     (click (role button :name "Left drawer"))
     (expect-attr (role button :name "Left drawer") aria-expanded "false")
     (expect-attr (test-id "slot-left") class "column slot slot-left tabbed collapsed")

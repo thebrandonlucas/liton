@@ -64,6 +64,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-settings: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></svg>");
   --icon-ellipsis: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='19' cy='12' r='1'/><circle cx='5' cy='12' r='1'/></svg>");
   --icon-ellipsis-vertical: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='12' cy='19' r='1'/></svg>");
+  --icon-x: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 6 6 18'/><path d='m6 6 12 12'/></svg>");
   --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
@@ -89,7 +90,7 @@ button:active { transform: scale(.97); }
 .pane:focus-visible, .liton:focus-visible, .panel-anchor:focus-visible { outline: none; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--edge); border-radius: var(--small-radius); }
 
-/* The bar: liton, a notice, and status modules on the right. */
+/* Tiling's bar: liton, and status modules on the right. */
 .bar { display: flex; flex: 0 0 2.4rem; align-items: center; gap: .75rem; margin: var(--gap) var(--gap) 0; padding: 0 .4rem;
   border: 1px solid var(--edge); border-radius: var(--radius); background: var(--glass-deep);
   backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
@@ -97,13 +98,11 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .bar button { background: none; border-color: transparent; padding: .35rem .55rem; white-space: nowrap; }
 .bar button:hover { color: var(--text); border-color: var(--edge); }
 .brand { padding: 0 .55rem 0 .35rem; font: italic 500 19px/1 var(--font-display); color: var(--accent); letter-spacing: .01em; }
-.notice { color: var(--fail); font-family: var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modules { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
 .module { padding: .35rem .5rem; border-radius: var(--small-radius); white-space: nowrap; }
 .module .count { display: inline-block; min-width: 1.5em; padding: .15em .35em; border-radius: 999px; text-align: center; }
 .needs-you.counting .count { background: var(--warn); color: var(--on-accent); font-weight: 700; }
 .running.counting .count { color: var(--text); }
-.drawer-toggles { display: flex; gap: .2rem; }
 .bar [aria-expanded="true"] { color: var(--accent); }
 /* An icon button: its icon is --icon, drawn in its text's colour. */
 button.icon { display: inline-grid; place-items: center; }
@@ -113,9 +112,17 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .drawer-right { --icon: var(--icon-panel-right); }
 .settings-toggle { --icon: var(--icon-settings); }
 .menu-toggle { --icon: var(--icon-ellipsis); }
+.dismiss { --icon: var(--icon-x); }
 .new-workspace, .new-agent { --icon: var(--icon-plus); --icon-size: 14px; }
 
 .work { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+
+/* What went wrong last, over the bottom of the tiles until dismissed. */
+.toast { position: absolute; left: 50%; bottom: calc(var(--gap) * 2); z-index: 8; transform: translateX(-50%); max-width: min(560px, calc(100% - 4 * var(--gap)));
+  display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; color: var(--text);
+  background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
+  border: 1px solid var(--fail); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
+.toast .dismiss { flex: none; padding: 3px; border-color: transparent; background: none; color: var(--muted); }
 
 /* Settings: a glass sheet over the tiles, from the right. */
 .settings { position: absolute; top: var(--gap); right: var(--gap); bottom: var(--gap); z-index: 10; width: min(400px, calc(100% - 2 * var(--gap)));
@@ -208,7 +215,12 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .agent-kind:not(:empty) + .agent-place::before { content: "·" / ""; margin-right: 6px; }
 /* The ⋯ menu: what the pane follows, and moving, pinning or closing it. */
 .pane-menu { position: relative; flex: none; align-self: flex-start; }
-.pane-header .menu-toggle, .pane-header .new-workspace { padding: 3px 6px; }
+.pane-header .menu-toggle, .pane-header .new-workspace, .pane-header .drawer-toggle, .pane-header .settings-toggle { flex: none; padding: 3px 6px; }
+/* What needs you, in the Workspaces header; in a Workbench, Settings at the left drawer's bottom left. */
+.needs-you-count { flex: none; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--warn); color: var(--on-accent); font: 700 11px/18px var(--font-ui); text-align: center; }
+.needs-you-count:empty { display: none; }
+.workbench .slot-left .pane { padding-bottom: 36px; }
+.workbench .slot-left .pane-header .settings-toggle { position: absolute; left: 8px; bottom: 6px; }
 .pane-header .menu-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--edge-active); }
 .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 190px; max-width: 280px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
   background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
@@ -558,10 +570,14 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   /* No blur behind the panes, which fill a phone's screen: its GPU would blur
      that much on every frame that scrolls or changes, and lag. */
   .pane { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--sheet); }
-  /* The bar slims to the brand, what needs you and Settings; the presets are in Settings. */
+  /* Tiling's bar slims to the brand, what needs you and Settings; the presets are in Settings.
+     A Workbench has none: Settings is in the left drawer's header, and the tab bar counts what needs you. */
   .bar { flex-basis: 48px; gap: .25rem; padding: 0 2px 0 .4rem; }
   .brand { font-size: 20px; }
-  .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggles { display: none; }
+  .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggle, .needs-you-count { display: none; }
+  .workbench .slot-left .pane { padding-bottom: 0; }
+  .workbench .slot-left .pane-header .settings-toggle { position: static; }
+  .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .bar button { min-width: 44px; min-height: 44px; }
   .bar .icon { --icon-size: 20px; }
   .column-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
