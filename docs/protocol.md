@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `tickets.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -104,9 +104,10 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
 `RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
 `Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
-`Finish` and `Cancel` (Audio, below); `tickets.v1`'s `ListTickets`,
-`GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link` and `Unlink`
-(Tickets, below).
+`Finish` and `Cancel` (Audio, below); `rooms.v1`'s `ListRooms`, `Send`,
+`React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
+`ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
+and `Unlink` (Tickets, below).
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
@@ -232,6 +233,10 @@ events when nothing changed:
 | `files.v1` | `file/<context>/<path>` | snapshot | `{"Contents": {"path", "read"}}` |
 | `voice.v1` | `status` | snapshot | `{"Status": {"stt": "Ready"}}`, or `"Loading"`, or `{"Down": reason}` |
 | `review.v1` | `threads/<context>` | snapshot | `{"Threads": {"round", "next", "threads", "comments"}}` |
+| `rooms.v1` | `rooms` | snapshot | `{"Rooms": [Room]}` |
+| `rooms.v1` | `members/<room_id>` | snapshot | `{"Members": [Member]}` |
+| `rooms.v1` | `messages/<room_id>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the room's top level and its threads' summaries |
+| `rooms.v1` | `thread/<room_id>/<root>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: a thread's replies |
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
@@ -371,6 +376,58 @@ Looks good otherwise.
 A heading says where a diff's lines are, as in `src/Auth.roc:41
 (the uncommitted diff, removed lines)`, and a thread's earlier comments
 are quoted under its lines.
+
+### Rooms
+
+`rooms.v1` is rooms where people and agents talk: channels, forums, direct
+conversations and announcements, from any NIP-29 relay or other source of
+rooms ([research/buzz-provider.md](research/buzz-provider.md)). It names no
+relay and no event kinds; ids are opaque strings, such as a group's UUID, an
+event id and a public key.
+
+```json
+{ "id": "general", "provider": "mock", "name": "general", "kind": "Channel", "topic": "The team",
+  "private": false, "archived": false, "joined": true, "unread": "Unknown", "links": [], "me": "you" }
+{ "id": "scout", "provider": "mock", "name": "Scout", "kind": { "Agent": { "owner": "you" } }, "role": "Member", "presence": "Online" }
+```
+
+A room's `kind` is `Channel`, `Forum`, `Direct` or `Announce`; a forum's
+top-level messages are its posts, each with a thread of replies. `unread` is
+`{"Counted": {"messages", "mentions"}}` or `"Unknown"`, `links` the
+repositories or projects it discusses as clone URLs, and `me` your member id
+there, when the provider knows it. A member is a `Person` or an `Agent`, with
+its `owner` only when its provider verified it; its `role` is `Owner`,
+`Admin`, `Member` or `Guest`, and its `presence` `Online`, `Away`, `Offline`
+or `Unknown`.
+
+A room's `messages/<room_id>` and a thread's `thread/<room_id>/<root>` are
+append-only, each entry a `sequence` and an `event`: `{"Posted": Message}`,
+`{"Edited": {"id", "text"}}`, `{"Deleted": {"id"}}`, `{"Reacted": {"id",
+"emoji", "by", "added"}}`, `{"Threaded": {"root", "replies", "last_reply",
+"participants"}}`, a thread's summary, or `{"Typing": {"member", "place"}}`.
+A message is `{"id", "room_id", "author", "text", "time", "place",
+"mentions", "reactions", "edited", "deleted"}`, its `place` `"TopLevel"` or
+`{"Reply": {"root", "parent"}}`, its reactions `[{"emoji", "by"}]`. A
+room's topic holds its top-level messages, what happens to them, and each
+thread's summary; a thread's, its replies and what happens to them. The
+sequence is the provider's, in the order events arrived, so a client resumes
+after it, and orders messages by their `time`.
+
+```json
+{ "capability": "rooms.v1", "request": { "Send": { "room_id": "general", "text": "@Scout thanks", "place": { "Reply": { "root": "m1", "parent": "m1" } }, "mentions": ["scout"] } } }
+{ "Ok": { "Sent": { "message_id": "m9" } } }
+{ "capability": "rooms.v1", "request": { "React": { "room_id": "general", "message_id": "m1", "emoji": "+" } } }
+{ "Ok": "Accepted" }
+```
+
+`Send` posts a message in a room or replies in a thread, the first reply
+starting it, and answers `Sent` with its id once the provider took it; a
+client shows it sending until its `Posted` arrives. `React` and `Unreact`
+add and take back your reaction, `Join` and `Leave` make you a member of a
+room or no longer one. Each answers `Accepted`, or `Rejected` with why, such
+as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
+The mock provider keeps three rooms, one a forum, where its agents type and
+then answer when a message mentions them.
 
 ### Tickets
 

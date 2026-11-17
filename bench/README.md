@@ -7,7 +7,7 @@ tables).
 
 ```sh
 zig build daemon ui                        # liton as it is now, into zig-out/
-rig/paseo/paseo.sh --version               # once: installs Paseo 0.15.3's npm packages
+zig build devtool -- paseo cli --version   # once: installs Paseo 0.15.3's npm packages
 CHROME=/path/to/chromium node bench/bench.mjs
 ```
 
@@ -43,8 +43,8 @@ nothing listens outside it.
 
 - A throwaway Paseo 0.15.3 daemon from `rig/paseo`'s npm packages, with a
   temporary home, a password, the mock provider (no model or account) and,
-  unlike `rig/paseo/daemon.sh`, its web UI on, as Paseo serves its own web
-  client.
+  unlike `zig build devtool -- paseo daemon`, its web UI on, as Paseo serves
+  its own web client.
 - `--agents` mock agents, each in its own directory (Paseo shows each as a
   workspace): agents 1 to N-1 run one ten-second scripted turn, then agent 0
   one two-second turn, so it was updated last and liton opens on it. Agent k's

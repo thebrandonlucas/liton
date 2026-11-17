@@ -1,0 +1,51 @@
+## The development tool's pure part: what its arguments ask for.
+Cli := [].{
+
+	Command : [Help, Usage(Str), Ui({ roc_ui : Str, runtime_files : List(Str), flags : List(Str) }), Specs({ roc_ui : Str, target : Str }), Paseo([Daemon, Relay, Bridge, Cli(List(Str))]), Speech([Model([Parakeet, Whisper]), Sherpa, Whisper])]
+
+	usage : Str
+	usage =
+		\\Usage: zig build devtool -- <command> [arguments]
+		\\
+		\\Commands:
+		\\  paseo daemon          a throwaway Paseo daemon on 127.0.0.1:16767 (rig/paseo/)
+		\\  paseo cli <args>...   Paseo's CLI against it
+		\\  paseo relay           Paseo's relay, locally in workerd
+		\\  paseo bridge          liton's relay bridge, paired with the daemon through the relay
+		\\  speech model parakeet|whisper
+		\\                        download a speech model into rig/speech/models
+		\\  speech sherpa         sherpa-onnx with Parakeet on port 6006 (rig/speech/)
+		\\  speech whisper        whisper.cpp's whisper-server on 127.0.0.1:8178
+		\\  ui <roc-ui> <runtime.mjs> <environment.mjs> <worker.mjs> [<flag>...]
+		\\                        build the browser UI into zig-out/www (zig build ui)
+		\\  spec <roc-ui> <target>
+		\\                        run the UI's specs natively (zig build spec)
+		\\  help
+		\\
+		\\liton's development tasks, in Roc, run from the repository's root.
+		\\The rigs run in the foreground; rig/paseo/README.md and
+		\\rig/speech/README.md list the settings that override their defaults.
+
+	parse : List(Str) -> Command
+	parse = |arguments|
+		match arguments {
+			[] | ["help"] | ["--help"] | ["-h"] => Help
+			["ui", roc_ui, runtime, environment, worker, .. as flags] => Ui({ roc_ui, runtime_files: [runtime, environment, worker], flags })
+			["spec", roc_ui, target] => Specs({ roc_ui, target })
+			["paseo", "daemon"] => Paseo(Daemon)
+			["paseo", "relay"] => Paseo(Relay)
+			["paseo", "bridge"] => Paseo(Bridge)
+			["paseo", "cli", .. as rest] => Paseo(Cli(rest))
+			["speech", "model", "parakeet"] => Speech(Model(Parakeet))
+			["speech", "model", "whisper"] => Speech(Model(Whisper))
+			["speech", "sherpa"] => Speech(Sherpa)
+			["speech", "whisper"] => Speech(Whisper)
+			[command, ..] => Usage("unknown command or arguments for ${command}")
+		}
+}
+
+expect Cli.parse([]) == Help and Cli.parse(["help"]) == Help
+expect Cli.parse(["deploy"]) == Usage("unknown command or arguments for deploy")
+expect Cli.parse(["paseo", "cli", "daemon", "pair", "--json"]) == Paseo(Cli(["daemon", "pair", "--json"])) and Cli.parse(["paseo", "relay"]) == Paseo(Relay)
+expect Cli.parse(["speech", "model", "parakeet"]) == Speech(Model(Parakeet)) and Cli.parse(["speech", "model"]) == Usage("unknown command or arguments for speech")
+expect Cli.parse(["ui", "roc-ui", "r.mjs", "e.mjs", "w.mjs", "--specialize=no"]) == Ui({ roc_ui: "roc-ui", runtime_files: ["r.mjs", "e.mjs", "w.mjs"], flags: ["--specialize=no"] })

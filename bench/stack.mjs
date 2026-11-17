@@ -1,7 +1,7 @@
 // The processes a benchmark run needs, all on 127.0.0.1 inside the private
 // network namespace bench.mjs opens: a throwaway Paseo 0.15.3 daemon from
-// the rig's npm packages (its web UI on, unlike rig/paseo/daemon.sh), liton's
-// daemon pointed at it, and counting proxies in front of both, so each
+// the rig's npm packages (its web UI on, unlike the devtool's `paseo
+// daemon`), liton's daemon pointed at it, and counting proxies in front of both, so each
 // client's traffic to a daemon is counted on its own.
 import { spawn, execFile } from "node:child_process";
 import fs from "node:fs";
@@ -70,7 +70,7 @@ export async function start_paseo({ repo, scratch, log }) {
     }),
   );
   const bin = path.join(repo, "rig/paseo/node_modules/.bin/paseo");
-  if (!fs.existsSync(bin)) throw new Error("rig/paseo has no npm packages yet: run rig/paseo/paseo.sh --version once");
+  if (!fs.existsSync(bin)) throw new Error("rig/paseo has no npm packages yet: run `zig build devtool -- paseo cli --version` once");
   const child = start(bin, ["daemon", "run", "--home", home], {
     cwd: scratch,
     env: {
