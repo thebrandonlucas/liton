@@ -77,7 +77,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   font: 14px/1.45 var(--font-ui);
   scrollbar-color: var(--edge) transparent;
 }
-@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting, .composer .stopping::before, .tool-card.running .tool-line > span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting, .composer .stopping::before, .tool-card.running .tool-line > span, .fold-line.running { animation: none; } }
 .liton * { scrollbar-width: thin; }
 button { font: inherit; color: inherit; background: var(--field); border: 1px solid var(--edge);
   border-radius: var(--small-radius); padding: 3px 10px; cursor: pointer;
@@ -295,20 +295,23 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .entry.user { background: var(--user); border: 1px solid var(--edge); align-self: flex-end; max-width: 85%; }
 .entry.agent { max-width: 95%; }
 .entry.result { background: var(--tool); }
-.entry.tool { padding: 0 10px; }
+.entry.tool, .entry.fold { padding: 0 10px; }
 .entry.result pre, .tool-card pre { font: 12px var(--font-mono); }
-/* A tool call: one muted line behind a chevron, opening on its input and output. */
-.tool-line { display: flex; gap: 6px; align-items: center; min-width: 0; cursor: pointer; list-style: none; font-size: 13px; color: var(--muted); }
+/* A tool call, or a fold of several: one muted line behind a chevron, opening on its input and output, or on the entries under it. */
+.tool-line, .fold-line { display: flex; gap: 6px; align-items: center; min-width: 0; cursor: pointer; list-style: none; font-size: 13px; color: var(--muted); }
+.fold-line { width: 100%; padding: 0; text-align: left; background: none; border: 0; }
+.fold-line:active { transform: none; }
 .tool-line::-webkit-details-marker { display: none; }
-.tool-line::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform var(--fast) ease; }
-.tool-card[open] > .tool-line::before { transform: rotate(90deg); }
-.tool-line:hover { color: var(--text); }
+.tool-line::before, .fold-line::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform var(--fast) ease; }
+.tool-card[open] > .tool-line::before, .fold-line[aria-expanded="true"]::before { transform: rotate(90deg); }
+.tool-line:hover, .fold-line:hover { color: var(--text); }
 .tool-name { flex: none; font-weight: 600; }
 .tool-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
 .tool-card[open] .tool-target { white-space: pre-wrap; word-break: break-word; }
 .tool-state { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.tool-card.running .tool-line > span { background: linear-gradient(90deg, var(--muted) 35%, var(--text) 50%, var(--muted) 65%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer calc(var(--motion) * 1600ms + 1ms) linear infinite; }
-.tool-card.failed > .tool-line { color: var(--fail); }
+.tool-card.running .tool-line > span, .fold-line.running { background: linear-gradient(90deg, var(--muted) 35%, var(--text) 50%, var(--muted) 65%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer calc(var(--motion) * 1600ms + 1ms) linear infinite; }
+.fold-line.running::before { background: var(--muted); }
+.tool-card.failed > .tool-line, .fold-line.failed { color: var(--fail); }
 .tool-card > pre { margin: 4px 0 0 18px; }
 .tool-card pre:empty { display: none; }
 .tool-input { color: var(--text); }

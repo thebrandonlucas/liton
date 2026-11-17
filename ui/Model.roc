@@ -159,6 +159,9 @@ Model := [].{
 		## for the panes shown more than `Model.window` (`Model.show_earlier`).
 		windows : List({ pane : Str, session_id : Str, count : U64 }),
 
+		## The folds each chat pane has opened, by their keys (`Model.Fold`).
+		opened_folds : List({ pane : Str, key : Str }),
+
 		## What voice in the composers is doing (ui/Microphone.roc).
 		voice : Speech.State,
 
@@ -275,6 +278,7 @@ Model := [].{
 				clipboard: { serial: 0, key: "", text: "" },
 				jumps: [],
 				windows: [],
+				opened_folds: [],
 				voice: Speech.initial,
 				form: Model.closed_form,
 				creating: [],
@@ -676,7 +680,12 @@ Model := [].{
 	## past its first 4 lines is `folded`.
 	ToolCard : { tool : Str, input : Str, state : [Running, Done, Failed], output : Str, folded : Str }
 
-	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]) }
+	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]), fold : Try(Fold, [NotFold]) }
+
+	## One line standing for entries folded under it, which opening it shows
+	## after it: what they did, and whether a tool call among them runs or
+	## failed. Its key names its session and its first entry.
+	Fold : { key : Str, summary : Str, state : [Running, Done, Failed], open : Bool }
 
 	## A timeline as a chat pane shows it: each tool call as a card holding its
 	## result, which shows no entry of its own.
@@ -698,9 +707,9 @@ Model := [].{
 							Ok(result) => (if (result.failed) Failed else Done, result.output.split_on("\n"))
 							Err(NotFound) => (Running, [])
 						}
-						Ok({ sequence, event, card: Ok({ tool, input, state, output: Str.join_with(lines.take_first(4), "\n"), folded: Str.join_with(lines.drop_first(4), "\n") }) })
+						Ok({ sequence, event, card: Ok({ tool, input, state, output: Str.join_with(lines.take_first(4), "\n"), folded: Str.join_with(lines.drop_first(4), "\n") }), fold: Err(NotFold) })
 					}
-					_ => Ok({ sequence, event, card: Err(NotTool) })
+					_ => Ok({ sequence, event, card: Err(NotTool), fold: Err(NotFold) })
 				},
 		)
 	}
@@ -721,11 +730,41 @@ Model := [].{
 				"Hidden" => { ..tool, output: "", folded: "" }
 				_ => tool
 			}
-		timeline = Model.entries(state, Model.session_of(state, shown))
+		session_id = Model.session_of(state, shown)
+		timeline = Model.entries(state, session_id)
 		count = Model.window_of(state, shown)
-		Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
+		opened = state.opened_folds.keep_if(|fold| fold.pane == shown.id).map(|fold| fold.key)
+		listed = Model.with_tool_cards(if (timeline.len() > count) timeline.drop_first(timeline.len() - count) else timeline)
 			.drop_if(|entry| Model.option(shown, "show_status") == "false" and status(entry))
 			.map(|entry| { ..entry, card: entry.card.map_ok(card) })
+		Model.tools_folded(listed, session_id, opened)
+	}
+
+	## Runs of two or more tool calls, each under one fold, shown only once
+	## it is `opened`.
+	tools_folded : List(Shown), Str, List(Str) -> List(Shown)
+	tools_folded = |listed, session_id, opened| {
+		under_fold = |rows, run|
+			match run {
+				[first, _, ..] => {
+					cards = run.keep_oks(|entry| entry.card)
+					key = "${session_id}/tools/${first.sequence.to_str()}"
+					names = cards.map(|tool| tool.tool).fold([], |found, name| if (found.contains(name)) found else found.append(name))
+					state = if (cards.any(|tool| tool.state == Running)) Running else if (cards.any(|tool| tool.state == Failed)) Failed else Done
+					fold = { key, summary: "${run.len().to_str()} tool calls: ${Str.join_with(names, ", ")}", state, open: opened.contains(key) }
+					rows.append({ ..first, card: Err(NotTool), fold: Ok(fold) }).concat(if (fold.open) run else [])
+				}
+				_ => rows.concat(run)
+			}
+		walked = listed.fold({ rows: [], run: [] }, |so_far, entry| if (entry.card.is_ok()) { ..so_far, run: so_far.run.append(entry) } else { rows: under_fold(so_far.rows, so_far.run).append(entry), run: [] })
+		under_fold(walked.rows, walked.run)
+	}
+
+	## Opens a chat pane's fold, or closes it again.
+	toggle_fold : State, { pane_id : Str, key : Str } -> State
+	toggle_fold = |state, { pane_id, key }| {
+		opened = { pane: pane_id, key }
+		{ ..state, opened_folds: if (state.opened_folds.contains(opened)) state.opened_folds.drop_if(|fold| fold == opened) else state.opened_folds.append(opened) }
 	}
 
 	last_sequence : State, Str -> U64

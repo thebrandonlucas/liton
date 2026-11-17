@@ -952,16 +952,17 @@ Liton := [].{
 							[
 								Engine.each(
 									shown.map(|{ pane, state }| Model.chat_entries(state, pane)),
-									|entry| entry.sequence.to_str(),
+									|entry| entry.fold.map_ok(|fold| fold.key) ?? entry.sequence.to_str(),
 									|row|
 										Html.li(
-											[Engine.class_s(row.field(|entry| Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
+											[Engine.class_s(row.field(|entry| if (entry.fold.is_ok()) "entry fold" else Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
 											[
 												Engine.switch(
-													row.field(|entry| if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
-													[Card, Message, Plain],
+													row.field(|entry| if (entry.fold.is_ok()) Fold else if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
+													[Fold, Card, Message, Plain],
 													|kind|
 														match kind {
+															Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
 															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }))
 															Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
 															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
@@ -1508,14 +1509,7 @@ Liton := [].{
 	## red once failed; the state's word is for screen readers.
 	tool_card : Signal(ctx, Model.ToolCard) -> Elem(ctx)
 	tool_card = |card| {
-		state = card.map(
-			|shown|
-				match shown.state {
-					Running => "running"
-					Done => "done"
-					Failed => "failed"
-				},
-		)
+		state = card.map(|shown| Liton.tool_state(shown.state))
 		input = card.map(|shown| shown.input.split_first("\n") ?? { before: shown.input, after: "" })
 		Engine.element(
 			"details",
@@ -1548,6 +1542,28 @@ Liton := [].{
 			],
 		)
 	}
+
+	## A fold's line, which opens it or closes it again. Like a tool call's,
+	## it shimmers while one under it runs and is red if one failed.
+	fold_line : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, Model.Fold) -> Elem(ctx)
+	fold_line = |model, id, fold|
+		Html.button_s(
+			fold.map(|shown| shown.summary),
+			[
+				Engine.attr("type", "button"),
+				Engine.class_s(fold.map(|shown| "fold-line ${Liton.tool_state(shown.state)}")),
+				Html.flag("aria-expanded", fold.map(|shown| shown.open)),
+			],
+			model.update_by(fold.map2(id, |shown, pane_id| { pane_id, key: shown.key }), Model.toggle_fold),
+		)
+
+	tool_state : [Running, Done, Failed] -> Str
+	tool_state = |state|
+		match state {
+			Running => "running"
+			Done => "done"
+			Failed => "failed"
+		}
 
 	## A message's text, which shows as Markdown.
 	message : Chat.Event -> Try(Str, [NotMessage])

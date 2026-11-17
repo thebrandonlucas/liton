@@ -85,6 +85,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings, the drawer buttons, a pane's menu and + are icons rather than words and glyphs, with the same names for screen readers, which a pointer resting on a pane's menu or + also shows.
 - Send and Stop are one round button at the end of the message box: an arrow that sends, which turns into a red Stop while the agent works and nothing is typed, and a turning ring once pressed until the agent stops. Stop is no longer in a chat's header.
 - A tool call is one muted line, its tool and what it ran, that opens on its input and output. It shimmers while it runs and turns red if it failed.
+- Tool calls one after another fold into one line, how many and which tools, that opens on them.
 
 ### Fixed
 
