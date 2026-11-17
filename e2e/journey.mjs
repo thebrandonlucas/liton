@@ -130,7 +130,7 @@ try {
   await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
     await click("Workspaces", ".tree-session button", "Fix the login redirect");
     await see("Changes", ".git-status", "fix-auth");
-    await click("Changes", ".git-file button", "src/Auth.roc");
+    await click("Changes", '.git-file button[aria-label="src/Auth.roc"]', "Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
     await see("Changes", ".code-row .added", "redirect_to = request.came_from");
     await see("Chat", ".markdown .code", "/login");

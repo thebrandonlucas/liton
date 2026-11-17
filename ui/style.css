@@ -487,6 +487,15 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-file:has([aria-pressed="true"]) { background: var(--selected); }
 .git-file .lines { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
+/* Changes' tree: folders fold, and a file's square says how it changed, its word left to screen readers. */
+.git-tree .git-file { padding-left: calc(4px + var(--depth, 0) * 12px); }
+.git-tree .change { flex: none; order: -1; width: 8px; height: 8px; border-radius: 2px; font-size: 0; background: var(--warn); }
+.git-tree .change.added { background: var(--added); }
+.git-tree .change.deleted { background: var(--removed); }
+.git-tree .git-folder .change { display: none; }
+.git-tree .git-folder button { font-family: var(--font-ui); color: var(--muted); }
+.git-tree .git-folder button::before { content: "▾ " / ""; }
+.git-tree .git-folder.folded button::before { content: "▸ " / ""; }
 .file-diff { font: 12px var(--font-mono); tab-size: 2; border: 1px solid var(--edge); border-radius: var(--small-radius); overflow-x: auto; }
 .git-commits summary { cursor: pointer; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .commits { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }

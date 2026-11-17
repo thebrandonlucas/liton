@@ -1273,26 +1273,7 @@ Liton := [].{
 										),
 										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
 										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
-										Html.ul(
-											[Engine.class("git-files"), Engine.attr("data-part", "files")],
-											[
-												Engine.each(
-													files.map(
-														|listed|
-															match listed {
-																Files(shown_files) => shown_files
-																Loading => []
-															},
-													),
-													|file| file.path,
-													|row| {
-														asked = row.key().map2(id.lift_row(), |path, pane_id| { path, pane_id })
-														picked = asked.map2(model.signal().lift_row(), |{ path, pane_id }, state| Model.git_pane(state, pane_id).file == Selected(path))
-														Liton.git_file(row.field(|file| file), picked, model.lift_row().update_by(asked, |state, { path, pane_id }| Model.show_git(state, pane_id, Model.git_pane(state, pane_id).scope, Selected(path))))
-													},
-												),
-											],
-										),
+										Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(shown.map(|{ pane: pane_shown, state }| Model.changed_tree(state, pane_shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.changed_row(model, id, row))]),
 										Engine.switch(
 											hunks.map(
 												|asked|
@@ -1516,6 +1497,33 @@ Liton := [].{
 				Html.span_s(file.map(Liton.file_lines), [Engine.class("lines")]),
 			],
 		)
+
+	## A row of a Changes pane's tree, indented by its depth: a folder, which
+	## folds, or a file, which shows its diff; its name, named by its path to
+	## a screen reader, how it changed as a coloured square, and by how many
+	## lines. Top-level for the reason `scope_picker` is.
+	changed_row : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.ChangedRow) -> Elem(Row(PaneCtx, Model.ChangedRow))
+	changed_row = |model, id, row| {
+		shown = row.field(|changed| changed)
+		asked = shown.map2(id.lift_row(), |changed, pane_id| { pane_id, path: changed.path, folder: changed.folder })
+		picked = asked.map2(model.signal().lift_row(), |{ pane_id, path, folder }, state| !folder and Model.git_pane(state, pane_id).file == Selected(path))
+		Html.li(
+			[Engine.class_s(shown.map(|changed| if (!changed.folder) "git-file" else if (changed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|changed| "--depth: ${changed.depth.to_str()}"))],
+			[
+				Html.button_s(
+					shown.map(|changed| changed.path.split_last("/").map_ok(|parts| parts.after) ?? changed.path),
+					[
+						Html.aria_label_s(shown.map(|changed| if (changed.folder) changed.path else Liton.file_label(changed.file))),
+						Engine.attr_presence("aria-pressed", shown.map2(picked, |changed, is_picked| if (changed.folder) Absent else Present(if (is_picked) "true" else "false"))),
+						Engine.attr_presence("aria-expanded", shown.map(|changed| if (changed.folder) Present(if (changed.folded) "false" else "true") else Absent)),
+					],
+					model.lift_row().update_by(asked, Model.pick_changed),
+				),
+				Html.span_s(shown.map(|changed| if (changed.folder) "" else Liton.change_text(changed.file.change)), [Engine.class_s(shown.map(|changed| "change ${Liton.change_text(changed.file.change)}"))]),
+				Html.span_s(shown.map(|changed| Liton.file_lines(changed.file)), [Engine.class("lines")]),
+			],
+		)
+	}
 
 	## A file's diff in the code view, in one column or old beside new, under
 	## its path, which Open in Files shows in the Files pane.

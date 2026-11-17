@@ -227,7 +227,11 @@ Model := [].{
 
 	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
-	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile] }
+	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str) }
+
+	## A row of a Changes pane's tree: a changed file, or a folder of them
+	## with the lines they add and remove as its `file`'s.
+	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -1510,9 +1514,10 @@ Model := [].{
 			Err(NotFound) => Bool.False
 		}
 
-	## A Changes pane shows uncommitted changes and no file until picked.
+	## A Changes pane shows uncommitted changes, every folder open, and no
+	## file until picked.
 	git_pane : State, Str -> GitPane
-	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile }
+	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [] }
 
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
@@ -1521,6 +1526,22 @@ Model := [].{
 	## sends at once brings what the UI doesn't have yet.
 	show_git : State, Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> State
 	show_git = |state, pane_id, scope, file| Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), scope, file })
+
+	## Shows a file of a Changes pane's tree, or folds or unfolds a folder, at
+	## once.
+	pick_changed : State, { pane_id : Str, path : Str, folder : Bool } -> State
+	pick_changed = |state, { pane_id, path, folder }| {
+		shown = Model.git_pane(state, pane_id)
+		if (folder) Model.set_git_pane(state, { ..shown, folded: if (shown.folded.contains(path)) shown.folded.drop_if(|folded| folded == path) else shown.folded.append(path) }) else Model.show_git(state, pane_id, shown.scope, Selected(path))
+	}
+
+	## The files of the scope a Changes pane shows, as its tree's rows.
+	changed_tree : State, Pane -> List(ChangedRow)
+	changed_tree = |state, shown|
+		match Model.git_files(state, shown) {
+			Files(files) => changed_rows(files, Model.git_pane(state, shown.id).folded, "", 0)
+			Loading => []
+		}
 
 	git_changes_of : State, Context.Id, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
 	git_changes_of = |state, context, scope| state.git_changes.find_first(|known| known.context == context and known.changes.scope == scope).map_ok(|known| known.changes)
@@ -2458,6 +2479,25 @@ folder_rows = |state, context, shown, folder, depth| {
 			}
 		},
 	)
+}
+
+## The rows of the changed `files` in `folder`, `depth` folders deep: its
+## folders first, each over its own rows unless folded, then its files.
+changed_rows : List(WorkspaceGit.File), List(Str), Str, U64 -> List(Model.ChangedRow)
+changed_rows = |files, folded, folder, depth| {
+	inside = files.keep_if(|file| folder.is_empty() or file.path.starts_with("${folder}/"))
+	rest = |file| if (folder.is_empty()) file.path else file.path.drop_prefix("${folder}/")
+	child = |name| if (folder.is_empty()) name else "${folder}/${name}"
+	names = inside.keep_oks(|file| rest(file).split_first("/").map_ok(|parts| parts.before)).fold([], |found, name| if (found.contains(name)) found else found.append(name))
+	folders = names.join_map(
+		|name| {
+			path = child(name)
+			under = files.keep_if(|file| file.path.starts_with("${path}/"))
+			row = { path, folder: Bool.True, folded: folded.contains(path), depth, file: { path, change: Modified, additions: under.fold(0, |sum, file| file.additions + sum), deletions: under.fold(0, |sum, file| file.deletions + sum), body: Text } }
+			if (row.folded) [row] else changed_rows(files, folded, path, depth + 1).prepend(row)
+		},
+	)
+	folders.concat(inside.keep_if(|file| rest(file).split_first("/").is_err()).map(|file| { path: file.path, folder: Bool.False, folded: Bool.False, depth, file }))
 }
 
 ## A size in bytes, as "4 KB" or "1.2 MB".
