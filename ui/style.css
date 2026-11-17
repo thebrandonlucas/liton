@@ -87,7 +87,7 @@ button { font: inherit; color: inherit; background: var(--field); border: 1px so
 button:hover { border-color: var(--edge-active); }
 button:active { transform: scale(.97); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.pane:focus-visible, .liton:focus-visible, .panel-anchor:focus-visible { outline: none; }
+.pane:focus-visible, .panel-anchor:focus-visible { outline: none; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--edge); border-radius: var(--small-radius); }
 
 /* Tiling's bar: liton, and status modules on the right. */

@@ -45,8 +45,8 @@ Liton := [].{
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
-	## stylesheet alone uses. Keys pressed inside the root, outside a text
-	## field, reach `Model.pressed`.
+	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`), anywhere,
+	## and other keys outside a text field reach `Model.pressed`.
 	page : State(Ctx, Model.State) -> Elem(Ctx)
 	page = |model|
 		Engine.element(
@@ -54,9 +54,7 @@ Liton := [].{
 			[
 				Engine.class("liton"),
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
-				Engine.attr("tabindex", "-1"),
-				Engine.ref("app"),
-				Engine.on_key({ keymap: Engine.const(Engine.Keymap.every.outside_text()) }, model.set_value(|state, key| Model.pressed(state, key.key))),
+				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord)).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value(|state, key| Model.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord == key.heard).map_ok(|(_, name)| name) ?? key.key))),
 			],
 			[
 				# A Workbench has no bar: its drawers' buttons are in the main
@@ -176,8 +174,7 @@ Liton := [].{
 			|outbox| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout: Ms(60000) })],
 			model.on_result(|state, outbox, res| if (outbox.key == "review.v1") Model.reviewed(state, outbox.serial, res ?? "") else Model.created(state, outbox.serial, res ?? "")),
 		),
-		# Keys reach the root only from inside it.
-		Engine.watch(Engine.const({}), |_| [Engine.command(Focus("app"))], Engine.ignore({})),
+
 		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, command)| Engine.command(command)), Engine.ignore({})),
 		# The browser's back and forward show the panel the URL names.
 		Engine.watch(
@@ -212,6 +209,12 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
+	## The chords heard in a text field too, by the names `Model.pressed`
+	## takes: Ctrl+B and Ctrl+E show or hide the drawers, as in Paseo, and
+	## Ctrl+, Settings.
+	shortcuts : List((Engine.Chord, Str))
+	shortcuts = [(Engine.Chord.plain("b").with_ctrl(), "Ctrl+B"), (Engine.Chord.plain("e").with_ctrl(), "Ctrl+E"), (Engine.Chord.plain(",").with_ctrl(), "Ctrl+,")]
+
 	## A call, its JSON `body` naming the capability and holding the request.
 	call : Str -> Engine.Ask(Str, Engine.HttpError)
 	call = |body| Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout: Ms(5000) })
@@ -239,7 +242,7 @@ Liton := [].{
 
 	## Opens or closes Settings.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Esc closes)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
 
 	## What went wrong last, over the tiles until dismissed or replaced.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
@@ -263,7 +266,7 @@ Liton := [].{
 	## every button of class `icon`.
 	drawer_toggle : State(ctx, Model.State), Model.Slot, Str -> Elem(ctx)
 	drawer_toggle = |model, drawer, name|
-		Html.button("", [Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", name), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
+		Html.button("", [Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"), Html.aria_label(name), Engine.attr("title", "${name} (${if (drawer == Left) "Ctrl+B" else "Ctrl+E"})"), Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer)))], model.update(|state| Model.toggle_drawer(state, drawer)))
 
 	## Where a pane's header is in a Workbench: the main area's shown tab,
 	## with the drawers' buttons at its ends, or the left drawer's, with
@@ -306,7 +309,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box.", "help"),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box. Ctrl+B and Ctrl+E show or hide the drawers, Ctrl+, opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

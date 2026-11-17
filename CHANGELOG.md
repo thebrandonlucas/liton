@@ -58,6 +58,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Unread, as in email: a session that finished, failed or asks for you since you last looked has a dot and a bolder title in the Inbox, and a ring round its dot in Workspaces and Sessions. Opening it, or having it in a chat on screen, reads it; Mark read, Mark unread and Mark all read in the Inbox do it by hand. Each shows at once.
 - The Chat preset, in Settings: your sessions, the latest first, beside one large chat, with the right drawer hidden.
 - Each project, workspace and session in Workspaces and Sessions has a ⋮ menu, which a right-click opens too: a new workspace of a project, a new agent in a workspace or beside a session, and for a session, Stop agent while it works, Mark read or unread, and Copy id.
+- Keys, as in Paseo, which work in the message box too: Ctrl+B and Ctrl+E show or hide the left and right drawers, Ctrl+, opens or closes Settings, and Escape stops the agent of the chat you are in, once there is no menu, Settings or new agent or workspace form left for it to close first. The drawer buttons and Settings name their keys when you hover them.
 
 ### Changed
 
