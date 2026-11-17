@@ -13,6 +13,6 @@
     (expect-visible (text "Google US English (online)"))
     (select-option (label "Speaking voice") "Samantha")
     (select-option (label "Speaking rate") "1.25")
-    (expect-port-sent "liton/voice/order" 3 "{\"picked\":{\"Picked\":{\"rate\":\"1.25\",\"voice\":\"Samantha\"}},\"replies\":[],\"session\":\"\",\"stop\":\"0\"}")
+    (expect-port-sent "liton/voice/order" 3 "{\"hush\":\"0\",\"picked\":{\"Picked\":{\"rate\":\"1.25\",\"voice\":\"Samantha\"}},\"replies\":[],\"session\":\"\",\"stop\":\"0\"}")
   )
 )

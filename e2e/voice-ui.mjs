@@ -6,7 +6,9 @@
 // stops it, and the transcript lands in the composer beside what was typed;
 // then Send while dictating stops it and sends what was typed with the
 // transcript after it, in one go. Without one, the mic says the engine is
-// down, and the dictation is skipped.
+// down, and the dictation is skipped. Either way, the capture's worklet, fed
+// a tone, hears nothing in a conversation while a reply is spoken and for
+// 400 ms after.
 // CDP is roc-signals's DevTools client, which `zig build e2e` passes; CHROME
 // names the browser (default `chromium` on PATH).
 import { spawn } from "node:child_process";
@@ -15,6 +17,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import vm from "node:vm";
 
 const { launch } = await import(pathToFileURL(process.argv[2]).href);
 
@@ -69,6 +72,29 @@ try {
   await until("the manifest", async () => (await fetch(`${base}/liton/v1/manifest`)).ok);
   const status = async () => (await (await fetch(`${base}/liton/v1/poll`, { method: "POST", body: JSON.stringify({ topics: [{ capability: "voice.v1", topic: "status", after: "" }] }) })).json()).topics[0].events[0].Status.stt;
   const up = (await status()) === "Ready";
+
+  await step("a conversation stops listening while a reply is spoken, and listens again 400 ms after it", async () => {
+    const posted = [];
+    const scope = { sampleRate: 16000, currentTime: 0, AudioWorkletProcessor: class { port = { postMessage: (data) => posted.push(data) }; } };
+    scope.registerProcessor = (name, Capture) => (scope.capture = new Capture({ processorOptions: { continuous: true } }));
+    vm.runInNewContext(fs.readFileSync(path.join(repo, "ui/voice-worklet.js"), "utf8"), scope);
+    const play = (seconds, amplitude) => {
+      for (let block = 0; block < (seconds * 16000) / 128; block++) {
+        scope.capture.process([[Float32Array.from({ length: 128 }, (_, i) => amplitude * Math.sin(((block * 128 + i) * 2 * Math.PI) / 40))]]);
+        scope.currentTime += 128 / 16000;
+      }
+    };
+    const begun = () => posted.some((data) => data.begin);
+    const speaking = (now) => scope.capture.port.onmessage({ data: { speaking: now } });
+    play(1, 0.001);
+    speaking(true);
+    play(1, 0.3);
+    speaking(false);
+    play(0.3, 0.3);
+    if (begun()) throw new Error("it heard the reply");
+    play(0.3, 0.3);
+    if (!begun()) throw new Error("it didn't listen again");
+  });
 
   const browser = await launch({ executablePath: chrome });
   const page = await browser.newPage();

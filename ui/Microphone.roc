@@ -1,7 +1,8 @@
 ## Voice in a chat pane's composer (docs/research/voice.md): a mic button
 ## that dictates into the draft, tapped to start and stop or held to talk,
 ## and a conversation toggle that sends each utterance and speaks the
-## agent's replies, which talking over stops. Each shows its state at once,
+## agent's replies, not listening while it does (or it would hear the
+## speakers), a tap on the mic stopping one. Each shows its state at once,
 ## before the page or the daemon answers.
 import pf.Engine exposing [Elem, Signal, State]
 import pf.Html
@@ -33,10 +34,8 @@ Microphone := [].{
 		}
 		unavailable = |reason| { ..base, disabled: Bool.True, class: "mic unavailable", title: "Voice is unavailable: ${reason}", talk_disabled: Bool.True }
 		match (voice.engine, voice.phase) {
-			(_, Listening) if mine and voice.mode == Conversation => {
-				status = if (voice.speaking) "Speaking" else if (voice.transcribing > 0) "Transcribing…" else "Listening"
-				{ ..base, class: if (voice.speaking) "mic conversation speaking" else "mic conversation", label: "End the conversation", title: "End the conversation", status, level: voice.level, talking: Bool.True }
-			}
+			(_, Listening) if mine and voice.mode == Conversation and voice.speaking => { ..base, class: "mic conversation speaking", label: "Stop speaking", title: "Stop speaking, and listen", status: "Speaking", talking: Bool.True }
+			(_, Listening) if mine and voice.mode == Conversation => { ..base, class: "mic conversation", label: "End the conversation", title: "End the conversation", status: if (voice.transcribing > 0) "Transcribing…" else "Listening", level: voice.level, talking: Bool.True }
 			(_, Listening) if mine => { ..base, class: "mic listening", label: "Stop dictating", title: "Stop dictating", status: "Listening", level: voice.level }
 			(_, Transcribing) if mine => { ..base, disabled: Bool.True, class: "mic transcribing", label: "Transcribing", title: "Transcribing what you said", status: "Transcribing…" }
 			(_, Failed(reason)) if mine and reason == "Denied" => { ..base, class: "mic denied", title: "The browser blocked the microphone: allow it in this site's settings, then tap to try again", status: "Microphone blocked" }
@@ -77,12 +76,15 @@ Microphone := [].{
 	}
 
 	## A click of the mic: starts dictating, or stops what it does, unless it
-	## ends a press that started it.
+	## ends a press that started it. While a reply is spoken it stops only
+	## the speaking, to listen again; the agent works on, its Stop apart.
 	tap : Model.State, Str -> Model.State
 	tap = |state, pane_id| {
 		voice = state.voice
 		if (voice.swallow_click)
 			{ ..state, voice: { ..voice, swallow_click: Bool.False } }
+		else if (voice.pane == pane_id and voice.mode == Conversation and voice.phase == Listening and voice.speaking)
+			{ ..state, voice: { ..voice, speaking: Bool.False, hush: voice.hush + 1 } }
 		else if (voice.pane == pane_id and voice.phase == Listening)
 			Microphone.stop(state)
 		else
@@ -141,9 +143,8 @@ Microphone := [].{
 
 	## Takes what the page heard. A transcript dictated goes into the draft
 	## where the selection was, for editing, or, if Send stopped it, after
-	## what was typed, sent with it; one said in a conversation is sent.
-	## Talking over a reply stops the agent too. A microphone the browser
-	## refused, or that stopped, fails the recording.
+	## what was typed, sent with it; one said in a conversation is sent. A
+	## microphone the browser refused, or that stopped, fails the recording.
 	heard : Model.State, Try(Speech.Heard, _) -> Model.State
 	heard = |state, message| {
 		voice = state.voice
@@ -172,8 +173,6 @@ Microphone := [].{
 			Ok(NotTranscribed(reason)) if voice.mode == Dictation => changed_to({ ..done, phase: Failed(reason) })
 			Ok(NotTranscribed(reason)) => { ..changed_to(done), notice: "Not transcribed: ${reason}" }
 			Ok(Speaking(speaking)) => changed_to({ ..voice, speaking })
-			Ok(BargedIn) if Model.busy(Model.session(state, voice.session).status) => Model.stop(changed_to({ ..voice, speaking: Bool.False }), voice.pane)
-			Ok(BargedIn) => changed_to({ ..voice, speaking: Bool.False })
 			Err(Threw(reason)) => changed_to({ ..voice, phase: Failed(reason), held: Up, swallow_click: Bool.False, speaking: Bool.False })
 			Err(Closed) if voice.phase == Listening => changed_to({ ..voice, phase: Failed("the microphone stopped"), held: Up, speaking: Bool.False })
 			Err(_) => state
@@ -181,7 +180,7 @@ Microphone := [].{
 	}
 
 	## What the page is to do: end a dictation, speak a conversation's
-	## replies, and keep the voice and rate picked.
+	## replies or stop when tapped to, and keep the voice and rate picked.
 	order : Model.State -> Speech.Order
 	order = |state| {
 		voice = state.voice
@@ -196,7 +195,7 @@ Microphone := [].{
 							_ => Err(NotReply)
 						},
 				)
-		{ stop: voice.stopping, session: voice.session, replies, picked: voice.picked }
+		{ stop: voice.stopping, hush: voice.hush, session: voice.session, replies, picked: voice.picked }
 	}
 
 	## The voice picked and the voices settings offer: the first on the

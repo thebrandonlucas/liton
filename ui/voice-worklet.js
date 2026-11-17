@@ -3,11 +3,11 @@
 // each 100 ms, in dBFS from -60 to -10 as 0 to 100, and finds speech with an
 // energy VAD on 20 ms frames, against a noise floor that follows the
 // quietest frames and rises slowly. Speech starts 12 dB over the floor for
-// 60 ms, or, while a reply is spoken, 20 dB over it for 300 ms, which barges
-// in; it ends after 700 ms under it. A conversation records only from 300 ms
-// before speech starts to its end, each an utterance of its own; dictation
-// records until flushed.
-const rate = 16000, frame = 320, preroll = 4800;
+// 60 ms and ends after 700 ms under it. A conversation records only from
+// 300 ms before speech starts to its end, each an utterance of its own, and
+// not at all while a reply is spoken and for 400 ms after, as the microphone
+// would hear the speakers; dictation records until flushed.
+const rate = 16000, frame = 320, preroll = 4800, tail = 0.4;
 
 class Capture extends AudioWorkletProcessor {
   constructor({ processorOptions }) {
@@ -30,11 +30,11 @@ class Capture extends AudioWorkletProcessor {
     this.loud = 0;
     this.quiet = 0;
     this.speech = false;
-    this.speaking = false;
+    this.paused = 0; // the time to listen again from, while a reply is spoken
     this.recording = !this.continuous;
     this.port.onmessage = ({ data }) => {
       if (data === "flush") this.end();
-      else this.speaking = data.speaking;
+      else if (this.continuous) this.pause(data.speaking);
     };
   }
 
@@ -51,6 +51,7 @@ class Capture extends AudioWorkletProcessor {
   }
 
   sample(value) {
+    if (currentTime < this.paused) return;
     const pcm = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
     if (this.recording) this.keep(pcm);
     else {
@@ -66,10 +67,9 @@ class Capture extends AudioWorkletProcessor {
     this.energy = this.counted = 0;
     if (++this.frames % 5 === 0) this.port.postMessage({ level: Math.round(Math.max(0, Math.min(100, ((db + 60) / 50) * 100))) });
     this.floor = db < this.floor ? db : this.floor + 0.02;
-    const over = this.speaking ? 20 : 12;
-    if (db > this.floor + over && db > -55) {
+    if (db > this.floor + 12 && db > -55) {
       this.quiet = 0;
-      if (!this.speech && ++this.loud >= (this.speaking ? 15 : 3)) this.started();
+      if (!this.speech && ++this.loud >= 3) this.started();
     } else {
       this.loud = 0;
       if (this.speech && ++this.quiet >= 35) {
@@ -79,9 +79,23 @@ class Capture extends AudioWorkletProcessor {
     }
   }
 
+  // Stops listening as a reply starts being spoken, ending the utterance
+  // there, and listens again, afresh, `tail` after it stops.
+  pause(speaking) {
+    if (!speaking) {
+      if (this.paused === Infinity) this.paused = currentTime + tail;
+      return;
+    }
+    this.paused = Infinity;
+    this.end();
+    this.speech = false;
+    this.loud = this.quiet = this.energy = this.counted = 0;
+    this.ring.fill(0);
+    this.port.postMessage({ level: 0 });
+  }
+
   started() {
     this.speech = true;
-    if (this.speaking) this.port.postMessage({ barge: true });
     if (this.recording) return;
     this.recording = true;
     this.port.postMessage({ begin: true });

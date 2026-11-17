@@ -1,4 +1,4 @@
-(test "Liton — a conversation listens at once, sends each utterance as a message, speaks the agent's reply, and talking over it stops the agent"
+(test "Liton — a conversation listens at once, sends each utterance as a message, speaks the agent's reply without listening meanwhile, and a tap on the mic stops the speaking, not the agent"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"voice\",\"version\":1}],\"id\":\"local-speech\",\"name\":\"Local speech\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -24,16 +24,24 @@
     (run-effect 4)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Scratch\"}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"3\",\"events\":[{\"Entry\":{\"event\":{\"UserMessage\":{\"text\":\"Run the tests.\"}},\"sequence\":2}},{\"Entry\":{\"event\":{\"AgentMessage\":{\"text\":\"All 12 tests pass.\"}},\"sequence\":3}}]},{\"capability\":\"voice.v1\",\"topic\":\"status\",\"cursor\":\"v1\",\"events\":[]}]}")
     (run-effect 5)
-    (expect-port-sent "liton/voice/order" 2 "{\"picked\":\"Unknown\",\"replies\":[{\"sequence\":\"3\",\"text\":\"All 12 tests pass.\"}],\"session\":\"s1\",\"stop\":\"0\"}")
+    (expect-port-sent "liton/voice/order" 2 "{\"hush\":\"0\",\"picked\":\"Unknown\",\"replies\":[{\"sequence\":\"3\",\"text\":\"All 12 tests pass.\"}],\"session\":\"s1\",\"stop\":\"0\"}")
     (emit-port "liton/voice/capture" "{\"Speaking\":true}")
+    ; The page stops listening while the reply is spoken, and listens again after.
     (expect-text (test-id "voice-status") "Speaking")
-    ; Talking over the reply stops it, and the agent, at once.
-    (emit-port "liton/voice/capture" "\"BargedIn\"")
+    (expect-visible (role button :name "Stop speaking"))
+    (emit-port "liton/voice/capture" "{\"Speaking\":false}")
     (expect-text (test-id "voice-status") "Listening")
-    (expect-text (test-id "stop-status") "Stopping…")
+    (expect-visible (role button :name "End the conversation"))
+    ; A tap on the mic stops the speaking and listens, at once; the agent works on.
+    (emit-port "liton/voice/capture" "{\"Speaking\":true}")
+    (click (role button :name "Stop speaking"))
+    (expect-text (test-id "voice-status") "Listening")
+    (expect-visible (role button :name "End the conversation"))
+    (expect-port-sent "liton/voice/order" 3 "{\"hush\":\"1\",\"picked\":\"Unknown\",\"replies\":[{\"sequence\":\"3\",\"text\":\"All 12 tests pass.\"}],\"session\":\"s1\",\"stop\":\"0\"}")
+    (expect-absent (test-id "stop-status"))
     (click (role button :name "End the conversation"))
     (expect-attr (role button :name "Conversation") "aria-pressed" "false")
     (expect-port-subscriptions "liton/voice/capture" 0)
-    (expect-port-sends "liton/voice/order" 3)
+    (expect-port-sends "liton/voice/order" 4)
   )
 )

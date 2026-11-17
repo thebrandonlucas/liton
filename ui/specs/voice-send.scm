@@ -12,7 +12,7 @@
     (click (role button :name "Send"))
     ; Transcribing before the page or the daemon answer, the typed text kept.
     (expect-text (test-id "voice-status") "Transcribing…")
-    (expect-port-sent "liton/voice/order" 2 "{\"picked\":\"Unknown\",\"replies\":[],\"session\":\"s1\",\"stop\":\"1\"}")
+    (expect-port-sent "liton/voice/order" 2 "{\"hush\":\"0\",\"picked\":\"Unknown\",\"replies\":[],\"session\":\"s1\",\"stop\":\"1\"}")
     (expect-value (label "Message") "Please")
     (expect-pending-effects 0)
     (emit-port "liton/voice/capture" "\"Transcribing\"")

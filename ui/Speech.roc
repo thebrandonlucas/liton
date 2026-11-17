@@ -21,7 +21,8 @@ Speech := [].{
 	## press. `stopping` asks the page to end the recording numbered so, and
 	## `transcribing` counts the utterances it is transcribing; `sending`
 	## sends the dictation's transcript once it comes. A
-	## conversation speaks the agent's messages after the entry `spoken`.
+	## conversation speaks the agent's messages after the entry `spoken`,
+	## and `hush` counts the taps that stopped them being spoken.
 	## `voices` and `picked` are settings' speech choices, which the page
 	## keeps.
 	State : {
@@ -39,6 +40,7 @@ Speech := [].{
 		transcribing : U64,
 		sending : Bool,
 		spoken : U64,
+		hush : U64,
 		voices : List({ name : Str, local : Bool }),
 		picked : Picked,
 	}
@@ -62,6 +64,7 @@ Speech := [].{
 		transcribing: 0,
 		sending: Bool.False,
 		spoken: 0,
+		hush: 0,
 		voices: [],
 		picked: Unknown,
 	}
@@ -69,9 +72,9 @@ Speech := [].{
 	## What the page tells of a recording: the input's level, 0 to 100; an
 	## utterance ended and is being transcribed; its transcript, and where
 	## the composer's selection then was, as byte offsets into the draft, or
-	## why there is none; a reply being spoken started or stopped; or the
-	## speaker talked over it, which stopped it.
-	Heard : [Level(U8), Transcribing, Transcript({ text : Str, from : U64, to : U64 }), NotTranscribed(Str), Speaking(Bool), BargedIn]
+	## why there is none; or a reply being spoken started or stopped, which
+	## pauses a conversation's listening until shortly after.
+	Heard : [Level(U8), Transcribing, Transcript({ text : Str, from : U64, to : U64 }), NotTranscribed(Str), Speaking(Bool)]
 
 	## Records from the microphone while subscribed: until stopped for
 	## dictation, or utterance after utterance, each ended by silence, for a
@@ -82,8 +85,9 @@ Speech := [].{
 	## What the page is to do, as it changes: end the dictation numbered
 	## `stop`, posting what is left; speak the agent's messages in a
 	## conversation's session (`replies`) it hasn't, sentence by sentence,
-	## naming code rather than reading it; and keep the voice and rate picked.
-	Order : { stop : U64, session : Str, replies : List({ sequence : U64, text : Str }), picked : Picked }
+	## naming code rather than reading it, and stop speaking when `hush`
+	## changes; and keep the voice and rate picked.
+	Order : { stop : U64, hush : U64, session : Str, replies : List({ sequence : U64, text : Str }), picked : Picked }
 
 	order : Port.Command(Order)
 	order = Port.command({ name: "liton/voice/order" })

@@ -18,7 +18,7 @@
     (click (role button :name "Stop dictating"))
     ; Transcribing before the page or the daemon answer.
     (expect-text (test-id "voice-status") "Transcribing…")
-    (expect-port-sent "liton/voice/order" 2 "{\"picked\":\"Unknown\",\"replies\":[],\"session\":\"s1\",\"stop\":\"1\"}")
+    (expect-port-sent "liton/voice/order" 2 "{\"hush\":\"0\",\"picked\":\"Unknown\",\"replies\":[],\"session\":\"s1\",\"stop\":\"1\"}")
     (emit-port "liton/voice/capture" "\"Transcribing\"")
     (expect-text (test-id "voice-status") "Transcribing…")
     (emit-port "liton/voice/capture" "{\"Transcript\":{\"text\":\" run it\",\"from\":6,\"to\":6}}")

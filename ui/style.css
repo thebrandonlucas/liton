@@ -268,8 +268,9 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .composer textarea:focus { outline: none; border-color: var(--edge-active); }
 .composer button { min-height: calc(1.45em + 14px); color: var(--accent); }
 /* Voice in the composer (ui/Microphone.roc): the mic, whose ring follows the
-   input's level while it listens and pulses through a conversation, the
-   conversation toggle, and a word over them saying what they are doing. */
+   input's level while it listens and pulses through a conversation, showing
+   a stop while a reply is spoken, the conversation toggle, and a word over
+   them saying what they are doing. */
 .composer { position: relative; }
 .voice { display: flex; gap: 6px; }
 .voice[hidden], .voice-settings[hidden], .voice-status:empty { display: none; }
@@ -281,7 +282,7 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--f
 .composer .mic.listening, .composer .mic.conversation, .composer .talk[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .composer .mic.listening, .composer .mic.conversation { box-shadow: 0 0 0 calc(var(--level) * .08px) color-mix(in srgb, var(--accent) 35%, transparent); }
 .composer .mic.conversation::after { content: ""; position: absolute; inset: -5px; border: 2px solid var(--accent); border-radius: 50%; animation: mic-pulse calc(var(--motion) * 1600ms + 1ms) ease-out infinite; }
-.composer .mic.speaking { background: var(--accent-to); border-color: var(--accent-to); }
+.composer .mic.speaking { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='6' y='6' width='12' height='12' rx='2'/></svg>"); background: var(--accent-to); border-color: var(--accent-to); }
 .composer .mic.speaking::after { border-color: var(--accent-to); animation-duration: calc(var(--motion) * 800ms + 1ms); }
 .composer .mic.transcribing { opacity: 1; cursor: progress; }
 .composer .mic.transcribing::before { animation: mic-busy calc(var(--motion) * 700ms + 1ms) ease-in-out infinite alternate; }

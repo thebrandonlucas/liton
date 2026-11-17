@@ -8,6 +8,7 @@
 const key = "liton.voice";
 let recording = null; // the one capture at a time: { serial, emit, stop, speaking }
 let stopped; // the last stop ordered
+let hushed; // the last hush ordered
 const spoken = new Set(); // the replies spoken, as `<session>/<sequence>`
 let queued = 0; // sentences speechSynthesis has yet to finish
 let talking = false;
@@ -52,10 +53,7 @@ export function capture({ pane, mode, serial }, { emit, close }) {
       if (data.level !== undefined) emit({ Level: data.level });
       else if (data.chunk) utterance?.posts.push(post(utterance.id, utterance.seq++, data.chunk));
       else if (data.begin) begin();
-      else if (data.barge) {
-        hush();
-        emit("BargedIn");
-      } else if (data.end) ended();
+      else if (data.end) ended();
     };
     if (stopping) node.port.postMessage("flush");
   })().catch((error) => {
@@ -70,11 +68,14 @@ export function capture({ pane, mode, serial }, { emit, close }) {
   };
 }
 
-// Does what the app says, as it changes: ends a dictation, speaks the
-// replies not spoken yet, and keeps the voice and rate picked.
-export function order({ stop, session, replies, picked }) {
+// Does what the app says, as it changes: ends a dictation, stops speaking
+// when tapped to, speaks the replies not spoken yet, and keeps the voice and
+// rate picked.
+export function order({ stop, hush: hushing, session, replies, picked }) {
   if (stop !== stopped && recording?.serial === stop) recording.stop();
   stopped = stop;
+  if (hushed !== undefined && hushing !== hushed) hush();
+  hushed = hushing;
   if (picked.Picked) localStorage.setItem(key, JSON.stringify(picked.Picked));
   for (const { sequence, text } of replies) {
     if (spoken.has(`${session}/${sequence}`)) continue;
