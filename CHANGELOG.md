@@ -107,6 +107,10 @@ All notable changes to liton are documented in this file. The format is based on
 - The review over Changes and Files shows only while it has drafts or threads still open, rather than always saying "no drafts", and Send review only while there are drafts to send.
 - Changes lists its files as a tree of folders, each with the lines its files add and remove, which fold away when clicked; a coloured square says whether a file was added, modified or deleted.
 - A file's diff in Changes opens in the main area, in place of the chat, with Open in main area; files picked then show there too, until Back to Chat.
+- In the Developer, Inbox and Chat presets a pane's menu hides the pane rather than closing it, or hides its drawer when it is the last pane the drawer shows; Show in the menu of a pane beside it brings it back. Hidden panes stay hidden after a reload. Settings' Remove still closes a pane, and Tiling's menus still offer Close pane.
+- Tabs show their widget's icon beside its title, and a × on hover that hides the tab in the Developer, Inbox and Chat presets and closes it in Tiling.
+- In Tiling, a pane's menu switches its column between a stack and tabs, in place of the column's Stack and Tabs buttons, and offers it only when the column holds more than one pane.
+- A pane's menu names where it moves the pane: "Move to right drawer" or "Move to main area" in the Developer, Inbox and Chat presets, for each place its widget fits, and "Move to the column on the left" or "Move to a new column on the right" in Tiling, rather than ← and → arrows.
 
 ### Fixed
 
