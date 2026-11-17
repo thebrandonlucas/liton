@@ -39,33 +39,60 @@ Mock := [].{
 				StatusChanged(Running),
 				ToolCall({ call_id: "seed-2", tool: "bash", input: "zig build test --summary all" }),
 				ToolResult({ call_id: "seed-2", output: "test.timeline_order... FAIL (expected 3, got 2)", failed: Bool.True }),
-				PermissionRequested({ request_id: "seed-3", tool: "edit", description: "Sort entries by sequence in tests/timeline.roc" }),
+				PermissionRequested(Chat.permission({ request_id: "seed-3", tool: "edit", description: "Sort entries by sequence in tests/timeline.roc" })),
 				StatusChanged(AwaitingPermission),
 			],
 		},
 		{ id: "notes", agent: "claude", title: "Scratch", events: [StatusChanged(Idle)] },
 	]
 
+	## The plan a message asking for one gets, and its choices, as Claude's
+	## in Paseo.
+	plan : Str
+	plan =
+		\\## Plan
+		\\
+		\\1. Find where an empty list reaches `first` in `src/Main.roc`.
+		\\2. Return **an empty result** there instead of crashing.
+		\\3. Add a test for the empty case, and run `zig build test`.
+
+	plan_choices : List(Chat.Choice)
+	plan_choices = [
+		{ id: "reject", label: "Reject", allows: Bool.False, style: Danger },
+		{ id: "implement", label: "Implement", allows: Bool.True, style: Primary },
+		{ id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary },
+	]
+
 	## What follows a message. `next` is the timeline's next sequence number,
-	## which makes the ids of the calls and requests unique.
+	## which makes the ids of the calls and requests unique. A message that
+	## asks for a plan gets one to approve, in Markdown with its own choices.
 	on_message : Str, U64 -> List(Scheduled)
 	on_message = |text, next| {
 		call_id = "call-${next.to_str()}"
+		request_id = "permission-${next.to_str()}"
+		asked : Chat.Permission
+		asked =
+			if text.with_ascii_lowercased().contains("plan") {
+				{ ..Chat.permission({ request_id, tool: "ExitPlanMode", description: "Plan: handle the empty case" }), body: Ok(Mock.plan), choices: Ok(Mock.plan_choices) }
+			} else {
+				Chat.permission({ request_id, tool: "edit", description: "Edit src/Main.roc to handle the empty case" })
+			}
 		[
 			{ delay_ms: 0, event: UserMessage({ text: text }) },
 			{ delay_ms: 400, event: StatusChanged(Running) },
 			{ delay_ms: 1200, event: AgentMessage({ text: "Looking into it: \"${text}\"" }) },
 			{ delay_ms: 2000, event: ToolCall({ call_id, tool: "bash", input: "rg -n TODO src" }) },
 			{ delay_ms: 3200, event: ToolResult({ call_id, output: "src/Main.roc:12: # TODO handle the empty case", failed: Bool.False }) },
-			{ delay_ms: 4000, event: PermissionRequested({ request_id: "permission-${next.to_str()}", tool: "edit", description: "Edit src/Main.roc to handle the empty case" }) },
+			{ delay_ms: 4000, event: PermissionRequested(asked) },
 			{ delay_ms: 4000, event: StatusChanged(AwaitingPermission) },
 		]
 	}
 
-	## What follows an answer to a pending permission request.
-	on_answer : Str, Bool, U64 -> List(Scheduled)
-	on_answer = |request_id, allowed, next| {
-		answered = { delay_ms: 0, event: PermissionAnswered({ request_id, allowed }) }
+	## What follows an answer to a pending permission request, with the
+	## choice taken, if it offered its own.
+	on_answer : Str, Bool, Try(Str, [Missing]), U64 -> List(Scheduled)
+	on_answer = |request_id, allowed, choice, next| {
+		answered = { delay_ms: 0, event: PermissionAnswered({ request_id, allowed, choice }) }
 		if allowed {
 			call_id = "call-${next.to_str()}"
 			[
@@ -91,16 +118,26 @@ Mock := [].{
 	on_cancel : List(Chat.Entry) -> List(Scheduled)
 	on_cancel = |timeline|
 		if [Running, AwaitingPermission].contains(Mock.status(timeline)) {
-			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
+			Chat.pending_permissions(timeline).map(|request_id| { delay_ms: 0, event: PermissionAnswered({ request_id, allowed: Bool.False, choice: Err(Missing) }) }).concat([{ delay_ms: 0, event: AgentMessage({ text: "Stopped." }) }, { delay_ms: 0, event: StatusChanged(Idle) }])
 		} else {
 			[]
 		}
 
 	## What follows starting an agent with a first prompt: it runs at once,
 	## as `on_message` goes on. Without a prompt it waits, idle.
+	## Matched, not compared with `==`: compared, Roc nightly-2026-11-07 says
+	## its is_eq "never resolved to a concrete type" once an event can hold a
+	## plan's choices (not reported upstream yet; near
+	## https://github.com/roc-lang/roc/issues/12883). Compare again once a
+	## Roc upgrade compiles it.
 	on_create : Str -> List(Scheduled)
 	on_create = |prompt|
-		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(|scheduled| if (scheduled.event == StatusChanged(Running)) { ..scheduled, delay_ms: 0 } else scheduled)
+		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(
+			|scheduled| match scheduled.event {
+				StatusChanged(Running) => { ..scheduled, delay_ms: 0 }
+				_ => scheduled
+			},
+		)
 
 	## The kinds of agent the mock provider starts.
 	agents : List(Chat.Agent)
@@ -272,13 +309,24 @@ expect {
 }
 
 expect Mock.on_message("hi", 7).len() == 7
-expect Mock.on_answer("p", Bool.False, 3).len() == 3
+expect Mock.on_answer("p", Bool.False, Err(Missing), 3).len() == 3
+expect {
+	asked = |text| Mock.on_message(text, 7).keep_oks(
+		|scheduled| match scheduled.event {
+			PermissionRequested(question) => Ok(question)
+			_ => Err(NotAsked)
+		},
+	)
+	asked("Plan the fix").map(|question| (question.tool, question.body, question.choices.map_ok(|choices| choices.map(|choice| choice.id)))) == [("ExitPlanMode", Ok(Mock.plan), Ok(["reject", "implement", "implement_resume"]))]
+		and asked("Fix it").map(|question| (question.body, question.choices)) == [(Err(Missing), Err(Missing))]
+		and Mock.on_answer("permission-7", Bool.True, Ok("implement"), 9).first().map_ok(|scheduled| scheduled.event) == Ok(PermissionAnswered({ request_id: "permission-7", allowed: Bool.True, choice: Ok("implement") }))
+}
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
 
 expect {
-	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested({ request_id: "p1", tool: "edit", description: "" }) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
-	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
+	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested(Chat.permission({ request_id: "p1", tool: "edit", description: "" })) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]
+	Mock.on_cancel(asked).map(|scheduled| scheduled.event) == [PermissionAnswered({ request_id: "p1", allowed: Bool.False, choice: Err(Missing) }), AgentMessage({ text: "Stopped." }), StatusChanged(Idle)]
 		and Mock.on_cancel([{ sequence: 1, event: StatusChanged(Idle) }]) == []
 }
 expect Mock.git("main", Uncommitted, NoFile).diff == []

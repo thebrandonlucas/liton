@@ -39,7 +39,13 @@ Paseo := [].{
 		}
 	}
 
-	Permission : { id : Str, name : Str, title : Try(Str, [Missing]), description : Try(Str, [Missing]) }
+	## A pending permission request. A plan's carries the plan in its
+	## `input`, and Paseo's choices for it, such as Implement and Reject, as
+	## its `actions`.
+	Permission : { id : Str, name : Str, title : Try(Str, [Missing]), description : Try(Str, [Missing]), input : Try({ plan : Try(Loose, [Missing]) }, [Missing]), actions : Try(List(Action), [Missing]) }
+
+	## `behavior` is allow or deny, `variant` primary, secondary or danger.
+	Action : { id : Str, label : Str, behavior : Str, variant : Try(Str, [Missing]) }
 
 	## An agent's state, from `get_agent_status` or a timeline page's `agent`.
 	## `status` is initializing, idle, running, error or closed.
@@ -115,11 +121,30 @@ Paseo := [].{
 		if (payload.accepted) Ok({}) else Err(Refused(payload.error ?? "Paseo did not take the message"))
 	}
 
-	## Answers a permission request. Paseo answers with the request's id: an
+	## Answers a permission request, with the id of the action chosen if it
+	## offered its own. Paseo answers with the request's id: an
 	## `agent_permission_resolved` once it took the answer (see `resolved`).
-	permission_answer : Str, Str, Bool -> Str
-	permission_answer = |agent_id, request_id, allowed|
-		Json.to_str({ type: "session", message: { type: "agent_permission_response", agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny" } } })
+	permission_answer : Str, Str, Bool, Try(Str, [Missing]) -> Str
+	permission_answer = |agent_id, request_id, allowed, choice|
+		Json.to_str({ type: "session", message: { type: "agent_permission_response", agentId: agent_id, requestId: request_id, response: { behavior: if (allowed) "allow" else "deny", selectedActionId: choice } } })
+
+	## A pending request as chat.v1's: its title, or else its description,
+	## as its line, a plan as its body, and its actions as its choices.
+	requested : Permission -> Chat.Permission
+	requested = |asked| {
+		plan = loose_text(asked.input.map_ok(|input| input.plan) ?? Err(Missing))
+		style = |variant|
+			match variant {
+				Ok("primary") => Primary
+				Ok("danger") => Danger
+				_ => Secondary
+			}
+		{
+			..Chat.permission({ request_id: asked.id, tool: asked.name, description: asked.title ?? (asked.description ?? asked.name) }),
+			body: if (plan == "") Err(Missing) else Ok(plan),
+			choices: asked.actions.map_ok(|actions| actions.map(|action| { id: action.id, label: action.label, allows: action.behavior == "allow", style: style(action.variant) })),
+		}
+	}
 
 	resolved : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	resolved = |text, request_id| Paseo.write_answer(text, "agent_permission_resolved", request_id).map_ok(|_| {})
@@ -472,11 +497,11 @@ Paseo := [].{
 				Err(NotHolding) => page.end_cursor.map_ok(|end| end.seq) ?? (if (replayed) 0 else state.cursor)
 			}
 		ids = snapshot.pending_permissions.map(|permission| permission.id)
-		answers = state.permissions.drop_if(|id| ids.contains(id)).map(|id| PermissionAnswered({ request_id: id, allowed: Bool.True }))
+		answers = state.permissions.drop_if(|id| ids.contains(id)).map(|id| PermissionAnswered({ request_id: id, allowed: Bool.True, choice: Err(Missing) }))
 		requests =
 			snapshot.pending_permissions
 				.drop_if(|permission| state.permissions.contains(permission.id))
-				.map(|permission| PermissionRequested({ request_id: permission.id, tool: permission.name, description: permission.title ?? (permission.description ?? permission.name) }))
+				.map(|permission| PermissionRequested(Paseo.requested(permission)))
 		{
 			state: { epoch: page.epoch, cursor, emitted_through: walked.through, open_calls: walked.open_calls, permissions: ids, status },
 			events: walked.events.concat(answers).concat(requests).concat(if (status == state.status) [] else [StatusChanged(status)]),
@@ -658,9 +683,17 @@ expect first.events == [UserMessage({ text: "Rename load_config" }), ToolCall({ 
 expect first.state == { epoch: "e1", cursor: 3, emitted_through: 2, open_calls: ["c1"], permissions: [], status: Running }
 expect second.events == [ToolResult({ call_id: "c1", output: "src/Config.roc:3", failed: Bool.False }), AgentMessage({ text: "Renaming it: done." }), StatusChanged(Idle)]
 expect second.state == { epoch: "e1", cursor: 6, emitted_through: 4, open_calls: [], permissions: [], status: Idle }
-expect asked.events == [PermissionRequested({ request_id: "p1", tool: "Edit", description: "Edit src/Config.roc" }), StatusChanged(AwaitingPermission)]
+expect asked.events == [PermissionRequested(Chat.permission({ request_id: "p1", tool: "Edit", description: "Edit src/Config.roc" })), StatusChanged(AwaitingPermission)]
 expect asked.state.cursor == 6
-expect answered_elsewhere([]).events == [PermissionAnswered({ request_id: "p1", allowed: Bool.True }), StatusChanged(Running)]
+expect answered_elsewhere([]).events == [PermissionAnswered({ request_id: "p1", allowed: Bool.True, choice: Err(Missing) }), StatusChanged(Running)]
+
+# A plan to approve, as Claude asks it in Paseo 0.15: the plan as the body, Paseo's actions as the choices.
+expect {
+	plan = "{\"id\":\"permission-1\",\"provider\":\"claude\",\"name\":\"ExitPlanMode\",\"kind\":\"plan\",\"title\":\"Plan\",\"input\":{\"plan\":\"## Plan\\n1. Rename it\",\"allowedPrompts\":[{\"tool\":\"Bash\"}]},\"actions\":[{\"id\":\"reject\",\"label\":\"Reject\",\"behavior\":\"deny\",\"variant\":\"danger\",\"intent\":\"dismiss\"},{\"id\":\"implement\",\"label\":\"Implement\",\"behavior\":\"allow\",\"variant\":\"primary\",\"intent\":\"implement\"},{\"id\":\"implement_resume\",\"label\":\"Implement with Auto\",\"behavior\":\"allow\",\"intent\":\"implement_resume\"}],\"metadata\":{\"toolUseId\":\"t1\",\"planText\":\"## Plan\\n1. Rename it\"}}"
+	planned = fetched(second.state, response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: plan, entries: [] }))
+	choices = [{ id: "reject", label: "Reject", allows: Bool.False, style: Danger }, { id: "implement", label: "Implement", allows: Bool.True, style: Primary }, { id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary }]
+	planned.events.first() == Ok(PermissionRequested({ ..Chat.permission({ request_id: "permission-1", tool: "ExitPlanMode", description: "Plan" }), body: Ok("## Plan\n1. Rename it"), choices: Ok(choices) }))
+}
 expect fetched(Paseo.answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
 
 # Paseo restarted: the same timeline in a new epoch repeats nothing, but closes the open call.
@@ -712,7 +745,8 @@ session = |message| "{\"type\":\"session\",\"message\":${message}}"
 request : Str -> Str
 request = |message| "{\"message\":${message},\"type\":\"session\"}"
 
-expect Paseo.permission_answer("a1", "p1", Bool.False) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
+expect Paseo.permission_answer("a1", "p1", Bool.False, Err(Missing)) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
+expect Paseo.permission_answer("a1", "p1", Bool.True, Ok("implement")) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"allow\",\"selectedActionId\":\"implement\"},\"type\":\"agent_permission_response\"}")
 expect Paseo.send_request("a1", "Go on", "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
 
 expect {

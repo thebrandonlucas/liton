@@ -1032,7 +1032,7 @@ Model := [].{
 	answer : State, Str, Bool -> State
 	answer = |state, pane_id, allowed|
 		match Model.pending(state, pane_id) {
-			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
+			Ok({ session_id, request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
 			Err(NoneWaiting) => state
 		}
 
@@ -1151,7 +1151,7 @@ Model := [].{
 	answer_item : State, Str, Bool -> State
 	answer_item = |state, session_id, allowed|
 		match Model.item_permission(state, session_id) {
-			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed }))
+			Ok({ request_id, .. }) => Model.send(state, AnswerPermission({ session_id, request_id, allowed, choice: Err(Missing) }))
 			Err(NoneWaiting) => state
 		}
 

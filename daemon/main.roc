@@ -486,20 +486,23 @@ chat_call! = |context, provider, asked| {
 				}
 				NoSession => Ok(no_session(session_id))
 			}
-		AnswerPermission({ session_id, request_id, allowed }) =>
-			if !Chat.pending_permissions(visible!(db, session_id, 0)?).contains(request_id) {
+		AnswerPermission({ session_id, request_id, allowed, choice }) => {
+			timeline = visible!(db, session_id, 0)?
+			if !Chat.pending_permissions(timeline).contains(request_id) {
 				Ok(Err({ code: NotFound, message: "no pending permission request ${request_id}" }))
+			} else if !Chat.answerable(timeline, request_id, allowed, choice) {
+				Ok(Err({ code: BadRequest, message: "permission request ${request_id} offers no such choice" }))
 			} else {
 				match routed_provider!(context, provider, session_id)? {
 					MockSession => {
-						schedule!(db, session_id, |next| Mock.on_answer(request_id, allowed, next))?
+						schedule!(db, session_id, |next| Mock.on_answer(request_id, allowed, choice, next))?
 						Ok(Ok(Accepted))
 					}
 					PaseoSession(daemon) => {
-						outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed), request_id, Paseo.resolved)
+						outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed, choice), request_id, Paseo.resolved)
 						if outcome.is_ok() {
 							known = state_of!(db, session_id)?
-							store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed })] })?
+							store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed, choice })] })?
 						}
 						forget_check!(db, "cycle")?
 						Ok(paseo_answer(outcome))
@@ -507,6 +510,7 @@ chat_call! = |context, provider, asked| {
 					NoSession => Ok(no_session(session_id))
 				}
 			}
+		}
 		Cancel({ session_id }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {

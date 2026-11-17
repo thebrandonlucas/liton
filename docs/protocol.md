@@ -110,6 +110,20 @@ own stop button does, and is `Accepted` once the provider stopped it (from
 Paseo, its `cancel_agent_request`). A session that isn't running is left as
 it is, and accepted too.
 
+`{"AnswerPermission": {"session_id", "request_id", "allowed"}}` answers a
+timeline's `PermissionRequested`. A request is `{"request_id", "tool",
+"description"}`, the tool and a line of what it would do, and, when its
+provider tells more, its `body` as Markdown, such as a plan to approve, and
+its own `choices`, each `{"id", "label", "allows", "style"}` with `style`
+`Primary`, `Secondary` or `Danger`; an attention.v1 item's `permissions`
+are such requests. Answering one with choices may name the choice taken,
+`"choice": id`, with `allowed` as it `allows`; a choice the request doesn't
+offer is `BadRequest`. The `PermissionAnswered` that follows names it too.
+From Paseo, a plan's body is its request's `input.plan` and its choices its
+`actions`, such as Claude's Reject, Implement and Implement with the mode it
+planned from, the choice sent as `selectedActionId`. The mock asks for a
+plan when a message mentions one.
+
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is
 `{"session_id", "provider", "title", "agent", "state", "summary",
