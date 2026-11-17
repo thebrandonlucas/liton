@@ -145,6 +145,10 @@ Model := [].{
 		theme : Str,
 		glass : Bool,
 
+		## The background this browser shows over the theme's (`Wallpaper`):
+		## an image's URL, or "" for the theme's, and its dim in percent.
+		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
+
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
@@ -277,6 +281,7 @@ Model := [].{
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
 				glass: Bool.True,
+				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
 				menu: "",
 				copied: "",

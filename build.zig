@@ -230,6 +230,7 @@ pub fn build(b: *std.Build) void {
         \\mkdir -p zig-out/www
         \\"$1" build --opt=size $5 --target=wasm32 ui/main.roc --output=zig-out/www/app.wasm
         \\cp ui/index.html ui/style.css ui/ports.mjs ui/voice.mjs ui/voice-worklet.js "$2" "$3" "$4" zig-out/www/
+        \\cp -R ui/backgrounds zig-out/www/
         ,
         "sh", roc_ui,
     });

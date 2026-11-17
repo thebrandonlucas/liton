@@ -18,6 +18,7 @@ import Themes
 import Model
 import Widgets
 import Dropdown
+import Wallpaper
 
 Liton := [].{
 	Ctx : In(Root, Model.State)
@@ -39,8 +40,8 @@ Liton := [].{
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False }, boot.url), Liton.page),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Liton.page),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -52,7 +53,7 @@ Liton := [].{
 			"div",
 			[
 				Engine.class("liton"),
-				Engine.attr_s("style", model.signal().map(|state| Themes.style(Model.theme_shown(state), state.glass))),
+				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
 				Engine.attr("tabindex", "-1"),
 				Engine.ref("app"),
 				Engine.on_key({ keymap: Engine.const(Engine.Keymap.every.outside_text()) }, model.set_value(|state, key| Model.pressed(state, key.key))),
@@ -100,7 +101,7 @@ Liton := [].{
 					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
-			].concat(Liton.effects(model)).concat(Microphone.effects(model)),
+			].concat(Liton.effects(model)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 
 	## Every request to the daemon is a call or a poll of /liton/v1
@@ -308,6 +309,8 @@ Liton := [].{
 						),
 						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked })), Engine.text("Glass")]),
 						Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
+						Html.h3("Background", ""),
+						Wallpaper.settings(model),
 						Microphone.settings(model, Liton.choices),
 						Html.h3("Layout", ""),
 						Engine.each(model.signal().map(|state| state.columns), |column| column.id, |row| Liton.settings_column(model, row)),

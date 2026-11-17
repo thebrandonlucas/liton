@@ -31,7 +31,9 @@ Setup := [].{
 	## focused tile's edge fades into `accent_to` along; the text colors; how
 	## much of the accent, in percent, the tiles' faint `edge` and the focused
 	## one's `edge_active` hold; the tiles' `glass`, a tint, its opacity in
-	## percent and its blur in pixels (0 for none); what is behind the tiles;
+	## percent and its blur in pixels (0 for none); what is behind the tiles: a
+	## gradient, a color, or an image at a URL dimmed by `dim` percent at its
+	## centre and more towards its edges;
 	## the gap between them and their corners' radius in pixels; the font
 	## stacks of text, of the monospace chrome and of the display face; and
 	## whether things move. Colors are CSS colors.
@@ -45,7 +47,7 @@ Setup := [].{
 		edge : U8,
 		edge_active : U8,
 		glass : { tint : Str, opacity : U8, blur : U8 },
-		background : [Gradient({ base : Str, from : Str, to : Str, glow : Str }), Flat(Str)],
+		background : [Gradient({ base : Str, from : Str, to : Str, glow : Str }), Flat(Str), Image({ url : Str, dim : U8 })],
 		gap : U8,
 		radius : U8,
 		fonts : { ui : Str, mono : Str, display : Str },

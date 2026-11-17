@@ -15,6 +15,7 @@ Themes := [].{
 			match theme.background {
 				Gradient({ base, from, to, glow }) => "radial-gradient(70vmax 50vmax at 6% -10%, color-mix(in srgb, ${glow} 20%, transparent), transparent 65%), radial-gradient(80vmax 70vmax at 105% 110%, ${to}, transparent 70%), linear-gradient(160deg, ${from}, ${base} 60%)"
 				Flat(color) => color
+				Image(picture) => Themes.image(theme, picture)
 			}
 		properties = [
 			("color-scheme", if (theme.scheme == Light) "light" else "dark"),
@@ -41,6 +42,17 @@ Themes := [].{
 		Str.join_with(properties.map(|(name, value)| "${name}: ${value}"), "; ")
 	}
 
+	## An image covering the root, dimmed towards black (white in a light
+	## theme) by `dim` percent at its centre and 30 more at its edges, over the
+	## glass tint while it loads. A quote or backslash in the URL is escaped.
+	image : Setup.Theme, { url : Str, dim : U8 } -> Str
+	image = |theme, { url, dim }| {
+		shade = if (theme.scheme == Light) "255 255 255" else "0 0 0"
+		edge = if (dim > 70) 100 else dim + 30
+		quoted = url.replace_each("\\", "%5C").replace_each("\"", "%22").replace_each("\n", "")
+		"radial-gradient(rgb(${shade} / ${dim.to_str()}%), rgb(${shade} / ${edge.to_str()}%)), url(\"${quoted}\") center / cover no-repeat, ${theme.glass.tint}"
+	}
+
 	## A theme's swatch in the picker: its accent edge over its background.
 	swatch : Setup.Theme -> Str
 	swatch = |theme| {
@@ -48,8 +60,9 @@ Themes := [].{
 			match theme.background {
 				Gradient({ from, .. }) => from
 				Flat(color) => color
+				Image(picture) => Themes.image(theme, picture)
 			}
-		"background: linear-gradient(135deg, ${ground} 0 45%, ${theme.accent} 55%, ${theme.accent_to})"
+		"background: linear-gradient(135deg, transparent 0 45%, ${theme.accent} 55%, ${theme.accent_to}), ${ground}"
 	}
 }
 
