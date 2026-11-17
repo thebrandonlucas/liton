@@ -237,6 +237,22 @@ try {
     const [agents] = (await post("poll", { topics: [{ capability: "chat.v1", topic: "agents", after: "" }] })).topics;
     assert.deepEqual(agents.events[0].Agents.map((a) => a.agent), ["claude", "codex"]);
   });
+  await step("sessions, workspaces and projects are renamed, pinned and archived, and the listings show it", async () => {
+    const workspaces = async () => (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed;
+    const sessions = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions;
+    assert.deepEqual(await call("chat.v1", { Rename: { session_id: "notes", title: "Notes" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("workspaces.v1", { Rename: { workspace_id: "main", name: "Main" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("workspaces.v1", { Pin: { workspace_id: "main", pinned: true } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("workspaces.v1", { RenameProject: { project_id: "liton", name: "Liton" } }), { Ok: "Accepted" });
+    const main = (await workspaces()).workspaces.find((w) => w.id === "main");
+    assert.deepEqual([(await sessions()).find((s) => s.id === "notes").title, main.name, main.pinned, (await workspaces()).projects[0].name], ["Notes", "Main", true, "Liton"]);
+    assert.deepEqual(await call("chat.v1", { Archive: { session_id: "notes" } }), { Ok: "Accepted" });
+    assert.ok(!(await sessions()).some((s) => s.id === "notes"));
+    assert.ok(!(await workspaces()).workspaces.find((w) => w.id === "main").session_ids.includes("notes"));
+    assert.deepEqual(await call("workspaces.v1", { Archive: { workspace_id: "fix-auth" } }), { Ok: "Accepted" });
+    assert.ok(!(await workspaces()).workspaces.some((w) => w.id === "fix-auth"));
+    assert.equal((await call("workspaces.v1", { Pin: { workspace_id: "nope", pinned: true } })).Err.code, "NotFound");
+  });
   console.log("PASS /liton/v1");
   process.exit(0);
 } catch (error) {

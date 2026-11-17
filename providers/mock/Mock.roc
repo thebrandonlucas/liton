@@ -235,6 +235,18 @@ Mock := [].{
 		{ id: "main", provider: "mock", project_id: "liton", name: "main", directory: "/mock/liton", kind: Checkout, branch: Branch("main"), state: Idle, dirty: Bool.False, changes: Counted({ additions: 0, deletions: 0 }), pinned: Bool.False, labels: [], session_ids: ["flaky-ci", "notes"] },
 	]
 
+	## The mock's workspaces as the daemon keeps their changes: each seeded
+	## one as it was changed last, if it was, then those made since, without
+	## those archived.
+	with_changes : List({ id : Str, workspace : Try(Workspaces.Workspace, [Archived]) }) -> List(Workspaces.Workspace)
+	with_changes = |stored| {
+		seeded = Mock.workspaces.map(|shown| shown.id)
+		Mock.workspaces
+			.map(|shown| stored.find_first(|changed| changed.id == shown.id).map_ok(|changed| changed.workspace) ?? Ok(shown))
+			.concat(stored.drop_if(|changed| seeded.contains(changed.id)).map(|changed| changed.workspace))
+			.keep_oks(|shown| shown)
+	}
+
 	## A workspace's git. fix-auth's has the login fix uncommitted and one
 	## commit ahead of main; main is clean.
 	git : Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> WorkspaceGit.Found
@@ -407,4 +419,11 @@ expect {
 	seeded = Mock.ended(Err(Missing), 0, [UserMessage({ text: "Hi" }), StatusChanged(Running), AgentMessage({ text: "Hello" }), StatusChanged(Idle)].map(|event| { delay_ms: 0, event }))
 	seeded.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:00.000Z"), ended: "1970-01-01T00:00:00.000Z" }), StatusChanged(Idle)]
 		and Mock.ended(Err(Missing), 0, Mock.on_create("")) == Mock.on_create("")
+}
+
+expect {
+	made = { ..Mock.workspaces.first() ?? Mock.made_workspace({ id: "", provider: "", name: "", directory: "" }, "", Checkout, ""), id: "workspace-1", name: "docs" }
+	renamed = { ..(Mock.workspaces.first() ?? made), name: "login", pinned: Bool.False }
+	Mock.with_changes([]) == Mock.workspaces
+		and Mock.with_changes([{ id: "main", workspace: Err(Archived) }, { id: "fix-auth", workspace: Ok(renamed) }, { id: "workspace-1", workspace: Ok(made) }]).map(|shown| (shown.id, shown.name)) == [("fix-auth", "login"), ("workspace-1", "docs")]
 }

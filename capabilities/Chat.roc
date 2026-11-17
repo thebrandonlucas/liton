@@ -58,7 +58,10 @@ Chat := [].{
 	## directory of the provider the call names, with a model and a first
 	## prompt ("" for none), and answers `Started` with its session's id.
 	## `AnswerPermission` takes one of the request's `choices` by its id, if
-	## it offered any, with `allowed` as that choice allows.
+	## it offered any, with `allowed` as that choice allows. `Rename` gives a
+	## session a title, or with "" the one its provider gives it; `Archive`
+	## stops it, if it runs, and lists it no more. A session has no pin of
+	## its own: a client pins the workspace it works in (workspaces.v1).
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
@@ -66,6 +69,8 @@ Chat := [].{
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		Cancel({ session_id : Str }),
 		Create(Create),
+		Rename({ session_id : Str, title : Str }),
+		Archive({ session_id : Str }),
 	]
 
 	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), prompt : Str }

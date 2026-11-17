@@ -99,9 +99,10 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission`, `Cancel` and `Create`; `attention.v1`'s `ListItems`,
-`Settle`, `Snooze`, `Unsettle` and `Seen`; `workspaces.v1`'s `ListWorkspaces` and
-`Create`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
+`AnswerPermission`, `Cancel`, `Create`, `Rename` and `Archive`;
+`attention.v1`'s `ListItems`, `Settle`, `Snooze`, `Unsettle` and `Seen`;
+`workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
+`RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
 `Resolve`, `Reopen` and `Send` (Review, below); `voice.v1`'s `Begin`,
 `Finish` and `Cancel` (Audio, below).
 
@@ -123,6 +124,31 @@ From Paseo, a plan's body is its request's `input.plan` and its choices its
 `actions`, such as Claude's Reject, Implement and Implement with the mode it
 planned from, the choice sent as `selectedActionId`. The mock asks for a
 plan when a message mentions one.
+
+Sessions, workspaces and projects are renamed, pinned and archived where
+their provider keeps them:
+
+```json
+{ "capability": "chat.v1", "request": { "Rename": { "session_id": "fix-auth", "title": "Fix the login" } } }
+{ "capability": "chat.v1", "request": { "Archive": { "session_id": "fix-auth" } } }
+{ "capability": "workspaces.v1", "request": { "Rename": { "workspace_id": "main", "name": "Main" } } }
+{ "capability": "workspaces.v1", "request": { "Pin": { "workspace_id": "main", "pinned": true } } }
+{ "capability": "workspaces.v1", "request": { "Archive": { "workspace_id": "main" } } }
+{ "capability": "workspaces.v1", "request": { "RenameProject": { "project_id": "liton", "name": "liton" } } }
+{ "Ok": "Accepted" }
+```
+
+Each answers `Accepted` once the provider took it, and the next listing
+shows it: a new title or name, a workspace's `pinned`, and an archived
+session or workspace left out. A name `""` gives back the one the provider
+derives. A session has no pin of its own, as Paseo pins workspaces and not
+agents: a client pins the workspace a session works in, a session without
+one can't be pinned, and projects can be neither pinned nor archived. From
+Paseo these are its `update_agent_request` (the agent's name),
+`archive_agent_request`, `workspace.title.set.request`,
+`workspace.pin.set.request`, `archive_workspace_request` and
+`project.rename.request`; Paseo can't unarchive an agent or a workspace
+over its protocol, and neither can liton. The mock keeps its own changes.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is

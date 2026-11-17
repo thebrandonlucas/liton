@@ -170,6 +170,30 @@ Paseo := [].{
 		}
 	}
 
+	## Renames an agent, or gives it back the title Paseo derives with "".
+	## Paseo answers with an `update_agent_response` (see `accepted`).
+	rename_request : Str, Str, Str -> Str
+	rename_request = |agent_id, title, request_id| Json.to_str({ type: "session", message: { type: "update_agent_request", agentId: agent_id, name: title, requestId: request_id } })
+
+	## Archives an agent: Paseo stops it if it runs, and lists it no more.
+	## Paseo answers with an `agent_archived` (see `archived`).
+	archive_request : Str, Str -> Str
+	archive_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "archive_agent_request", agentId: agent_id, requestId: request_id } })
+
+	archived : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	archived = |text, request_id| Paseo.write_answer(text, "agent_archived", request_id).map_ok(|_| {})
+
+	## Whether the `type` answer to `request_id`, one of Paseo's that says
+	## whether it took a write, took it.
+	accepted : Str, Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	accepted = |text, type, request_id| {
+		answered : Try({ message : { payload : { accepted : Bool, error : Try(Try(Str, [Null]), [Missing]) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, type, request_id)?)
+		payload = answered?.message.payload
+		reason = payload.error.map_ok(|error| error ?? "") ?? ""
+		if (payload.accepted) Ok({}) else Err(Refused(if (reason == "") "Paseo did not take the change" else reason))
+	}
+
 	## Starts an agent of the kind `agent` in `cwd`, in the workspace
 	## `workspace_id` if any, as `agent_id`: an id liton picks, which makes
 	## the same request sent again start no second agent. Paseo answers once
@@ -824,6 +848,23 @@ expect {
 		and Paseo.resolved(failure, "p2") == Err(OtherMessage)
 		and Paseo.answers_request(resolution, "p1")
 		and Paseo.answers_request(failure, "p1")
+}
+
+expect Paseo.rename_request("a1", "Fix login", "u1") == request("{\"agentId\":\"a1\",\"name\":\"Fix login\",\"requestId\":\"u1\",\"type\":\"update_agent_request\"}")
+expect Paseo.archive_request("a1", "x1") == request("{\"agentId\":\"a1\",\"requestId\":\"x1\",\"type\":\"archive_agent_request\"}")
+
+expect {
+	answer = |fields| session("{\"type\":\"update_agent_response\",\"payload\":{\"requestId\":\"u1\",\"agentId\":\"a1\",${fields}}}")
+	Paseo.accepted(answer("\"accepted\":true,\"error\":null"), "update_agent_response", "u1") == Ok({})
+		and Paseo.accepted(answer("\"accepted\":false,\"error\":\"Agent a1 not found\""), "update_agent_response", "u1") == Err(Refused("Agent a1 not found"))
+		and Paseo.accepted(answer("\"accepted\":false"), "update_agent_response", "u1") == Err(Refused("Paseo did not take the change"))
+		and Paseo.accepted(answer("\"accepted\":true,\"error\":null"), "update_agent_response", "u2") == Err(OtherMessage)
+}
+
+expect {
+	archived = session("{\"type\":\"agent_archived\",\"payload\":{\"agentId\":\"a1\",\"archivedAt\":\"2026-01-01T00:00:00.000Z\",\"requestId\":\"x1\"}}")
+	failure = session("{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"x1\",\"requestType\":\"archive_agent_request\",\"error\":\"Agent not found: a9\",\"code\":\"handler_error\"}}")
+	Paseo.archived(archived, "x1") == Ok({}) and Paseo.archived(failure, "x1") == Err(Refused("Agent not found: a9")) and Paseo.archived(archived, "x2") == Err(OtherMessage)
 }
 
 expect Paseo.cancel_request("a1", "c1") == request("{\"agentId\":\"a1\",\"requestId\":\"c1\",\"type\":\"cancel_agent_request\"}")

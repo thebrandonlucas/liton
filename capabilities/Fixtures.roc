@@ -16,6 +16,8 @@ Fixtures := [].{
 		SendMessage({ session_id: "s1", text: "Fix the failing test" }),
 		AnswerPermission({ session_id: "s1", request_id: "p1", allowed: Bool.True, choice: Err(Missing) }),
 		AnswerPermission({ session_id: "s1", request_id: "p2", allowed: Bool.True, choice: Ok("implement") }),
+		Rename({ session_id: "s1", title: "Fix the tests" }),
+		Archive({ session_id: "s1" }),
 	]
 
 	responses : List(Chat.Response)

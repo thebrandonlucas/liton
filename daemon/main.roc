@@ -527,6 +527,34 @@ chat_call! = |context, provider, asked| {
 				}
 				NoSession => Ok(no_session(session_id))
 			}
+		Rename({ session_id, title }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "UPDATE sessions SET title = :title WHERE id = :session_id;", params: { session_id, title: if (title == "") session_id else title } })?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-rename-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.rename_request(session_id, title, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "update_agent_response", id))
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
+			}
+		Archive({ session_id }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 1 WHERE id = :session_id;", params: { session_id } })?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-archive-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.archive_request(session_id, request_id), request_id, Paseo.archived)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
+			}
 		Create(asked_create) => started!(context, provider, asked_create)
 	}
 }
@@ -580,22 +608,42 @@ paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, prompt }| 
 workspaces_call! : Context, Try(Str, [Missing]), Workspaces.Request => Try(Protocol.Answer(Workspaces.Response), _)
 workspaces_call! = |context, provider, asked| {
 	db = context.db
+	match Remote.workspaces_owner(context.remotes, asked) {
+		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded_workspaces!(endpoint, provider, asked))
+		Ok(_) => return Ok(Err({ code: NotFound, message: "no such workspace or project of the provider named" }))
+		Err(Local) => {}
+	}
 	match asked {
 		ListWorkspaces => {
 			listed = workspaces!(context)?
 			Ok(Ok(Listed({ projects: listed.projects.keep_if(|project| Protocol.serves(provider, project.provider)), workspaces: listed.workspaces.keep_if(|workspace| Protocol.serves(provider, workspace.provider)) })))
 		}
-		Create(created) if Remote.owner(context.remotes, created.project_id).is_ok() =>
-			match Remote.owner(context.remotes, created.project_id) {
-				Ok(endpoint) if Remote.serves(endpoint.name, provider) => Ok(forwarded_create!(endpoint, provider, created))
-				_ => Ok(Err({ code: NotFound, message: "no project ${created.project_id}" }))
+		Rename({ workspace_id, .. }) => workspace_changed!(context, provider, workspace_id, asked)
+		Pin({ workspace_id, .. }) => workspace_changed!(context, provider, workspace_id, asked)
+		Archive({ workspace_id }) => workspace_changed!(context, provider, workspace_id, asked)
+		RenameProject({ project_id, name }) => {
+			mock_owns = context.mock_enabled and Protocol.serves(provider, Mock.provider.id) and Mock.projects.any(|project| project.id == project_id)
+			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
+			match (mock_owns, paseo_projects.any(|project| project.id == project_id), context.paseo) {
+				(Bool.True, _, _) => {
+					Sqlite.execute!({ db, query: "INSERT INTO mock_projects (id, name) VALUES (:id, :name) ON CONFLICT (id) DO UPDATE SET name = excluded.name;", params: { id: project_id, name } })?
+					Ok(Ok(Accepted))
+				}
+				(_, Bool.True, Ok(daemon)) => {
+					request_id = "liton-project-${now_ms!().to_str()}"
+					outcome = written!(daemon, PaseoWorkspaces.rename_project_request(project_id, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "project.rename.response", id))
+					forget_check!(db, "cycle")?
+					Ok(paseo_workspaces_answer(outcome))
+				}
+				_ => Ok(Err({ code: NotFound, message: "no project ${project_id}" }))
 			}
+		}
 		Create({ project_id, kind, branch }) => {
 			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
 			match (Mock.projects.find_first(|project| project.id == project_id), paseo_projects.find_first(|project| project.id == project_id), context.paseo) {
 				(Ok(project), _, _) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) => {
 					made : { count : I64 }
-					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces;", params: {}, limits: Sqlite.default_query_limits })?
+					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces WHERE id LIKE 'workspace-%';", params: {}, limits: Sqlite.default_query_limits })?
 					number = (made.count + 1).to_str()
 					workspace = Mock.made_workspace(project, "workspace-${number}", kind, branch ?? "work-${number}")
 					Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value);", params: { id: workspace.id, value: Json.to_str(workspace) } })?
@@ -614,6 +662,39 @@ workspaces_call! = |context, provider, asked| {
 				_ => Ok(Err({ code: NotFound, message: "no project ${project_id}" }))
 			}
 		}
+	}
+}
+
+## Renames, pins or archives a workspace of the mock's, keeping the change
+## (see `Mock.with_changes`), or of Paseo's.
+workspace_changed! : Context, Try(Str, [Missing]), Str, Workspaces.Request => Try(Protocol.Answer(Workspaces.Response), _)
+workspace_changed! = |context, provider, workspace_id, asked| {
+	db = context.db
+	mock_listed = if (context.mock_enabled and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
+	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
+	match (mock_listed.find_first(|shown| shown.id == workspace_id), paseo_listed.any(|shown| shown.id == workspace_id), context.paseo) {
+		(Ok(shown), _, _) => {
+			changed =
+				match asked {
+					Rename({ name, .. }) => Json.to_str({ ..shown, name: if (name == "") shown.id else name })
+					Pin({ pinned, .. }) => Json.to_str({ ..shown, pinned })
+					_ => ""
+				}
+			Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: workspace_id, value: changed } })?
+			Ok(Ok(Accepted))
+		}
+		(_, Bool.True, Ok(daemon)) => {
+			request_id = "liton-workspace-${now_ms!().to_str()}"
+			outcome =
+				match asked {
+					Rename({ name, .. }) => written!(daemon, PaseoWorkspaces.rename_request(workspace_id, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.title.set.response", id))
+					Pin({ pinned, .. }) => written!(daemon, PaseoWorkspaces.pin_request(workspace_id, pinned, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.pin.set.response", id))
+					_ => written!(daemon, PaseoWorkspaces.archive_request(workspace_id, request_id), request_id, PaseoWorkspaces.archived)
+				}
+			forget_check!(db, "cycle")?
+			Ok(paseo_workspaces_answer(outcome))
+		}
+		_ => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
 	}
 }
 
@@ -935,7 +1016,7 @@ workspaces! = |context| {
 		wanted!(db, "workspace_list", "")?
 	}
 	sessions = sessions!(context)?
-	from_mock = if (context.mock_enabled) { projects: Mock.projects, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
+	from_mock = if (context.mock_enabled) { projects: mock_projects!(db)?, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
 	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
 	placed : List({ id : Str, workspace_id : Str })
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
@@ -951,22 +1032,34 @@ workspaces! = |context| {
 	Ok({ projects: from_mock.projects.concat(from_paseo.projects).concat(from_remotes.projects), workspaces: from_mock.workspaces.concat(paseo_workspaces).map(|shown| { ..shown, state: Workspaces.state(sessions, shown.session_ids) }).concat(from_remotes.workspaces) })
 }
 
-## The mock provider's workspaces, then those made since, each listing the
-## sessions started in it too.
+## The mock provider's workspaces as changed, then those made since, each
+## listing the sessions started in it too, without those archived. An
+## archived workspace is kept as "".
 mock_workspaces! : Sqlite.Db => Try(List(Workspaces.Workspace), _)
 mock_workspaces! = |db| {
-	made : List({ value : Str })
-	made = Sqlite.query_many!({ db, query: "SELECT value FROM mock_workspaces ORDER BY rowid;", params: {}, limits: Sqlite.default_query_limits })?
+	made : List({ id : Str, value : Str })
+	made = Sqlite.query_many!({ db, query: "SELECT id, value FROM mock_workspaces ORDER BY rowid;", params: {}, limits: Sqlite.default_query_limits })?
+	archived : List({ id : Str })
+	archived = Sqlite.query_many!({ db, query: "SELECT id FROM sessions WHERE provider = 'mock' AND archived = 1;", params: {}, limits: Sqlite.default_query_limits })?
 	started : List({ id : Str, workspace_id : Str })
-	started = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'mock' AND workspace_id != '' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
-	parsed = made.keep_oks(
+	started = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'mock' AND workspace_id != '' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	stored = made.map(
 		|row| {
 			workspace : Try(Workspaces.Workspace, _)
 			workspace = Json.parse(row.value)
-			workspace
+			{ id: row.id, workspace: workspace.map_err(|_| Archived) }
 		},
 	)
-	Ok(Mock.workspaces.concat(parsed).map(|shown| { ..shown, session_ids: shown.session_ids.concat(started.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id)) }))
+	gone = archived.map(|row| row.id)
+	Ok(Mock.with_changes(stored).map(|shown| { ..shown, session_ids: shown.session_ids.concat(started.keep_if(|row| row.workspace_id == shown.id and !shown.session_ids.contains(row.id)).map(|row| row.id)).drop_if(|id| gone.contains(id)) }))
+}
+
+## The mock provider's projects, each by the name it was given, if any.
+mock_projects! : Sqlite.Db => Try(List(Workspaces.Project), _)
+mock_projects! = |db| {
+	named : List({ id : Str, name : Str })
+	named = Sqlite.query_many!({ db, query: "SELECT id, name FROM mock_projects;", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(Mock.projects.map(|project| { ..project, name: named.find_first(|row| row.id == project.id and row.name != "").map_ok(|row| row.name) ?? project.name }))
 }
 
 ## Paseo's projects and workspaces as the cycle last listed them, none before.
@@ -1000,6 +1093,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
@@ -1010,7 +1104,7 @@ create_tables! = |db| {
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
 	# no directory, workspace or listing until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''")] {
+	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''"), ("archived", "INTEGER NOT NULL DEFAULT 0")] {
 		existing : List({ name : Str })
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
@@ -1124,7 +1218,7 @@ sessions! : Context => Try(List(Chat.Session), _)
 sessions! = |context| {
 	{ db, mock_enabled, paseo, .. } = context
 	rows : List({ id : Str, agent : Str, title : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	mock_listed = if (mock_enabled) mock_workspaces!(db)? else []
 	var $sessions = []
 	for row in if (mock_enabled) rows else [] {
@@ -1239,6 +1333,13 @@ written! = |daemon, request, request_id, answer| {
 ## failure, such as not reaching Paseo, `Unavailable`.
 paseo_answer : Try({}, _) -> Protocol.Answer(Chat.Response)
 paseo_answer = |outcome|
+	match outcome {
+		Ok({}) => Ok(Accepted)
+		Err(err) => Err(paseo_error(err))
+	}
+
+paseo_workspaces_answer : Try({}, _) -> Protocol.Answer(Workspaces.Response)
+paseo_workspaces_answer = |outcome|
 	match outcome {
 		Ok({}) => Ok(Accepted)
 		Err(err) => Err(paseo_error(err))
@@ -1733,10 +1834,10 @@ forwarded! = |endpoint, provider, asked| {
 
 ## Forwards a workspaces.v1 Create to the remote whose project it names,
 ## as `forwarded!` does a chat.v1 call.
-forwarded_create! : Remote.Endpoint, Try(Str, [Missing]), Workspaces.Create => Protocol.Answer(Workspaces.Response)
-forwarded_create! = |endpoint, provider, created| {
+forwarded_workspaces! : Remote.Endpoint, Try(Str, [Missing]), Workspaces.Request => Protocol.Answer(Workspaces.Response)
+forwarded_workspaces! = |endpoint, provider, asked| {
 	unavailable = |problem| Err({ code: Unavailable, message: "the provider ${endpoint.name}: ${problem}" })
-	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.workspaces_call(endpoint.name, provider, created))) {
+	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.workspaces_call(endpoint.name, provider, asked))) {
 		Ok(body) => {
 			answer : Try(Protocol.Answer(Workspaces.Response), _)
 			answer = Json.parse(body)
