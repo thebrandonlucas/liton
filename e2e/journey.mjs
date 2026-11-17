@@ -57,7 +57,8 @@ try {
   const base = `http://127.0.0.1:${port}`;
   await until("the manifest", async () => (await fetch(`${base}/liton/v1/manifest`)).ok);
 
-  const browser = await launch({ executablePath: process.env.CHROME || "chromium" });
+  // A laptop's window, not headless Chrome's small default, in which a drawer is too short to show a file.
+  const browser = await launch({ executablePath: process.env.CHROME || "chromium", args: ["--window-size=1280,800"] });
   const page = await browser.newPage();
   await page.goto(`${base}/`);
   // Whether an element matching `selector` in the pane named `pane` contains `text`.
