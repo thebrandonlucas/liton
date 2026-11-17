@@ -74,7 +74,7 @@ Liton := [].{
 									|column| column.id,
 									|row|
 										Html.button_s(
-											row.field(|column| column).map2(model.signal().lift_row(), |column, state| Str.join_with(column.panes.map(|pane| Liton.label(state, pane)), " · ")),
+											row.field(|column| column).map2(model.signal().lift_row(), |column, state| Str.join_with(Model.shown_panes(state, column).map(|pane| Liton.label(state, pane)), " · ")),
 											[
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_column)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
@@ -275,7 +275,7 @@ Liton := [].{
 	drawer_toggle : State(ctx, Model.State), Model.Slot, Signal(ctx, Model.Counts) -> Elem(ctx)
 	drawer_toggle = |model, drawer, workspace_changes| {
 		key = if (drawer == Left) "Ctrl+B" else "Ctrl+E"
-		panes = model.signal().map(|state| Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| column.panes.map(|pane| Liton.label(state, pane))), " · "))
+		panes = model.signal().map(|state| Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| Model.shown_panes(state, column).map(|pane| Liton.label(state, pane))), " · "))
 		Engine.element(
 			"button",
 			[
@@ -517,7 +517,7 @@ Liton := [].{
 					"column-header",
 					[
 						Engine.each(
-							row.field(|shown| shown.panes),
+							column.map2(model.signal(), |shown, state| Model.shown_panes(state, shown)),
 							|pane| pane.id,
 							|tab|
 								Html.button_s(
@@ -557,7 +557,7 @@ Liton := [].{
 			"section",
 			[
 				Html.aria_label_s(title),
-				Engine.class_s(id.map2(column.lift_row(), |pane_id, group| if (group.tabbed and pane_id != group.active) "pane hidden" else "pane").map2(id.map2(model.signal(), |pane_id, state| pane_id == state.focused_pane), |class, focused| if (focused) "${class} focused" else class)),
+				Engine.class_s(id.map2(column.lift_row(), |pane_id, group| { pane_id, group }).map2(model.signal(), |{ pane_id, group }, state| Str.join_with(["pane", if ((group.tabbed and pane_id != group.active) or state.hidden.contains(pane_id)) "hidden" else "", if (pane_id == state.focused_pane) "focused" else ""].drop_if(Str.is_empty), " "))),
 				# Clicking anywhere in it focuses it, or what was clicked in it.
 				Engine.attr("tabindex", "-1"),
 				Engine.on("focus", model.update_by(id.map2(column.lift_row(), |pane_id, group| { pane: pane_id, column: group.id }), Model.focus_pane)),
@@ -698,7 +698,8 @@ Liton := [].{
 	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
 
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, the moves
-	## Tiling allows, and Close. Each closes the menu.
+	## Tiling allows, and Close; in a Workbench, Hide, and Show for each pane
+	## its column hides. Each closes the menu.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	pane_menu = |model, id, title, shown| {
 		closing = |change| |state, pane_id| { ..change(state, pane_id), menu: "" }
@@ -742,7 +743,17 @@ Liton := [].{
 										),
 									|| Engine.text(""),
 								),
-								Html.button("Close pane", [Engine.class("close")], model.update_by(id, closing(Model.close_pane))),
+								Engine.when(model.signal().map(|state| state.shell == Tiling), || Html.button("Close pane", [Engine.class("close")], model.update_by(id, closing(Model.close_pane))), || Engine.text("")),
+								Engine.when(
+									id.map2(model.signal(), |pane_id, state| !Model.hide_label(state, pane_id).is_empty()),
+									|| Html.button_s(id.map2(model.signal(), |pane_id, state| Model.hide_label(state, pane_id)), [], model.update_by(id, closing(Model.hide_pane))),
+									|| Engine.text(""),
+								),
+								Engine.each(
+									id.map2(model.signal(), |pane_id, state| Model.hidden_beside(state, pane_id)),
+									|pane| pane.id,
+									|hidden_row| Html.button_s(hidden_row.field(|pane| "Show ${Widgets.find(pane.widget).title}"), [], model.lift_row().update_by(hidden_row.key(), closing(Model.show_pane))),
+								),
 							],
 						),
 					|| Engine.text(""),

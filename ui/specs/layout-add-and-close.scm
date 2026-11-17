@@ -1,4 +1,4 @@
-(test "Liton — settings add a widget as a tab of the Workbench's main area, and Close in its menu closes one"
+(test "Liton — settings add a widget as a tab of the Workbench's main area, its menu hides it and the other tab's shows it again, and Remove in settings closes it"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -12,12 +12,19 @@
     (expect-attr (role region :name "CI runs") class "pane")
     (expect-attr (role region :name "Chat") class "pane hidden")
     (expect-visible (text "This widget needs ci.v1, which no connected provider supplies. Connect one that does, and it fills in here."))
-    ; The first pane's close button is the Workspaces pane's. Its drawer stays.
-    (expect-visible (role region :name "Workspaces"))
-    (click (role button :name "Workspaces menu"))
-    (click (role button :name "Close pane"))
-    (expect-absent (role region :name "Workspaces"))
-    (expect-text (test-id "show-left") "")
-    (expect-visible (role region :name "CI runs"))
+    (click (role button :name "Settings"))
+    (click (role button :name "CI runs menu"))
+    (click (role button :name "Hide CI runs"))
+    (expect-attr (role region :name "CI runs") class "pane hidden")
+    (expect-attr (role region :name "Chat") class "pane focused")
+    (expect-text (test-id "show-main") "Chat")
+    (click (role button :name "Chat menu"))
+    (click (role button :name "Show CI runs"))
+    (expect-attr (role region :name "CI runs") class "pane focused")
+    (expect-text (test-id "show-main") "Chat · CI runs")
+    (click (role button :name "Settings"))
+    (click (role button :name "Remove CI runs"))
+    (expect-absent (role region :name "CI runs"))
+    (expect-text (test-id "show-main") "Chat")
   )
 )

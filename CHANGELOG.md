@@ -103,6 +103,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The right drawer's button, at the end of the chat's header, shows the lines the chat's workspace has added and removed but not committed, in green and red, so you can tell there is something to review without opening the drawer. Hovering a drawer's button names what the drawer holds, such as Changes · Files.
 - A chat reads as a centred column at most 820px wide, in 15px text, with your own messages in a neutral grey bubble rather than a gold one.
 - The message box is one rounded box under the chat's column: what you type on top, and a row below it with a chip naming the session's model (or its agent, when the provider doesn't say which model), the mic and conversation buttons, and Send.
+- In the Developer, Inbox and Chat presets a pane's menu hides the pane rather than closing it, or hides its drawer when it is the last pane the drawer shows; Show in the menu of a pane beside it brings it back. Hidden panes stay hidden after a reload. Settings' Remove still closes a pane, and Tiling's menus still offer Close pane.
 
 ### Fixed
 

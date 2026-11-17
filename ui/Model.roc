@@ -692,14 +692,14 @@ Model := [].{
 	slot_named = |name| [Left, Main, Right].find_first(|slot| Model.slot_name(slot) == name) ?? Free
 
 	## Moves a pane to the end of a Workbench slot, as its active tab, and
-	## shows the slot's drawer.
+	## shows it and the slot's drawer.
 	move_to_slot : State, Str, Slot -> State
 	move_to_slot = |state, id, slot| {
 		moved = Model.pane(state, id)
 		to = state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? ""
 		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
 		columns = left_behind.map(|column| if (column.id == to) { ..column, active: id, panes: column.panes.append(moved) } else column)
-		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot) })
+		if (to.is_empty()) state else Model.drop_empty_columns({ ..state, columns, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
 	}
 
 	## The value of a pane's option `key`, or its widget's default.
@@ -757,7 +757,48 @@ Model := [].{
 	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
 	close_pane : State, Str -> State
-	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }) })
+	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+
+	## A column's panes a Workbench doesn't hide.
+	shown_panes : State, Column -> List(Pane)
+	shown_panes = |state, column| column.panes.drop_if(|listed_pane| state.hidden.contains(listed_pane.id))
+
+	## The panes hidden in the column of pane `id`, which its ⋯ menu shows again.
+	hidden_beside : State, Str -> List(Pane)
+	hidden_beside = |state, id| state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)).map_ok(|column| column.panes.keep_if(|listed_pane| state.hidden.contains(listed_pane.id))) ?? []
+
+	## What hiding a Workbench pane hides, as its ⋯ menu names it: the pane,
+	## while its column shows another, else its drawer. The main area's last
+	## pane, and Tiling's, don't hide: "".
+	hide_label : State, Str -> Str
+	hide_label = |state, id|
+		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(column) if state.shell == Workbench => {
+				slot = Model.slot_of(state, column.id)
+				if (Model.shown_panes(state, column).len() > 1) "Hide ${Widgets.find(Model.pane(state, id).widget).title}" else if (slot == Left or slot == Right) "Hide ${Model.slot_name(slot)} drawer" else ""
+			}
+			_ => ""
+		}
+
+	## Hides a Workbench pane as `hide_label` names it, its column showing,
+	## and focusing in its place, the next it shows.
+	hide_pane : State, Str -> State
+	hide_pane = |state, id|
+		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+			Ok(column) if state.shell == Workbench => {
+				slot = Model.slot_of(state, column.id)
+				match Model.shown_panes(state, column).find_first(|listed_pane| listed_pane.id != id) {
+					Ok(next) => Model.change_column({ ..state, hidden: state.hidden.append(id), focused_pane: if (state.focused_pane == id) next.id else state.focused_pane }, column.id, |holding| if (holding.active == id) { ..holding, active: next.id } else holding)
+					Err(NotFound) if slot == Left or slot == Right => { ..state, collapsed: state.collapsed.append(slot) }
+					Err(NotFound) => state
+				}
+			}
+			_ => state
+		}
+
+	## Shows a hidden pane again, as its column's active tab, focused.
+	show_pane : State, Str -> State
+	show_pane = |state, id| Model.activate_tab({ ..state, hidden: state.hidden.drop_if(|hidden_id| hidden_id == id), focused_pane: id }, id)
 
 	## Drops columns left without panes, apart from a Workbench's slots, and
 	## points a tab group or the narrow screen that showed what is gone at what
@@ -1506,12 +1547,12 @@ Model := [].{
 		}
 	}
 
-	## Whether a pane is on screen: not a tab behind another, nor in a
+	## Whether a pane is on screen: not hidden, a tab behind another, nor in a
 	## collapsed drawer.
 	pane_visible : State, Str -> Bool
 	pane_visible = |state, pane_id|
 		match state.columns.find_first(|column| column.panes.any(|shown| shown.id == pane_id)) {
-			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id))
+			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id)) and !state.hidden.contains(pane_id)
 			Err(NotFound) => Bool.False
 		}
 
