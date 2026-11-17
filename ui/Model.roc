@@ -152,7 +152,8 @@ Model := [].{
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
-		## The pane whose ⋯ menu is open, or "".
+		## The pane whose ⋯ menu is open, or a row's ⋮ menu as
+		## `Model.row_menu_key` names it, or "".
 		menu : Str,
 
 		## The time, in milliseconds since 1970, as of the last minute that
@@ -423,12 +424,53 @@ Model := [].{
 	}
 
 	## Marks the pane clicked or focused in, and shows its column on a narrow
-	## screen. Another pane's menu closes.
+	## screen. Another pane's menu, or one of its rows', closes.
 	focus_pane : State, { pane : Str, column : Str } -> State
-	focus_pane = |state, { pane: pane_id, column }| { ..state, focused_pane: pane_id, active_column: column, menu: if (state.menu == pane_id) pane_id else "" }
+	focus_pane = |state, { pane: pane_id, column }| { ..state, focused_pane: pane_id, active_column: column, menu: if (state.menu == pane_id or state.menu.starts_with("${pane_id} ")) state.menu else "" }
 
 	toggle_menu : State, Str -> State
 	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
+
+	## What names a row's ⋮ menu in `menu`.
+	row_menu_key : { pane_id : Str, key : Str } -> Str
+	row_menu_key = |{ pane_id, key }| "${pane_id} ${key}"
+
+	## What a row's ⋮ menu offers: on a project, a new workspace of it; on a
+	## workspace, a new agent there; on a session, a new agent beside it,
+	## stopping it while it works, marking it read or unread unless it works,
+	## and copying its
+	## id. Renaming, pinning and archiving wait on capabilities to call.
+	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, CopyId]
+
+	row_menu : State, Str -> List({ label : Str, action : RowAction })
+	row_menu = |state, key|
+		match Context.from_str(key) {
+			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }] else []
+			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }]
+			Ok(Session(session_id)) if !Model.starting(state, session_id) => {
+				listed_session = Model.session(state, session_id)
+				placed = state.workspaces.workspaces.any(|workspace| workspace.session_ids.contains(session_id))
+				read = state.attention.find_first(|item| item.session_id == session_id and item.state != Working).map_ok(|_| if (Model.unread(state, session_id)) [{ label: "Mark read", action: MarkRead }] else [{ label: "Mark unread", action: MarkUnread }]) ?? []
+				(if (placed) [{ label: "New agent beside it", action: NewAgent }] else [])
+					.concat(if (Model.busy(listed_session.status)) [{ label: "Stop agent", action: Stop }] else [])
+					.concat(read)
+					.append({ label: "Copy id", action: CopyId })
+			}
+			_ => []
+		}
+
+	## Does what a row's ⋮ menu offers, and closes it.
+	row_act : State, { pane_id : Str, key : Str, action : RowAction } -> State
+	row_act = |state0, { pane_id, key, action }| {
+		state = { ..state0, menu: "" }
+		match action {
+			NewWorkspace | NewAgent => Model.open_form(state, { pane_id, key })
+			Stop => Model.stop_session(state, key)
+			MarkRead => Model.mark_seen(state, [key], Bool.True)
+			MarkUnread => Model.mark_seen(state, [key], Bool.False)
+			CopyId => Model.copy(state, { key: "id:${key}", text: key })
+		}
+	}
 
 	## Copies a code block, shown as copied at once.
 	copy : State, { key : Str, text : Str } -> State
@@ -1039,10 +1081,10 @@ Model := [].{
 	## Stops the agent of the session a pane shows, shown as stopping at once
 	## until its status changes. A stop refused before is asked again.
 	stop : State, Str -> State
-	stop = |state, pane_id| {
-		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		{ ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
-	}
+	stop = |state, pane_id| Model.stop_session(state, Model.session_of(state, Model.pane(state, pane_id)))
+
+	stop_session : State, Str -> State
+	stop_session = |state, session_id| { ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
 
 	## Whether a session is being stopped, or why it wasn't.
 	stopping : State, Str -> [NotStopping, Stopping, NotStopped(Str)]

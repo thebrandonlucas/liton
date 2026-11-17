@@ -63,6 +63,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-panel-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='18' height='18' x='3' y='3' rx='2'/><path d='M15 3v18'/></svg>");
   --icon-settings: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></svg>");
   --icon-ellipsis: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='19' cy='12' r='1'/><circle cx='5' cy='12' r='1'/></svg>");
+  --icon-ellipsis-vertical: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='12' cy='19' r='1'/></svg>");
   --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
@@ -252,7 +253,16 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .tree-group .counts:not(:empty) ~ .new-agent { margin-left: auto; }
 .tree-row:hover .new-agent, .tree-row .new-agent:focus-visible, .tree-row.focused .new-agent { opacity: 1; }
 .tree-row .new-agent:hover { color: var(--accent); border-color: var(--edge); }
-@media (hover: none) { .tree-row .new-agent { opacity: 1; } }
+/* A row's ⋮ menu, on hover or always on a touch screen; a right-click opens it too. */
+.row-menu { position: relative; flex: none; }
+.tree-row:not(.has-menu) .row-menu { display: none; }
+.tree-row .row-menu-toggle { --icon: var(--icon-ellipsis-vertical); --icon-size: 14px; padding: 2px 3px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
+.tree-row:hover .row-menu-toggle, .tree-row .row-menu-toggle:focus-visible, .tree-row .row-menu-toggle[aria-expanded="true"] { opacity: 1; }
+.tree-row .row-menu-toggle:hover { color: var(--text); border-color: var(--edge); }
+.row-menu .menu { top: calc(100% + 2px); }
+.tree .menu button { text-align: left; padding: 4px 8px; border-color: transparent; background: none; color: var(--text); font-size: 12.5px; }
+.tree .menu button:hover { background: var(--tool); }
+@media (hover: none) { .tree-row .new-agent, .tree-row .row-menu-toggle { opacity: 1; } }
 .create-form { display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); animation: menu-in var(--fast) ease-out backwards; }
 .create-form .create-title { margin: 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
 .create-form input, .create-form select { padding: 4px 6px; min-width: 0; }
@@ -604,7 +614,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .tree-row { position: relative; min-height: 46px; padding: 0 0 0 12px; font-size: 15.5px; }
   .tree-row .row-title::after { content: ""; position: absolute; inset: 0; }
   .tree-row .branch, .tree-row .counts, .tree-row .added, .tree-row .removed, .tree-row .status-word, .tree-row .age { font-size: 12px; }
-  .tree-row .new-agent { position: relative; z-index: 1; min-width: 44px; min-height: 44px; --icon-size: 18px; opacity: 1; }
+  .tree-row .new-agent, .tree-row .row-menu-toggle { position: relative; z-index: 1; min-width: 44px; min-height: 44px; --icon-size: 18px; opacity: 1; }
+  .row-menu { z-index: 2; }
+  .tree .menu button { min-height: 44px; font-size: 14px; }
   .tree-group { margin-top: 10px; }
   .tree-group .row-title { font-size: 13px; }
   .tree-session { padding-left: calc(12px + var(--depth, 0) * 18px); }

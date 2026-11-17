@@ -541,8 +541,8 @@ Liton := [].{
 					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing],
 					|body|
 						match body {
-							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)))
-							Workspaces => Html.div("workspaces-pane", [Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)))])
+							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
+							Workspaces => Html.div("workspaces-pane", [Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -845,11 +845,13 @@ Liton := [].{
 	## workspace's to start an agent there and on a project's to create a
 	## workspace of it. A group folds, as a folder does, indented by its
 	## depth; a workspace, a session or a file is focused, and a thread jumps
-	## to its lines. The widgets share it, as one list of rows, each with
+	## to its lines. With `Menus`, a project's, workspace's or session's row
+	## has a ⋮ menu (`Model.row_menu`), which a right-click opens too. The
+	## widgets share it, as one list of rows, each with
 	## every part the stylesheet hides where it doesn't apply, to keep the
 	## module small.
-	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)) -> Elem(PaneCtx)
-	tree = |model0, id, rows|
+	tree : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.Row)), [Menus, NoMenus] -> Elem(PaneCtx)
+	tree = |model0, id, rows, menus|
 		Html.ul(
 			[Engine.class("tree"), Engine.attr("data-part", "list")],
 			[
@@ -872,10 +874,10 @@ Liton := [].{
 						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
 						Html.li(
 							[
-								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}")),
+								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}${if (menus == Menus and Liton.has_menu(shown)) " has-menu" else ""}")),
 								Engine.attr_s("data-part", kind),
 								Engine.attr_s("style", row.field(|shown| "--depth: ${shown.depth.to_str()}")),
-							],
+							].concat(if (menus == Menus) [Engine.on_with("contextmenu", { prevent: Bool.True }, model.update_by(asked, |state, at| if (Model.row_menu(state, at.key).is_empty()) state else { ..state, menu: Model.row_menu_key(at) }))] else []),
 							[
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
 								Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
@@ -886,12 +888,57 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
 								Html.span_s(row.field(|shown| shown.age), [Engine.class("age"), Engine.test_id("row-age")]),
 								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else if (shown.kind == Session) "New agent beside ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
-							],
+							].concat(if (menus == Menus) [Liton.row_menu(model, asked, row.field(|shown| shown.title))] else []),
 						)
 					},
 				),
 			],
 		)
+
+	## Whether a row has a ⋮ menu: a project's, a workspace's, or a session's
+	## not still starting.
+	has_menu : Model.Row -> Bool
+	has_menu = |row| row.kind == Workspace or (row.kind == Session and row.dot != "starting") or (row.kind == Group and row.creatable)
+
+	## A row's ⋮ and, while open, its menu (`Model.row_menu`), each of whose
+	## actions closes it.
+	row_menu : State(ctx, Model.State), Signal(ctx, { pane_id : Str, key : Str }), Signal(ctx, Str) -> Elem(ctx)
+	row_menu = |model, asked, title| {
+		open = asked.map2(model.signal(), |at, state| state.menu == Model.row_menu_key(at))
+		Html.div(
+			"row-menu",
+			[
+				Engine.element(
+					"button",
+					[
+						Engine.attr("type", "button"),
+						Engine.class("icon menu-toggle row-menu-toggle"),
+						Html.aria_label_s(title.map(|name| "${name} menu")),
+						Engine.attr_s("title", title.map(|name| "${name} menu")),
+						Engine.attr("aria-haspopup", "true"),
+						Html.flag("aria-expanded", open),
+						Engine.on_click(model.update_by(asked, |state, at| Model.toggle_menu(state, Model.row_menu_key(at)))),
+					],
+					[],
+				),
+				Engine.when(
+					open,
+					||
+						Html.div(
+							"menu",
+							[
+								Engine.each(
+									asked.map2(model.signal(), |at, state| Model.row_menu(state, at.key)),
+									|item| item.label,
+									|item| Html.button_s(item.field(|shown| shown.label), [], model.lift_row().update_by(item.field(|shown| shown.action).map2(asked.lift_row(), |action, { pane_id, key }| { pane_id, key, action }), Model.row_act)),
+								),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+	}
 
 	## A Workspaces pane's form, while open in it: an agent to start in a
 	## workspace, of a kind its provider offers, with a model and a first
@@ -1188,7 +1235,7 @@ Liton := [].{
 					[],
 					[
 						Engine.element("summary", [], [Html.span_s(Engine.const("Review"), [Engine.class("review-title")]), Html.span_s(pane.map2(model.signal(), |shown, state| Model.review_summary(state, shown)), [Engine.class("review-summary"), Engine.test_id("review-summary")])]),
-						Liton.tree(model, id, pane.map2(model.signal(), |shown, state| Model.review_rows(state, shown))),
+						Liton.tree(model, id, pane.map2(model.signal(), |shown, state| Model.review_rows(state, shown)), NoMenus),
 						Html.form(
 							"Comment on the whole review",
 							[Engine.class("review-overall"), Engine.on("submit", model.update_by(id, Model.comment_overall))],
@@ -1215,7 +1262,7 @@ Liton := [].{
 			[
 				Liton.review_panel(model, id, pane),
 				Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), [Engine.class("missing")]),
-				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown))),
+				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown)), NoMenus),
 				Html.div_attrs(
 					[Engine.class("file-view"), Engine.attr("data-part", "file")],
 					[
