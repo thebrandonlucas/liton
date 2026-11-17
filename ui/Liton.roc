@@ -1097,6 +1097,12 @@ Liton := [].{
 											],
 										),
 								),
+								# While the agent works on a turn: a loader and for how long.
+								Engine.when(
+									shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
+									|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
+									|| Engine.text(""),
+								),
 							],
 						),
 						# Last, so shown first: the timeline is reversed. ui/ports.mjs

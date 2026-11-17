@@ -79,7 +79,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   font: 14px/1.45 var(--font-ui);
   scrollbar-color: var(--edge) transparent;
 }
-@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting, .composer .stopping::before, .tool-card.running .tool-line > span, .fold-line.running { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .liton { --fast: 0ms; --slow: 0ms; } .status-dot.running, .status-dot.starting, .composer .stopping::before, .entry.working .loader, .tool-card.running .tool-line > span, .fold-line.running { animation: none; } }
 .liton * { scrollbar-width: thin; }
 button { font: inherit; color: inherit; background: var(--field); border: 1px solid var(--edge);
   border-radius: var(--small-radius); padding: 3px 10px; cursor: pointer;
@@ -353,6 +353,8 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .entry.permission { background: var(--warn-tint); }
 .entry.status, .entry.answer { color: var(--muted); font: 11px var(--font-mono); padding: 0 10px; }
 .entry.pending { opacity: .6; }
+.entry.working { display: flex; gap: 8px; align-items: center; color: var(--muted); font: 12px var(--font-mono); }
+.entry.working .loader { width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px dotted currentColor; animation: spin calc(var(--motion) * 1600ms + 1ms) linear infinite; }
 .entry.user.failed { outline: 1px solid var(--fail); }
 .sent-status { display: block; color: var(--muted); font-size: 12px; }
 .sent-status:empty { display: none; }

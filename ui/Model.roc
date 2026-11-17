@@ -157,7 +157,9 @@ Model := [].{
 		menu : Str,
 
 		## The time, in milliseconds since 1970, as of the last minute that
-		## began: what rows count the time since their last activity from.
+		## began, or second while a chat on screen shows a turn running: what
+		## rows count the time since their last activity from, and the chat
+		## how long its agent has worked.
 		now : I64,
 
 		## The code block last copied, by its key, and the copy asked of the
@@ -954,10 +956,12 @@ Model := [].{
 	}
 
 	## Polls each second, unless a poll is still on its way, and takes the
-	## time `at` once a new minute begins.
+	## time `at` once a new minute begins, or each second while a chat on
+	## screen shows a turn running.
 	tick : State, I64 -> State
 	tick = |state0, at| {
-		state = if (at // 60_000 == state0.now // 60_000) state0 else { ..state0, now: at }
+		timing = Model.panes(state0).any(|shown| shown.widget == "chat" and Model.pane_visible(state0, shown.id) and Model.working(state0, shown).is_ok())
+		state = if (at // 60_000 == state0.now // 60_000 and !timing) state0 else { ..state0, now: at }
 		if (state.polling) state else Model.poll(state)
 	}
 
@@ -1081,6 +1085,26 @@ Model := [].{
 		}
 		sent = { serial, session_id, request, after: Model.last_sequence(state, session_id), failed: "" }
 		{ ..state, outbox: { serial, request }, sent: state.sent.append(sent), notice: "" }
+	}
+
+	## How long the agent of the session a chat pane shows has worked on its
+	## turn, waiting for you too, as `Model.duration_text` says it, or "" if
+	## its provider doesn't tell; none while it is in no turn.
+	working : State, Pane -> Try(Str, [NotWorking])
+	working = |state, shown| {
+		shown_session = Model.session(state, Model.session_of(state, shown))
+		match epoch_ms(shown_session.running_since ?? "") {
+			_ if !Model.busy(shown_session.status) or Model.starting(state, shown_session.id) => Err(NotWorking)
+			Ok(since) if state.now >= since => Ok(Model.duration_text(state.now - since))
+			_ => Ok("")
+		}
+	}
+
+	## Milliseconds as "9s", "3m 46s" or "1h 2m".
+	duration_text : I64 -> Str
+	duration_text = |milliseconds| {
+		seconds = milliseconds // 1000
+		if (seconds < 60) "${seconds.to_str()}s" else if (seconds < 3600) "${(seconds // 60).to_str()}m ${(seconds % 60).to_str()}s" else "${(seconds // 3600).to_str()}h ${(seconds % 3600 // 60).to_str()}m"
 	}
 
 	## Whether a session's agent is in a turn, which Stop ends.

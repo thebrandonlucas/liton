@@ -62,6 +62,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Chat preset, in Settings: your sessions, the latest first, beside one large chat, with the right drawer hidden.
 - Each project, workspace and session in Workspaces and Sessions has a ⋮ menu, which a right-click opens too: a new workspace of a project, a new agent in a workspace or beside a session, and for a session, Stop agent while it works, Mark read or unread, and Copy id.
 - Keys, as in Paseo, which work in the message box too: Ctrl+B and Ctrl+E show or hide the left and right drawers, Ctrl+, opens or closes Settings, and Escape stops the agent of the chat you are in, once there is no menu, Settings or new agent or workspace form left for it to close first. The drawer buttons and Settings name their keys when you hover them.
+- While an agent works on a turn, waiting for you too, its chat shows a loader at the bottom and for how long, as "3m 46s", counting each second.
 
 ### Changed
 
