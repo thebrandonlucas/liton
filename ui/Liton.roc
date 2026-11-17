@@ -1339,15 +1339,17 @@ Liton := [].{
 			_ => { added: "", removed: "" }
 		}
 
-	## A pane's review, over its files or changes: its drafts and the rounds
-	## sent, Send review, which sends the drafts to the agent as one message,
+	## A pane's review, over its files or changes, while it has drafts or
+	## threads open: its drafts and the rounds sent, Send review while it has
+	## drafts, which sends the drafts to the agent as one message,
 	## and, opened, its threads, each jumping to its lines, and a comment on
 	## the whole review.
 	review_panel : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	review_panel = |model, id, pane| {
 		key = id.map(|pane_id| "${pane_id}/review")
+		review = pane.map2(model.signal(), |shown, state| Model.review_of(state, Model.context_of(state, shown)))
 		Html.div_attrs(
-			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.boolean("hidden", model.signal().map(|state| !state.capabilities.contains(Capability.review_v1)))],
+			[Engine.class("review-panel"), Engine.attr("data-part", "review"), Html.boolean("hidden", review.map2(model.signal(), |shown, state| !state.capabilities.contains(Capability.review_v1) or (Review.drafts(shown) == 0 and shown.threads.all(|thread| thread.resolved))))],
 			[
 				Engine.element(
 					"details",
@@ -1365,7 +1367,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.button("Send review", [Engine.class("send-review"), Engine.attr("title", "Send the drafts to the agent as one message")], model.update_by(id, Model.send_review)),
+				Engine.when(review.map(|shown| Review.drafts(shown) > 0), || Html.button("Send review", [Engine.class("send-review"), Engine.attr("title", "Send the drafts to the agent as one message")], model.update_by(id, Model.send_review)), || Engine.text("")),
 			],
 		)
 	}

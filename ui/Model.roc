@@ -2084,12 +2084,13 @@ Model := [].{
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
-	## What a review panel says of its review: its drafts and rounds sent.
+	## What a review panel says of its review: its drafts and rounds sent,
+	## each left out while none.
 	review_summary : State, Pane -> Str
 	review_summary = |state, shown| {
 		review = Model.review_of(state, Model.context_of(state, shown))
 		drafts = Review.drafts(review)
-		Str.join_with([if (drafts == 0) "no drafts" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
+		Str.join_with([if (drafts == 0) "" else if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts", if (review.round == 0) "" else if (review.round == 1) "1 round sent" else "${review.round.to_str()} rounds sent"].drop_if(Str.is_empty), " · ")
 	}
 
 	## Adds a pane's comment on the whole review, shown at once as a draft.

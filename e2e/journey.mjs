@@ -153,7 +153,7 @@ try {
     await see("Chat", ".entry.user", "src/Auth.roc:2-3");
     await see("Chat", ".entry.user", "Fall back to");
     await see("Chat", ".markdown", "Looking into it", 8000);
-    await see("Files", '[data-testid="review-summary"]', "no drafts · 1 round sent");
+    await see("Files", '[data-testid="review-summary"]', "1 round sent");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
     await click("Workspaces", ".tree-session button", "Find the flaky CI test");
