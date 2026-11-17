@@ -429,11 +429,12 @@ Model := [].{
 	use_theme = |state, name| { ..state, theme: name }
 
 	## A key pressed outside a text field: 1 to 9, with or without Alt (or
-	## Option, which types ¡ to ª on a Mac), shows that preset. Anywhere:
-	## Ctrl+B and Ctrl+E show or hide a Workbench's drawers, Ctrl+, opens or
-	## closes Settings, and Escape leaves a row's renaming, else closes a
-	## menu or Settings, else a Workspaces pane's form, else stops the agent
-	## of the chat focused, or of the first chat.
+	## Option, which types ¡ to ª on a Mac), shows that preset, and Ctrl+B
+	## and Ctrl+E show or hide a Workbench's drawers and Ctrl+, opens or
+	## closes Settings, as Cmd+B, Cmd+E and Cmd+, do anywhere. Escape,
+	## anywhere, leaves a row's renaming, else closes a menu or Settings,
+	## else a Workspaces pane's form, else stops the agent of the chat
+	## focused, or of the first chat.
 	pressed : State, Str -> State
 	pressed = |state, key| {
 		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)

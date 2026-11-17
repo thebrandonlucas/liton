@@ -1,4 +1,4 @@
-(test "Liton — Ctrl+B and Ctrl+E show and hide the drawers, Ctrl+, Settings, and Escape closes a menu or Settings first, then stops the chat's agent at once"
+(test "Liton — Ctrl+B and Ctrl+E, or Cmd+B and Cmd+E in the message box too, show and hide the drawers, Ctrl+, Settings, and Escape closes a menu or Settings first, then stops the chat's agent at once"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -10,13 +10,17 @@
     (expect-attr (role button :name "Left drawer") aria-expanded "true")
     (press "Control+e")
     (expect-attr (role button :name "Right drawer") aria-expanded "false")
-    ; Heard in the message box too.
-    (press (label "Message") "Control+e")
-    (expect-attr (role button :name "Right drawer") aria-expanded "true")
     (press "Control+,")
     (expect-visible (role region :name "Settings"))
     (press "Escape")
     (expect-absent (role region :name "Settings"))
+    ; Cmd is heard in the message box too; Ctrl is left to move the cursor.
+    (press (label "Message") "Meta+e")
+    (expect-attr (role button :name "Right drawer") aria-expanded "true")
+    (press (label "Message") "Control+b")
+    (expect-attr (role button :name "Left drawer") aria-expanded "true")
+    (press (label "Message") "Meta+b")
+    (expect-attr (role button :name "Left drawer") aria-expanded "false")
     (click (role button :name "Chat menu"))
     (press "Escape")
     (expect-attr (role button :name "Chat menu") aria-expanded "false")
