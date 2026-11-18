@@ -6,6 +6,8 @@
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
+## It answers only requests to LITON_HOST, localhost or a name
+## LITON_ALLOWED_HOSTS lists, comma-separated, such as a proxy's domain.
 ## LITON_MOCK=off leaves out the mock provider. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
@@ -81,7 +83,7 @@ import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -117,7 +119,8 @@ init! = || {
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
-	context = { db, mock_enabled, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
+	context = { db, allowed_hosts, mock_enabled, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -166,23 +169,63 @@ shutdown! = |_reason, _context| Ok({})
 
 respond! : Server.Request, Context => Try(Server.Outcome, [ServerErr(Str)])
 respond! = |request, context| {
+	asked = {
+		authority: match request.authority() {
+			Present(named) => Present({ host: named.host(), port: named.port() })
+			Absent => Absent
+		},
+		posted: match request.method() {
+			POST => Bool.True
+			_ => Bool.False
+		},
+		headers: request.headers().map(|field| { name: field.name, value: field.value }),
+	}
 	response =
-		match (request.method(), request.target()) {
-			(GET, Resource({ raw_path: "/", .. })) =>
+		match (cross_site_refusal(context.allowed_hosts, asked), request.method(), request.target()) {
+			(Err(why), _, _) => Ok(text(403, why))
+			(Ok({}), GET, Resource({ raw_path: "/", .. })) =>
 				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
-			(GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
+			(Ok({}), GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
 				manifest!(context)
-			(POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
+			(Ok({}), POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
 				call!(context, request)
-			(POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
+			(Ok({}), POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
 				polled_topics!(context, request)
-			(POST, Resource({ raw_path, .. })) if raw_path.starts_with(audio_route) =>
+			(Ok({}), POST, Resource({ raw_path, .. })) if raw_path.starts_with(audio_route) =>
 				audio_chunk!(context, request, raw_path.drop_prefix(audio_route))
 			_ => Ok(text(404, "Not found"))
 		}
 	match response {
 		Ok(answer) => Ok(Server.respond(answer))
 		Err(err) => Ok(Server.respond(text(500, Str.inspect(err))))
+	}
+}
+
+## Why the daemon refuses a request, if it does, so that a page of another
+## site in the browser can't drive its agents: a host it isn't reached by,
+## as a rebound DNS name gives; an Origin other than the host's own; or a
+## POST of a type any page may send any site without asking it first.
+cross_site_refusal : List(Str), { authority : [Absent, Present({ host : Str, port : [Absent, Present(U16)] })], posted : Bool, headers : List({ name : Str, value : Str }) } -> Try({}, Str)
+cross_site_refusal = |allowed_hosts, { authority, posted, headers }| {
+	header = |name| headers.find_first(|field| field.name.caseless_ascii_equals(name)).map_ok(|field| field.value.trim())
+	content_type = (header("Content-Type") ?? "").with_ascii_lowercased()
+	match authority {
+		Absent => Err("the request names no host")
+		Present({ host, .. }) if !allowed_hosts.any(|allowed| allowed.caseless_ascii_equals(host)) =>
+			Err("this daemon isn't reached as ${host}; LITON_ALLOWED_HOSTS lists the names it is, besides LITON_HOST and localhost")
+		Present({ host, port }) => {
+			served = match port {
+				Present(number) => "${host}:${number.to_str()}"
+				Absent => host
+			}
+			match header("Origin") {
+				Ok(origin) if !(origin.split_first("://").map_ok(|{ after, .. }| after.caseless_ascii_equals(served)) ?? Bool.False) =>
+					Err("a page of ${origin} can't use the daemon at ${served}")
+				_ if posted and (content_type == "" or ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data"].any(|simple| content_type.starts_with(simple))) =>
+					Err("a POST sends its body as application/json")
+				_ => Ok({})
+			}
+		}
 	}
 }
 
@@ -2377,3 +2420,20 @@ room_entries! = |db, wanted, room_id, thread|
 			Ok(Protocol.room_appended(wanted, log.keep_if(|entry| entry.sequence > after and Rooms.place_of(posted, entry.event) == thread)))
 		}
 	}
+
+expect {
+	allowed_hosts = ["127.0.0.1", "localhost", "liton.example"]
+	asked = |host, port, posted, headers| cross_site_refusal(allowed_hosts, { authority: Present({ host, port }), posted, headers })
+	json_type = { name: "content-type", value: "application/json" }
+	asked("127.0.0.1", Present(8095), Bool.True, [json_type, { name: "Origin", value: "http://127.0.0.1:8095" }]).is_ok()
+		and asked("liton.example", Absent, Bool.True, [{ name: "Origin", value: "https://liton.example" }, json_type]).is_ok()
+		and asked("localhost", Present(8095), Bool.True, [json_type]).is_ok()
+		and asked("rebound.example", Present(8095), Bool.False, []).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.True, [json_type, { name: "Origin", value: "https://elsewhere.example" }]).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.True, [json_type, { name: "Origin", value: "http://localhost:3000" }]).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.True, [json_type, { name: "Origin", value: "null" }]).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.True, [{ name: "Content-Type", value: "text/plain;charset=UTF-8" }]).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.True, []).is_err()
+		and asked("127.0.0.1", Present(8095), Bool.False, []).is_ok()
+		and cross_site_refusal(allowed_hosts, { authority: Absent, posted: Bool.False, headers: [] }).is_err()
+}

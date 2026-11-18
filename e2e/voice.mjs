@@ -41,12 +41,12 @@ daemon.on("error", fail);
 daemon.on("exit", (code) => fail(`the daemon exited with ${code}`));
 
 const base = `http://127.0.0.1:${port}/liton/v1`;
-const call = async (request) => (await fetch(`${base}/call`, { method: "POST", body: JSON.stringify({ capability: "voice.v1", request }) })).json();
+const call = async (request) => (await fetch(`${base}/call`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ capability: "voice.v1", request }) })).json();
 const chunk = async (utterance, seq, body) => {
   const response = await fetch(`${base}/audio/voice.v1/${utterance}/${seq}`, { method: "POST", headers: { "Content-Type": "audio/L16;rate=16000;channels=1" }, body });
   return { status: response.status, answer: await response.json() };
 };
-const status = async () => (await (await fetch(`${base}/poll`, { method: "POST", body: JSON.stringify({ topics: [{ capability: "voice.v1", topic: "status", after: "" }] }) })).json()).topics[0];
+const status = async () => (await (await fetch(`${base}/poll`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topics: [{ capability: "voice.v1", topic: "status", after: "" }] }) })).json()).topics[0];
 const step = async (name, run) => {
   check = name;
   await run();
