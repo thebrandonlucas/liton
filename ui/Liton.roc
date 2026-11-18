@@ -8,6 +8,7 @@ import cap.Chat
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Rooms
 import cap.WorkspaceGit
 import setup.Setup
 import Highlight
@@ -173,7 +174,7 @@ Liton := [].{
 			),
 		),
 		# An agent or workspace to create, whose answer may take a provider a
-		# while, a review.v1 request, or an edit of a listing.
+		# while, a review.v1 or rooms.v1 request, or an edit of a listing.
 		Engine.watch_changes(
 			model.signal().map(|state| state.call_outbox),
 			|outbox| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout: Ms(60000) })],
@@ -181,6 +182,7 @@ Liton := [].{
 				|state, outbox, res|
 					match outbox.key {
 						"review.v1" => Model.reviewed(state, outbox.serial, res ?? "")
+						"rooms.v1" => Model.rooms_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -615,7 +617,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Rooms, Capabilities, Connecting, Missing, MainDiff],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -624,6 +626,7 @@ Liton := [].{
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
+							Rooms => Liton.rooms(model)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -1762,6 +1765,51 @@ Liton := [].{
 			Text => "+${file.additions.to_str()} −${file.deletions.to_str()}"
 			Binary => "Binary"
 			TooLarge => "Too large"
+		}
+
+	## The rooms the daemon lists: each one's name, kind and what is unread
+	## in it, and Join or Leave, which shows at once.
+	rooms : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	rooms = |model0|
+		Html.ul(
+			[Engine.class("room-list"), Engine.attr("data-part", "list")],
+			[
+				Engine.each(
+					model0.signal().map(Model.rooms_listed),
+					|room| room.id,
+					|row| {
+						model = model0.lift_row()
+						asking = row.field(|room| room).map2(model.signal(), |room, state| { room, joining: Model.joining(state, room.id) })
+						Html.li(
+							[Engine.class_s(row.field(|room| if (room.joined) "room-row" else "room-row not-joined")), Engine.attr("data-part", "room")],
+							[
+								Html.span_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")]),
+								Html.span_s(row.field(|room| Liton.room_kind(room.kind)), [Engine.class("room-kind")]),
+								Html.span_s(row.field(|room| Liton.room_unread(room.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
+								Html.span_s(asking.map(|{ room, joining }| if (joining) (if (room.joined) "Joining…" else "Leaving…") else if (room.joined) "" else "Not joined"), [Engine.class("room-joined")]),
+								Html.button_s(row.field(|room| if (room.joined) "Leave" else "Join"), [Html.aria_label_s(row.field(|room| if (room.joined) "Leave #${room.name}" else "Join #${room.name}"))], model.update_by(row.key(), Model.toggle_joined)),
+							],
+						)
+					},
+				),
+			],
+		)
+
+	room_kind : Rooms.Kind -> Str
+	room_kind = |kind|
+		match kind {
+			Channel => "channel"
+			Forum => "forum"
+			Direct => "direct"
+			Announce => "announcements"
+		}
+
+	## What is unread in a room: messages, then mentions of you, as "3 @1".
+	room_unread : [Counted({ messages : U32, mentions : U32 }), Unknown] -> Str
+	room_unread = |unread|
+		match unread {
+			Counted({ messages, mentions }) => Str.join_with([if (messages > 0) messages.to_str() else "", if (mentions > 0) "@${mentions.to_str()}" else ""].drop_if(Str.is_empty), " ")
+			Unknown => ""
 		}
 
 	## The providers and transformers, each with what it offers.

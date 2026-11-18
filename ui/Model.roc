@@ -8,6 +8,7 @@ import cap.Files
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Rooms
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
@@ -142,6 +143,13 @@ Model := [].{
 		reviews : List({ context : Context.Id, review : Review.Snapshot }),
 		reviewing : List({ serial : U64, request : Review.Request, accepted : U64 }),
 		composer : Composer,
+
+		## What polls answered of rooms.v1, and its requests on their way (sent
+		## as `call_outbox`). A request is shown at once (`rooms_listed`) until
+		## the daemon refuses it, or until the poll numbered `accepted`
+		## answers, the first sent after it accepted it (0 while it waits).
+		rooms : List(Rooms.Room),
+		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64 }),
 
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
@@ -306,6 +314,8 @@ Model := [].{
 				reviews: [],
 				reviewing: [],
 				composer: Model.closed_composer,
+				rooms: [],
+				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
@@ -1199,7 +1209,8 @@ Model := [].{
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads)
+		rooms = if (offered(Capability.rooms_v1) and laid_out.any(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))) [RoomList] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -1254,7 +1265,7 @@ Model := [].{
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
+		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: settled.room_asks.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -1291,6 +1302,7 @@ Model := [].{
 				else
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
+			(_, Rooms(listed)) => { ..state, rooms: listed }
 			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
@@ -2385,10 +2397,60 @@ Model := [].{
 		}
 	}
 
+	## The rooms as the daemon last listed them, with the joins and leaves on
+	## their way applied.
+	rooms_listed : State -> List(Rooms.Room)
+	rooms_listed = |state| {
+		joined = |listed, room_id, member| listed.map(|room| if (room.id == room_id) { ..room, joined: member } else room)
+		state.room_asks.fold(
+			state.rooms,
+			|listed, asked|
+				match asked.request {
+					Join({ room_id }) => joined(listed, room_id, Bool.True)
+					Leave({ room_id }) => joined(listed, room_id, Bool.False)
+					_ => listed
+				},
+		)
+	}
+
+	## Whether a join or leave of a room is on its way.
+	joining : State, Str -> Bool
+	joining = |state, room_id| state.room_asks.any(|asked| asked.request == Join({ room_id: room_id }) or asked.request == Leave({ room_id: room_id }))
+
+	## Joins a room you aren't in, or leaves one you are, shown at once.
+	toggle_joined : State, Str -> State
+	toggle_joined = |state, room_id|
+		match Model.rooms_listed(state).find_first(|room| room.id == room_id) {
+			Ok(room) if !Model.joining(state, room_id) => Model.ask_rooms(state, if (room.joined) Leave({ room_id: room_id }) else Join({ room_id: room_id }))
+			_ => state
+		}
+
+	## Sends a rooms.v1 request, shown at once until the daemon answers.
+	ask_rooms : State, Rooms.Request -> State
+	ask_rooms = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0 }), notice: "" }
+	}
+
+	## Takes the daemon's answer to a rooms.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	rooms_answered : State, U64, Str -> State
+	rooms_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Rooms.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => Model.poll({ ..state, room_asks: state.room_asks.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Rooms, Capabilities, Connecting, Missing, MainDiff]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2411,6 +2473,7 @@ Model := [].{
 				"inbox" => Inbox
 				"changes" => Changes
 				"files" => Files
+				"rooms" => Rooms
 				_ => Capabilities
 			}
 	}

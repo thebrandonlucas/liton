@@ -95,6 +95,16 @@ Widgets := [].{
 			options: [],
 			parts: ["header", "list", "folder", "file", "line"],
 		},
+		{
+			id: "rooms",
+			title: "Rooms",
+			needs: [Capability.rooms_v1],
+			slots: [Left, Main, Right],
+			minimum_width: 260,
+			follows_session: Bool.False,
+			options: [],
+			parts: ["header", "list", "room"],
+		},
 		{ id: "capabilities", title: "Capabilities", needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: ["header", "manifest"] },
 		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
 	]
