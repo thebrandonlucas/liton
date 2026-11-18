@@ -5,6 +5,7 @@
     (click (role button :name "Settings"))
     (expect-attr (role button :name "Settings") aria-expanded "true")
     (expect-visible (role button :name "+ Chat"))
+    (expect-visible (role button :name "+ Rooms (unavailable)"))
     (click (role button :name "+ CI runs (unavailable)"))
     ; Shown at once, as the main area's active tab.
     (expect-text (test-id "show-main") "Chat · CI runs")
