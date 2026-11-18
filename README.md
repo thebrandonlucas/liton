@@ -16,6 +16,8 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 
 `zig build run` (in `kai shell`) builds the UI and the daemon and serves both at http://127.0.0.1:8095, with scripted mock agents. `LITON_HOST`, `LITON_PORT` and `LITON_DB` (default `liton.db`) configure the daemon.
 
+`LITON_MOCK=off` leaves out the mock provider. A comma-separated list of its parts keeps only those: `agents` (its scripted sessions, with their workspaces, git and files), `rooms` and `tickets`. `LITON_MOCK=rooms,tickets` shows the mock's rooms and tickets beside a real provider's agents, such as Paseo's (`PASEO_PASSWORD`).
+
 `LITON_PROVIDERS` adds providers outside the daemon, each a server of the same protocol such as another liton daemon, as `name=url` pairs separated by commas: `LITON_PROVIDERS="echo=http://127.0.0.1:8096,team=https://liton.example"`. What each offers is named under its name (`echo/echo`, `team/fix-auth`), and the daemon asks each at most once every `LITON_PROVIDERS_INTERVAL_MS` (default 1000) however many clients poll. `zig build example-provider` builds `zig-out/bin/provider-echo`, the smallest such provider (`examples/provider-echo/`).
 
 ## Setups

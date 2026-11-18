@@ -153,7 +153,7 @@ expect {
 	dropped = Drag.dropped(state, dragged, over_chat)
 	pressed == Pressed({ pane: "pane-4", pointer: 1, from: "tab:pane-4" })
 		and Drag.over(dragged) == { column: "column-2", at: End }
-		and dropped.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3"]]
+		and dropped.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3", "pane-5"]]
 		and Drag.dropped(state, pressed, over_chat).columns == state.columns
 		and Drag.dropped(state, dragged, { ..over_chat, at: Outside }).columns == state.columns
 		and Drag.released(dragged, over_chat) == Idle

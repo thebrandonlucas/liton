@@ -96,6 +96,16 @@ Widgets := [].{
 			parts: ["header", "list", "folder", "file", "line"],
 		},
 		{
+			id: "tickets",
+			title: "Tickets",
+			needs: [Capability.tickets_v1],
+			slots: [Left, Main, Right],
+			minimum_width: 260,
+			follows_session: Bool.False,
+			options: [],
+			parts: ["header", "filters", "list", "ticket"],
+		},
+		{
 			id: "rooms",
 			title: "Rooms",
 			needs: [Capability.rooms_v1],

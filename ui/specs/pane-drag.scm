@@ -7,7 +7,7 @@
     (expect-attr (role region :name "Files") class "pane hidden dragged")
     (pointer-up (role region :name "Chat"))
     (expect-text (test-id "show-main") "Chat · Files")
-    (expect-text (test-id "show-right") "Changes")
+    (expect-text (test-id "show-right") "Changes · Tickets")
     (expect-attr (test-id "slot-main") class "column slot slot-main tabbed")
     (expect-attr (role button :name "Files") aria-pressed "true")
     ; Over a tab's left half, it goes before it.
@@ -28,7 +28,7 @@
     (press "Escape")
     (expect-attr (test-id "slot-right") class "column slot slot-right tabbed")
     (pointer-up (role region :name "Changes"))
-    (expect-text (test-id "show-right") "Changes")
+    (expect-text (test-id "show-right") "Changes · Tickets")
     (pointer-down (role button :name "Files"))
     (pointer-move (role region :name "Changes"))
     (pointer-move (test-id "show-left"))

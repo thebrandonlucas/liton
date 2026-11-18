@@ -77,6 +77,12 @@ All notable changes to liton are documented in this file. The format is based on
 - React to a room's messages, or take your reaction back, from the reactions under each: it counts at once, and comes back with why if the provider refuses.
 - Drag a pane by its tab or header with the mouse to move it: in the Developer, Inbox and Chat presets to another drawer or the main area its widget fits, or to another place among a drawer's tabs; in Tiling into another column or its tabs, before or after a stacked pane, or past a pane's outer edge into a new column. The column it would drop into is outlined and a bar marks where it lands; Escape or letting go outside the columns leaves it where it was. On a touch screen, panes still move from their menu.
 - `tickets.v1`: issues and tickets from your trackers, listed with filters, read with their comments, commented on, and moved between statuses and assignees, each with a link back to where it lives. A session links to the ticket its branch names, unless you link or unlink it by hand. The mock provider offers scripted tickets of a GitHub-like and a Linear-like source to try it with, through `liton call tickets.v1` (docs/protocol.md, Tickets).
+- `LITON_MOCK` takes a comma-separated list of the mock's parts, `agents`, `rooms` and `tickets`, to keep only those: `LITON_MOCK=rooms,tickets` shows its rooms and tickets beside Paseo's agents without its scripted sessions. `on`, the default, is all of them, and `off` none.
+- A Tickets widget, in Settings' Add a widget: the tickets of every source the daemon offers through `tickets.v1`, the latest changed first, each with its key, title, status, assignees, source and how long ago it changed. Filter them by source, status, assignee (anyone, you or nobody) and text in the key or title; the list changes as you type.
+- Open a ticket from the Tickets list to read its description and comments, as Markdown, with a link to it where its source keeps it; ← Tickets goes back to the list.
+- Change a ticket from its Tickets pane: set its status to one of its source's, assign it to its source's people or take them off, and comment on it in Markdown. Each change shows at once, marked Saving… until the daemon has it, and goes back, with why, if the tracker refuses it.
+- A ticket shows the sessions working on it, linked by hand or by their branch: open one to focus it, as the chat shows it, or unlink it. Link to links the session in focus to the ticket. Each shows at once, and goes back, with why, if the daemon refuses it.
+- The Developer preset has Tickets as the right drawer's third tab, after Changes and Files.
 
 ### Changed
 
@@ -134,6 +140,11 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, scrolling and taps no longer stutter: panes there no longer blur what is behind them, which a phone redrew on every frame.
 - The inbox shows the latest message of your three most recently active Paseo sessions, even those you haven't opened since, instead of the last one you saw.
 - In a narrow Inbox, such as the one in the left drawer, an item's Mark read, Settle and Snooze show under it as you hover it, instead of over its title, so clicking the title opens it rather than settling it.
+- Adding a second Chat in Settings no longer stops the page: each chat keeps its own message box, and sending or dictating focuses the one you used.
+- A widget added in Settings, or a pane moved there, is no longer hidden behind Settings: Settings closes to show it, and the added pane is the one focused (on a phone, its panel shows).
+- A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
+- A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
+- Settings' Add a widget marks the widgets already in your layout with a ✓, and screen readers say so. You can still add another, such as a second chat.
 
 ### Removed
 
