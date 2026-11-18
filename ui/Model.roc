@@ -666,7 +666,8 @@ Model := [].{
 
 	## A new pane of `widget`, focused, its column shown on a narrow screen: a
 	## tab in a Workbench's main area, or a column of its own at the end in
-	## Tiling.
+	## Tiling. A Changes diff the main area showed goes back to its pane, so
+	## the new tab shows its widget.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
@@ -676,7 +677,7 @@ Model := [].{
 				(state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), state.next_id + 1, state.columns.get(1).map_ok(|main| main.id) ?? "")
 			else
 				(state.columns.append(column), state.next_id + 2, column.id)
-		Model.show_column({ ..state, columns, next_id, focused_pane: added.id }, shown)
+		Model.show_column({ ..state, columns, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
 	}
 
 	slot_of : State, Str -> Slot

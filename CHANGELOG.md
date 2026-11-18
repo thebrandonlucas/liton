@@ -129,6 +129,7 @@ All notable changes to liton are documented in this file. The format is based on
 - In a narrow Inbox, such as the one in the left drawer, an item's Mark read, Settle and Snooze show under it as you hover it, instead of over its title, so clicking the title opens it rather than settling it.
 - Adding a second Chat in Settings no longer stops the page: each chat keeps its own message box, and sending or dictating focuses the one you used.
 - A widget added in Settings, or a pane moved there, is no longer hidden behind Settings: Settings closes to show it, and the added pane is the one focused (on a phone, its panel shows).
+- A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
 
 ### Removed
 
