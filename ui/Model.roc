@@ -2499,11 +2499,39 @@ Model := [].{
 		{ ..state, room_logs: state.room_logs.drop_if(|log| log.room_id == room_id and log.root == root).append({ room_id, root, entries: known.concat(arrived.keep_if(|entry| entry.sequence > last)) }) }
 	}
 
+	room_members_of : State, Str -> List(Rooms.Member)
+	room_members_of = |state, room_id| state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
+
 	## A room's member as its members topic tells, or as its id alone does.
 	room_member : State, Str, Str -> Rooms.Member
-	room_member = |state, room_id, member_id| {
-		members = state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
-		members.find_first(|known| known.id == member_id) ?? { id: member_id, provider: "", name: member_id, picture: Err(Missing), kind: Person, role: Member, presence: Unknown }
+	room_member = |state, room_id, member_id| Model.room_members_of(state, room_id).find_first(|known| known.id == member_id) ?? { id: member_id, provider: "", name: member_id, picture: Err(Missing), kind: Person, role: Member, presence: Unknown }
+
+	## The names of the other members of the room a draft is for (by its
+	## key, as `send_to_room` takes it) that start with the mention it ends
+	## with, such as Scout for "@sc"; none if it ends with none.
+	mention_choices : State, Str -> List(Str)
+	mention_choices = |state, key| {
+		room_id = Model.room_pane(state, key.drop_suffix("/thread")).room_id
+		me = Model.room_of(state, room_id).me ?? ""
+		match mention_typed(Model.draft(state, key)) {
+			Ok({ typed, .. }) => Model.room_members_of(state, room_id).keep_if(|member| member.id != me and member.name.with_ascii_lowercased().starts_with(typed.with_ascii_lowercased())).map(|member| member.name)
+			Err(NoMention) => []
+		}
+	}
+
+	## Mentions a member as @Name in place of the mention a draft ends with.
+	mention : State, { key : Str, name : Str } -> State
+	mention = |state, { key, name }|
+		match mention_typed(Model.draft(state, key)) {
+			Ok({ before, .. }) => { ..Model.set_draft(state, key, "${before}@${name} "), drafts_rewritten: { count: state.drafts_rewritten.count + 1, ref: "composer:${key}" } }
+			Err(NoMention) => state
+		}
+
+	## The ids of a room's members a message mentions as @Name.
+	mentioned : State, Str, Str -> List(Str)
+	mentioned = |state, room_id, text| {
+		lowered = text.with_ascii_lowercased()
+		Model.room_members_of(state, room_id).keep_if(|member| lowered.contains("@${member.name.with_ascii_lowercased()}")).map(|member| member.id)
 	}
 
 	## The top-level messages of the room a Rooms pane opened, by their times.
@@ -2588,8 +2616,8 @@ Model := [].{
 	}
 
 	## Sends the draft of a Rooms pane's room, or of the thread it opened
-	## (key "<pane>/thread"), shown at once as sending, and clears it. An
-	## empty draft says it needs text.
+	## (key "<pane>/thread"), shown at once as sending, with the members it
+	## mentions, and clears it. An empty draft says it needs text.
 	send_to_room : State, Str -> State
 	send_to_room = |state, key| {
 		pane_id = key.drop_suffix("/thread")
@@ -2597,7 +2625,7 @@ Model := [].{
 		text = Model.draft(state, key).trim()
 		sent_to = if (key == pane_id) TopLevel else Reply({ root, parent: root })
 		cleared = { ..Model.set_draft(state, key, ""), drafts_rewritten: { count: state.drafts_rewritten.count + 1, ref: "composer:${key}" } }
-		if (text.is_empty()) { ..state, notice: "A message needs text." } else Model.ask_rooms(cleared, Send({ room_id, text, place: sent_to, mentions: [] }))
+		if (text.is_empty()) { ..state, notice: "A message needs text." } else Model.ask_rooms(cleared, Send({ room_id, text, place: sent_to, mentions: Model.mentioned(state, room_id, text) }))
 	}
 
 	## Sends a message the daemon refused again, or with `again` false gives
@@ -2970,6 +2998,23 @@ comment_state = |state|
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
 	}
+
+## The mention a draft ends with, `@` and what is typed after it, and
+## the draft before it.
+mention_typed : Str -> Try({ before : Str, typed : Str }, [NoMention])
+mention_typed = |text| {
+	spaced = text.split_last(" ").map_ok(|parts| { before: "${parts.before} ", word: parts.after }) ?? { before: "", word: text }
+	{ before, word } = spaced.word.split_last("\n").map_ok(|parts| { before: "${spaced.before}${parts.before}\n", word: parts.after }) ?? spaced
+	if (word.starts_with("@")) Ok({ before, typed: word.drop_prefix("@") }) else Err(NoMention)
+}
+
+# "@sc" offers Scout, who replaces it, and the message sent mentions Scout.
+expect {
+	scout = { id: "scout", provider: "mock", name: "Scout", picture: Err(Missing), kind: Agent({ owner: Err(Missing) }), role: Member, presence: Online }
+	state = { ..Model.initial(""), room_panes: [{ pane: "p", room_id: "general", root: "" }], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
+	chosen = Model.mention(state, { key: "p", name: "Scout" })
+	Model.mention_choices(state, "p") == ["Scout"] and Model.draft(chosen, "p") == "thanks\n@Scout " and Model.send_to_room(chosen, "p").room_asks.map(|asked| asked.request) == [Send({ room_id: "general", text: "thanks\n@Scout", place: TopLevel, mentions: ["scout"] })]
+}
 
 ## Messages in the order of their times, those alike as posted.
 by_time : List(Rooms.Message) -> List(Rooms.Message)

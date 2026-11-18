@@ -370,6 +370,8 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .room-message.pending { opacity: .6; }
 .room-message.failed .sent-status { color: var(--fail); }
 .room-retry { display: flex; gap: 6px; }
+.mention-choices { display: flex; flex-wrap: wrap; gap: 4px; }
+.mention-choices:empty { display: none; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .inbox-items { list-style: none; margin: 0; padding: 0; }
 .inbox-item { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--small-radius); }

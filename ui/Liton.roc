@@ -1874,7 +1874,8 @@ Liton := [].{
 		)
 
 	## The composer of a Rooms pane's room, or of the thread it opened, as
-	## the chat's: Send shows the message at once as sending.
+	## the chat's: Send shows the message at once as sending. A mention being
+	## typed offers the room's members it may name.
 	room_composer : State(PaneCtx, Model.State), Signal(PaneCtx, Str), [Room, Thread], Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_composer = |model, id, place, placeholder| {
 		key = id.map(|pane_id| if (place == Thread) "${pane_id}/thread" else pane_id)
@@ -1882,6 +1883,16 @@ Liton := [].{
 			if (place == Thread) "Reply in the thread" else "Send to the room",
 			[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(key, Model.send_to_room))],
 			[
+				Html.div(
+					"mention-choices",
+					[
+						Engine.each(
+							key.map2(model.signal(), |draft_key, state| Model.mention_choices(state, draft_key)),
+							|name| name,
+							|row| Html.button_s(row.key().map(|name| "@${name}"), [], model.lift_row().update_by(row.key().map2(key.lift_row(), |name, draft_key| { key: draft_key, name }), Model.mention)),
+						),
+					],
+				),
 				Liton.composer_input(model, key, { name: if (place == Thread) "Your reply" else "Your message", placeholder, ref: key.map(|draft_key| "composer:${draft_key}") }, Model.send_to_room),
 				Html.div("composer-row", [Html.submit_button("", [Engine.class("send"), Html.aria_label(if (place == Thread) "Send the reply" else "Send to the room")])]),
 			],
