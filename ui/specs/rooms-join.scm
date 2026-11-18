@@ -1,0 +1,40 @@
+(test "Liton — Rooms lists each room with its kind and unread, and Join and Leave show at once, Leave coming back with why when refused"
+  (setup
+    (local-storage "liton.snapshot" "{\"version\":6,\"shell\":\"Tiling\",\"columns\":[{\"id\":\"column-1\",\"size\":1,\"tabbed\":false,\"active\":\"pane-1\",\"panes\":[{\"id\":\"pane-1\",\"widget\":\"rooms\",\"pinned\":\"\",\"options\":[]}]}],\"collapsed\":[],\"hidden\":[],\"theme\":\"\"}"))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    ; The poll sent before the manifest arrived, for every capability.
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"general\",\"provider\":\"mock\",\"name\":\"general\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":{\"Counted\":{\"messages\":3,\"mentions\":1}},\"links\":[],\"me\":\"you\"},{\"id\":\"releases\",\"provider\":\"mock\",\"name\":\"releases\",\"kind\":\"Announce\",\"private\":false,\"archived\":false,\"joined\":false,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"}]}]}]}")
+    (run-effect 3)
+    (expect-visible (text "#general"))
+    (expect-visible (text "announcements"))
+    (expect-text (test-id "room-unread") "3 @1")
+    (expect-visible (text "Not joined"))
+    (click (role button :name "Join #releases"))
+    ; Joined at once, before the daemon answers.
+    (expect-pending-effects 1)
+    (expect-visible (role button :name "Leave #releases"))
+    (expect-visible (text "Joining…"))
+    (stub-http "join" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
+    (run-effect 4)
+    ; Accepted, it holds until the poll it asks for answers.
+    (expect-visible (text "Joining…"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r2\",\"events\":[{\"Rooms\":[{\"id\":\"general\",\"provider\":\"mock\",\"name\":\"general\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"},{\"id\":\"releases\",\"provider\":\"mock\",\"name\":\"releases\",\"kind\":\"Announce\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"}]}]}]}")
+    (run-effect 5)
+    (expect-absent (text "Joining…"))
+    (expect-visible (role button :name "Leave #releases"))
+    (click (role button :name "Leave #general"))
+    (expect-pending-effects 1)
+    (expect-visible (role button :name "Join #general"))
+    (expect-visible (text "Leaving…"))
+    (stub-http "leave" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Rejected\":\"you own #general\"}}")
+    (run-effect 6)
+    ; Refused, it is a member again, with why.
+    (expect-visible (role button :name "Leave #general"))
+    (expect-absent (text "Leaving…"))
+    (expect-text (test-id "notice") "you own #general")
+  )
+)

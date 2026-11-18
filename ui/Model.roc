@@ -8,12 +8,15 @@ import cap.Files
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Rooms
+import cap.Tickets
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
 import setup.Setup
 import Highlight
 import Speech
+import TicketDesk
 import Widgets
 
 Model := [].{
@@ -84,8 +87,10 @@ Model := [].{
 		drafts : List({ pane : Str, text : Str }),
 
 		## How many times a draft changed other than by typing, sent or
-		## dictated, so `Liton.effects` writes it into its box though focused.
-		drafts_rewritten : U64,
+		## How many times a draft changed other than by typing, sent, dictated or
+		## mentioned, and the draft's key (`drafts`' `pane`) of the latest, so
+		## `Liton.effects` writes it into the box `composer-<key>` though focused.
+		drafts_rewritten : { pane : Str, count : U64 },
 
 		## Whether the pointer is coarse, a touch screen's, whose keyboard has
 		## no Shift+Enter: Enter in a composer then starts a new line.
@@ -143,6 +148,21 @@ Model := [].{
 		reviewing : List({ serial : U64, request : Review.Request, accepted : U64 }),
 		composer : Composer,
 
+		## What polls answered of rooms.v1: the rooms, each room's members, and
+		## the entries of each room's messages (`root` "") and of each thread
+		## (`root` its top-level message); what each Rooms pane shows; and the
+		## requests on their way (sent as `call_outbox`). A request is shown at
+		## once (`rooms_listed`, `sending_lines`) until the daemon refuses it,
+		## or until the poll numbered `accepted` answers, the first sent after
+		## it accepted it (0 while it waits); a message sent until a log posts
+		## it, its id `message_id` once the daemon answers, or with why it
+		## `failed` if the daemon refused it.
+		rooms : List(Rooms.Room),
+		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
+		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
+		room_panes : List(RoomPane),
+		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
+
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
 		## is the one picked, or "" for the default. `glass` is whether tiles
@@ -198,13 +218,17 @@ Model := [].{
 
 		## Agents started and workspaces created, shown starting until a listing
 		## has them; the last call whose answer may take a provider a while, to
-		## create one, or a review.v1 request, its capability as `key` and its
+		## create one, or a review.v1 or tickets.v1 request, its capability as `key` and its
 		## JSON as `text`: the shape of `clipboard`, which spares the module
 		## another instance of the effect that sends it; the kinds of agent each
 		## provider starts.
 		creating : List(Creating),
 		call_outbox : { serial : U64, key : Str, text : Str },
 		agents : List(Chat.Agent),
+
+		## What Tickets panes show (`TicketDesk`), and the tickets.v1
+		## requests on their way (sent as `call_outbox`).
+		tickets : TicketDesk.State,
 	}
 
 	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
@@ -233,6 +257,19 @@ Model := [].{
 	## A row of a Changes pane's tree: a changed file, or a folder of them
 	## with the lines they add and remove as its `file`'s.
 	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
+
+	## What a Rooms pane shows: the room opened, "" for the list of rooms,
+	## and the thread opened in it by its root, "" for none.
+	RoomPane : { pane : Str, room_id : Str, root : Str }
+
+	## A message as a Rooms pane shows it: its author's name, and whether an
+	## agent; how long ago it was posted (`Model.ago`), and when; its text,
+	## unless deleted; its reactions, each with how many reacted, whether
+	## you did and whether your reaction is on its way; and, in the room, its thread's replies, who replied, and how
+	## long ago last (`threaded`). A message sent and not yet posted says
+	## so (`status`), or why the daemon refused it (`failed`), by the
+	## `serial` of its request.
+	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -280,7 +317,7 @@ Model := [].{
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
-				drafts_rewritten: 0,
+				drafts_rewritten: { pane: "", count: 0 },
 				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
@@ -306,6 +343,11 @@ Model := [].{
 				reviews: [],
 				reviewing: [],
 				composer: Model.closed_composer,
+				rooms: [],
+				room_members: [],
+				room_logs: [],
+				room_panes: [],
+				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
@@ -325,6 +367,7 @@ Model := [].{
 				creating: [],
 				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
+				tickets: TicketDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -663,16 +706,20 @@ Model := [].{
 	panes : State -> List(Pane)
 	panes = |state| state.columns.join_map(|column| column.panes)
 
-	## A new pane of `widget`: a tab in a Workbench's main area, or a column of
-	## its own at the end in Tiling.
+	## A new pane of `widget`, focused, its column shown on a narrow screen: a
+	## tab in a Workbench's main area, or a column of its own at the end in
+	## Tiling. A Changes diff the main area showed goes back to its pane, so
+	## the new tab shows its widget.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
 		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
-		if (state.shell == Workbench)
-			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), next_id: state.next_id + 1 }
-		else
-			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
+		(columns, next_id, shown) =
+			if (state.shell == Workbench)
+				(state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), state.next_id + 1, state.columns.get(1).map_ok(|main| main.id) ?? "")
+			else
+				(state.columns.append(column), state.next_id + 2, column.id)
+		Model.show_column({ ..state, columns, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
 	}
 
 	slot_of : State, Str -> Slot
@@ -1170,8 +1217,9 @@ Model := [].{
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows; of each Files pane on screen, its root, the directories
 	## open and the file it shows; the workspaces, while a pane lists them;
-	## and the review of the context of each, Files or Changes, on screen.
-	## Until the manifest arrives, every capability counts as offered.
+	## the review of the context of each, Files or Changes, on screen; and
+	## of Tickets panes on screen, the tickets, the links and the ticket each
+	## shows. Until the manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
@@ -1195,11 +1243,22 @@ Model := [].{
 			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
 		}
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
+		# A ticket list's, its sessions' links, and the ticket each shows.
+		ticket_views = laid_out.keep_if(|shown| shown.widget == "tickets" and Model.pane_visible(state, shown.id)).map(|shown| TicketDesk.view(state.tickets, shown.id))
+		tickets = if (offered(Capability.tickets_v1) and !ticket_views.is_empty()) [TicketList, TicketLinks].concat(ticket_views.map(|view| view.ticket).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads)
+		# The rooms, and the messages and members of the room each Rooms pane
+		# opened, and of the thread opened in it.
+		room_topics = |shown| {
+			{ room_id, root, .. } = Model.room_pane(state, shown.id)
+			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
+		}
+		rooms_shown = laid_out.keep_if(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))
+		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.join_map(room_topics).prepend(RoomList) else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -1253,8 +1312,8 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
-		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
+		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
+		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -1269,6 +1328,8 @@ Model := [].{
 		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
 		match subject {
 			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
+			RoomMessages(room_id) => Model.logged(with_events, room_id, "", [])
+			RoomThread({ room_id, root }) => Model.logged(with_events, room_id, root, [])
 			# Unchanged items still settle what was set aside.
 			Items => Model.attention_fetched(with_events, serial, with_events.attention)
 			# The requests its review has held since the poll they waited for.
@@ -1291,8 +1352,15 @@ Model := [].{
 				else
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
+			(_, Rooms(listed)) => { ..state, rooms: listed }
+			(RoomMembers(room_id), Members(members)) => { ..state, room_members: state.room_members.drop_if(|known| known.room_id == room_id).append({ room_id, members }) }
+			(RoomMessages(room_id), RoomEntry(entry)) => Model.logged(state, room_id, "", [entry])
+			(RoomThread({ room_id, root }), RoomEntry(entry)) => Model.logged(state, room_id, root, [entry])
 			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
+			(_, Tickets(listing)) => { ..state, tickets: TicketDesk.received(state.tickets, Listing(listing)) }
+			(_, Ticket(ticket)) => { ..state, tickets: TicketDesk.received(state.tickets, Opened(ticket)) }
+			(_, Links(links)) => { ..state, tickets: TicketDesk.received(state.tickets, Links(links)) }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -1460,7 +1528,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: state.drafts_rewritten + 1 }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
@@ -1870,19 +1938,24 @@ Model := [].{
 	changed = |state, listed_session|
 		if (Model.starting(state, listed_session.id)) Model.newest else Attention.recency(state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? ""))
 
-	## How long ago a session last changed, as its row says it: "now", "3m",
-	## "2h", "4d" or "1w"; "" if unknown.
+	## How long ago a session last changed, as `Model.ago` says it.
 	age : State, Chat.Session -> Str
 	age = |state, listed_session| {
 		last_change = state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? "")
-		match epoch_ms(last_change) {
-			Ok(at) if state.now > 0 and !Model.starting(state, listed_session.id) => {
+		if (Model.starting(state, listed_session.id)) "" else Model.ago(state, last_change)
+	}
+
+	## How long ago a time such as `2026-01-01T08:00:00.000Z` was, from the
+	## minute last begun, as "now", "3m", "3h", "2d" or "4w"; "" for none.
+	ago : State, Str -> Str
+	ago = |state, time|
+		match epoch_ms(time) {
+			Ok(at) if state.now > 0 => {
 				minutes = (state.now - at) // 60_000
 				if (minutes < 1) "now" else if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else if (minutes < 10080) "${(minutes // 1440).to_str()}d" else "${(minutes // 10080).to_str()}w"
 			}
 			_ => ""
 		}
-	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64
@@ -2189,6 +2262,14 @@ Model := [].{
 		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
 	}
 
+	## Shows a ticket in a Tickets pane, or its list again for "".
+	open_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	open_ticket = |state, { pane_id, ticket_id }| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, ticket: ticket_id }) }
+
+	## Changes the filter of a Tickets pane's list.
+	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
+	filter_tickets = |state, pane_id, change| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, filter: change(view.filter) }) }
+
 	## Sends a review.v1 request, shown at once by applying it to the review
 	## the UI has (`review_of`) until the daemon answers.
 	ask_review : State, Review.Request -> State
@@ -2208,6 +2289,52 @@ Model := [].{
 			Ok(Err({ message, .. })) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: message }
 			Err(_) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: "The daemon did not answer." }
 		}
+	}
+
+	## Sends a tickets.v1 request, shown at once (`TicketDesk`) until the
+	## daemon answers.
+	ask_tickets : State, Tickets.Request -> State
+	ask_tickets = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "tickets.v1", text: Json.to_str({ capability: "tickets.v1", request }) }, tickets: { ..state.tickets, asked: state.tickets.asked.append({ serial, request, accepted: 0 }) }, notice: "" }
+	}
+
+	## Takes the daemon's answer to a tickets.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	tickets_answered : State, U64, Str -> State
+	tickets_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Tickets.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, tickets: TicketDesk.answered(state.tickets, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Links the session the focus shows to a ticket by hand: the one
+	## focused, or the focused workspace's that needs you most.
+	link_ticket : State, Str -> State
+	link_ticket = |state, ticket_id| {
+		session_id = Model.session_of(state, Model.pane(state, ""))
+		if (session_id.is_empty() or Model.starting(state, session_id)) state else Model.ask_tickets(state, Link({ session_id, ticket_id }))
+	}
+
+	## Comments a Tickets pane's draft on the ticket it shows.
+	comment_ticket : State, Str -> State
+	comment_ticket = |state, pane_id| {
+		key = "${pane_id}/ticket"
+		text = Model.draft(state, key).trim()
+		ticket_id = TicketDesk.view(state.tickets, pane_id).ticket
+		if (text.is_empty() or ticket_id.is_empty()) state else Model.ask_tickets(Model.set_draft(state, key, ""), Comment({ ticket_id, body: text }))
+	}
+
+	## Assigns a ticket to a person too, or no longer.
+	assign : State, { ticket_id : Str, person_id : Str }, Bool -> State
+	assign = |state, { ticket_id, person_id }, assigned| {
+		assignees = TicketDesk.listing_shown(state.tickets).tickets.find_first(|shown| shown.id == ticket_id).map_ok(|shown| shown.assignees.map(|person| person.id)) ?? []
+		Model.ask_tickets(state, SetAssignees({ ticket_id, person_ids: if (assigned) assignees.drop_if(|id| id == person_id).append(person_id) else assignees.drop_if(|id| id == person_id) }))
 	}
 
 	## What a comment's button asks: to edit the draft, delete it, reply to
@@ -2385,10 +2512,280 @@ Model := [].{
 		}
 	}
 
+	## The rooms as the daemon last listed them, with the joins and leaves on
+	## their way applied.
+	rooms_listed : State -> List(Rooms.Room)
+	rooms_listed = |state| {
+		joined = |listed, room_id, member| listed.map(|room| if (room.id == room_id) { ..room, joined: member } else room)
+		state.room_asks.fold(
+			state.rooms,
+			|listed, asked|
+				match asked.request {
+					Join({ room_id }) => joined(listed, room_id, Bool.True)
+					Leave({ room_id }) => joined(listed, room_id, Bool.False)
+					_ => listed
+				},
+		)
+	}
+
+	## Whether a join or leave of a room is on its way.
+	joining : State, Str -> Bool
+	joining = |state, room_id| state.room_asks.any(|asked| asked.request == Join({ room_id: room_id }) or asked.request == Leave({ room_id: room_id }))
+
+	## Joins a room you aren't in, or leaves one you are, shown at once.
+	toggle_joined : State, Str -> State
+	toggle_joined = |state, room_id|
+		match Model.rooms_listed(state).find_first(|room| room.id == room_id) {
+			Ok(room) if !Model.joining(state, room_id) => Model.ask_rooms(state, if (room.joined) Leave({ room_id: room_id }) else Join({ room_id: room_id }))
+			_ => state
+		}
+
+	room_pane : State, Str -> RoomPane
+	room_pane = |state, pane_id| state.room_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, room_id: "", root: "" }
+
+	## Opens a room in a Rooms pane, or with "" the list of rooms again.
+	open_room : State, { pane_id : Str, room_id : Str } -> State
+	open_room = |state, { pane_id, room_id }| { ..state, room_panes: state.room_panes.drop_if(|shown| shown.pane == pane_id).append({ pane: pane_id, room_id, root: "" }) }
+
+	## Opens a thread beside the room a Rooms pane shows, by its root, or
+	## closes it with "".
+	open_thread : State, { pane_id : Str, root : Str } -> State
+	open_thread = |state, { pane_id, root }| { ..state, room_panes: state.room_panes.map(|shown| if (shown.pane == pane_id) { ..shown, root } else shown) }
+
+	## A room as listed, or as its id alone tells.
+	room_of : State, Str -> Rooms.Room
+	room_of = |state, room_id| Model.rooms_listed(state).find_first(|room| room.id == room_id) ?? Rooms.room({ id: room_id, provider: "", name: room_id, kind: Channel })
+
+	## The entries of a room's messages, or of a thread in it by its root.
+	room_log : State, Str, Str -> List(Rooms.Entry)
+	room_log = |state, room_id, root| state.room_logs.find_first(|log| log.room_id == room_id and log.root == root).map_ok(|log| log.entries) ?? []
+
+	## Whether a room's messages, or a thread's, have arrived.
+	room_loaded : State, Str, Str -> Bool
+	room_loaded = |state, room_id, root| state.room_logs.any(|log| log.room_id == room_id and log.root == root)
+
+	## A room's or thread's log with the entries after those it has.
+	logged : State, Str, Str, List(Rooms.Entry) -> State
+	logged = |state, room_id, root, arrived| {
+		known = Model.room_log(state, room_id, root)
+		last = known.last().map_ok(|entry| entry.sequence) ?? 0
+		{ ..state, room_logs: state.room_logs.drop_if(|log| log.room_id == room_id and log.root == root).append({ room_id, root, entries: known.concat(arrived.keep_if(|entry| entry.sequence > last)) }) }
+	}
+
+	room_members_of : State, Str -> List(Rooms.Member)
+	room_members_of = |state, room_id| state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
+
+	## A room's member as its members topic tells, or as its id alone does.
+	room_member : State, Str, Str -> Rooms.Member
+	room_member = |state, room_id, member_id| Model.room_members_of(state, room_id).find_first(|known| known.id == member_id) ?? { id: member_id, provider: "", name: member_id, picture: Err(Missing), kind: Person, role: Member, presence: Unknown }
+
+	## The names of the other members of the room a draft is for (by its
+	## key, as `send_to_room` takes it) that start with the mention it ends
+	## with, such as Scout for "@sc"; none if it ends with none.
+	mention_choices : State, Str -> List(Str)
+	mention_choices = |state, key| {
+		room_id = Model.room_pane(state, key.drop_suffix("/thread")).room_id
+		me = Model.room_of(state, room_id).me ?? ""
+		match mention_typed(Model.draft(state, key)) {
+			Ok({ typed, .. }) => Model.room_members_of(state, room_id).keep_if(|member| member.id != me and member.name.with_ascii_lowercased().starts_with(typed.with_ascii_lowercased())).map(|member| member.name)
+			Err(NoMention) => []
+		}
+	}
+
+	## Mentions a member as @Name in place of the mention a draft ends with.
+	mention : State, { key : Str, name : Str } -> State
+	mention = |state, { key, name }|
+		match mention_typed(Model.draft(state, key)) {
+			Ok({ before, .. }) => { ..Model.set_draft(state, key, "${before}@${name} "), drafts_rewritten: { pane: key, count: state.drafts_rewritten.count + 1 } }
+			Err(NoMention) => state
+		}
+
+	## The ids of a room's members a message mentions as @Name.
+	mentioned : State, Str, Str -> List(Str)
+	mentioned = |state, room_id, text| {
+		lowered = text.with_ascii_lowercased()
+		Model.room_members_of(state, room_id).keep_if(|member| lowered.contains("@${member.name.with_ascii_lowercased()}")).map(|member| member.id)
+	}
+
+	## The top-level messages of the room a Rooms pane opened, by their times.
+	room_lines : State, Str -> List(RoomLine)
+	room_lines = |state, pane_id| {
+		room_id = Model.room_pane(state, pane_id).room_id
+		log = Model.room_log(state, room_id, "")
+		threads = Rooms.threads(log)
+		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True }).concat(Model.sending_lines(state, room_id, ""))
+	}
+
+	## The thread a Rooms pane opened: its top-level message, then its
+	## replies by their times.
+	thread_lines : State, Str -> List(RoomLine)
+	thread_lines = |state, pane_id| {
+		{ room_id, root, .. } = Model.room_pane(state, pane_id)
+		posted = Rooms.messages(Model.room_log(state, room_id, "")).keep_if(|message| message.id == root).concat(by_time(Rooms.messages(Model.room_log(state, room_id, root)).keep_if(|message| message.place != TopLevel)))
+		posted.map(|message| Model.room_line(state, message, [])).concat(Model.sending_lines(state, room_id, root))
+	}
+
+	## The messages sent to a room's top level, or to a thread by its root,
+	## that no log has posted yet.
+	sending_lines : State, Str, Str -> List(RoomLine)
+	sending_lines = |state, room_id, root| {
+		me = Model.room_of(state, room_id).me ?? ""
+		state.room_asks.keep_oks(
+			|asked|
+				match asked.request {
+					Send(sent) if sent.room_id == room_id and (if (root.is_empty()) sent.place == TopLevel else sent.place != TopLevel and Rooms.root_of(Rooms.message({ id: "", room_id, author: me, text: "", time: "", place: sent.place, mentions: [] })) == root) => {
+						line = Model.room_line(state, Rooms.message({ id: "sending:${asked.serial.to_str()}", room_id, author: me, text: sent.text, time: "", place: sent.place, mentions: sent.mentions }), [])
+						Ok({ ..line, author: if (Model.room_members_of(state, room_id).any(|member| member.id == me)) line.author else "You", status: if (asked.failed.is_empty()) "Sending…" else "Not sent: ${asked.failed}", failed: !asked.failed.is_empty(), serial: asked.serial })
+					}
+					_ => Err(NotSent)
+				},
+		)
+	}
+
+	room_line : State, Rooms.Message, List(Rooms.Thread) -> RoomLine
+	room_line = |state, posted, threads| {
+		author = Model.room_member(state, posted.room_id, posted.author)
+		me = Model.room_of(state, posted.room_id).me ?? ""
+		thread = threads.find_first(|summary| summary.root == posted.id) ?? { root: posted.id, replies: 0, last_reply: Err(Missing), participants: [] }
+		{
+			id: posted.id,
+			author: author.name,
+			agent: author.kind != Person,
+			ago: Model.ago(state, posted.time),
+			time: posted.time,
+			text: posted.text,
+			edited: posted.edited,
+			deleted: posted.deleted,
+			reactions: Model.reactions_shown(state, posted, me),
+			threaded: Bool.False,
+			replies: thread.replies,
+			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
+			last_reply: thread.last_reply.map_ok(|time| Model.ago(state, time)) ?? "",
+			status: "",
+			failed: Bool.False,
+			serial: 0,
+		}
+	}
+
+	## A message's reactions with yours on their way applied.
+	reactions_shown : State, Rooms.Message, Str -> List({ emoji : Str, count : U64, mine : Bool, pending : Bool })
+	reactions_shown = |state, posted, me| {
+		reacting = state.room_asks.keep_oks(
+			|asked|
+				match asked.request {
+					React({ message_id, emoji, .. }) if message_id == posted.id => Ok({ emoji, by: me, added: Bool.True })
+					Unreact({ message_id, emoji, .. }) if message_id == posted.id => Ok({ emoji, by: me, added: Bool.False })
+					_ => Err(NotReacting)
+				},
+		)
+		reacting.fold(posted.reactions, Rooms.reacted).map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me), pending: reacting.any(|asked| asked.emoji == reaction.emoji) })
+	}
+
+	## Reacts to a message in the room a Rooms pane opened with `emoji`, or
+	## takes back your reaction if `mine`, shown at once.
+	toggle_reaction : State, { pane_id : Str, message_id : Str, emoji : Str, mine : Bool } -> State
+	toggle_reaction = |state, { pane_id, message_id, emoji, mine }| {
+		room_id = Model.room_pane(state, pane_id).room_id
+		Model.ask_rooms(state, if (mine) Unreact({ room_id, message_id, emoji }) else React({ room_id, message_id, emoji }))
+	}
+
+	## Who types in a room's messages, or a thread's, as "Scout is typing…":
+	## those who said they type there and posted nothing since.
+	typing : State, Str, Str -> Str
+	typing = |state, room_id, root| {
+		typists = Model.room_log(state, room_id, root).fold(
+			[],
+			|so_far, entry|
+				match entry.event {
+					Typing(typed) => if (so_far.contains(typed.member)) so_far else so_far.append(typed.member)
+					Posted(posted) => so_far.drop_if(|typist| typist == posted.author)
+					_ => so_far
+				},
+		)
+		names = typists.map(|member_id| Model.room_member(state, room_id, member_id).name)
+		match names {
+			[] => ""
+			[one] => "${one} is typing…"
+			_ => "${Str.join_with(names, ", ")} are typing…"
+		}
+	}
+
+	## Sends the draft of a Rooms pane's room, or of the thread it opened
+	## (key "<pane>/thread"), shown at once as sending, with the members it
+	## mentions, and clears it. An empty draft says it needs text.
+	send_to_room : State, Str -> State
+	send_to_room = |state, key| {
+		pane_id = key.drop_suffix("/thread")
+		{ room_id, root, .. } = Model.room_pane(state, pane_id)
+		text = Model.draft(state, key).trim()
+		sent_to = if (key == pane_id) TopLevel else Reply({ root, parent: root })
+		cleared = { ..Model.set_draft(state, key, ""), drafts_rewritten: { pane: key, count: state.drafts_rewritten.count + 1 } }
+		if (text.is_empty()) { ..state, notice: "A message needs text." } else Model.ask_rooms(cleared, Send({ room_id, text, place: sent_to, mentions: Model.mentioned(state, room_id, text) }))
+	}
+
+	## Sends a message the daemon refused again, or with `again` false gives
+	## it up.
+	resend : State, { serial : U64, again : Bool } -> State
+	resend = |state, { serial, again }| {
+		kept = { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial) }
+		match state.room_asks.find_first(|asked| asked.serial == serial) {
+			Ok(asked) if again => Model.ask_rooms(kept, asked.request)
+			_ => kept
+		}
+	}
+
+	## Sends a rooms.v1 request, shown at once until the daemon answers.
+	ask_rooms : State, Rooms.Request -> State
+	ask_rooms = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+	}
+
+	## Without the messages sent that a log has posted.
+	posted_sent : State -> State
+	posted_sent = |state| {
+		posted = |message_id|
+			state.room_logs.any(
+				|log|
+					log.entries.any(
+						|entry|
+							match entry.event {
+								Posted(message) => message.id == message_id
+								_ => Bool.False
+							},
+					),
+			)
+		{ ..state, room_asks: state.room_asks.drop_if(|asked| !asked.message_id.is_empty() and posted(asked.message_id)) }
+	}
+
+	## Takes the daemon's answer to a rooms.v1 request: a message sent holds
+	## until a log posts it, another request accepted until the poll it asks
+	## for shows it; refused, a message stays with why it failed, and another
+	## request is undone, with why.
+	rooms_answered : State, U64, Str -> State
+	rooms_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Rooms.Response), _)
+		answered = Json.parse(text)
+		sends = |asked|
+			match asked.request {
+				Send(_) => asked.serial == serial
+				_ => Bool.False
+			}
+		undone = |reason| { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial and !sends(asked)).map(|asked| if (sends(asked)) { ..asked, failed: reason } else asked), notice: reason }
+		match answered {
+			Ok(Ok(Sent({ message_id }))) => Model.poll(Model.posted_sent({ ..state, room_asks: state.room_asks.map(|asked| if (asked.serial == serial) { ..asked, message_id } else asked) }))
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => Model.poll({ ..state, room_asks: state.room_asks.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
+	## `NoView` is a widget's that liton has no view of yet.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2411,7 +2808,10 @@ Model := [].{
 				"inbox" => Inbox
 				"changes" => Changes
 				"files" => Files
-				_ => Capabilities
+				"tickets" => Tickets
+				"rooms" => Rooms
+				"capabilities" => Capabilities
+				_ => NoView
 			}
 	}
 }
@@ -2508,7 +2908,7 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
 expect {
@@ -2525,9 +2925,9 @@ expect {
 	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
 	tiling = Model.layout(state, Model.tiling)
 	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
-	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3"]]
+	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3", "pane-5"]]
 		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
-		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3"]]
+		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3", "pane-5"]]
 		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
 		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
 		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
@@ -2556,7 +2956,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
 }
 
 expect {
@@ -2696,6 +3096,30 @@ comment_state = |state|
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
 	}
+
+## The mention a draft ends with, `@` and what is typed after it, and
+## the draft before it.
+mention_typed : Str -> Try({ before : Str, typed : Str }, [NoMention])
+mention_typed = |text| {
+	spaced = text.split_last(" ").map_ok(|parts| { before: "${parts.before} ", word: parts.after }) ?? { before: "", word: text }
+	{ before, word } = spaced.word.split_last("\n").map_ok(|parts| { before: "${spaced.before}${parts.before}\n", word: parts.after }) ?? spaced
+	if (word.starts_with("@")) Ok({ before, typed: word.drop_prefix("@") }) else Err(NoMention)
+}
+
+# "@sc" offers Scout, who replaces it, and the message sent mentions Scout.
+expect {
+	scout = { id: "scout", provider: "mock", name: "Scout", picture: Err(Missing), kind: Agent({ owner: Err(Missing) }), role: Member, presence: Online }
+	state = { ..Model.initial(""), room_panes: [{ pane: "p", room_id: "general", root: "" }], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
+	chosen = Model.mention(state, { key: "p", name: "Scout" })
+	Model.mention_choices(state, "p") == ["Scout"] and Model.draft(chosen, "p") == "thanks\n@Scout " and Model.send_to_room(chosen, "p").room_asks.map(|asked| asked.request) == [Send({ room_id: "general", text: "thanks\n@Scout", place: TopLevel, mentions: ["scout"] })]
+}
+
+## Messages in the order of their times, those alike as posted.
+by_time : List(Rooms.Message) -> List(Rooms.Message)
+by_time = |posted| {
+	keyed = posted.map_with_index(|message, index| { message, index, at: epoch_ms(message.time) ?? 0 })
+	keyed.sort_with(|left, right| if (left.at < right.at or (left.at == right.at and left.index < right.index)) Before else if (left.at == right.at and left.index == right.index) Same else After).map(|kept| kept.message)
+}
 
 ## A UTC time such as `2026-01-01T08:00:00.000Z` in milliseconds since
 ## 1970, to the second.

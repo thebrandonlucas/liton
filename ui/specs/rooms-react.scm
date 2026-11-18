@@ -1,0 +1,38 @@
+(test "Liton — a reaction shows at once, pending until the room has it, and taking one back comes back with why when refused"
+  (setup
+    (local-storage "liton.snapshot" "{\"version\":6,\"shell\":\"Tiling\",\"columns\":[{\"id\":\"column-1\",\"size\":1,\"tabbed\":false,\"active\":\"pane-1\",\"panes\":[{\"id\":\"pane-1\",\"widget\":\"rooms\",\"pinned\":\"\",\"options\":[]}]}],\"collapsed\":[],\"hidden\":[],\"theme\":\"\"}"))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    ; The poll sent before the manifest arrived, for every capability.
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"general\",\"provider\":\"mock\",\"name\":\"general\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"},{\"id\":\"ideas\",\"provider\":\"mock\",\"name\":\"ideas\",\"kind\":\"Forum\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"}]}]}]}")
+    (run-effect 3)
+    (click (role button :name "#general"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[]},{\"capability\":\"rooms.v1\",\"topic\":\"messages/general\",\"cursor\":\"1\",\"events\":[{\"RoomEntry\":{\"sequence\":1,\"event\":{\"Posted\":{\"id\":\"general-1\",\"room_id\":\"general\",\"author\":\"ada\",\"text\":\"Shipped the fix\",\"time\":\"2026-01-01T09:00:00.000Z\",\"place\":\"TopLevel\",\"mentions\":[],\"reactions\":[{\"emoji\":\"+\",\"by\":[\"ada\"]}],\"edited\":false,\"deleted\":false}}}}]},{\"capability\":\"rooms.v1\",\"topic\":\"members/general\",\"cursor\":\"m1\",\"events\":[{\"Members\":[{\"id\":\"you\",\"provider\":\"mock\",\"name\":\"You\",\"kind\":\"Person\",\"role\":\"Owner\",\"presence\":\"Online\"},{\"id\":\"ada\",\"provider\":\"mock\",\"name\":\"Ada\",\"kind\":\"Person\",\"role\":\"Admin\",\"presence\":\"Away\"},{\"id\":\"scout\",\"provider\":\"mock\",\"name\":\"Scout\",\"kind\":{\"Agent\":{\"owner\":\"you\"}},\"role\":\"Member\",\"presence\":\"Online\"},{\"id\":\"patch\",\"provider\":\"mock\",\"name\":\"Patch\",\"kind\":{\"Agent\":{\"owner\":\"ada\"}},\"role\":\"Member\",\"presence\":\"Online\"}]}]}]}")
+    (run-effect 4)
+    (expect-attr (role button :name "React with +") aria-pressed "false")
+    (click (role button :name "React with +"))
+    ; Counted at once, before the daemon answers.
+    (expect-pending-effects 1)
+    (expect-text (role button :name "Take back +") "+ 2")
+    (expect-attr (role button :name "Take back +") class "reaction pending")
+    (stub-http "react" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
+    (run-effect 5)
+    (expect-attr (role button :name "Take back +") class "reaction pending")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[]},{\"capability\":\"rooms.v1\",\"topic\":\"messages/general\",\"cursor\":\"2\",\"events\":[{\"RoomEntry\":{\"sequence\":2,\"event\":{\"Reacted\":{\"id\":\"general-1\",\"emoji\":\"+\",\"by\":\"you\",\"added\":true}}}}]},{\"capability\":\"rooms.v1\",\"topic\":\"members/general\",\"cursor\":\"m1\",\"events\":[]}]}")
+    (run-effect 6)
+    (expect-attr (role button :name "Take back +") class "reaction")
+    (expect-text (role button :name "Take back +") "+ 2")
+    (click (role button :name "Take back +"))
+    (expect-text (role button :name "React with +") "+ 1")
+    (stub-http "unreact" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Rejected\":\"join #general first\"}}")
+    (run-effect 7)
+    (expect-text (role button :name "Take back +") "+ 2")
+    (expect-text (test-id "notice") "join #general first")
+    ; A reaction no one made yet, made from the message.
+    (click (role button :name "React with 🎉"))
+    (expect-text (role button :name "Take back 🎉") "🎉 1")
+  )
+)

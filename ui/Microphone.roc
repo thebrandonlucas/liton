@@ -168,7 +168,7 @@ Microphone := [].{
 			}
 			Ok(Transcript({ text, from, to })) if voice.mode == Dictation => {
 				typed = Model.set_draft(state, voice.pane, Speech.insert(Model.draft(state, voice.pane), from, to, text))
-				{ ..typed, drafts_rewritten: typed.drafts_rewritten + 1, voice: done }
+				{ ..typed, drafts_rewritten: { pane: voice.pane, count: typed.drafts_rewritten.count + 1 }, voice: done }
 			}
 			Ok(Transcript({ text, .. })) if Speech.echoes(text, Microphone.replies(state).last().map_ok(|reply| reply.text) ?? "") => { ..changed_to(done), notice: "Not sent: it sounded like the reply read back" }
 			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim() }))

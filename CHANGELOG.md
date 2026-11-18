@@ -69,11 +69,24 @@ All notable changes to liton are documented in this file. The format is based on
 - Rename a project, a workspace or a session from its ⋮ menu: its title becomes a field, Enter saves the new name, which shows at once, and Escape leaves it as it was. A rename the provider refuses is undone, with why.
 - The protocol has `rooms.v1`, rooms where people and agents talk: channels, forums, direct conversations and announcements, with their members, messages, threads and reactions, from any NIP-29 relay or other source of rooms. List rooms, send a message or a reply, react, and join or leave a room with `liton call rooms.v1`, and follow a room with `liton watch rooms.v1 messages/<room>`.
 - The mock provider offers `rooms.v1`: three rooms, #general, the forum #ideas and the announcements of #releases, where you talk with Ada and the agents Scout and Patch. An agent a message mentions types and then answers in the message's thread.
+- A Rooms widget, in Settings' Add a widget, lists the rooms `rooms.v1` offers, each with its kind and what is unread in it. Join a room or leave one, shown at once and undone with why if the provider refuses.
+- Open a room from Rooms to read it: each message's author, marked if an agent, how long ago it was posted, its text as Markdown, whether it was edited or deleted, its reactions and its thread's replies, and who is typing. A forum shows its posts as cards.
+- Open a message's thread from its replies in a room: its replies and who is typing in it show beside the room, or in its place in a narrow pane.
+- Write in a room, or reply in a thread, from a composer like the chat's. A message shows at once as sending until the room posts it; one the provider refuses, such as in a room you haven't joined or one only others announce in, stays with why, to retry or discard.
+- Mention a room's members as you write: typing @ offers the others in the room, narrowing as you type their name, and a message names those it @mentions, so an agent you mention answers in its thread.
+- React to a room's messages, or take your reaction back, from the reactions under each: it counts at once, and comes back with why if the provider refuses.
 - Drag a pane by its tab or header with the mouse to move it: in the Developer, Inbox and Chat presets to another drawer or the main area its widget fits, or to another place among a drawer's tabs; in Tiling into another column or its tabs, before or after a stacked pane, or past a pane's outer edge into a new column. The column it would drop into is outlined and a bar marks where it lands; Escape or letting go outside the columns leaves it where it was. On a touch screen, panes still move from their menu.
 - `tickets.v1`: issues and tickets from your trackers, listed with filters, read with their comments, commented on, and moved between statuses and assignees, each with a link back to where it lives. A session links to the ticket its branch names, unless you link or unlink it by hand. The mock provider offers scripted tickets of a GitHub-like and a Linear-like source to try it with, through `liton call tickets.v1` (docs/protocol.md, Tickets).
+- `LITON_MOCK` takes a comma-separated list of the mock's parts, `agents`, `rooms` and `tickets`, to keep only those: `LITON_MOCK=rooms,tickets` shows its rooms and tickets beside Paseo's agents without its scripted sessions. `on`, the default, is all of them, and `off` none.
+- A Tickets widget, in Settings' Add a widget: the tickets of every source the daemon offers through `tickets.v1`, the latest changed first, each with its key, title, status, assignees, source and how long ago it changed. Filter them by source, status, assignee (anyone, you or nobody) and text in the key or title; the list changes as you type.
+- Open a ticket from the Tickets list to read its description and comments, as Markdown, with a link to it where its source keeps it; ← Tickets goes back to the list.
+- Change a ticket from its Tickets pane: set its status to one of its source's, assign it to its source's people or take them off, and comment on it in Markdown. Each change shows at once, marked Saving… until the daemon has it, and goes back, with why, if the tracker refuses it.
+- A ticket shows the sessions working on it, linked by hand or by their branch: open one to focus it, as the chat shows it, or unlink it. Link to links the session in focus to the ticket. Each shows at once, and goes back, with why, if the daemon refuses it.
+- The Developer preset has Tickets as the right drawer's third tab, after Changes and Files.
 
 ### Changed
 
+- **Breaking:** the daemon refuses a request from a page of another site, so a website open in your browser can't send your agents work: one whose `Origin` isn't the daemon's own address, a POST not sent as `application/json`, and one to a host name other than `LITON_HOST`, `localhost` or one `LITON_ALLOWED_HOSTS` lists. Behind a proxy or a domain of its own, set `LITON_ALLOWED_HOSTS` to its name, such as `LITON_ALLOWED_HOSTS=liton.example`. A client of the protocol sends its calls and polls with `Content-Type: application/json`.
 - **Breaking:** the Paseo and speech rigs run from liton's development tool rather than shell scripts: `zig build devtool -- paseo daemon` (and `paseo cli`, `paseo relay`, `paseo bridge`) in place of `rig/paseo/*.sh`, and `zig build devtool -- speech sherpa` (and `speech whisper`, `speech model`) in place of `rig/speech/*.sh`, with the same settings.
 - Sending a message or allowing or denying a request shows at once: the message appears as "Sending…" and the prompt gives way to "Allowing…" or "Denying…" until the agent has it. A message the agent did not take stays, with why and a Retry button; an answer it did not take brings the prompt back. A chat pane says "Loading…" until its session's timeline arrives.
 - The browser remembers which drawers you hid, and each pane's options. Layouts saved before options existed load with every option at its default.
@@ -116,6 +129,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Tabs show their widget's icon beside its title, and a × on hover that hides the tab in the Developer, Inbox and Chat presets and closes it in Tiling.
 - In Tiling, a pane's menu switches its column between a stack and tabs, in place of the column's Stack and Tabs buttons, and offers it only when the column holds more than one pane.
 - A pane's menu names where it moves the pane: "Move to right drawer" or "Move to main area" in the Developer, Inbox and Chat presets, for each place its widget fits, and "Move to the column on the left" or "Move to a new column on the right" in Tiling, rather than ← and → arrows.
+- The Inbox preset has Rooms as a tab beside the Inbox, in the left drawer.
 
 ### Fixed
 
@@ -127,6 +141,11 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, scrolling and taps no longer stutter: panes there no longer blur what is behind them, which a phone redrew on every frame.
 - The inbox shows the latest message of your three most recently active Paseo sessions, even those you haven't opened since, instead of the last one you saw.
 - In a narrow Inbox, such as the one in the left drawer, an item's Mark read, Settle and Snooze show under it as you hover it, instead of over its title, so clicking the title opens it rather than settling it.
+- Adding a second Chat in Settings no longer stops the page: each chat keeps its own message box, and sending or dictating focuses the one you used.
+- A widget added in Settings, or a pane moved there, is no longer hidden behind Settings: Settings closes to show it, and the added pane is the one focused (on a phone, its panel shows).
+- A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
+- A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
+- Settings' Add a widget marks the widgets already in your layout with a ✓, and screen readers say so. You can still add another, such as a second chat.
 
 ### Removed
 
