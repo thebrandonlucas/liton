@@ -626,7 +626,7 @@ Liton := [].{
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
-							Rooms => Liton.rooms(model)
+							Rooms => Liton.rooms(model, id)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -1767,10 +1767,14 @@ Liton := [].{
 			TooLarge => "Too large"
 		}
 
-	## The rooms the daemon lists: each one's name, kind and what is unread
-	## in it, and Join or Leave, which shows at once.
-	rooms : State(PaneCtx, Model.State) -> Elem(PaneCtx)
-	rooms = |model0|
+	## A Rooms pane: the rooms, or the room opened from them.
+	rooms : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	rooms = |model, id| Engine.when(id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id.is_empty()), || Liton.room_list(model, id), || Liton.room_opened(model, id))
+
+	## The rooms the daemon lists: each one's name, which opens it, its kind
+	## and what is unread in it, and Join or Leave.
+	room_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	room_list = |model0, id|
 		Html.ul(
 			[Engine.class("room-list"), Engine.attr("data-part", "list")],
 			[
@@ -1779,21 +1783,110 @@ Liton := [].{
 					|room| room.id,
 					|row| {
 						model = model0.lift_row()
-						asking = row.field(|room| room).map2(model.signal(), |room, state| { room, joining: Model.joining(state, room.id) })
 						Html.li(
 							[Engine.class_s(row.field(|room| if (room.joined) "room-row" else "room-row not-joined")), Engine.attr("data-part", "room")],
 							[
-								Html.span_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")]),
+								Html.button_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")], model.update_by(row.key().map2(id.lift_row(), |room_id, pane_id| { pane_id, room_id }), Model.open_room)),
 								Html.span_s(row.field(|room| Liton.room_kind(room.kind)), [Engine.class("room-kind")]),
 								Html.span_s(row.field(|room| Liton.room_unread(room.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
-								Html.span_s(asking.map(|{ room, joining }| if (joining) (if (room.joined) "Joining…" else "Leaving…") else if (room.joined) "" else "Not joined"), [Engine.class("room-joined")]),
-								Html.button_s(row.field(|room| if (room.joined) "Leave" else "Join"), [Html.aria_label_s(row.field(|room| if (room.joined) "Leave #${room.name}" else "Join #${room.name}"))], model.update_by(row.key(), Model.toggle_joined)),
+								Liton.join_controls(model, row.field(|room| room)),
 							],
 						)
 					},
 				),
 			],
 		)
+
+	## Whether you are in a room, and Join or Leave it, which shows at once.
+	join_controls : State(ctx, Model.State), Signal(ctx, Rooms.Room) -> Elem(ctx)
+	join_controls = |model, room|
+		Html.div(
+			"room-join",
+			[
+				Html.span_s(room.map2(model.signal(), |shown, state| if (Model.joining(state, shown.id)) (if (shown.joined) "Joining…" else "Leaving…") else if (shown.joined) "" else "Not joined"), [Engine.class("room-joined")]),
+				Html.button_s(room.map(|shown| if (shown.joined) "Leave" else "Join"), [Html.aria_label_s(room.map(|shown| if (shown.joined) "Leave #${shown.name}" else "Join #${shown.name}"))], model.update_by(room.map(|shown| shown.id), Model.toggle_joined)),
+			],
+		)
+
+	## A room opened: its name and topic, Join or Leave, and its messages,
+	## the newest at the bottom, with who is typing. A forum's are its posts.
+	room_opened : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	room_opened = |model, id| {
+		room_id = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id)
+		shown = room_id.map2(model.signal(), |opened, state| Model.room_of(state, opened))
+		Html.div_s(
+			shown.map(|opened| if (opened.kind == Forum) "room forum" else "room"),
+			[
+				Html.div(
+					"room-header",
+					[
+						Html.button("‹", [Engine.class("room-back"), Html.aria_label("All rooms")], model.update_by(id, |state, pane_id| Model.open_room(state, { pane_id, room_id: "" }))),
+						Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title")]),
+						Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
+						Liton.join_controls(model, shown),
+					],
+				),
+				Html.div(
+					"timeline-scroll",
+					[
+						Html.ul(
+							[Engine.class("timeline room-timeline"), Engine.attr("data-part", "room")],
+							[Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
+						),
+					],
+				),
+				Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
+				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+			],
+		)
+	}
+
+	## A message: who wrote it, a person or an agent, how long ago, and
+	## whether edited; its text as Markdown, unless deleted; its reactions;
+	## and its thread's replies.
+	room_message : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.RoomLine) -> Elem(Row(PaneCtx, Model.RoomLine))
+	room_message = |model0, id, row| {
+		model = model0.lift_row()
+		Html.li(
+			[Engine.class_s(row.field(|line| Str.join_with(["room-message", if (line.agent) "agent" else "", if (line.deleted) "deleted" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "message")],
+			[
+				Html.div(
+					"room-meta",
+					[
+						Html.span_s(row.field(|line| line.author), [Engine.class("room-author")]),
+						Html.span_s(row.field(|line| if (line.agent) "agent" else ""), [Engine.class("room-agent")]),
+						Engine.element("time", [Engine.attr_s("datetime", row.field(|line| line.time)), Engine.attr_s("title", row.field(|line| line.time))], [Engine.text_s(row.field(|line| line.ago))]),
+						Html.span_s(row.field(|line| if (line.edited and !line.deleted) "edited" else ""), [Engine.class("room-edited")]),
+					],
+				),
+				Engine.when(
+					row.field(|line| line.deleted),
+					|| Html.p("This message was deleted.", "room-deleted"),
+					|| Liton.markdown(model, row.key().map2(id.lift_row(), |message_id, pane_id| "${pane_id}/${message_id}"), row.field(|line| Markdown.blocks(line.text))),
+				),
+				Html.div(
+					"room-reactions",
+					[Engine.each(row.field(|line| line.reactions), |reaction| reaction.emoji, |reaction| Html.span_s(reaction.field(|shown| "${shown.emoji} ${shown.count.to_str()}"), [Engine.class_s(reaction.field(|shown| if (shown.mine) "reaction mine" else "reaction"))]))],
+				),
+				Html.div(
+					"room-thread",
+					[
+						Html.span_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")]),
+						Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
+					],
+				),
+			],
+		)
+	}
+
+	## A thread's replies and who replied, as "2 replies · Scout, Ada".
+	replies_text : Model.RoomLine -> Str
+	replies_text = |line|
+		match line.replies {
+			0 => ""
+			1 => "1 reply · ${line.repliers}"
+			count => "${count.to_str()} replies · ${line.repliers}"
+		}
 
 	room_kind : Rooms.Kind -> Str
 	room_kind = |kind|

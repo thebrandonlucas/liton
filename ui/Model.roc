@@ -144,11 +144,17 @@ Model := [].{
 		reviewing : List({ serial : U64, request : Review.Request, accepted : U64 }),
 		composer : Composer,
 
-		## What polls answered of rooms.v1, and its requests on their way (sent
-		## as `call_outbox`). A request is shown at once (`rooms_listed`) until
-		## the daemon refuses it, or until the poll numbered `accepted`
-		## answers, the first sent after it accepted it (0 while it waits).
+		## What polls answered of rooms.v1: the rooms, each room's members, and
+		## the entries of each room's messages (`root` "") and of each thread
+		## (`root` its top-level message); what each Rooms pane shows; and the
+		## requests on their way (sent as `call_outbox`). A request is shown at
+		## once (`rooms_listed`) until the daemon refuses it, or until the poll
+		## numbered `accepted` answers, the first sent after it accepted it (0
+		## while it waits).
 		rooms : List(Rooms.Room),
+		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
+		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
+		room_panes : List(RoomPane),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64 }),
 
 		## The themes settings offer and the one a snapshot naming none shows:
@@ -242,6 +248,16 @@ Model := [].{
 	## with the lines they add and remove as its `file`'s.
 	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
+	## What a Rooms pane shows: the room opened, "" for the list of rooms,
+	## and the thread opened in it by its root, "" for none.
+	RoomPane : { pane : Str, room_id : Str, root : Str }
+
+	## A message as a Rooms pane shows it: its author's name, and whether an
+	## agent; how long ago it was posted (`Model.ago`), and when; its text,
+	## unless deleted; its reactions, each with how many reacted and whether
+	## you did; and its thread's replies, who replied, and how long ago last.
+	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), replies : U32, repliers : Str, last_reply : Str }
+
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
 
@@ -315,6 +331,9 @@ Model := [].{
 				reviewing: [],
 				composer: Model.closed_composer,
 				rooms: [],
+				room_members: [],
+				room_logs: [],
+				room_panes: [],
 				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
@@ -1209,7 +1228,13 @@ Model := [].{
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		rooms = if (offered(Capability.rooms_v1) and laid_out.any(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))) [RoomList] else []
+		# The rooms, and the messages and members of the room each Rooms pane opened.
+		room_topics = |shown| {
+			{ room_id, .. } = Model.room_pane(state, shown.id)
+			if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]
+		}
+		rooms_shown = laid_out.keep_if(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))
+		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.join_map(room_topics).prepend(RoomList) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -1280,6 +1305,7 @@ Model := [].{
 		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
 		match subject {
 			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
+			RoomMessages(room_id) => Model.logged(with_events, room_id, "", [])
 			# Unchanged items still settle what was set aside.
 			Items => Model.attention_fetched(with_events, serial, with_events.attention)
 			# The requests its review has held since the poll they waited for.
@@ -1303,6 +1329,8 @@ Model := [].{
 					{ ..state, timelines: state.timelines.append({ session_id, entries: [entry] }) }
 			(_, Items(items)) => { ..state, attention: items }
 			(_, Rooms(listed)) => { ..state, rooms: listed }
+			(RoomMembers(room_id), Members(members)) => { ..state, room_members: state.room_members.drop_if(|known| known.room_id == room_id).append({ room_id, members }) }
+			(RoomMessages(room_id), RoomEntry(entry)) => Model.logged(state, room_id, "", [entry])
 			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
@@ -1882,19 +1910,24 @@ Model := [].{
 	changed = |state, listed_session|
 		if (Model.starting(state, listed_session.id)) Model.newest else Attention.recency(state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? ""))
 
-	## How long ago a session last changed, as its row says it: "now", "3m",
-	## "2h", "4d" or "1w"; "" if unknown.
+	## How long ago a session last changed, as `Model.ago` says it.
 	age : State, Chat.Session -> Str
 	age = |state, listed_session| {
 		last_change = state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? "")
-		match epoch_ms(last_change) {
-			Ok(at) if state.now > 0 and !Model.starting(state, listed_session.id) => {
+		if (Model.starting(state, listed_session.id)) "" else Model.ago(state, last_change)
+	}
+
+	## How long ago a time was, as a row says it: "now", "3m", "2h", "4d" or
+	## "1w"; "" if unknown.
+	ago : State, Str -> Str
+	ago = |state, time|
+		match epoch_ms(time) {
+			Ok(at) if state.now > 0 => {
 				minutes = (state.now - at) // 60_000
 				if (minutes < 1) "now" else if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else if (minutes < 10080) "${(minutes // 1440).to_str()}d" else "${(minutes // 10080).to_str()}w"
 			}
 			_ => ""
 		}
-	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64
@@ -2425,6 +2458,90 @@ Model := [].{
 			_ => state
 		}
 
+	room_pane : State, Str -> RoomPane
+	room_pane = |state, pane_id| state.room_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, room_id: "", root: "" }
+
+	## Opens a room in a Rooms pane, or with "" the list of rooms again.
+	open_room : State, { pane_id : Str, room_id : Str } -> State
+	open_room = |state, { pane_id, room_id }| { ..state, room_panes: state.room_panes.drop_if(|shown| shown.pane == pane_id).append({ pane: pane_id, room_id, root: "" }) }
+
+	## A room as listed, or as its id alone tells.
+	room_of : State, Str -> Rooms.Room
+	room_of = |state, room_id| Model.rooms_listed(state).find_first(|room| room.id == room_id) ?? Rooms.room({ id: room_id, provider: "", name: room_id, kind: Channel })
+
+	## The entries of a room's messages, or of a thread in it by its root.
+	room_log : State, Str, Str -> List(Rooms.Entry)
+	room_log = |state, room_id, root| state.room_logs.find_first(|log| log.room_id == room_id and log.root == root).map_ok(|log| log.entries) ?? []
+
+	## Whether a room's messages, or a thread's, have arrived.
+	room_loaded : State, Str, Str -> Bool
+	room_loaded = |state, room_id, root| state.room_logs.any(|log| log.room_id == room_id and log.root == root)
+
+	## A room's or thread's log with the entries after those it has.
+	logged : State, Str, Str, List(Rooms.Entry) -> State
+	logged = |state, room_id, root, arrived| {
+		known = Model.room_log(state, room_id, root)
+		last = known.last().map_ok(|entry| entry.sequence) ?? 0
+		{ ..state, room_logs: state.room_logs.drop_if(|log| log.room_id == room_id and log.root == root).append({ room_id, root, entries: known.concat(arrived.keep_if(|entry| entry.sequence > last)) }) }
+	}
+
+	## A room's member as its members topic tells, or as its id alone does.
+	room_member : State, Str, Str -> Rooms.Member
+	room_member = |state, room_id, member_id| {
+		members = state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
+		members.find_first(|known| known.id == member_id) ?? { id: member_id, provider: "", name: member_id, picture: Err(Missing), kind: Person, role: Member, presence: Unknown }
+	}
+
+	## The top-level messages of the room a Rooms pane opened, by their times.
+	room_lines : State, Str -> List(RoomLine)
+	room_lines = |state, pane_id| {
+		log = Model.room_log(state, Model.room_pane(state, pane_id).room_id, "")
+		threads = Rooms.threads(log)
+		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| Model.room_line(state, posted, threads))
+	}
+
+	room_line : State, Rooms.Message, List(Rooms.Thread) -> RoomLine
+	room_line = |state, posted, threads| {
+		author = Model.room_member(state, posted.room_id, posted.author)
+		me = Model.room_of(state, posted.room_id).me ?? ""
+		thread = threads.find_first(|summary| summary.root == posted.id) ?? { root: posted.id, replies: 0, last_reply: Err(Missing), participants: [] }
+		{
+			id: posted.id,
+			author: author.name,
+			agent: author.kind != Person,
+			ago: Model.ago(state, posted.time),
+			time: posted.time,
+			text: posted.text,
+			edited: posted.edited,
+			deleted: posted.deleted,
+			reactions: posted.reactions.map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me) }),
+			replies: thread.replies,
+			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
+			last_reply: thread.last_reply.map_ok(|time| Model.ago(state, time)) ?? "",
+		}
+	}
+
+	## Who types in a room's messages, or a thread's, as "Scout is typing…":
+	## those who said they type there and posted nothing since.
+	typing : State, Str, Str -> Str
+	typing = |state, room_id, root| {
+		typists = Model.room_log(state, room_id, root).fold(
+			[],
+			|so_far, entry|
+				match entry.event {
+					Typing(typed) => if (so_far.contains(typed.member)) so_far else so_far.append(typed.member)
+					Posted(posted) => so_far.drop_if(|typist| typist == posted.author)
+					_ => so_far
+				},
+		)
+		names = typists.map(|member_id| Model.room_member(state, room_id, member_id).name)
+		match names {
+			[] => ""
+			[one] => "${one} is typing…"
+			_ => "${Str.join_with(names, ", ")} are typing…"
+		}
+	}
+
 	## Sends a rooms.v1 request, shown at once until the daemon answers.
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
@@ -2759,6 +2876,13 @@ comment_state = |state|
 		Draft => "draft"
 		Sent(round) => "sent in round ${round.to_str()}"
 	}
+
+## Messages in the order of their times, those alike as posted.
+by_time : List(Rooms.Message) -> List(Rooms.Message)
+by_time = |posted| {
+	keyed = posted.map_with_index(|message, index| { message, index, at: epoch_ms(message.time) ?? 0 })
+	keyed.sort_with(|left, right| if (left.at < right.at or (left.at == right.at and left.index < right.index)) Before else if (left.at == right.at and left.index == right.index) Same else After).map(|kept| kept.message)
+}
 
 ## A UTC time such as `2026-01-01T08:00:00.000Z` in milliseconds since
 ## 1970, to the second.
