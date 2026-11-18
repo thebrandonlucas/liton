@@ -1924,7 +1924,24 @@ Liton := [].{
 				),
 				Html.div(
 					"room-reactions",
-					[Engine.each(row.field(|line| line.reactions), |reaction| reaction.emoji, |reaction| Html.span_s(reaction.field(|shown| "${shown.emoji} ${shown.count.to_str()}"), [Engine.class_s(reaction.field(|shown| if (shown.mine) "reaction mine" else "reaction"))]))],
+					[
+						Engine.each(
+							row.field(|line| line.reactions),
+							|reaction| reaction.emoji,
+							|reaction|
+								Html.button_s(
+									reaction.field(|shown| "${shown.emoji} ${shown.count.to_str()}"),
+									[Engine.class_s(reaction.field(|shown| if (shown.pending) "reaction pending" else "reaction")), Html.flag("aria-pressed", reaction.field(|shown| shown.mine)), Html.aria_label_s(reaction.field(|shown| if (shown.mine) "Take back ${shown.emoji}" else "React with ${shown.emoji}"))],
+									model.lift_row().update_by(reaction.field(|shown| shown).map2(row.key().lift_row().map2(id.lift_row().lift_row(), |message_id, pane_id| { message_id, pane_id }), |shown, { message_id, pane_id }| { pane_id, message_id, emoji: shown.emoji, mine: shown.mine }), Model.toggle_reaction),
+								),
+						),
+						# The reactions no one has made yet, to make.
+						Engine.each(
+							row.field(|line| if (line.deleted or !line.status.is_empty()) [] else Liton.reaction_choices.drop_if(|emoji| line.reactions.any(|reaction| reaction.emoji == emoji))),
+							|emoji| emoji,
+							|choice| Html.button_s(choice.key(), [Engine.class("react"), Html.aria_label_s(choice.key().map(|emoji| "React with ${emoji}"))], model.lift_row().update_by(choice.key().map2(row.key().lift_row().map2(id.lift_row().lift_row(), |message_id, pane_id| { message_id, pane_id }), |emoji, { message_id, pane_id }| { pane_id, message_id, emoji, mine: Bool.False }), Model.toggle_reaction)),
+						),
+					],
 				),
 				Engine.when(row.field(|line| !line.status.is_empty()), || Html.span_s(row.field(|line| line.status), [Engine.class("sent-status"), Engine.test_id("room-sent-status")]), || Engine.text("")),
 				Engine.when(
@@ -1954,6 +1971,10 @@ Liton := [].{
 			],
 		)
 	}
+
+	## The reactions a message offers to make: a +, as a like, and two more.
+	reaction_choices : List(Str)
+	reaction_choices = ["+", "👀", "🎉"]
 
 	## A thread's replies and who replied, as "2 replies · Scout, Ada", or
 	## Reply to start one.

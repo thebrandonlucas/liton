@@ -257,12 +257,12 @@ Model := [].{
 
 	## A message as a Rooms pane shows it: its author's name, and whether an
 	## agent; how long ago it was posted (`Model.ago`), and when; its text,
-	## unless deleted; its reactions, each with how many reacted and whether
-	## you did; and, in the room, its thread's replies, who replied, and how
+	## unless deleted; its reactions, each with how many reacted, whether
+	## you did and whether your reaction is on its way; and, in the room, its thread's replies, who replied, and how
 	## long ago last (`threaded`). A message sent and not yet posted says
 	## so (`status`), or why the daemon refused it (`failed`), by the
 	## `serial` of its request.
-	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
+	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -2583,7 +2583,7 @@ Model := [].{
 			text: posted.text,
 			edited: posted.edited,
 			deleted: posted.deleted,
-			reactions: posted.reactions.map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me) }),
+			reactions: Model.reactions_shown(state, posted, me),
 			threaded: Bool.False,
 			replies: thread.replies,
 			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
@@ -2592,6 +2592,28 @@ Model := [].{
 			failed: Bool.False,
 			serial: 0,
 		}
+	}
+
+	## A message's reactions with yours on their way applied.
+	reactions_shown : State, Rooms.Message, Str -> List({ emoji : Str, count : U64, mine : Bool, pending : Bool })
+	reactions_shown = |state, posted, me| {
+		reacting = state.room_asks.keep_oks(
+			|asked|
+				match asked.request {
+					React({ message_id, emoji, .. }) if message_id == posted.id => Ok({ emoji, by: me, added: Bool.True })
+					Unreact({ message_id, emoji, .. }) if message_id == posted.id => Ok({ emoji, by: me, added: Bool.False })
+					_ => Err(NotReacting)
+				},
+		)
+		reacting.fold(posted.reactions, Rooms.reacted).map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me), pending: reacting.any(|asked| asked.emoji == reaction.emoji) })
+	}
+
+	## Reacts to a message in the room a Rooms pane opened with `emoji`, or
+	## takes back your reaction if `mine`, shown at once.
+	toggle_reaction : State, { pane_id : Str, message_id : Str, emoji : Str, mine : Bool } -> State
+	toggle_reaction = |state, { pane_id, message_id, emoji, mine }| {
+		room_id = Model.room_pane(state, pane_id).room_id
+		Model.ask_rooms(state, if (mine) Unreact({ room_id, message_id, emoji }) else React({ room_id, message_id, emoji }))
 	}
 
 	## Who types in a room's messages, or a thread's, as "Scout is typing…":

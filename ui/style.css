@@ -358,11 +358,16 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .room-author { font-weight: 650; color: var(--text); }
 .room-agent, .room-edited { font: 10px var(--font-mono); }
 .room-agent { padding: 0 4px; border: 1px solid var(--edge); border-radius: 4px; }
-.room-agent:empty, .room-edited:empty, .room-reactions:empty, .room-typing:empty { display: none; }
+.room-agent:empty, .room-edited:empty, .room-typing:empty { display: none; }
 .room-deleted { margin: 0; color: var(--muted); font-style: italic; }
 .room-reactions { display: flex; flex-wrap: wrap; gap: 4px; }
-.reaction { padding: 0 6px; border: 1px solid var(--edge); border-radius: 10px; font-size: 12px; }
-.reaction.mine { border-color: var(--accent); }
+.reaction, .react { padding: 0 6px; border: 1px solid var(--edge); border-radius: 10px; font-size: 12px; }
+.reaction[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.reaction.pending { opacity: .6; }
+/* The reactions to make show as the pointer is over the message. */
+.react { border-style: dashed; color: var(--muted); opacity: 0; }
+.room-message:hover .react, .react:focus-visible { opacity: 1; }
+@media (hover: none) { .react { opacity: 1; } }
 .room-thread { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
 .room-thread button { padding: 0; border: none; background: none; color: var(--accent); font-size: 12px; }
 .room-last-reply { color: var(--muted); }
