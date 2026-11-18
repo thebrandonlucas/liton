@@ -208,8 +208,9 @@ Liton := [].{
 			model.on_result(|state, _, res| { ..state, coarse_pointer: res ?? state.coarse_pointer }),
 		),
 		# A draft sent or dictated replaces what its box shows, focused or not.
-		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |_| [Engine.command(ApplyValue("composer")), Engine.command(Focus("composer"))], Engine.ignore({})),
-		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Engine.command(Focus("latest"))], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |rewritten| [Engine.command(ApplyValue("composer-${rewritten.pane}")), Engine.command(Focus("composer-${rewritten.pane}"))], Engine.ignore({})),
+		# The pane that jumped is the latest in `jumps`.
+		Engine.watch_changes(model.signal().map(|state| state.jumps), |jumps| jumps.last().map_ok(|jumped| [Engine.command(Focus("latest-${jumped.pane}"))]) ?? [], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
 			|clipboard| [Ports.copy.ask(clipboard.text)],
@@ -378,12 +379,15 @@ Liton := [].{
 								Engine.each(
 									model.signal().map(|state| Widgets.all.keep_if(|widget| Widgets.fits(widget, if (state.shell == Workbench) Main else Free))),
 									|widget| widget.id,
-									|row|
+									|row| {
+										offer = row.field(|widget| widget).map2(model.signal().lift_row(), Liton.widget_offer)
 										Html.button_s(
-											row.field(|widget| widget).map2(model.signal().lift_row(), |widget, state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
-											[],
-											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text(Model.add_pane(state, widget))),
-										),
+											offer.map(|offered| offered.text),
+											[Html.aria_label_s(offer.map(|offered| offered.name)), Engine.class_s(offer.map(|offered| if (offered.present) "added" else ""))],
+											# Closed, Settings shows the pane added rather than covering it.
+											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text({ ..Model.add_pane(state, widget), show_settings: Bool.False })),
+										)
+									},
 								),
 							],
 						),
@@ -395,6 +399,17 @@ Liton := [].{
 				),
 			|| Engine.text(""),
 		)
+
+	## How Settings offers a widget to add: unavailable while no provider
+	## supplies what it needs, and checked (by CSS) while the layout has it
+	## already, which a screen reader names. It can still be added again.
+	widget_offer : Widgets.Widget, Model.State -> { text : Str, name : Str, present : Bool }
+	widget_offer = |widget, state| {
+		unavailable = !Widgets.missing(widget, state.capabilities).is_empty()
+		present = Model.panes(state).any(|pane| pane.widget == widget.id)
+		text = if (unavailable) "+ ${widget.title} (unavailable)" else "+ ${widget.title}"
+		{ text, name: if (present) "+ ${widget.title} (${if (unavailable) "unavailable, " else ""}already in the layout)" else text, present }
+	}
 
 	## A slot's or column's panes in settings.
 	settings_column : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)
@@ -444,7 +459,7 @@ Liton := [].{
 									slot.lift_row().map(Model.slot_name),
 									[],
 									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.prop_s(Engine.Prop.value, choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
-									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text(Model.move_to_slot(state, pane_id, Model.slot_named(name)))),
+									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text({ ..Model.move_to_slot(state, pane_id, Model.slot_named(name)), show_settings: Bool.False })),
 								),
 							|| Engine.text(""),
 						),
@@ -617,7 +632,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -630,6 +645,7 @@ Liton := [].{
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
+							NoView => Html.p("liton can't show this widget yet.", "missing")
 							Missing =>
 								Html.p_s(
 									shown.map(|{ pane, state }| "This widget needs ${Model.missing(state, pane)}, which no connected provider supplies. Connect one that does, and it fills in here."),
@@ -1380,7 +1396,7 @@ Liton := [].{
 						# browsers can (animation-timeline). Jumping builds this pane's
 						# anchor anew, so it is the one `Liton.effects` focuses.
 						Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model0.update_by(id, Model.jump_to_latest))]),
-						Engine.remount_on(id.map2(model0.signal(), |pane_id, state| Model.jumps_of(state, pane_id)), || Engine.element("span", [Engine.ref("latest"), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
+						Engine.remount_on(id.map2(model0.signal(), |pane_id, state| Model.jumps_of(state, pane_id)), || Engine.element("span", [Engine.ref_s(id.map(|pane_id| "latest-${pane_id}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
 						Html.ul(
 							[Engine.class("timeline"), Engine.attr("data-part", "timeline")],
 							[
@@ -1508,7 +1524,7 @@ Liton := [].{
 	composer_input = |model, id| {
 		enter = Engine.Chord.plain("Enter")
 		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
-		Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Engine.on_key({ keymap: sends }, model.update_by(id, Microphone.send))], model.set_value_by(id, Model.set_draft))
+		Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref_s(id.map(|pane_id| "composer-${pane_id}")), Engine.on_key({ keymap: sends }, model.update_by(id, Microphone.send))], model.set_value_by(id, Model.set_draft))
 	}
 
 	## The git of the session a pane shows: its branch, the files of the scope

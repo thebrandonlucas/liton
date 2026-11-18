@@ -133,6 +133,11 @@ All notable changes to liton are documented in this file. The format is based on
 - On a phone, scrolling and taps no longer stutter: panes there no longer blur what is behind them, which a phone redrew on every frame.
 - The inbox shows the latest message of your three most recently active Paseo sessions, even those you haven't opened since, instead of the last one you saw.
 - In a narrow Inbox, such as the one in the left drawer, an item's Mark read, Settle and Snooze show under it as you hover it, instead of over its title, so clicking the title opens it rather than settling it.
+- Adding a second Chat in Settings no longer stops the page: each chat keeps its own message box, and sending or dictating focuses the one you used.
+- A widget added in Settings, or a pane moved there, is no longer hidden behind Settings: Settings closes to show it, and the added pane is the one focused (on a phone, its panel shows).
+- A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
+- A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
+- Settings' Add a widget marks the widgets already in your layout with a ✓, and screen readers say so. You can still add another, such as a second chat.
 
 ### Removed
 

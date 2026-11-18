@@ -86,8 +86,9 @@ Model := [].{
 		drafts : List({ pane : Str, text : Str }),
 
 		## How many times a draft changed other than by typing, sent or
-		## dictated, so `Liton.effects` writes it into its box though focused.
-		drafts_rewritten : U64,
+		## dictated, and the pane of the latest, so `Liton.effects` writes it
+		## into that pane's box though focused.
+		drafts_rewritten : { pane : Str, count : U64 },
 
 		## Whether the pointer is coarse, a touch screen's, whose keyboard has
 		## no Shift+Enter: Enter in a composer then starts a new line.
@@ -286,7 +287,7 @@ Model := [].{
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
-				drafts_rewritten: 0,
+				drafts_rewritten: { pane: "", count: 0 },
 				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
@@ -670,16 +671,20 @@ Model := [].{
 	panes : State -> List(Pane)
 	panes = |state| state.columns.join_map(|column| column.panes)
 
-	## A new pane of `widget`: a tab in a Workbench's main area, or a column of
-	## its own at the end in Tiling.
+	## A new pane of `widget`, focused, its column shown on a narrow screen: a
+	## tab in a Workbench's main area, or a column of its own at the end in
+	## Tiling. A Changes diff the main area showed goes back to its pane, so
+	## the new tab shows its widget.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
 		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
-		if (state.shell == Workbench)
-			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), next_id: state.next_id + 1 }
-		else
-			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
+		(columns, next_id, shown) =
+			if (state.shell == Workbench)
+				(state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), state.next_id + 1, state.columns.get(1).map_ok(|main| main.id) ?? "")
+			else
+				(state.columns.append(column), state.next_id + 2, column.id)
+		Model.show_column({ ..state, columns, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
 	}
 
 	slot_of : State, Str -> Slot
@@ -1474,7 +1479,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: state.drafts_rewritten + 1 }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
@@ -2462,7 +2467,8 @@ Model := [].{
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff]
+	## `NoView` is a widget's that liton has no view of yet.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2486,7 +2492,8 @@ Model := [].{
 				"changes" => Changes
 				"files" => Files
 				"tickets" => Tickets
-				_ => Capabilities
+				"capabilities" => Capabilities
+				_ => NoView
 			}
 	}
 }

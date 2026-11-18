@@ -1,18 +1,19 @@
-(test "Liton — settings add a widget as a tab of the Workbench's main area, its menu hides it and the other tab's shows it again, and Remove in settings closes it"
+(test "Liton — settings add a widget as the focused tab of the Workbench's main area and close to show it, its menu hides it and the other tab's shows it again, and Remove in settings closes it"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
     (click (role button :name "Settings"))
     (expect-attr (role button :name "Settings") aria-expanded "true")
-    (expect-visible (role button :name "+ Chat"))
+    (expect-attr (role button :name "+ Chat (already in the layout)") class "added")
     (click (role button :name "+ CI runs (unavailable)"))
-    ; Shown at once, as the main area's active tab.
+    ; Shown at once, as the main area's active tab, focused, with Settings
+    ; closed so it isn't behind them.
+    (expect-attr (role button :name "Settings") aria-expanded "false")
     (expect-text (test-id "show-main") "Chat · CI runs")
     (expect-attr (role button :name "CI runs") aria-pressed "true")
-    (expect-attr (role region :name "CI runs") class "pane")
+    (expect-attr (role region :name "CI runs") class "pane focused")
     (expect-attr (role region :name "Chat") class "pane hidden")
     (expect-visible (text "This widget needs ci.v1, which no connected provider supplies. Connect one that does, and it fills in here."))
-    (click (role button :name "Settings"))
     (click (role button :name "CI runs menu"))
     (click (role button :name "Hide CI runs"))
     (expect-attr (role region :name "CI runs") class "pane hidden")
