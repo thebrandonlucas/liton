@@ -7,7 +7,10 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]}]}")
     (run-effect 3)
     (click (role button :name "Settings"))
-    (click (role button :name "+ Tickets"))
+    (expect-visible (role button :name "+ Tickets"))
+    (click (role button :name "Close settings"))
+    ; Tickets is the right drawer's third tab, followed once shown.
+    (click (role button :name "Tickets"))
     (expect-visible (text "Loading tickets…"))
     ; Shown, the pane follows the tickets and their links.
     (expect-pending-effects 1)

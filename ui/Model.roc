@@ -2583,7 +2583,7 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
 expect {
@@ -2600,9 +2600,9 @@ expect {
 	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
 	tiling = Model.layout(state, Model.tiling)
 	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
-	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3"]]
+	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3", "pane-5"]]
 		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
-		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3"]]
+		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3", "pane-5"]]
 		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
 		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
 		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
@@ -2631,7 +2631,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
 }
 
 expect {

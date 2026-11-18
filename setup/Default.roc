@@ -8,8 +8,8 @@ import Setup
 Default := [].{
 
 	## A Workbench of workspaces and their sessions, the chat following the
-	## focus, and the changes and files of the workspace or session focused,
-	## as tabs.
+	## focus, and the changes and files of the workspace or session focused
+	## and the tickets, as tabs.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -19,7 +19,7 @@ Default := [].{
 			columns: [
 				{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
 				{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }] },
+				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }, { id: "pane-5", widget: "tickets", pinned: "", options: [] }] },
 			],
 			collapsed: [],
 			hidden: [],
