@@ -9,6 +9,20 @@ Mock := [].{
 	provider : Manifest.Provider
 	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1] }
 
+	## The parts of the mock a daemon offers: its scripted agents (chat,
+	## workspaces, workspace.git and files), its rooms and its tickets.
+	Parts : { agents : Bool, rooms : Bool, tickets : Bool }
+
+	## The mock provider offering only the capabilities of `parts`.
+	offering : Parts -> Manifest.Provider
+	offering = |{ agents, rooms, tickets }| {
+		..Mock.provider,
+		capabilities: Mock.provider.capabilities.keep_if(
+			|capability|
+				if (capability == Capability.rooms_v1) rooms else if (capability == Capability.tickets_v1) tickets else agents,
+		),
+	}
+
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }
 
@@ -427,3 +441,6 @@ expect {
 	Mock.with_changes([]) == Mock.workspaces
 		and Mock.with_changes([{ id: "main", workspace: Err(Archived) }, { id: "fix-auth", workspace: Ok(renamed) }, { id: "workspace-1", workspace: Ok(made) }]).map(|shown| (shown.id, shown.name)) == [("fix-auth", "login"), ("workspace-1", "docs")]
 }
+
+expect Mock.offering({ agents: Bool.False, rooms: Bool.True, tickets: Bool.True }).capabilities == [Capability.rooms_v1, Capability.tickets_v1]
+expect Mock.offering({ agents: Bool.True, rooms: Bool.True, tickets: Bool.True }) == Mock.provider

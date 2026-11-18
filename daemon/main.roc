@@ -6,7 +6,11 @@
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
 ## (default liton.db) and LITON_UI (default zig-out/www) configure it.
-## LITON_MOCK=off leaves out the mock provider. Setting PASEO_PASSWORD adds
+## LITON_MOCK=off leaves out the mock provider, and a comma-separated list
+## of its parts offers only those: `agents`, its scripted sessions (chat.v1,
+## workspaces.v1, workspace.git.v1 and files.v1), `rooms` and `tickets`, so
+## LITON_MOCK=rooms,tickets offers its rooms and tickets beside Paseo's
+## agents. The default, `on`, is all of them. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
 ##
@@ -81,7 +85,7 @@ import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 
-Context : { db : Sqlite.Db, mock_enabled : Bool, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+Context : { db : Sqlite.Db, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
@@ -98,9 +102,11 @@ init! = || {
 	create_tables!(db) ? |_| Exit(3)
 	# A password Paseo refused may have been fixed since.
 	Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) ? |_| Exit(3)
-	mock_enabled = env_or!("LITON_MOCK", "on") != "off"
-	if mock_enabled {
+	mock = checked!(mock_parts(env_or!("LITON_MOCK", "on")))?
+	if mock.agents {
 		seed!(db) ? |_| Exit(4)
+	}
+	if mock.rooms {
 		mock_rooms_seeded!(db) ? |_| Exit(4)
 	}
 	password = env_or!("PASEO_PASSWORD", "")
@@ -117,7 +123,7 @@ init! = || {
 			.with_file_roots([ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
-	context = { db, mock_enabled, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	context = { db, mock, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -149,6 +155,27 @@ transformers_named = |named| {
 		Err(NotFound) => Ok(known.keep_if(|part| ids.contains(part.id)))
 	}
 }
+
+## The parts of the mock LITON_MOCK names: all for `on` (or nothing),
+## none for `off`, or else some of `agents`, `rooms` and `tickets`,
+## comma-separated.
+mock_parts : Str -> Try(Mock.Parts, Str)
+mock_parts = |named| {
+	names = named.split_on(",").map(|name| name.trim()).drop_if(|name| name == "")
+	known = ["agents", "rooms", "tickets"]
+	if names.is_empty() or names == ["on"] {
+		Ok({ agents: Bool.True, rooms: Bool.True, tickets: Bool.True })
+	} else if names == ["off"] {
+		Ok({ agents: Bool.False, rooms: Bool.False, tickets: Bool.False })
+	} else {
+		match names.find_first(|name| !known.contains(name)) {
+			Ok(unknown) => Err("LITON_MOCK is on, off or some of ${Str.join_with(known, ", ")}, comma-separated, not ${unknown}")
+			Err(NotFound) => Ok({ agents: names.contains("agents"), rooms: names.contains("rooms"), tickets: names.contains("tickets") })
+		}
+	}
+}
+
+expect mock_parts("rooms, tickets") == Ok({ agents: Bool.False, rooms: Bool.True, tickets: Bool.True }) and mock_parts("on") == mock_parts("agents,rooms,tickets") and mock_parts("off").map_ok(|parts| parts.agents or parts.rooms or parts.tickets) == Ok(Bool.False) and mock_parts("rooms,nope").is_err()
 
 ## What `given` holds, or else its problem on stderr and the daemon stopped.
 checked! : Try(a, Str) => Try(a, [Exit(I64)])
@@ -221,8 +248,8 @@ offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far,
 ## and the transformers whose capabilities they offer (see
 ## `Transformer.offered`).
 offered : Context, List(Manifest.Provider) -> Manifest.Offered
-offered = |{ mock_enabled, paseo, speech, transformers, .. }, remote_providers| {
-	local = (if (mock_enabled) [Mock.provider] else []).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
+offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
+	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
 	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers)
@@ -597,7 +624,7 @@ chat_call! = |context, provider, asked| {
 started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat.Response), _)
 started! = |context, provider, { place, agent, model, prompt }| {
 	db = context.db
-	mock_listed = if (context.mock_enabled and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
+	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
 	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
 	match (place, context.paseo) {
 		(Workspace(workspace_id), _) if mock_listed.any(|shown| shown.id == workspace_id) =>
@@ -655,7 +682,7 @@ workspaces_call! = |context, provider, asked| {
 		Pin({ workspace_id, .. }) => workspace_changed!(context, provider, workspace_id, asked)
 		Archive({ workspace_id }) => workspace_changed!(context, provider, workspace_id, asked)
 		RenameProject({ project_id, name }) => {
-			mock_owns = context.mock_enabled and Protocol.serves(provider, Mock.provider.id) and Mock.projects.any(|project| project.id == project_id)
+			mock_owns = context.mock.agents and Protocol.serves(provider, Mock.provider.id) and Mock.projects.any(|project| project.id == project_id)
 			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
 			match (mock_owns, paseo_projects.any(|project| project.id == project_id), context.paseo) {
 				(Bool.True, _, _) => {
@@ -674,7 +701,7 @@ workspaces_call! = |context, provider, asked| {
 		Create({ project_id, kind, branch }) => {
 			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
 			match (Mock.projects.find_first(|project| project.id == project_id), paseo_projects.find_first(|project| project.id == project_id), context.paseo) {
-				(Ok(project), _, _) if context.mock_enabled and Protocol.serves(provider, Mock.provider.id) => {
+				(Ok(project), _, _) if context.mock.agents and Protocol.serves(provider, Mock.provider.id) => {
 					made : { count : I64 }
 					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces WHERE id LIKE 'workspace-%';", params: {}, limits: Sqlite.default_query_limits })?
 					number = (made.count + 1).to_str()
@@ -703,7 +730,7 @@ workspaces_call! = |context, provider, asked| {
 workspace_changed! : Context, Try(Str, [Missing]), Str, Workspaces.Request => Try(Protocol.Answer(Workspaces.Response), _)
 workspace_changed! = |context, provider, workspace_id, asked| {
 	db = context.db
-	mock_listed = if (context.mock_enabled and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
+	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
 	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
 	match (mock_listed.find_first(|shown| shown.id == workspace_id), paseo_listed.any(|shown| shown.id == workspace_id), context.paseo) {
 		(Ok(shown), _, _) => {
@@ -745,13 +772,13 @@ agents! = |context| {
 	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
 	from_paseo : Try(List(Chat.Agent), _)
 	from_paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
-	Ok((if (context.mock_enabled) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
+	Ok((if (context.mock.agents) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
 }
 
 ## tickets.v1's tickets: the mock's, as calls changed them.
 tickets! : Context => Try(List(Tickets.Ticket), _)
 tickets! = |context|
-	if context.mock_enabled {
+	if context.mock.tickets {
 		rows : List({ value : Str })
 		rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
 		Ok(MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))))
@@ -935,7 +962,7 @@ located! = |context, focus|
 				NoSession => Ok(Nowhere)
 			}
 		Workspace(workspace_id) =>
-			if context.mock_enabled and mock_workspaces!(context.db)?.any(|shown| shown.id == workspace_id) {
+			if context.mock.agents and mock_workspaces!(context.db)?.any(|shown| shown.id == workspace_id) {
 				Ok(MockWorkspace(workspace_id))
 			} else if context.paseo.is_ok() {
 				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(shown.directory)) ?? Nowhere)
@@ -1103,7 +1130,7 @@ workspaces! = |context| {
 		wanted!(db, "workspace_list", "")?
 	}
 	sessions = sessions!(context)?
-	from_mock = if (context.mock_enabled) { projects: mock_projects!(db)?, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
+	from_mock = if (context.mock.agents) { projects: mock_projects!(db)?, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
 	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
 	placed : List({ id : Str, workspace_id : Str })
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
@@ -1259,12 +1286,12 @@ timed! = |db, session_id, until| {
 
 ## The enabled provider a session belongs to.
 provider! : Context, Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSession], _)
-provider! = |{ db, mock_enabled, paseo, .. }, session_id| {
+provider! = |{ db, mock, paseo, .. }, session_id| {
 	rows : List({ provider : Str })
 	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
 		match (rows.first().map_ok(|row| row.provider), paseo) {
-			(Ok("mock"), _) => if (mock_enabled) MockSession else NoSession
+			(Ok("mock"), _) => if (mock.agents) MockSession else NoSession
 			(Ok("paseo"), Ok(daemon)) => PaseoSession(daemon)
 			_ => NoSession
 		},
@@ -1307,12 +1334,12 @@ visible! = |db, session_id, after| {
 ## The mock sessions, then Paseo's, then each remote's.
 sessions! : Context => Try(List(Chat.Session), _)
 sessions! = |context| {
-	{ db, mock_enabled, paseo, .. } = context
+	{ db, mock, paseo, .. } = context
 	rows : List({ id : Str, agent : Str, title : Str })
 	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
-	mock_listed = if (mock_enabled) mock_workspaces!(db)? else []
+	mock_listed = if (mock.agents) mock_workspaces!(db)? else []
 	var $sessions = []
-	for row in if (mock_enabled) rows else [] {
+	for row in if (mock.agents) rows else [] {
 		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, mock_listed, timed!(db, row.id, now_ms!())?))
 	}
 	if paseo.is_ok() {
@@ -2299,7 +2326,7 @@ mock_rooms! = |db| {
 rooms_call! : Context, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
 rooms_call! = |context, asked| {
 	db = context.db
-	rooms = if (context.mock_enabled) mock_rooms!(db)? else []
+	rooms = if (context.mock.rooms) mock_rooms!(db)? else []
 	room_of = |room_id| rooms.find_first(|room| room.id == room_id).map_err(|_| { code: NotFound, message: "no room ${room_id}" })
 	# A room's next events follow its last, even one still to come.
 	following! = |room_id| {
@@ -2355,7 +2382,7 @@ rooms_call! = |context, asked| {
 ## room's top level or of a thread after the cursor.
 rooms_update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
 rooms_update! = |context, wanted, subject| {
-	rooms = if (context.mock_enabled) mock_rooms!(context.db)? else []
+	rooms = if (context.mock.rooms) mock_rooms!(context.db)? else []
 	missing = |room_id| Protocol.failed(wanted, { code: NotFound, message: "no room ${room_id}" })
 	known = |room_id| rooms.any(|room| room.id == room_id)
 	match subject {
