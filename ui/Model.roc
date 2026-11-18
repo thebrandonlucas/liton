@@ -200,7 +200,7 @@ Model := [].{
 
 		## Agents started and workspaces created, shown starting until a listing
 		## has them; the last call whose answer may take a provider a while, to
-		## create one, or a review.v1 request, its capability as `key` and its
+		## create one, or a review.v1 or tickets.v1 request, its capability as `key` and its
 		## JSON as `text`: the shape of `clipboard`, which spares the module
 		## another instance of the effect that sends it; the kinds of agent each
 		## provider starts.
@@ -208,7 +208,8 @@ Model := [].{
 		call_outbox : { serial : U64, key : Str, text : Str },
 		agents : List(Chat.Agent),
 
-		## What Tickets panes show (`TicketDesk`).
+		## What Tickets panes show (`TicketDesk`), and the tickets.v1
+		## requests on their way (sent as `call_outbox`).
 		tickets : TicketDesk.State,
 	}
 
@@ -2235,6 +2236,44 @@ Model := [].{
 			Ok(Err({ message, .. })) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: message }
 			Err(_) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: "The daemon did not answer." }
 		}
+	}
+
+	## Sends a tickets.v1 request, shown at once (`TicketDesk`) until the
+	## daemon answers.
+	ask_tickets : State, Tickets.Request -> State
+	ask_tickets = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "tickets.v1", text: Json.to_str({ capability: "tickets.v1", request }) }, tickets: { ..state.tickets, asked: state.tickets.asked.append({ serial, request, accepted: 0 }) }, notice: "" }
+	}
+
+	## Takes the daemon's answer to a tickets.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	tickets_answered : State, U64, Str -> State
+	tickets_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Tickets.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, tickets: TicketDesk.answered(state.tickets, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Comments a Tickets pane's draft on the ticket it shows.
+	comment_ticket : State, Str -> State
+	comment_ticket = |state, pane_id| {
+		key = "${pane_id}/ticket"
+		text = Model.draft(state, key).trim()
+		ticket_id = TicketDesk.view(state.tickets, pane_id).ticket
+		if (text.is_empty() or ticket_id.is_empty()) state else Model.ask_tickets(Model.set_draft(state, key, ""), Comment({ ticket_id, body: text }))
+	}
+
+	## Assigns a ticket to a person too, or no longer.
+	assign : State, { ticket_id : Str, person_id : Str }, Bool -> State
+	assign = |state, { ticket_id, person_id }, assigned| {
+		assignees = TicketDesk.listing_shown(state.tickets).tickets.find_first(|shown| shown.id == ticket_id).map_ok(|shown| shown.assignees.map(|person| person.id)) ?? []
+		Model.ask_tickets(state, SetAssignees({ ticket_id, person_ids: if (assigned) assignees.drop_if(|id| id == person_id).append(person_id) else assignees.drop_if(|id| id == person_id) }))
 	}
 
 	## What a comment's button asks: to edit the draft, delete it, reply to

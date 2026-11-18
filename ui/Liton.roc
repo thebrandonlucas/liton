@@ -174,7 +174,7 @@ Liton := [].{
 			),
 		),
 		# An agent or workspace to create, whose answer may take a provider a
-		# while, a review.v1 request, or an edit of a listing.
+		# while, a review.v1 or tickets.v1 request, or an edit of a listing.
 		Engine.watch_changes(
 			model.signal().map(|state| state.call_outbox),
 			|outbox| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: outbox.text, timeout: Ms(60000) })],
@@ -182,6 +182,7 @@ Liton := [].{
 				|state, outbox, res|
 					match outbox.key {
 						"review.v1" => Model.reviewed(state, outbox.serial, res ?? "")
+						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -1072,7 +1073,9 @@ Liton := [].{
 
 	## A Tickets pane's ticket: the way back to the list, its key, a link to
 	## it where its source keeps it, its title, status, assignees, source and
-	## labels, and its body and comments as Markdown.
+	## labels, and its body and comments as Markdown; and its status, its
+	## assignees, of its source's people, and a comment to add, each shown
+	## at once, saving until the daemon has it.
 	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
 	ticket_detail = |model, id, view| {
 		shown = view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| TicketDesk.ticket_shown(state.tickets, ticket_id) ?? TicketDesk.missing)
@@ -1095,6 +1098,25 @@ Liton := [].{
 						Html.span_s(summary.map(|listed| listed.status.name), [Engine.class_s(summary.map(|listed| Liton.kind_class(listed.status.kind))), Engine.test_id("ticket-status")]),
 						Html.span_s(summary.map(|listed| Str.join_with(listed.assignees.map(|person| person.name), ", ")), [Engine.class("assignees")]),
 						Html.span_s(summary.map(|listed| Str.join_with(listed.labels, " · ")), [Engine.class("labels")]),
+					],
+				),
+				Html.div_attrs(
+					[Engine.class("ticket-fields"), Engine.attr("data-part", "fields")],
+					[
+						Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
+						Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+						Engine.element(
+							"fieldset",
+							[Engine.class("ticket-people")],
+							[
+								Engine.element("legend", [], [Engine.text("Assignees")]),
+								Engine.each(
+									summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.people) ?? []).map(|person| { ticket_id: listed.id, person, assigned: listed.assignees.contains(person) })),
+									|choice| choice.person.id,
+									|row| Engine.element("label", [], [Html.checkbox(row.field(|choice| choice.person.name), row.field(|choice| choice.assigned), [], model.lift_row().set_value_by(row.field(|choice| { ticket_id: choice.ticket_id, person_id: choice.person.id }), Model.assign)), Engine.text_s(row.field(|choice| choice.person.name))]),
+								),
+							],
+						),
 					],
 				),
 				Html.p_s(view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| if (TicketDesk.loaded(state.tickets, ticket_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
@@ -1120,6 +1142,14 @@ Liton := [].{
 									],
 								),
 						),
+					],
+				),
+				Html.form(
+					"New comment",
+					[Engine.class("ticket-composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(id, Model.comment_ticket))],
+					[
+						Html.textarea(Engine.const("Comment on this ticket"), id.map2(model.signal(), |pane_id, state| Model.draft(state, "${pane_id}/ticket")), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown")], model.set_value_by(id.map(|pane_id| "${pane_id}/ticket"), Model.set_draft)),
+						Html.div("comment-actions", [Html.submit_button("Comment", [])]),
 					],
 				),
 			],
