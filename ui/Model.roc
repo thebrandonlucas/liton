@@ -8,12 +8,14 @@ import cap.Files
 import cap.Manifest
 import cap.Protocol
 import cap.Review
+import cap.Tickets
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
 import setup.Setup
 import Highlight
 import Speech
+import TicketDesk
 import Widgets
 
 Model := [].{
@@ -205,6 +207,9 @@ Model := [].{
 		creating : List(Creating),
 		call_outbox : { serial : U64, key : Str, text : Str },
 		agents : List(Chat.Agent),
+
+		## What Tickets panes show (`TicketDesk`).
+		tickets : TicketDesk.State,
 	}
 
 	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
@@ -325,6 +330,7 @@ Model := [].{
 				creating: [],
 				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
+				tickets: TicketDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -1170,8 +1176,9 @@ Model := [].{
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows; of each Files pane on screen, its root, the directories
 	## open and the file it shows; the workspaces, while a pane lists them;
-	## and the review of the context of each, Files or Changes, on screen.
-	## Until the manifest arrives, every capability counts as offered.
+	## the review of the context of each, Files or Changes, on screen; and
+	## of Tickets panes on screen, the tickets, the links and the ticket each
+	## shows. Until the manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
 		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
@@ -1195,11 +1202,14 @@ Model := [].{
 			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
 		}
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
+		# A ticket list's, its sessions' links, and the ticket each shows.
+		ticket_views = laid_out.keep_if(|shown| shown.widget == "tickets" and Model.pane_visible(state, shown.id)).map(|shown| TicketDesk.view(state.tickets, shown.id))
+		tickets = if (offered(Capability.tickets_v1) and !ticket_views.is_empty()) [TicketList, TicketLinks].concat(ticket_views.map(|view| view.ticket).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -1253,7 +1263,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
-		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
+		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
@@ -1293,6 +1303,9 @@ Model := [].{
 			(_, Items(items)) => { ..state, attention: items }
 			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
+			(_, Tickets(listing)) => { ..state, tickets: TicketDesk.received(state.tickets, Listing(listing)) }
+			(_, Ticket(ticket)) => { ..state, tickets: TicketDesk.received(state.tickets, Opened(ticket)) }
+			(_, Links(links)) => { ..state, tickets: TicketDesk.received(state.tickets, Links(links)) }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -1875,14 +1888,20 @@ Model := [].{
 	age : State, Chat.Session -> Str
 	age = |state, listed_session| {
 		last_change = state.attention.find_first(|item| item.session_id == listed_session.id).map_ok(|item| item.updated) ?? (listed_session.updated ?? "")
-		match epoch_ms(last_change) {
-			Ok(at) if state.now > 0 and !Model.starting(state, listed_session.id) => {
+		if (Model.starting(state, listed_session.id)) "" else Model.ago(state, last_change)
+	}
+
+	## How long ago a time such as `2026-01-01T08:00:00.000Z` was, from the
+	## minute last begun, as "now", "3m", "3h", "2d" or "4w"; "" for none.
+	ago : State, Str -> Str
+	ago = |state, time|
+		match epoch_ms(time) {
+			Ok(at) if state.now > 0 => {
 				minutes = (state.now - at) // 60_000
 				if (minutes < 1) "now" else if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else if (minutes < 10080) "${(minutes // 1440).to_str()}d" else "${(minutes // 10080).to_str()}w"
 			}
 			_ => ""
 		}
-	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64
@@ -2189,6 +2208,10 @@ Model := [].{
 		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
 	}
 
+	## Changes the filter of a Tickets pane's list.
+	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
+	filter_tickets = |state, pane_id, change| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, filter: change(view.filter) }) }
+
 	## Sends a review.v1 request, shown at once by applying it to the review
 	## the UI has (`review_of`) until the daemon answers.
 	ask_review : State, Review.Request -> State
@@ -2388,7 +2411,7 @@ Model := [].{
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2411,6 +2434,7 @@ Model := [].{
 				"inbox" => Inbox
 				"changes" => Changes
 				"files" => Files
+				"tickets" => Tickets
 				_ => Capabilities
 			}
 	}

@@ -16,6 +16,7 @@ import Microphone
 import Ports
 import Themes
 import Model
+import TicketDesk
 import Widgets
 import Dropdown
 import Drag
@@ -615,7 +616,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Capabilities, Connecting, Missing, MainDiff],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -624,6 +625,7 @@ Liton := [].{
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
+							Tickets => Liton.tickets(model, id)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -1004,6 +1006,68 @@ Liton := [].{
 		else {
 			title = Model.context_title(state, pane)
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
+		}
+
+	## A Tickets pane: its filters, which `Tickets.matches` applies, over its
+	## tickets, the latest changed first, each with its key, title, status,
+	## assignees, source and how long ago it changed.
+	tickets : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	tickets = |model, id| {
+		view = id.map2(model.signal(), |pane_id, state| TicketDesk.view(state.tickets, pane_id))
+		filtered = |change| model.set_value_by(id, |state, pane_id, text| Model.filter_tickets(state, pane_id, |filter| change(filter, text)))
+		listed = view.map2(model.signal(), |shown, state| TicketDesk.listed(state.tickets, shown))
+		Html.div(
+			"tickets",
+			[
+				Html.div_attrs(
+					[Engine.class("ticket-filters"), Engine.attr("data-part", "filters")],
+					[
+						Html.text_input(Engine.const("Search tickets"), "search", view.map(|shown| shown.filter.text), [Engine.attr("placeholder", "Search tickets")], filtered(|filter, text| { ..filter, text })),
+						Dropdown.select(Engine.const("Source"), view.map(|shown| shown.filter.sources.first() ?? ""), [], [Dropdown.option("", "All sources")].concat(Liton.choices(model.signal().map(|state| state.tickets.listing.sources.map(|source| { value: source.id, label: source.name })))), filtered(|filter, text| { ..filter, sources: if (text.is_empty()) [] else [text] })),
+						Dropdown.select(Engine.const("Status"), view.map(|shown| TicketDesk.kinds_name(shown.filter.kinds)), [], TicketDesk.kinds.map(|named| Dropdown.option(named.name, named.name)), filtered(|filter, text| { ..filter, kinds: TicketDesk.kinds_named(text) })),
+						Dropdown.select(Engine.const("Assignee"), view.map(|shown| TicketDesk.assignee_name(shown.filter.assignee)), [], [Dropdown.option("Anyone", "Anyone"), Dropdown.option("Me", "Assigned to me"), Dropdown.option("Nobody", "Unassigned")], filtered(|filter, text| { ..filter, assignee: TicketDesk.assignee_named(text) })),
+					],
+				),
+				Html.ul(
+					[Engine.class("ticket-list"), Engine.attr("data-part", "list")],
+					[
+						Engine.each(
+							listed,
+							|ticket| ticket.id,
+							|row| {
+								state = model.signal().lift_row()
+								Html.li(
+									[Engine.class("ticket-row"), Engine.attr("data-part", "ticket")],
+									[
+										Html.div("ticket-title", [Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))]),
+										Html.div(
+											"ticket-meta",
+											[
+												Html.span_s(row.field(|ticket| ticket.status.name), [Engine.class_s(row.field(|ticket| Liton.kind_class(ticket.status.kind))), Engine.test_id("ticket-status")]),
+												Html.span_s(row.field(|ticket| Str.join_with(ticket.assignees.map(|person| person.name), ", ")), [Engine.class("assignees")]),
+												Html.span_s(row.field(|ticket| ticket.source).map2(state, |source_id, shown| shown.tickets.listing.sources.find_first(|source| source.id == source_id).map_ok(|source| source.name) ?? source_id), [Engine.class("source")]),
+												Html.span_s(row.field(|ticket| ticket.updated).map2(state, |updated, shown| Model.ago(shown, updated)), [Engine.class("age")]),
+											],
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+				Html.p_s(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+			],
+		)
+	}
+
+	## A status's badge, as its kind shows.
+	kind_class : [Open, Started, Done, Canceled] -> Str
+	kind_class = |kind|
+		match kind {
+			Open => "badge"
+			Started => "badge started"
+			Done => "badge done"
+			Canceled => "badge canceled"
 		}
 
 	## Rows of a tree, Workspaces', Sessions', Files' or a review's threads: a
