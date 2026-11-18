@@ -47,7 +47,7 @@ daemon.on("error", fail);
 daemon.on("exit", (code) => fail(`the daemon exited with ${code}`));
 
 const base = `http://127.0.0.1:${port}/liton/v1`;
-const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", body: JSON.stringify(body) })).json();
+const post = async (what, body) => (await fetch(`${base}/${what}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
 const call = (capability, request, provider) => post("call", { capability, request, ...(provider && { provider }) });
 const cliOptions = { env: { ...process.env, LITON_URL: `http://127.0.0.1:${port}` } };
 // liton run with args and, if given, input on stdin: its exit code, stdout and stderr.

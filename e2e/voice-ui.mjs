@@ -70,7 +70,7 @@ fs.writeFileSync(chrome, `#!/bin/sh\nexec ${JSON.stringify(process.env.CHROME ||
 try {
   const base = `http://127.0.0.1:${port}`;
   await until("the manifest", async () => (await fetch(`${base}/liton/v1/manifest`)).ok);
-  const status = async () => (await (await fetch(`${base}/liton/v1/poll`, { method: "POST", body: JSON.stringify({ topics: [{ capability: "voice.v1", topic: "status", after: "" }] }) })).json()).topics[0].events[0].Status.stt;
+  const status = async () => (await (await fetch(`${base}/liton/v1/poll`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topics: [{ capability: "voice.v1", topic: "status", after: "" }] }) })).json()).topics[0].events[0].Status.stt;
   const up = (await status()) === "Ready";
 
   await step("a conversation stops listening while a reply is spoken, and listens again 400 ms after it", async () => {

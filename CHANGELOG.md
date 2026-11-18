@@ -80,6 +80,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Changed
 
+- **Breaking:** the daemon refuses a request from a page of another site, so a website open in your browser can't send your agents work: one whose `Origin` isn't the daemon's own address, a POST not sent as `application/json`, and one to a host name other than `LITON_HOST`, `localhost` or one `LITON_ALLOWED_HOSTS` lists. Behind a proxy or a domain of its own, set `LITON_ALLOWED_HOSTS` to its name, such as `LITON_ALLOWED_HOSTS=liton.example`. A client of the protocol sends its calls and polls with `Content-Type: application/json`.
 - **Breaking:** the Paseo and speech rigs run from liton's development tool rather than shell scripts: `zig build devtool -- paseo daemon` (and `paseo cli`, `paseo relay`, `paseo bridge`) in place of `rig/paseo/*.sh`, and `zig build devtool -- speech sherpa` (and `speech whisper`, `speech model`) in place of `rig/speech/*.sh`, with the same settings.
 - Sending a message or allowing or denying a request shows at once: the message appears as "Sending…" and the prompt gives way to "Allowing…" or "Denying…" until the agent has it. A message the agent did not take stays, with why and a Retry button; an answer it did not take brings the prompt back. A chat pane says "Loading…" until its session's timeline arrives.
 - The browser remembers which drawers you hid, and each pane's options. Layouts saved before options existed load with every option at its default.
