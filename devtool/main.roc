@@ -23,7 +23,7 @@ main! = |arguments| {
 			Stderr.line!("liton-devtool: ${problem}\n\n${Cli.usage}")?
 			Err(Exit(2))
 		}
-		Ui({ roc_ui, runtime_files, flags }) => Ui.build!(roc_ui, runtime_files, flags)
+		Ui({ roc_ui, output, runtime_files, flags }) => Ui.build!(roc_ui, output, runtime_files, flags)
 		Specs({ roc_ui, target }) => Ui.specs!(roc_ui, target)
 		Paseo(command) => {
 			Exec.needs!("node", "nodejs", given)?
