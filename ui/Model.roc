@@ -664,16 +664,19 @@ Model := [].{
 	panes : State -> List(Pane)
 	panes = |state| state.columns.join_map(|column| column.panes)
 
-	## A new pane of `widget`: a tab in a Workbench's main area, or a column of
-	## its own at the end in Tiling.
+	## A new pane of `widget`, focused, its column shown on a narrow screen: a
+	## tab in a Workbench's main area, or a column of its own at the end in
+	## Tiling.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
 		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
-		if (state.shell == Workbench)
-			{ ..state, columns: state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), next_id: state.next_id + 1 }
-		else
-			{ ..state, columns: state.columns.append(column), active_column: column.id, next_id: state.next_id + 2 }
+		(columns, next_id, shown) =
+			if (state.shell == Workbench)
+				(state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), state.next_id + 1, state.columns.get(1).map_ok(|main| main.id) ?? "")
+			else
+				(state.columns.append(column), state.next_id + 2, column.id)
+		Model.show_column({ ..state, columns, next_id, focused_pane: added.id }, shown)
 	}
 
 	slot_of : State, Str -> Slot

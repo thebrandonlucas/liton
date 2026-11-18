@@ -381,7 +381,8 @@ Liton := [].{
 										Html.button_s(
 											row.field(|widget| widget).map2(model.signal().lift_row(), |widget, state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
 											[],
-											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text(Model.add_pane(state, widget))),
+											# Closed, Settings shows the pane added rather than covering it.
+											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text({ ..Model.add_pane(state, widget), show_settings: Bool.False })),
 										),
 								),
 							],
@@ -443,7 +444,7 @@ Liton := [].{
 									slot.lift_row().map(Model.slot_name),
 									[],
 									[Engine.each(row.field(|shown| Widgets.find(shown.widget).slots), Model.slot_name, |choice| Engine.element("option", [Engine.prop_s(Engine.Prop.value, choice.key())], [Engine.text_s(choice.field(Liton.slot_title))]))],
-									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text(Model.move_to_slot(state, pane_id, Model.slot_named(name)))),
+									model.set_value_by(id, |state, pane_id, name| Model.with_snapshot_text({ ..Model.move_to_slot(state, pane_id, Model.slot_named(name)), show_settings: Bool.False })),
 								),
 							|| Engine.text(""),
 						),
