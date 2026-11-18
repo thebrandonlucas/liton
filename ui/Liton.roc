@@ -1810,36 +1810,66 @@ Liton := [].{
 
 	## A room opened: its name and topic, Join or Leave, and its messages,
 	## the newest at the bottom, with who is typing. A forum's are its posts.
+	## A thread opened shows beside them, or in their place in a narrow pane.
 	room_opened : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_opened = |model, id| {
-		room_id = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id)
-		shown = room_id.map2(model.signal(), |opened, state| Model.room_of(state, opened))
+		opened = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id))
+		room_id = opened.map(|shown| shown.room_id)
+		shown = room_id.map2(model.signal(), |opened_id, state| Model.room_of(state, opened_id))
 		Html.div_s(
-			shown.map(|opened| if (opened.kind == Forum) "room forum" else "room"),
+			shown.map2(opened, |room, { root, .. }| Str.join_with(["room", if (room.kind == Forum) "forum" else "", if (root.is_empty()) "" else "threaded"].drop_if(Str.is_empty), " ")),
+			[Html.div("room-main", Liton.room_main(model, id, room_id, shown)), Engine.when(opened.map(|{ root, .. }| !root.is_empty()), || Liton.room_thread(model, id, opened), || Engine.text(""))],
+		)
+	}
+
+	## A room's header, messages and who is typing.
+	room_main : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> List(Elem(PaneCtx))
+	room_main = |model, id, room_id, shown|
+		[
+			Html.div(
+				"room-header",
+				[
+					Html.button("‹", [Engine.class("room-back"), Html.aria_label("All rooms")], model.update_by(id, |state, pane_id| Model.open_room(state, { pane_id, room_id: "" }))),
+					Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title")]),
+					Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
+					Liton.join_controls(model, shown),
+				],
+			),
+			Html.div(
+				"timeline-scroll",
+				[
+					Html.ul(
+						[Engine.class("timeline room-timeline"), Engine.attr("data-part", "room")],
+						[Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
+					),
+				],
+			),
+			Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
+			Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+		]
+
+	## The thread a Rooms pane opened: its top-level message, its replies and
+	## who is typing in it, and × to close it.
+	room_thread : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.RoomPane) -> Elem(PaneCtx)
+	room_thread = |model, id, opened|
+		Html.section(
+			"Thread",
+			"room-thread-pane",
 			[
-				Html.div(
-					"room-header",
-					[
-						Html.button("‹", [Engine.class("room-back"), Html.aria_label("All rooms")], model.update_by(id, |state, pane_id| Model.open_room(state, { pane_id, room_id: "" }))),
-						Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title")]),
-						Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
-						Liton.join_controls(model, shown),
-					],
-				),
+				Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))]),
 				Html.div(
 					"timeline-scroll",
 					[
 						Html.ul(
-							[Engine.class("timeline room-timeline"), Engine.attr("data-part", "room")],
-							[Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
+							[Engine.class("timeline room-timeline"), Engine.attr("data-part", "thread")],
+							[Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
 						),
 					],
 				),
-				Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
-				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+				Engine.when(opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)), || Html.p("Loading…", "missing"), || Engine.text("")),
+				Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
 			],
 		)
-	}
 
 	## A message: who wrote it, a person or an agent, how long ago, and
 	## whether edited; its text as Markdown, unless deleted; its reactions;
@@ -1868,22 +1898,28 @@ Liton := [].{
 					"room-reactions",
 					[Engine.each(row.field(|line| line.reactions), |reaction| reaction.emoji, |reaction| Html.span_s(reaction.field(|shown| "${shown.emoji} ${shown.count.to_str()}"), [Engine.class_s(reaction.field(|shown| if (shown.mine) "reaction mine" else "reaction"))]))],
 				),
-				Html.div(
-					"room-thread",
-					[
-						Html.span_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")]),
-						Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
-					],
+				Engine.when(
+					row.field(|line| line.threaded),
+					||
+						Html.div(
+							"room-thread",
+							[
+								Html.button_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
+								Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
+							],
+						),
+					|| Engine.text(""),
 				),
 			],
 		)
 	}
 
-	## A thread's replies and who replied, as "2 replies · Scout, Ada".
+	## A thread's replies and who replied, as "2 replies · Scout, Ada", or
+	## Reply to start one.
 	replies_text : Model.RoomLine -> Str
 	replies_text = |line|
 		match line.replies {
-			0 => ""
+			0 => "Reply"
 			1 => "1 reply · ${line.repliers}"
 			count => "${count.to_str()} replies · ${line.repliers}"
 		}

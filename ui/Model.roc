@@ -255,8 +255,9 @@ Model := [].{
 	## A message as a Rooms pane shows it: its author's name, and whether an
 	## agent; how long ago it was posted (`Model.ago`), and when; its text,
 	## unless deleted; its reactions, each with how many reacted and whether
-	## you did; and its thread's replies, who replied, and how long ago last.
-	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), replies : U32, repliers : Str, last_reply : Str }
+	## you did; and, in the room, its thread's replies, who replied, and how
+	## long ago last (`threaded`).
+	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -1228,10 +1229,11 @@ Model := [].{
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		# The rooms, and the messages and members of the room each Rooms pane opened.
+		# The rooms, and the messages and members of the room each Rooms pane
+		# opened, and of the thread opened in it.
 		room_topics = |shown| {
-			{ room_id, .. } = Model.room_pane(state, shown.id)
-			if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]
+			{ room_id, root, .. } = Model.room_pane(state, shown.id)
+			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
 		}
 		rooms_shown = laid_out.keep_if(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))
 		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.join_map(room_topics).prepend(RoomList) else []
@@ -1306,6 +1308,7 @@ Model := [].{
 		match subject {
 			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
 			RoomMessages(room_id) => Model.logged(with_events, room_id, "", [])
+			RoomThread({ room_id, root }) => Model.logged(with_events, room_id, root, [])
 			# Unchanged items still settle what was set aside.
 			Items => Model.attention_fetched(with_events, serial, with_events.attention)
 			# The requests its review has held since the poll they waited for.
@@ -1331,6 +1334,7 @@ Model := [].{
 			(_, Rooms(listed)) => { ..state, rooms: listed }
 			(RoomMembers(room_id), Members(members)) => { ..state, room_members: state.room_members.drop_if(|known| known.room_id == room_id).append({ room_id, members }) }
 			(RoomMessages(room_id), RoomEntry(entry)) => Model.logged(state, room_id, "", [entry])
+			(RoomThread({ room_id, root }), RoomEntry(entry)) => Model.logged(state, room_id, root, [entry])
 			(_, Listed(workspaces)) => Model.relisted({ ..state, listed: { ..state.listed, workspaces } })
 			(_, Agents(listed)) => { ..state, agents: listed }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
@@ -2465,6 +2469,11 @@ Model := [].{
 	open_room : State, { pane_id : Str, room_id : Str } -> State
 	open_room = |state, { pane_id, room_id }| { ..state, room_panes: state.room_panes.drop_if(|shown| shown.pane == pane_id).append({ pane: pane_id, room_id, root: "" }) }
 
+	## Opens a thread beside the room a Rooms pane shows, by its root, or
+	## closes it with "".
+	open_thread : State, { pane_id : Str, root : Str } -> State
+	open_thread = |state, { pane_id, root }| { ..state, room_panes: state.room_panes.map(|shown| if (shown.pane == pane_id) { ..shown, root } else shown) }
+
 	## A room as listed, or as its id alone tells.
 	room_of : State, Str -> Rooms.Room
 	room_of = |state, room_id| Model.rooms_listed(state).find_first(|room| room.id == room_id) ?? Rooms.room({ id: room_id, provider: "", name: room_id, kind: Channel })
@@ -2497,7 +2506,16 @@ Model := [].{
 	room_lines = |state, pane_id| {
 		log = Model.room_log(state, Model.room_pane(state, pane_id).room_id, "")
 		threads = Rooms.threads(log)
-		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| Model.room_line(state, posted, threads))
+		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True })
+	}
+
+	## The thread a Rooms pane opened: its top-level message, then its
+	## replies by their times.
+	thread_lines : State, Str -> List(RoomLine)
+	thread_lines = |state, pane_id| {
+		{ room_id, root, .. } = Model.room_pane(state, pane_id)
+		posted = Rooms.messages(Model.room_log(state, room_id, "")).keep_if(|message| message.id == root).concat(by_time(Rooms.messages(Model.room_log(state, room_id, root)).keep_if(|message| message.place != TopLevel)))
+		posted.map(|message| Model.room_line(state, message, []))
 	}
 
 	room_line : State, Rooms.Message, List(Rooms.Thread) -> RoomLine
@@ -2515,6 +2533,7 @@ Model := [].{
 			edited: posted.edited,
 			deleted: posted.deleted,
 			reactions: posted.reactions.map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me) }),
+			threaded: Bool.False,
 			replies: thread.replies,
 			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
 			last_reply: thread.last_reply.map_ok(|time| Model.ago(state, time)) ?? "",
