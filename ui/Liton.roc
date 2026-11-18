@@ -377,13 +377,15 @@ Liton := [].{
 								Engine.each(
 									model.signal().map(|state| Widgets.all.keep_if(|widget| Widgets.fits(widget, if (state.shell == Workbench) Main else Free))),
 									|widget| widget.id,
-									|row|
+									|row| {
+										offer = row.field(|widget| widget).map2(model.signal().lift_row(), Liton.widget_offer)
 										Html.button_s(
-											row.field(|widget| widget).map2(model.signal().lift_row(), |widget, state| if (Widgets.missing(widget, state.capabilities).is_empty()) "+ ${widget.title}" else "+ ${widget.title} (unavailable)"),
-											[],
+											offer.map(|offered| offered.text),
+											[Html.aria_label_s(offer.map(|offered| offered.name)), Engine.class_s(offer.map(|offered| if (offered.present) "added" else ""))],
 											# Closed, Settings shows the pane added rather than covering it.
 											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text({ ..Model.add_pane(state, widget), show_settings: Bool.False })),
-										),
+										)
+									},
 								),
 							],
 						),
@@ -395,6 +397,17 @@ Liton := [].{
 				),
 			|| Engine.text(""),
 		)
+
+	## How Settings offers a widget to add: unavailable while no provider
+	## supplies what it needs, and checked (by CSS) while the layout has it
+	## already, which a screen reader names. It can still be added again.
+	widget_offer : Widgets.Widget, Model.State -> { text : Str, name : Str, present : Bool }
+	widget_offer = |widget, state| {
+		unavailable = !Widgets.missing(widget, state.capabilities).is_empty()
+		present = Model.panes(state).any(|pane| pane.widget == widget.id)
+		text = if (unavailable) "+ ${widget.title} (unavailable)" else "+ ${widget.title}"
+		{ text, name: if (present) "+ ${widget.title} (${if (unavailable) "unavailable, " else ""}already in the layout)" else text, present }
+	}
 
 	## A slot's or column's panes in settings.
 	settings_column : State(Ctx, Model.State), RowRef(Ctx, Model.Column) -> Elem(ColumnCtx)

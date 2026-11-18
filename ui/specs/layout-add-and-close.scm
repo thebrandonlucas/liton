@@ -4,7 +4,7 @@
     (run-effect 1)
     (click (role button :name "Settings"))
     (expect-attr (role button :name "Settings") aria-expanded "true")
-    (expect-visible (role button :name "+ Chat"))
+    (expect-attr (role button :name "+ Chat (already in the layout)") class "added")
     (click (role button :name "+ CI runs (unavailable)"))
     ; Shown at once, as the main area's active tab, focused, with Settings
     ; closed so it isn't behind them.

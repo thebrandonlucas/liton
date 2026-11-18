@@ -7,7 +7,7 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
     (run-effect 3)
     (click (role button :name "Settings"))
-    (click (role button :name "+ Chat"))
+    (click (role button :name "+ Chat (already in the layout)"))
     (expect-text (test-id "show-main") "Chat · Chat")
     (fill (label "Message") "Find the TODOs")
     (press (label "Message") "Enter")
