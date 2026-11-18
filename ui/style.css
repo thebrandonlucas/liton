@@ -367,6 +367,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .room-thread button { padding: 0; border: none; background: none; color: var(--accent); font-size: 12px; }
 .room-last-reply { color: var(--muted); }
 .room-typing { margin: 0 12px 4px; color: var(--muted); font-size: 12px; }
+.room-message.pending { opacity: .6; }
+.room-message.failed .sent-status { color: var(--fail); }
+.room-retry { display: flex; gap: 6px; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .inbox-items { list-style: none; margin: 0; padding: 0; }
 .inbox-item { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--small-radius); }

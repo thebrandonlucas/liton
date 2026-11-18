@@ -208,7 +208,7 @@ Liton := [].{
 			model.on_result(|state, _, res| { ..state, coarse_pointer: res ?? state.coarse_pointer }),
 		),
 		# A draft sent or dictated replaces what its box shows, focused or not.
-		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |_| [Engine.command(ApplyValue("composer")), Engine.command(Focus("composer"))], Engine.ignore({})),
+		Engine.watch_changes(model.signal().map(|state| state.drafts_rewritten), |rewritten| [Engine.command(ApplyValue(rewritten.ref)), Engine.command(Focus(rewritten.ref))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.jumps), |_| [Engine.command(Focus("latest"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.clipboard),
@@ -1261,7 +1261,7 @@ Liton := [].{
 					"Send a message",
 					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
 					[
-						Liton.composer_input(model0, id),
+						Liton.composer_input(model0, id, { name: "Message", placeholder: Engine.const("Message the agent"), ref: Engine.const("composer") }, Microphone.send),
 						Html.div(
 							"composer-row",
 							[
@@ -1308,15 +1308,15 @@ Liton := [].{
 			Err(Missing) => { name: session.agent, title: if (session.agent.is_empty()) "" else "${session.agent}: its provider doesn't say which model it runs" }
 		}
 
-	## A box that grows with the draft to a few lines. Enter sends it and
-	## Shift+Enter starts a new line, except on a touch screen, where Enter
-	## starts one and Send sends. Enter that ends an IME composition is never
-	## heard.
-	composer_input : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	composer_input = |model, id| {
+	## A box that grows with the draft kept under `key` to a few lines, with
+	## the reference `ref`. Enter sends it and Shift+Enter starts a new line,
+	## except on a touch screen, where Enter starts one and Send sends. Enter
+	## that ends an IME composition is never heard.
+	composer_input : State(ctx, Model.State), Signal(ctx, Str), { name : Str, placeholder : Signal(ctx, Str), ref : Signal(ctx, Str) }, (Model.State, Str -> Model.State) -> Elem(ctx)
+	composer_input = |model, key, { name, placeholder, ref }, send| {
 		enter = Engine.Chord.plain("Enter")
 		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
-		Html.textarea(Engine.const("Message"), id.map2(model.signal(), |pane_id, state| Model.draft(state, pane_id)), [Engine.attr("rows", "1"), Engine.attr("placeholder", "Message the agent"), Engine.ref("composer"), Engine.on_key({ keymap: sends }, model.update_by(id, Microphone.send))], model.set_value_by(id, Model.set_draft))
+		Html.textarea(Engine.const(name), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "1"), Engine.attr_s("placeholder", placeholder), Engine.ref_s(ref), Engine.on_key({ keymap: sends }, model.update_by(key, send))], model.set_value_by(key, Model.set_draft))
 	}
 
 	## The git of the session a pane shows: its branch, the files of the scope
@@ -1846,6 +1846,7 @@ Liton := [].{
 			),
 			Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
 			Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+			Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
 		]
 
 	## The thread a Rooms pane opened: its top-level message, its replies and
@@ -1868,8 +1869,24 @@ Liton := [].{
 				),
 				Engine.when(opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)), || Html.p("Loading…", "missing"), || Engine.text("")),
 				Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
+				Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),
 			],
 		)
+
+	## The composer of a Rooms pane's room, or of the thread it opened, as
+	## the chat's: Send shows the message at once as sending.
+	room_composer : State(PaneCtx, Model.State), Signal(PaneCtx, Str), [Room, Thread], Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	room_composer = |model, id, place, placeholder| {
+		key = id.map(|pane_id| if (place == Thread) "${pane_id}/thread" else pane_id)
+		Html.form(
+			if (place == Thread) "Reply in the thread" else "Send to the room",
+			[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(key, Model.send_to_room))],
+			[
+				Liton.composer_input(model, key, { name: if (place == Thread) "Your reply" else "Your message", placeholder, ref: key.map(|draft_key| "composer:${draft_key}") }, Model.send_to_room),
+				Html.div("composer-row", [Html.submit_button("", [Engine.class("send"), Html.aria_label(if (place == Thread) "Send the reply" else "Send to the room")])]),
+			],
+		)
+	}
 
 	## A message: who wrote it, a person or an agent, how long ago, and
 	## whether edited; its text as Markdown, unless deleted; its reactions;
@@ -1878,7 +1895,7 @@ Liton := [].{
 	room_message = |model0, id, row| {
 		model = model0.lift_row()
 		Html.li(
-			[Engine.class_s(row.field(|line| Str.join_with(["room-message", if (line.agent) "agent" else "", if (line.deleted) "deleted" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "message")],
+			[Engine.class_s(row.field(|line| Str.join_with(["room-message", if (line.agent) "agent" else "", if (line.deleted) "deleted" else "", if (line.failed) "failed" else if (line.status.is_empty()) "" else "pending"].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "message")],
 			[
 				Html.div(
 					"room-meta",
@@ -1898,8 +1915,21 @@ Liton := [].{
 					"room-reactions",
 					[Engine.each(row.field(|line| line.reactions), |reaction| reaction.emoji, |reaction| Html.span_s(reaction.field(|shown| "${shown.emoji} ${shown.count.to_str()}"), [Engine.class_s(reaction.field(|shown| if (shown.mine) "reaction mine" else "reaction"))]))],
 				),
+				Engine.when(row.field(|line| !line.status.is_empty()), || Html.span_s(row.field(|line| line.status), [Engine.class("sent-status"), Engine.test_id("room-sent-status")]), || Engine.text("")),
 				Engine.when(
-					row.field(|line| line.threaded),
+					row.field(|line| line.failed),
+					||
+						Html.div(
+							"room-retry",
+							[
+								Html.button("Retry", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.True }), Model.resend)),
+								Html.button("Discard", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.False }), Model.resend)),
+							],
+						),
+					|| Engine.text(""),
+				),
+				Engine.when(
+					row.field(|line| line.threaded and line.status.is_empty()),
 					||
 						Html.div(
 							"room-thread",

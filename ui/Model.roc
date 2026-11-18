@@ -85,8 +85,9 @@ Model := [].{
 		drafts : List({ pane : Str, text : Str }),
 
 		## How many times a draft changed other than by typing, sent or
-		## dictated, so `Liton.effects` writes it into its box though focused.
-		drafts_rewritten : U64,
+		## dictated, and the reference of its box, so `Liton.effects` writes it
+		## into the box though focused.
+		drafts_rewritten : { count : U64, ref : Str },
 
 		## Whether the pointer is coarse, a touch screen's, whose keyboard has
 		## no Shift+Enter: Enter in a composer then starts a new line.
@@ -148,14 +149,16 @@ Model := [].{
 		## the entries of each room's messages (`root` "") and of each thread
 		## (`root` its top-level message); what each Rooms pane shows; and the
 		## requests on their way (sent as `call_outbox`). A request is shown at
-		## once (`rooms_listed`) until the daemon refuses it, or until the poll
-		## numbered `accepted` answers, the first sent after it accepted it (0
-		## while it waits).
+		## once (`rooms_listed`, `sending_lines`) until the daemon refuses it,
+		## or until the poll numbered `accepted` answers, the first sent after
+		## it accepted it (0 while it waits); a message sent until a log posts
+		## it, its id `message_id` once the daemon answers, or with why it
+		## `failed` if the daemon refused it.
 		rooms : List(Rooms.Room),
 		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
 		room_panes : List(RoomPane),
-		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64 }),
+		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
@@ -256,8 +259,10 @@ Model := [].{
 	## agent; how long ago it was posted (`Model.ago`), and when; its text,
 	## unless deleted; its reactions, each with how many reacted and whether
 	## you did; and, in the room, its thread's replies, who replied, and how
-	## long ago last (`threaded`).
-	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str }
+	## long ago last (`threaded`). A message sent and not yet posted says
+	## so (`status`), or why the daemon refused it (`failed`), by the
+	## `serial` of its request.
+	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
@@ -305,7 +310,7 @@ Model := [].{
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
-				drafts_rewritten: 0,
+				drafts_rewritten: { count: 0, ref: "composer" },
 				coarse_pointer: Bool.False,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
@@ -1292,7 +1297,7 @@ Model := [].{
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: settled.room_asks.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial) }
+		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -1504,7 +1509,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: state.drafts_rewritten + 1 }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { count: state.drafts_rewritten.count + 1, ref: "composer" } }, SendMessage({ session_id, text }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
@@ -2504,9 +2509,10 @@ Model := [].{
 	## The top-level messages of the room a Rooms pane opened, by their times.
 	room_lines : State, Str -> List(RoomLine)
 	room_lines = |state, pane_id| {
-		log = Model.room_log(state, Model.room_pane(state, pane_id).room_id, "")
+		room_id = Model.room_pane(state, pane_id).room_id
+		log = Model.room_log(state, room_id, "")
 		threads = Rooms.threads(log)
-		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True })
+		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True }).concat(Model.sending_lines(state, room_id, ""))
 	}
 
 	## The thread a Rooms pane opened: its top-level message, then its
@@ -2515,7 +2521,24 @@ Model := [].{
 	thread_lines = |state, pane_id| {
 		{ room_id, root, .. } = Model.room_pane(state, pane_id)
 		posted = Rooms.messages(Model.room_log(state, room_id, "")).keep_if(|message| message.id == root).concat(by_time(Rooms.messages(Model.room_log(state, room_id, root)).keep_if(|message| message.place != TopLevel)))
-		posted.map(|message| Model.room_line(state, message, []))
+		posted.map(|message| Model.room_line(state, message, [])).concat(Model.sending_lines(state, room_id, root))
+	}
+
+	## The messages sent to a room's top level, or to a thread by its root,
+	## that no log has posted yet.
+	sending_lines : State, Str, Str -> List(RoomLine)
+	sending_lines = |state, room_id, root| {
+		me = Model.room_of(state, room_id).me ?? ""
+		state.room_asks.keep_oks(
+			|asked|
+				match asked.request {
+					Send(sent) if sent.room_id == room_id and (if (root.is_empty()) sent.place == TopLevel else sent.place != TopLevel and Rooms.root_of(Rooms.message({ id: "", room_id, author: me, text: "", time: "", place: sent.place, mentions: [] })) == root) => {
+						line = Model.room_line(state, Rooms.message({ id: "sending:${asked.serial.to_str()}", room_id, author: me, text: sent.text, time: "", place: sent.place, mentions: sent.mentions }), [])
+						Ok({ ..line, author: if (me.is_empty()) "You" else line.author, status: if (asked.failed.is_empty()) "Sending…" else "Not sent: ${asked.failed}", failed: !asked.failed.is_empty(), serial: asked.serial })
+					}
+					_ => Err(NotSent)
+				},
+		)
 	}
 
 	room_line : State, Rooms.Message, List(Rooms.Thread) -> RoomLine
@@ -2537,6 +2560,9 @@ Model := [].{
 			replies: thread.replies,
 			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
 			last_reply: thread.last_reply.map_ok(|time| Model.ago(state, time)) ?? "",
+			status: "",
+			failed: Bool.False,
+			serial: 0,
 		}
 	}
 
@@ -2561,21 +2587,70 @@ Model := [].{
 		}
 	}
 
+	## Sends the draft of a Rooms pane's room, or of the thread it opened
+	## (key "<pane>/thread"), shown at once as sending, and clears it. An
+	## empty draft says it needs text.
+	send_to_room : State, Str -> State
+	send_to_room = |state, key| {
+		pane_id = key.drop_suffix("/thread")
+		{ room_id, root, .. } = Model.room_pane(state, pane_id)
+		text = Model.draft(state, key).trim()
+		sent_to = if (key == pane_id) TopLevel else Reply({ root, parent: root })
+		cleared = { ..Model.set_draft(state, key, ""), drafts_rewritten: { count: state.drafts_rewritten.count + 1, ref: "composer:${key}" } }
+		if (text.is_empty()) { ..state, notice: "A message needs text." } else Model.ask_rooms(cleared, Send({ room_id, text, place: sent_to, mentions: [] }))
+	}
+
+	## Sends a message the daemon refused again, or with `again` false gives
+	## it up.
+	resend : State, { serial : U64, again : Bool } -> State
+	resend = |state, { serial, again }| {
+		kept = { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial) }
+		match state.room_asks.find_first(|asked| asked.serial == serial) {
+			Ok(asked) if again => Model.ask_rooms(kept, asked.request)
+			_ => kept
+		}
+	}
+
 	## Sends a rooms.v1 request, shown at once until the daemon answers.
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
 		serial = state.call_outbox.serial + 1
-		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0 }), notice: "" }
+		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
 	}
 
-	## Takes the daemon's answer to a rooms.v1 request: accepted, it holds
-	## until the poll it asks for shows it; refused, it is undone, with why.
+	## Without the messages sent that a log has posted.
+	posted_sent : State -> State
+	posted_sent = |state| {
+		posted = |message_id|
+			state.room_logs.any(
+				|log|
+					log.entries.any(
+						|entry|
+							match entry.event {
+								Posted(message) => message.id == message_id
+								_ => Bool.False
+							},
+					),
+			)
+		{ ..state, room_asks: state.room_asks.drop_if(|asked| !asked.message_id.is_empty() and posted(asked.message_id)) }
+	}
+
+	## Takes the daemon's answer to a rooms.v1 request: a message sent holds
+	## until a log posts it, another request accepted until the poll it asks
+	## for shows it; refused, a message stays with why it failed, and another
+	## request is undone, with why.
 	rooms_answered : State, U64, Str -> State
 	rooms_answered = |state, serial, text| {
 		answered : Try(Protocol.Answer(Rooms.Response), _)
 		answered = Json.parse(text)
-		undone = |reason| { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial), notice: reason }
+		sends = |asked|
+			match asked.request {
+				Send(_) => asked.serial == serial
+				_ => Bool.False
+			}
+		undone = |reason| { ..state, room_asks: state.room_asks.drop_if(|asked| asked.serial == serial and !sends(asked)).map(|asked| if (sends(asked)) { ..asked, failed: reason } else asked), notice: reason }
 		match answered {
+			Ok(Ok(Sent({ message_id }))) => Model.poll(Model.posted_sent({ ..state, room_asks: state.room_asks.map(|asked| if (asked.serial == serial) { ..asked, message_id } else asked) }))
 			Ok(Ok(Rejected(reason))) => undone(reason)
 			Ok(Ok(_)) => Model.poll({ ..state, room_asks: state.room_asks.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
 			Ok(Err({ message, .. })) => undone(message)
