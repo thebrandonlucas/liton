@@ -130,6 +130,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Adding a second Chat in Settings no longer stops the page: each chat keeps its own message box, and sending or dictating focuses the one you used.
 - A widget added in Settings, or a pane moved there, is no longer hidden behind Settings: Settings closes to show it, and the added pane is the one focused (on a phone, its panel shows).
 - A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
+- A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
 
 ### Removed
 

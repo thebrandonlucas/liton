@@ -2393,7 +2393,8 @@ Model := [].{
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff]
+	## `NoView` is a widget's that liton has no view of yet.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2416,7 +2417,8 @@ Model := [].{
 				"inbox" => Inbox
 				"changes" => Changes
 				"files" => Files
-				_ => Capabilities
+				"capabilities" => Capabilities
+				_ => NoView
 			}
 	}
 }
