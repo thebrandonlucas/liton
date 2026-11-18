@@ -31,6 +31,12 @@ capability's own: a tag without a payload is a string (`"ListSessions"`), one
 with a payload an object of one field (`{"SendMessage": {…}}`), and an optional
 field is left out when absent.
 
+A POST's body is sent as `Content-Type: application/json`. So that a page of
+another site in a browser can't use it, the daemon answers `403` to a request
+whose `Origin` isn't its own address, to a POST of another type, and to one
+naming a host other than `LITON_HOST`, `localhost` or one of
+`LITON_ALLOWED_HOSTS`.
+
 ### Manifest
 
 `GET /liton/v1/manifest` lists what the daemon offers, and the topics of each
