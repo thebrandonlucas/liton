@@ -2260,6 +2260,14 @@ Model := [].{
 		}
 	}
 
+	## Links the session the focus shows to a ticket by hand: the one
+	## focused, or the focused workspace's that needs you most.
+	link_ticket : State, Str -> State
+	link_ticket = |state, ticket_id| {
+		session_id = Model.session_of(state, Model.pane(state, ""))
+		if (session_id.is_empty() or Model.starting(state, session_id)) state else Model.ask_tickets(state, Link({ session_id, ticket_id }))
+	}
+
 	## Comments a Tickets pane's draft on the ticket it shows.
 	comment_ticket : State, Str -> State
 	comment_ticket = |state, pane_id| {

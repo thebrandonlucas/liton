@@ -1073,7 +1073,9 @@ Liton := [].{
 
 	## A Tickets pane's ticket: the way back to the list, its key, a link to
 	## it where its source keeps it, its title, status, assignees, source and
-	## labels, and its body and comments as Markdown; and its status, its
+	## labels, the sessions working on it, each to open or unlink, and to
+	## link the session focused; its body and comments as Markdown; and its
+	## status, its
 	## assignees, of its source's people, and a comment to add, each shown
 	## at once, saving until the daemon has it.
 	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
@@ -1119,6 +1121,31 @@ Liton := [].{
 						),
 					],
 				),
+				Html.div_attrs(
+					[Engine.class("ticket-sessions"), Engine.attr("data-part", "sessions")],
+					[
+						Engine.each(
+							summary.map2(model.signal(), |listed, state| TicketDesk.links_shown(state.tickets).keep_if(|link| link.ticket_id == listed.id)),
+							|link| link.session_id,
+							|row| {
+								title = row.key().map2(model.signal().lift_row(), |session_id, state| Model.session(state, session_id).title)
+								Html.div(
+									"ticket-session",
+									[
+										Html.button_s(title, [Engine.class("session-title"), Html.aria_label_s(title.map(|name| "Open ${name}"))], model.lift_row().update_by(row.key(), |state, session_id| Model.open(state, Session(session_id)))),
+										Html.span_s(row.field(|link| if (link.inferred) "by its branch" else "linked"), [Engine.class("link-kind")]),
+										Html.button("Unlink", [Html.aria_label_s(title.map(|name| "Unlink ${name}"))], model.lift_row().update_by(row.key(), |state, unlinked| Model.ask_tickets(state, Unlink({ session_id: unlinked })))),
+									],
+								)
+							},
+						),
+						Engine.when(
+							summary.map2(model.signal(), |listed, state| Liton.linkable(state, listed.id)),
+							|| Html.button_s(model.signal().map(|state| "Link to ${Model.session(state, Model.session_of(state, Model.pane(state, ""))).title}"), [Engine.class("link-session")], model.update_by(summary.map(|listed| listed.id), Model.link_ticket)),
+							|| Engine.text(""),
+						),
+					],
+				),
 				Html.p_s(view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| if (TicketDesk.loaded(state.tickets, ticket_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
 				Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
 				Html.ul(
@@ -1154,6 +1181,14 @@ Liton := [].{
 				),
 			],
 		)
+	}
+
+	## Whether the session the focus shows can be linked to a ticket: one
+	## that isn't starting nor linked to it already.
+	linkable : Model.State, Str -> Bool
+	linkable = |state, ticket_id| {
+		session_id = Model.session_of(state, Model.pane(state, ""))
+		!session_id.is_empty() and !Model.starting(state, session_id) and !TicketDesk.links_shown(state.tickets).contains({ session_id, ticket_id, inferred: Bool.False }) and !TicketDesk.links_shown(state.tickets).contains({ session_id, ticket_id, inferred: Bool.True })
 	}
 
 	## A status's badge, as its kind shows.

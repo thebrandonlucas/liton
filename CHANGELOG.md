@@ -75,6 +75,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A Tickets widget, in Settings' Add a widget: the tickets of every source the daemon offers through `tickets.v1`, the latest changed first, each with its key, title, status, assignees, source and how long ago it changed. Filter them by source, status, assignee (anyone, you or nobody) and text in the key or title; the list changes as you type.
 - Open a ticket from the Tickets list to read its description and comments, as Markdown, with a link to it where its source keeps it; ← Tickets goes back to the list.
 - Change a ticket from its Tickets pane: set its status to one of its source's, assign it to its source's people or take them off, and comment on it in Markdown. Each change shows at once, marked Saving… until the daemon has it, and goes back, with why, if the tracker refuses it.
+- A ticket shows the sessions working on it, linked by hand or by their branch: open one to focus it, as the chat shows it, or unlink it. Link to links the session in focus to the ticket. Each shows at once, and goes back, with why, if the daemon refuses it.
 
 ### Changed
 

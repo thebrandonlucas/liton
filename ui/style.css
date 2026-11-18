@@ -396,6 +396,13 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .ticket-people { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 0; border: none; flex-basis: 100%; }
 .ticket-people legend { float: left; margin-right: 4px; padding: 0; color: var(--muted); }
 .ticket-people label { display: inline-flex; gap: 4px; align-items: center; }
+.ticket-sessions { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.ticket-sessions:empty { display: none; }
+.ticket-session { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ticket-session .session-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; padding: 0; background: none; text-align: left; color: var(--accent); }
+.ticket-session .link-kind { font: 11px var(--font-mono); color: var(--muted); }
+.ticket-sessions button:not(.session-title) { padding: 1px 8px; font-size: 12px; }
+.link-session { align-self: flex-start; }
 .ticket-composer { display: flex; flex-direction: column; gap: 6px; }
 .ticket-composer textarea { padding: 6px 8px; resize: vertical; min-height: 4.5em; font: 13px/1.45 var(--font-ui); }
 .ticket-composer button[type="submit"] { align-self: flex-end; background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
