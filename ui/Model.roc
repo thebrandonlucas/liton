@@ -2562,7 +2562,7 @@ Model := [].{
 				match asked.request {
 					Send(sent) if sent.room_id == room_id and (if (root.is_empty()) sent.place == TopLevel else sent.place != TopLevel and Rooms.root_of(Rooms.message({ id: "", room_id, author: me, text: "", time: "", place: sent.place, mentions: [] })) == root) => {
 						line = Model.room_line(state, Rooms.message({ id: "sending:${asked.serial.to_str()}", room_id, author: me, text: sent.text, time: "", place: sent.place, mentions: sent.mentions }), [])
-						Ok({ ..line, author: if (me.is_empty()) "You" else line.author, status: if (asked.failed.is_empty()) "Sending…" else "Not sent: ${asked.failed}", failed: !asked.failed.is_empty(), serial: asked.serial })
+						Ok({ ..line, author: if (Model.room_members_of(state, room_id).any(|member| member.id == me)) line.author else "You", status: if (asked.failed.is_empty()) "Sending…" else "Not sent: ${asked.failed}", failed: !asked.failed.is_empty(), serial: asked.serial })
 					}
 					_ => Err(NotSent)
 				},

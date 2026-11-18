@@ -1962,7 +1962,7 @@ Liton := [].{
 						Html.div(
 							"room-thread",
 							[
-								Html.button_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
+								Html.button_s(row.field(Liton.replies_text), [Engine.class_s(row.field(|line| if (line.replies == 0) "start-thread" else "")), Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
 								Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
 							],
 						),
