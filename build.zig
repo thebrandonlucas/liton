@@ -238,16 +238,18 @@ fn addRocAppInputs(
     run.addFileInput(.{ .cwd_relative = compiler_path });
 }
 
-// Builds the app at root with compiler into a file called name, again only
-// when what it reads changes.
+// Builds the app at root with compiler and flags into a file called name,
+// again only when what it reads changes.
 fn addRocBuild(
     b: *std.Build,
     sources: SourceTree,
     compiler: []const u8,
+    flags: []const []const u8,
     root: []const u8,
     name: []const u8,
 ) std.Build.LazyPath {
     const run = b.addSystemCommand(&.{ compiler, "build" });
+    run.addArgs(flags);
     run.setName(b.fmt("{s} build {s}", .{ compiler, root }));
     run.addFileArg(b.path(root));
     addRocAppInputs(b, run, sources, compiler, root);
@@ -330,7 +332,9 @@ pub fn build(b: *std.Build) void {
     // change, and the specs check behaviour, not speed; the e2e step drives
     // the specialized module the browser gets.
     const spec_step = b.step("spec", "Run the UI's specs natively");
-    const run_specs = addDevtoolCommand(b, devtool, "spec", &.{ "spec", roc_ui, nativeRocTarget(b) });
+    const spec_runner = addRocBuild(b, sources, roc_ui, &.{ "--specialize=no", b.fmt("--target={s}", .{nativeRocTarget(b)}) }, "ui/main.roc", "liton-specs");
+    const run_specs = addDevtoolCommand(b, devtool, "spec", &.{"spec"});
+    run_specs.addFileArg(spec_runner);
     spec_step.dependOn(&run_specs.step);
     test_step.dependOn(&run_specs.step);
 
@@ -354,19 +358,19 @@ pub fn build(b: *std.Build) void {
     ui_step.dependOn(&install_ui.step);
 
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
-    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
     daemon_step.dependOn(&install_daemon.step);
 
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.
     const cli_step = b.step("cli", "Build the command line client into zig-out/bin/liton");
-    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, "cli/main.roc", "liton"), "liton");
+    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "cli/main.roc", "liton"), "liton");
     cli_step.dependOn(&install_cli.step);
 
     // The example provider outside the daemon, a server of /liton/v1 on the
     // daemon's platform and compiler.
     const example_step = b.step("example-provider", "Build the example provider into zig-out/bin/provider-echo");
-    const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
+    const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
     example_step.dependOn(&install_example.step);
 
     // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and

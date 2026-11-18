@@ -20,14 +20,12 @@ Ui := [].{
 		Path.copy_dir_with!(Path.utf8("ui/backgrounds"), Path.utf8("${output}/backgrounds"), { symlinks: Follow, destination: Merge })
 	}
 
-	## The UI's .scm specs, in the native runner roc-signals builds the UI
-	## into for `target`, zig-out/bin/liton-specs.
-	specs! : Str, Str => Try({}, _)
-	specs! = |roc_ui, target| {
-		Path.create_all!(Path.utf8("zig-out/bin"))?
-		Exec.call!(".", roc_ui, ["build", "--specialize=no", "--target=${target}", "ui/main.roc", "--output=zig-out/bin/liton-specs"])?
+	## The UI's .scm specs, in `runner`, the native runner roc-signals builds
+	## the UI into.
+	specs! : Str => Try({}, _)
+	specs! = |runner| {
 		specs = Path.list!(Path.utf8("ui/specs"))?.map(Path.display).keep_if(|path| path.ends_with(".scm"))
-		Cmd.new(OsStr.from_str("zig-out/bin/liton-specs")).args(Ui.ordered(specs).map(OsStr.from_str)).call!()
+		Cmd.new(OsStr.from_str(runner)).args(Ui.ordered(specs).map(OsStr.from_str)).call!()
 	}
 
 	## `paths` in a shell glob's order, by their bytes.

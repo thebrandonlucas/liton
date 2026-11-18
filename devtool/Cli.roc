@@ -1,7 +1,7 @@
 ## The development tool's pure part: what its arguments ask for.
 Cli := [].{
 
-	Command : [Help, Usage(Str), Ui({ roc_ui : Str, output : Str, runtime_files : List(Str), flags : List(Str) }), Specs({ roc_ui : Str, target : Str }), Paseo([Daemon, Relay, Bridge, Cli(List(Str))]), Speech([Model([Parakeet, Whisper]), Sherpa, Whisper])]
+	Command : [Help, Usage(Str), Ui({ roc_ui : Str, output : Str, runtime_files : List(Str), flags : List(Str) }), Specs(Str), Paseo([Daemon, Relay, Bridge, Cli(List(Str))]), Speech([Model([Parakeet, Whisper]), Sherpa, Whisper])]
 
 	usage : Str
 	usage =
@@ -18,8 +18,7 @@ Cli := [].{
 		\\  speech whisper        whisper.cpp's whisper-server on 127.0.0.1:8178
 		\\  ui <roc-ui> <output> <runtime.mjs> <environment.mjs> <worker.mjs> [<flag>...]
 		\\                        build the browser UI into the directory output (zig build ui)
-		\\  spec <roc-ui> <target>
-		\\                        run the UI's specs natively (zig build spec)
+		\\  spec <runner>         run the UI's specs in roc-signals's native runner (zig build spec)
 		\\  help
 		\\
 		\\liton's development tasks, in Roc, run from the repository's root.
@@ -31,7 +30,7 @@ Cli := [].{
 		match arguments {
 			[] | ["help"] | ["--help"] | ["-h"] => Help
 			["ui", roc_ui, output, runtime, environment, worker, .. as flags] => Ui({ roc_ui, output, runtime_files: [runtime, environment, worker], flags })
-			["spec", roc_ui, target] => Specs({ roc_ui, target })
+			["spec", runner] => Specs(runner)
 			["paseo", "daemon"] => Paseo(Daemon)
 			["paseo", "relay"] => Paseo(Relay)
 			["paseo", "bridge"] => Paseo(Bridge)
