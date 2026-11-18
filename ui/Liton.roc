@@ -1008,12 +1008,18 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	## A Tickets pane: its filters, which `Tickets.matches` applies, over its
-	## tickets, the latest changed first, each with its key, title, status,
-	## assignees, source and how long ago it changed.
+	## A Tickets pane: the ticket it opened, or its filters, which
+	## `Tickets.matches` applies, over its tickets, the latest changed first,
+	## each with its key, title, which opens it, status, assignees, source
+	## and how long ago it changed.
 	tickets : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	tickets = |model, id| {
 		view = id.map2(model.signal(), |pane_id, state| TicketDesk.view(state.tickets, pane_id))
+		Engine.when(view.map(|shown| shown.ticket.is_empty()), || Liton.ticket_list(model, id, view), || Liton.ticket_detail(model, id, view))
+	}
+
+	ticket_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
+	ticket_list = |model, id, view| {
 		filtered = |change| model.set_value_by(id, |state, pane_id, text| Model.filter_tickets(state, pane_id, |filter| change(filter, text)))
 		listed = view.map2(model.signal(), |shown, state| TicketDesk.listed(state.tickets, shown))
 		Html.div(
@@ -1039,13 +1045,17 @@ Liton := [].{
 								Html.li(
 									[Engine.class("ticket-row"), Engine.attr("data-part", "ticket")],
 									[
-										Html.div("ticket-title", [Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))]),
+										Engine.element(
+											"button",
+											[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key().map2(id.lift_row(), |ticket_id, pane_id| { pane_id, ticket_id }), Model.open_ticket))],
+											[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
+										),
 										Html.div(
 											"ticket-meta",
 											[
 												Html.span_s(row.field(|ticket| ticket.status.name), [Engine.class_s(row.field(|ticket| Liton.kind_class(ticket.status.kind))), Engine.test_id("ticket-status")]),
 												Html.span_s(row.field(|ticket| Str.join_with(ticket.assignees.map(|person| person.name), ", ")), [Engine.class("assignees")]),
-												Html.span_s(row.field(|ticket| ticket.source).map2(state, |source_id, shown| shown.tickets.listing.sources.find_first(|source| source.id == source_id).map_ok(|source| source.name) ?? source_id), [Engine.class("source")]),
+												Html.span_s(row.field(|ticket| ticket.source).map2(state, |source_id, shown| TicketDesk.source_name(shown.tickets, source_id)), [Engine.class("source")]),
 												Html.span_s(row.field(|ticket| ticket.updated).map2(state, |updated, shown| Model.ago(shown, updated)), [Engine.class("age")]),
 											],
 										),
@@ -1056,6 +1066,62 @@ Liton := [].{
 					],
 				),
 				Html.p_s(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+			],
+		)
+	}
+
+	## A Tickets pane's ticket: the way back to the list, its key, a link to
+	## it where its source keeps it, its title, status, assignees, source and
+	## labels, and its body and comments as Markdown.
+	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
+	ticket_detail = |model, id, view| {
+		shown = view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| TicketDesk.ticket_shown(state.tickets, ticket_id) ?? TicketDesk.missing)
+		summary = shown.map(|opened| opened.summary)
+		Html.div_attrs(
+			[Engine.class("ticket"), Engine.attr("data-part", "ticket")],
+			[
+				Html.div(
+					"ticket-bar",
+					[
+						Html.button("← Tickets", [Html.aria_label("Back to the tickets")], model.update_by(id, |state, pane_id| Model.open_ticket(state, { pane_id, ticket_id: "" }))),
+						Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
+						Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]),
+					],
+				),
+				Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
+				Html.div(
+					"ticket-meta",
+					[
+						Html.span_s(summary.map(|listed| listed.status.name), [Engine.class_s(summary.map(|listed| Liton.kind_class(listed.status.kind))), Engine.test_id("ticket-status")]),
+						Html.span_s(summary.map(|listed| Str.join_with(listed.assignees.map(|person| person.name), ", ")), [Engine.class("assignees")]),
+						Html.span_s(summary.map(|listed| Str.join_with(listed.labels, " · ")), [Engine.class("labels")]),
+					],
+				),
+				Html.p_s(view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| if (TicketDesk.loaded(state.tickets, ticket_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
+				Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
+				Html.ul(
+					[Engine.class("ticket-comments")],
+					[
+						Engine.each(
+							shown.map(|opened| opened.comments),
+							|posted| posted.id,
+							|row|
+								Html.li(
+									[Engine.class_s(row.key().map(|comment_id| if (comment_id.starts_with("pending-")) "ticket-comment pending" else "ticket-comment")), Engine.attr("data-part", "comment")],
+									[
+										Html.div(
+											"comment-header",
+											[
+												Html.span_s(row.field(|posted| posted.author.name), [Engine.class("comment-author")]),
+												Html.span_s(row.field(|posted| posted.created).map2(model.signal().lift_row(), |created, state| Model.ago(state, created)), [Engine.class("age")]),
+											],
+										),
+										Liton.markdown(model.lift_row(), row.key().map(|comment_id| "comment/${comment_id}"), row.field(|posted| Markdown.blocks(posted.body))),
+									],
+								),
+						),
+					],
+				),
 			],
 		)
 	}

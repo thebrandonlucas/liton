@@ -73,6 +73,7 @@ All notable changes to liton are documented in this file. The format is based on
 - `tickets.v1`: issues and tickets from your trackers, listed with filters, read with their comments, commented on, and moved between statuses and assignees, each with a link back to where it lives. A session links to the ticket its branch names, unless you link or unlink it by hand. The mock provider offers scripted tickets of a GitHub-like and a Linear-like source to try it with, through `liton call tickets.v1` (docs/protocol.md, Tickets).
 - `LITON_MOCK` takes a comma-separated list of the mock's parts, `agents`, `rooms` and `tickets`, to keep only those: `LITON_MOCK=rooms,tickets` shows its rooms and tickets beside Paseo's agents without its scripted sessions. `on`, the default, is all of them, and `off` none.
 - A Tickets widget, in Settings' Add a widget: the tickets of every source the daemon offers through `tickets.v1`, the latest changed first, each with its key, title, status, assignees, source and how long ago it changed. Filter them by source, status, assignee (anyone, you or nobody) and text in the key or title; the list changes as you type.
+- Open a ticket from the Tickets list to read its description and comments, as Markdown, with a link to it where its source keeps it; ← Tickets goes back to the list.
 
 ### Changed
 

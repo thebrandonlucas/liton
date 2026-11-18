@@ -42,15 +42,29 @@ TicketDesk := [].{
 		listing.tickets.keep_if(|ticket| Tickets.matches(filter, listing, ticket)).sort_with(|a, b| bytes_order(b.updated.to_utf8(), a.updated.to_utf8()))
 	}
 
-	## An opened ticket as listed, with the comments on their way after its
-	## own, each numbered `pending-<serial>`.
+	## A ticket as listed, with its body and comments once its topic
+	## answers, and the comments on their way after its own, each numbered
+	## `pending-<serial>`.
 	ticket_shown : State, Str -> Try(Tickets.Ticket, [NotFound])
 	ticket_shown = |desk, ticket_id| {
 		listing = TicketDesk.listing_shown(desk)
-		opened = desk.opened.find_first(|shown| shown.summary.id == ticket_id)?
-		summary = listing.tickets.find_first(|shown| shown.id == ticket_id) ?? opened.summary
-		Ok(desk.asked.fold({ ..opened, summary }, |shown, asked| if (TicketDesk.comments(asked.request) and Tickets.ticket_of(asked.request) == ticket_id) Tickets.applied(listing, shown, asked.request, { comment_id: "pending-${asked.serial.to_str()}", now: "" }) ?? shown else shown))
+		opened = desk.opened.find_first(|shown| shown.summary.id == ticket_id)
+		summary = listing.tickets.find_first(|shown| shown.id == ticket_id).on_err(|_| opened.map_ok(|shown| shown.summary))?
+		known = { summary, body: opened.map_ok(|shown| shown.body) ?? "", comments: opened.map_ok(|shown| shown.comments) ?? [] }
+		Ok(desk.asked.fold(known, |shown, asked| if (TicketDesk.comments(asked.request) and Tickets.ticket_of(asked.request) == ticket_id) Tickets.applied(listing, shown, asked.request, { comment_id: "pending-${asked.serial.to_str()}", now: "" }) ?? shown else shown))
 	}
+
+	## Whether a ticket's topic has answered with its body and comments.
+	loaded : State, Str -> Bool
+	loaded = |desk, ticket_id| desk.opened.any(|shown| shown.summary.id == ticket_id)
+
+	## What a pane shows of a ticket no one has.
+	missing : Tickets.Ticket
+	missing = { summary: { id: "", provider: "", source: "", key: "", title: "", url: "", status: { id: "", name: "", kind: Open }, assignees: [], labels: [], waiting_on: [], branch: Err(Missing), updated: "" }, body: "", comments: [] }
+
+	## The name of a ticket's source.
+	source_name : State, Str -> Str
+	source_name = |desk, source_id| desk.listing.sources.find_first(|source| source.id == source_id).map_ok(|source| source.name) ?? source_id
 
 	comments : Tickets.Request -> Bool
 	comments = |request|

@@ -373,12 +373,24 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .ticket-list { list-style: none; margin: 0; padding: 0; }
 .ticket-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border-radius: var(--small-radius); transition: background-color var(--fast) ease; }
 .ticket-row:hover { background: var(--tool); }
-.ticket-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-row .ticket-title { min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-row .ticket-title:active { transform: none; }
 .ticket-key { margin-right: 6px; font: 12px var(--font-mono); color: var(--muted); }
 .ticket-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font: 11px var(--font-mono); color: var(--muted); }
 .ticket-meta span:empty { display: none; }
 .ticket-meta .age { margin-left: auto; }
 .ticket-empty { margin: 8px 10px; color: var(--muted); font-size: 13px; }
+.ticket { display: flex; flex-direction: column; gap: 8px; padding: 2px 4px; }
+.ticket-bar { display: flex; align-items: center; gap: 8px; }
+.ticket-bar button { padding: 1px 8px; font-size: 12px; }
+.ticket-link { margin-left: auto; font-size: 12px; color: var(--accent); }
+.ticket-heading { margin: 0; font: 600 16px/1.35 var(--font-display); overflow-wrap: anywhere; }
+.ticket > .markdown { font-size: 13.5px; }
+.ticket-comments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ticket-comment { padding: 6px 10px; border: 1px solid var(--edge); border-left: 3px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); font-size: 13px; }
+.ticket-comment.pending { border-left-style: dashed; opacity: .75; }
+.ticket-comment .comment-header { margin-bottom: 2px; font-size: 12px; }
+.ticket-comment .age { margin-left: auto; font: 11px var(--font-mono); color: var(--muted); }
 .ticket-empty:empty { display: none; }
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }

@@ -2208,6 +2208,10 @@ Model := [].{
 		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
 	}
 
+	## Shows a ticket in a Tickets pane, or its list again for "".
+	open_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	open_ticket = |state, { pane_id, ticket_id }| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, ticket: ticket_id }) }
+
 	## Changes the filter of a Tickets pane's list.
 	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
 	filter_tickets = |state, pane_id, change| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, filter: change(view.filter) }) }
