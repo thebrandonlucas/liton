@@ -476,7 +476,17 @@ kbd:empty { display: none; }
 .room-row:not(.not-joined) .room-join button { opacity: 0; }
 .unread-pill { align-self: center; margin: -40px 0 10px; z-index: 1; padding: 3px 12px; border: none; border-radius: 999px; background: var(--text); color: var(--glass-deep); font-size: 12px; font-weight: 600; box-shadow: var(--shadow); }
 .room-row:hover .room-join button, .room-row .room-join button:focus-visible { opacity: 1; }
-@media (hover: none) { .room-row .room-join button { opacity: 1; } }
+/* Leave shows over the row's end only while pointed at or focused, so it
+   takes the unread count's and dot's place then, rather than covering them;
+   on a touch screen it is always shown, so it sits in the row beside them. */
+.room-row:not(.not-joined):is(:hover, :has(.room-join button:focus-visible)) .room-unread,
+.room-row:not(.not-joined):is(:hover, :has(.room-join button:focus-visible))::after { visibility: hidden; }
+@media (hover: none) {
+	.room-row .room-join button { opacity: 1; }
+	.room-row:not(.not-joined) .room-join { position: static; margin-left: 0; }
+	.room-row:not(.not-joined):is(:hover, :has(.room-join button:focus-visible)) .room-unread,
+	.room-row:not(.not-joined):is(:hover, :has(.room-join button:focus-visible))::after { visibility: visible; }
+}
 /* A room: its header over its messages, each its author, time and text,
    reactions and thread; a forum's posts are cards. */
 .room { container-type: inline-size; flex: 1; min-height: 0; display: flex; }
