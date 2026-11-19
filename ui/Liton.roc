@@ -2226,7 +2226,7 @@ Liton := [].{
 		)
 		messages = Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
 		[header]
-			.concat(Conversation.timeline(model, id, { class: "timeline room-timeline", part: "room", jump: Bool.False, earlier: Engine.const(Bool.False), loading: room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")) }, [messages]))
+			.concat(Conversation.timeline(model, id, { class: "timeline room-timeline", part: "room", jump: Bool.True, earlier: Engine.const(Bool.False), loading: room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")) }, [messages]))
 			.concat([
 				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
 				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
@@ -2243,7 +2243,7 @@ Liton := [].{
 			"Thread",
 			"room-thread-pane",
 			[header]
-				.concat(Conversation.timeline(model, id.map(|pane_id| "${pane_id}/thread"), { class: "timeline room-timeline", part: "thread", jump: Bool.False, earlier: Engine.const(Bool.False), loading: opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)) }, [replies]))
+				.concat(Conversation.timeline(model, id.map(|pane_id| "${pane_id}/thread"), { class: "timeline room-timeline", part: "thread", jump: Bool.True, earlier: Engine.const(Bool.False), loading: opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)) }, [replies]))
 				.concat([
 					Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
 					Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),

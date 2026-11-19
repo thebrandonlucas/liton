@@ -20,7 +20,7 @@ Conversation := [].{
 			if (jump)
 				[
 					Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model.update_by(key, Model.jump_to_latest))]),
-					Engine.remount_on(key.map2(model.signal(), |jump_key, state| Model.jumps_of(state, jump_key)), || Engine.element("span", [Engine.ref_s(key.map(|jump_key| "latest-${jump_key}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
+					Engine.remount_on(key.map2(model.signal(), |jump_key, state| Model.jumps_of(state, jump_key)), || Engine.element("span", [Engine.ref_s(key.map(|jump_key| "latest-${jump_key}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor"), Engine.test_id("latest")], [])),
 				]
 			else
 				[]
