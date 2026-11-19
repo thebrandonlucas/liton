@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .roc_signals_platform = .{
-            .url = "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.6.0/3kWiwEo2KWAQTrPidpkPTMNGCY6AX7qup9K6tJVYMhB9.tar.zst",
-            .hash = "N-V-__8AAGpOYQA4p55CMFyujA5Re6fbXbpL8SOOmCa0WkhD",
+            .url = "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.7.0-rc1/EWXzR62Lkva6BKW4qbvpkHHEsR6ZswDBXi2sef7Sf9Mk.tar.zst",
+            .hash = "N-V-__8AAPMQbAABvoJd-7iXqcVMQvlTYfbt0tsqp2ppVKqy",
         },
         .roc_signals_source = .{
-            .url = "https://github.com/lukewilliamboswell/roc-signals/archive/refs/tags/0.6.0.tar.gz",
-            .hash = "N-V-__8AALnxdQCP1CRK-jGA-MyGq5UOot-0t8PHN9f0Rv7C",
+            .url = "https://github.com/lukewilliamboswell/roc-signals/archive/refs/tags/0.7.0-rc1.tar.gz",
+            .hash = "N-V-__8AADDEggDWfwd1wQICGWvO240zCZ_TqrSNn2_ojS7v",
         },
     },
     .paths = .{""},

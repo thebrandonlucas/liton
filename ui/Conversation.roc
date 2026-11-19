@@ -1,7 +1,7 @@
 ## A conversation, as chat and rooms show one: a timeline of entries, the
 ## newest at the bottom, over a composer. Each caller draws its own kinds of
 ## entry; this draws what they share.
-import pf.Engine exposing [Elem, Handler, Signal, State]
+import pf.Engine exposing [Elem, HandlerOf, Signal, State]
 import pf.Html
 import Model
 
@@ -84,7 +84,7 @@ Conversation := [].{
 	## How an entry sent but not yet in the timeline stands, `status` being
 	## "Sending…" or why it wasn't sent, or "" for nothing to say; and while
 	## it `failed`, a button for each of `actions`, such as Retry.
-	sent_state : { status : Signal(ctx, Str), failed : Signal(ctx, Bool), test_id : Str }, List({ label : Str, handler : Handler(ctx) }) -> Elem(ctx)
+	sent_state : { status : Signal(ctx, Str), failed : Signal(ctx, Bool), test_id : Str }, List({ label : Str, handler : HandlerOf(ctx, Engine.Click) }) -> Elem(ctx)
 	sent_state = |{ status, failed, test_id }, actions| {
 		buttons = actions.map(|action| Html.button(action.label, [], action.handler))
 		Engine.when(

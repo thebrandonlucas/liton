@@ -291,7 +291,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // The UI's platform's release bundle, the one ui/main.roc names, for the
-    // runtime.mjs, environment.mjs and worker.mjs the page loads.
+    // runtime.mjs and the environment.mjs, startup.mjs and worker.mjs it loads.
     const roc_signals = b.dependency("roc_signals_platform", .{});
 
     const check_step = b.step("check", "Run formatting and static checks");
@@ -350,6 +350,7 @@ pub fn build(b: *std.Build) void {
     const www = build_ui.addOutputDirectoryArg("www");
     build_ui.addFileArg(roc_signals.path("runtime.mjs"));
     build_ui.addFileArg(roc_signals.path("environment.mjs"));
+    build_ui.addFileArg(roc_signals.path("startup.mjs"));
     build_ui.addFileArg(roc_signals.path("worker.mjs"));
     if (fast) build_ui.addArg("--specialize=no");
     addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
