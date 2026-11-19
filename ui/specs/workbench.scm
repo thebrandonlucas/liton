@@ -5,7 +5,7 @@
     (expect-text (test-id "show-left") "Workspaces")
     (expect-text (test-id "show-main") "Chat")
     (expect-text (test-id "show-right") "Changes · Files · Tickets")
-    (expect-attr (test-id "slot-main") class "tile slot slot-main shown")
+    (expect-attr (test-id "slot-main") class "tile slot slot-main shown workspace-tile")
     ; Changes waits for a provider of workspace.git.
     (expect-attr (role region :name "Changes") class "pane")
     (expect-visible (text "This widget needs workspace.git.v1, which no connected provider supplies. Connect one that does, and it fills in here."))

@@ -10,8 +10,8 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"general\",\"provider\":\"mock\",\"name\":\"general\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":{\"Counted\":{\"messages\":3,\"mentions\":1}},\"links\":[],\"me\":\"you\"},{\"id\":\"releases\",\"provider\":\"mock\",\"name\":\"releases\",\"kind\":\"Announce\",\"private\":false,\"archived\":false,\"joined\":false,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"}]}]}]}")
     (run-effect 3)
     (expect-visible (text "#general"))
-    (expect-visible (text "announcements"))
-    (expect-text (test-id "room-unread") "3 @1")
+    (expect-visible (text "Announcements"))
+    (expect-text (test-id "room-unread") "@1")
     (expect-visible (text "Not joined"))
     (click (role button :name "Join #releases"))
     ; Joined at once, before the daemon answers.

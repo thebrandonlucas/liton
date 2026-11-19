@@ -14,10 +14,31 @@ TicketDesk := [].{
 	## A Tickets pane's filter.
 	View : { pane : Str, filter : Tickets.Filter }
 
-	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), views : List(View) }
+	## Which tickets Board panes show, as a Scopes pane picked: every one,
+	## the user's, those assigned to nobody, a source's, or those a view
+	## saved passes.
+	Scope : [All, Mine, Unassigned, Source(Str), Saved(Str)]
+
+	## A filter saved by name, which this browser keeps.
+	SavedView : { name : Str, filter : Tickets.Filter }
+
+	## A Board pane's own filter, over its scope's, whether it shows the
+	## ticket under the cursor `opened` in place of the list, and the
+	## tickets selected.
+	Board : { pane : Str, filter : Tickets.Filter, opened : Bool, selected : List(Str) }
+
+	## A group of a Board's list, or a column of its board, by `key`: a kind
+	## of status (`kind:Started`), or a status of one source (`status:<id>`).
+	Group : { key : Str, title : Str, kind : Tickets.Kind, tickets : List(Tickets.Summary) }
+
+	## `waiting` are requests to send once those before them are, as only
+	## one goes at a time; they show at once too.
+	## `dragged` is the ticket whose card is held on a Board, whether it has
+	## moved since, and the group under the pointer, by its key, "" for none.
+	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), saved : List(SavedView), dragged : { ticket : Str, moved : Bool, over : Str } }
 
 	initial : State
-	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], views: [] }
+	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], saved: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View
@@ -26,11 +47,127 @@ TicketDesk := [].{
 	with_view : State, Str, (View -> View) -> State
 	with_view = |desk, pane, change| { ..desk, views: desk.views.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.view(desk, pane))) }
 
+	## Every ticket, whatever its status.
+	everything : Tickets.Filter
+	everything = { ..Tickets.open, kinds: [] }
+
+	board : State, Str -> Board
+	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything, opened: Bool.False, selected: [] }
+
+	with_board : State, Str, (Board -> Board) -> State
+	with_board = |desk, pane, change| { ..desk, boards: desk.boards.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.board(desk, pane))) }
+
+	scope_filter : State, Scope -> Tickets.Filter
+	scope_filter = |desk, scope|
+		match scope {
+			Saved(name) => desk.saved.find_first(|kept| kept.name == name).map_ok(|kept| kept.filter) ?? TicketDesk.everything
+			All => TicketDesk.everything
+			Mine => { ..TicketDesk.everything, assignee: Me }
+			Unassigned => { ..TicketDesk.everything, assignee: Nobody }
+			Source(source_id) => { ..TicketDesk.everything, sources: [source_id] }
+		}
+
+	## A Board pane's filter: its scope's, narrowed by what its own sets.
+	board_filter : State, Str -> Tickets.Filter
+	board_filter = |desk, pane| {
+		scoped = TicketDesk.scope_filter(desk, desk.scope)
+		own = TicketDesk.board(desk, pane).filter
+		{
+			sources: if (own.sources.is_empty()) scoped.sources else own.sources,
+			kinds: if (own.kinds.is_empty()) scoped.kinds else own.kinds,
+			assignee: if (own.assignee == Anyone) scoped.assignee else own.assignee,
+			label: if (own.label.is_empty()) scoped.label else own.label,
+			text: if (own.text.is_empty()) scoped.text else own.text,
+		}
+	}
+
+	## A Board pane's tickets in groups: listed, by the kind of their status,
+	## those started first, leaving out kinds without tickets; on a board, in a
+	## column for each status of its one source, else for each kind, those
+	## open first. Kinds its filter leaves out have no column.
+	groups : State, Str, [List, Board] -> List(Group)
+	groups = |desk, pane, layout| {
+		filter = TicketDesk.board_filter(desk, pane)
+		tickets = TicketDesk.listed(desk, { pane, filter })
+		by_kind = |kind| { key: "kind:${TicketDesk.kind_name(kind)}", title: TicketDesk.kind_name(kind), kind, tickets: tickets.keep_if(|ticket| ticket.status.kind == kind) }
+		shown_kind = |kind| filter.kinds.is_empty() or filter.kinds.contains(kind)
+		one_source = if (filter.sources.len() == 1) desk.listing.sources.find_first(|source| filter.sources == [source.id]) else if (desk.listing.sources.len() == 1) desk.listing.sources.first() else Err(NotFound)
+		match (layout, one_source) {
+			(List, _) => [Started, Open, Done, Canceled].map(by_kind).drop_if(|group| group.tickets.is_empty())
+			(Board, Ok(source)) => source.statuses.keep_if(|status| shown_kind(status.kind)).map(|status| { key: "status:${status.id}", title: status.name, kind: status.kind, tickets: tickets.keep_if(|ticket| ticket.status.id == status.id) })
+			(Board, Err(_)) => [Open, Started, Done, Canceled].keep_if(shown_kind).map(by_kind)
+		}
+	}
+
+	## The status of its own source a ticket moved to `status` of another
+	## takes: the one of the same id, else the first of the same kind.
+	status_for : State, Tickets.Summary, Tickets.Status -> Try(Str, [NotFound])
+	status_for = |desk, ticket, status| {
+		statuses = desk.listing.sources.find_first(|source| source.id == ticket.source).map_ok(|source| source.statuses) ?? []
+		statuses.find_first(|known| known.id == status.id).on_err(|_| statuses.find_first(|known| known.kind == status.kind)).map_ok(|known| known.id)
+	}
+
+	kind_name : Tickets.Kind -> Str
+	kind_name = |kind|
+		match kind {
+			Open => "Open"
+			Started => "Started"
+			Done => "Done"
+			Canceled => "Canceled"
+		}
+
+	## How a Scopes pane names a scope.
+	scope_name : State, Scope -> Str
+	scope_name = |desk, scope|
+		match scope {
+			All => "All tickets"
+			Mine => "Mine"
+			Unassigned => "Unassigned"
+			Source(source_id) => TicketDesk.source_name(desk, source_id)
+			Saved(name) => name
+		}
+
+	## What a filter keeps, as "Started · Mine · bug", "" for every ticket.
+	described : State, Tickets.Filter -> Str
+	described = |desk, filter| {
+		parts = [
+			if (filter.kinds.is_empty()) "" else TicketDesk.kinds_name(filter.kinds),
+			match filter.assignee {
+				Me => "Mine"
+				Nobody => "Unassigned"
+				_ => ""
+			},
+			Str.join_with(filter.sources.map(|source_id| TicketDesk.source_name(desk, source_id)), ", "),
+			filter.label,
+			if (filter.text.is_empty()) "" else "“${filter.text}”",
+		]
+		Str.join_with(parts.drop_if(Str.is_empty), " · ")
+	}
+
+	## The labels the tickets have, each once, in order.
+	labels : State -> List(Str)
+	labels = |desk| desk.listing.tickets.join_map(|ticket| ticket.labels).fold([], |found, label| if (found.contains(label)) found else found.append(label)).sort_with(|a, b| bytes_order(a.to_utf8(), b.to_utf8()))
+
+	## The scopes a Scopes pane offers, each by a key, with how many tickets
+	## it has.
+	scopes : State -> List({ key : Str, scope : Scope, name : Str, count : U64 })
+	scopes = |desk| {
+		listing = TicketDesk.listing_shown(desk)
+		key = |scope|
+			match scope {
+				Source(source_id) => "source:${source_id}"
+				Saved(name) => "view:${name}"
+				_ => TicketDesk.scope_name(desk, scope)
+			}
+		counted = |scope| { key: key(scope), scope, name: TicketDesk.scope_name(desk, scope), count: listing.tickets.count_if(|ticket| Tickets.matches(TicketDesk.scope_filter(desk, scope), listing, ticket)) }
+		[All, Mine, Unassigned].concat(desk.listing.sources.map(|source| Source(source.id))).concat(desk.saved.map(|kept| Saved(kept.name))).map(counted)
+	}
+
 	## The sources and tickets with the status and assignee changes on their
 	## way applied.
 	listing_shown : State -> Tickets.Listing
 	listing_shown = |desk| {
-		changed = |ticket| desk.asked.fold(ticket, |shown, asked| if (Tickets.ticket_of(asked.request) == shown.id) Tickets.changed(desk.listing, shown, asked.request) ?? shown else shown)
+		changed = |ticket| desk.asked.map(|asked| asked.request).concat(desk.waiting).fold(ticket, |shown, request| if (Tickets.ticket_of(request) == shown.id) Tickets.changed(desk.listing, shown, request) ?? shown else shown)
 		{ ..desk.listing, tickets: desk.listing.tickets.map(changed) }
 	}
 
@@ -88,7 +225,7 @@ TicketDesk := [].{
 
 	## Whether a request about the ticket is on its way.
 	pending : State, Str -> Bool
-	pending = |desk, ticket_id| desk.asked.any(|asked| Tickets.ticket_of(asked.request) == ticket_id or TicketDesk.unlinks(desk, asked.request, ticket_id))
+	pending = |desk, ticket_id| desk.asked.any(|asked| Tickets.ticket_of(asked.request) == ticket_id or TicketDesk.unlinks(desk, asked.request, ticket_id)) or desk.waiting.any(|request| Tickets.ticket_of(request) == ticket_id)
 
 	unlinks : State, Tickets.Request, Str -> Bool
 	unlinks = |desk, request, ticket_id|
@@ -182,6 +319,18 @@ expect {
 		and TicketDesk.pending(asked, "t2")
 		and TicketDesk.listed(TicketDesk.answered(asked, 1, Refused), view).len() == 2
 		and TicketDesk.settled(TicketDesk.answered(asked, 1, Accepted(3)), 3).asked == []
+}
+
+# A Board lists its scope's tickets by kind, started first, and lays out
+# one source's as a column per status.
+expect {
+	started = { ..summary("t3", "Mine", "2026-01-03T08:00:00.000Z"), status: status("doing", Started), assignees: [{ id: "ada", name: "Ada" }] }
+	two = { ..desk, listing: { ..desk.listing, tickets: desk.listing.tickets.append(started) } }
+	titles = |groups| groups.map(|group| (group.title, group.tickets.map(|shown| shown.key)))
+	titles(TicketDesk.groups(two, "board", List)) == [("Started", ["#3"]), ("Open", ["#2", "#1"])]
+		and titles(TicketDesk.groups(two, "board", Board)) == [("open", ["#2", "#1"]), ("closed", [])]
+		and titles(TicketDesk.groups({ ..two, scope: Mine }, "board", List)) == [("Started", ["#3"])]
+		and TicketDesk.scopes(two).map(|scope| scope.count) == [3, 1, 2, 3]
 }
 
 # A comment on its way shows after the ticket's, and a link moves a session's.

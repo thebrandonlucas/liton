@@ -15,7 +15,7 @@
     (expect-attr (label "Command or place") autocomplete "off")
     ; Each command shows its keys.
     (expect-text (role option :name "Open or close Settings") "Open or close SettingsViewCtrl+,")
-    (expect-text (role option :name "docs") "docsWorkspace in appG then 2")
+    (expect-text (role option :name "docs") "docsWorkspace in appCtrl+2")
     ; Typing filters, and Enter runs the entry picked.
     (fill (label "Command or place") "settings")
     (expect-visible (role option :name "Open or close Settings"))
@@ -32,14 +32,14 @@
     (expect-text (test-id "session-title") "Write docs")
     ; The arrows move the pick, round from the end.
     (press "Control+k")
-    (fill (label "Command or place") "preset")
-    (expect-attr (role option :name "Show the Developer preset") aria-selected "true")
+    (fill (label "Command or place") "surface")
+    (expect-attr (role option :name "Open the Developer surface") aria-selected "true")
     (press (label "Command or place") "ArrowDown")
-    (expect-attr (role option :name "Show the Inbox preset") aria-selected "true")
-    (expect-attr (role option :name "Show the Developer preset") aria-selected "false")
+    (expect-attr (role option :name "Open the Tiling surface") aria-selected "true")
+    (expect-attr (role option :name "Open the Developer surface") aria-selected "false")
     (press (label "Command or place") "Control+p")
     (press (label "Command or place") "ArrowUp")
-    (expect-attr (role option :name "Show the Developer preset") aria-selected "false")
+    (expect-attr (role option :name "Open the Developer surface") aria-selected "false")
     (fill (label "Command or place") "nothing like it")
     (expect-visible (text "Nothing matches."))
     ; Escape closes it, running nothing.

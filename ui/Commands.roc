@@ -1,13 +1,16 @@
 ## Every action keys run, by name: what it is called, the group it is
 ## listed under, when it applies and what it does to the model.
+import cap.Review
 import Model
+import TicketDesk
 
 Commands := [].{
 
 	## `applies` says whether the command can run now, and `run` runs it.
 	Command : { id : Str, title : Str, group : Str, applies : Model.State -> Bool, run : Model.State -> Model.State }
 
-	## The commands, each preset's numbered by its place, the first's `preset.1`.
+	## The commands, each preset's numbered by its place, the first's
+	## `preset.1`, which applies while the daemon offers what it needs.
 	all : Model.State -> List(Command)
 	all = |state| {
 		workbench = |shown| shown.shell == Workbench
@@ -16,14 +19,60 @@ Commands := [].{
 			{ id: "drawer.left", title: "Show or hide the left drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Left) },
 			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
 			{ id: "palette", title: "Open or close the palette", group: "View", applies: always, run: |shown| if (shown.palette.open) Commands.close(shown) else Commands.open_palette(shown) },
-			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
+			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: Model.toggle_settings },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
+			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: Commands.thread_open, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
+			{ id: "rooms.focus", title: "Go to the rooms", group: "Rooms", applies: |shown| Model.panes(shown).any(|pane| pane.widget == "rooms"), run: Model.focus_rooms },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
+			{ id: "workspace.previous", title: "Go to the workspace before", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, -1) },
+			{ id: "workspace.next", title: "Go to the workspace after", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, 1) },
+			{ id: "tab.new", title: "Open the new tab menu", group: "Tabs", applies: |shown| !Model.tab_menu_items(shown).is_empty(), run: |shown| { ..shown, menu: if (shown.menu == Model.tab_menu) "" else Model.tab_menu } },
+			{ id: "tab.close", title: "Close the tab", group: "Tabs", applies: |shown| Model.shown_closing_tab(shown).is_ok(), run: Model.close_shown_tab },
 		]
+			.concat(Commands.board(state))
 			.concat(Commands.layout)
-			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+			.concat(Commands.review)
+			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Open the ${preset.name} surface", group: "Surfaces", applies: |shown| Model.offers(shown, preset), run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
+	}
+
+	## The Board's commands, on the Board pane in reach
+	## (`Model.board_in_reach`): move the cursor, open the ticket under it,
+	## go back to the list, and switch between the list and the board.
+	board : Model.State -> List(Command)
+	board = |state| {
+		reached = |shown| !Model.board_in_reach(shown).is_empty()
+		acted_on = |shown| reached(shown) and !Model.tickets_acted_on(shown).is_empty()
+		filtered = |shown| reached(shown) and TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).filter != TicketDesk.everything
+		filter = |key, title, change| { id: "board.filter.${key}", title: "Filter: ${title}", group: "Board", applies: reached, run: |shown| Model.filter_board(shown, Model.board_in_reach(shown), change) }
+		# The statuses and people of the source of the first ticket acted on.
+		source = Model.tickets_acted_on(state).first().map_ok(|ticket| ticket.source).ok_or("")
+		known = state.tickets.listing.sources.find_first(|listed| listed.id == source)
+		statuses = known.map_ok(|listed| listed.statuses) ?? []
+		people = known.map_ok(|listed| listed.people) ?? []
+		assigned = |shown, person_id| Model.tickets_acted_on(shown).all(|ticket| ticket.assignees.any(|person| person.id == person_id))
+		opened = |shown| reached(shown) and TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).opened
+		[
+			{ id: "board.next", title: "Move to the next ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Next) },
+			{ id: "board.previous", title: "Move to the previous ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Previous) },
+			{ id: "board.open", title: "Open the ticket under the cursor", group: "Board", applies: |shown| reached(shown) and !opened(shown) and !Model.ticket_under_cursor(shown).is_empty(), run: |shown| Model.open_in_board(shown, { pane_id: Model.board_in_reach(shown), ticket_id: Model.ticket_under_cursor(shown) }) },
+			{ id: "board.back", title: "Go back to the list", group: "Board", applies: opened, run: |shown| Model.back_to_list(shown, Model.board_in_reach(shown)) },
+			{ id: "board.select", title: "Select the ticket under the cursor, or no longer", group: "Board", applies: |shown| reached(shown) and !Model.ticket_under_cursor(shown).is_empty(), run: |shown| Model.select_ticket(shown, Toggle) },
+			{ id: "board.clear", title: "Select no tickets", group: "Board", applies: |shown| reached(shown) and !TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).selected.is_empty(), run: |shown| Model.select_ticket(shown, Clear) },
+			{ id: "ticket.status", title: "Change the status…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Set status to ") },
+			{ id: "ticket.assign", title: "Change the assignees…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Assign ") },
+			{ id: "board.search", title: "Search the tickets", group: "Board", applies: reached, run: Model.search_board },
+			{ id: "board.filter", title: "Filter the tickets…", group: "Board", applies: reached, run: |shown| Commands.open_palette_at(shown, "Filter: ") },
+			{ id: "board.unfilter", title: "Clear the filter", group: "Board", applies: filtered, run: |shown| Model.filter_board(shown, Model.board_in_reach(shown), |_| TicketDesk.everything) },
+			{ id: "board.save", title: "Save the filter as a view", group: "Board", applies: |shown| filtered(shown) or (reached(shown) and !TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).filter.text.is_empty()), run: |shown| Model.save_view(shown, Model.board_in_reach(shown)) },
+			{ id: "board.layout", title: "Switch between the list and the board", group: "Board", applies: reached, run: |shown| Model.set_option(shown, Model.board_in_reach(shown), "layout", if (Model.board_layout(shown, Model.board_in_reach(shown)) == Board) "List" else "Board") },
+		]
+			.concat(TicketDesk.kinds.map(|named| filter(named.name, named.name, |kept| { ..kept, kinds: named.kinds })))
+			.concat([filter("mine", "assigned to me", |kept| { ..kept, assignee: Me }), filter("unassigned", "unassigned", |kept| { ..kept, assignee: Nobody }), filter("anyone", "assigned to anyone", |kept| { ..kept, assignee: Anyone })])
+			.concat(TicketDesk.labels(state.tickets).map(|label| filter("label.${label}", "labelled ${label}", |kept| { ..kept, label })))
+			.concat(statuses.map(|status| { id: "ticket.status.${status.id}", title: "Set status to ${status.name}", group: "Ticket", applies: acted_on, run: |shown| Model.set_statuses(shown, status) }))
+			.concat(people.map(|person| { id: "ticket.assign.${person.id}", title: if (assigned(state, person.id)) "Unassign ${person.name}" else "Assign to ${person.name}", group: "Ticket", applies: acted_on, run: |shown| Model.assign_all(shown, person.id, !assigned(shown, person.id)) }))
 	}
 
 	## The layout's commands, each for a side: focus, move the pane focused,
@@ -44,6 +93,45 @@ Commands := [].{
 			.concat([(Right, "right", "Split the pane off to the right"), (Down, "down", "Split the pane off below")].map(|(side, word, title)| { id: "layout.split-${word}", title, group: "Layout", applies: |shown| Model.tile_of(shown, shown.focused_pane).map_ok(|tile| tile.panes.len() > 1) ?? Bool.False, run: |shown| Model.split_focused(shown, side) }))
 	}
 
+	## The Review surface's commands, as crit.md's keys run them: on the
+	## Review view on screen, step through its hunks and threads, comment on
+	## what is focused, mark the file in view viewed and finish the review;
+	## and submit or cancel the comment being written.
+	review : List(Command)
+	review = {
+		viewing = |state| Model.review_shown(state).is_ok()
+		on_view = |change| |state| Model.review_shown(state).map_ok(|view| change(state, view.id)) ?? state
+		composing = |state| !state.composer.pane.is_empty()
+		[
+			{ id: "review.next-hunk", title: "Focus the next hunk", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_hunk(state, pane_id, Next)) },
+			{ id: "review.previous-hunk", title: "Focus the previous hunk", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_hunk(state, pane_id, Previous)) },
+			{ id: "review.next-comment", title: "Focus the next thread", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_thread(state, pane_id, Next)) },
+			{ id: "review.previous-comment", title: "Focus the previous thread", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_thread(state, pane_id, Previous)) },
+			{ id: "review.comment", title: "Comment on the lines or thread focused", group: "Review", applies: |state| viewing(state) and Commands.review_focused(state), run: on_view(Model.comment_focused) },
+			{ id: "review.submit", title: "Keep the comment as a draft", group: "Review", applies: composing, run: Model.submit_comment },
+			{ id: "review.cancel", title: "Cancel the comment", group: "Review", applies: composing, run: |state| { ..state, composer: Model.closed_composer } },
+			{ id: "review.viewed", title: "Mark the file in view viewed", group: "Review", applies: |state| viewing(state) and !Model.review_focus(state).is_empty(), run: on_view(|state, pane_id| Model.toggle_viewed(state, { pane_id, path: Model.review_focus(state) })) },
+			{ id: "review.finish", title: "Finish the review", group: "Review", applies: |state| Model.review_shown(state).map_ok(|view| Review.drafts(Model.review_of(state, Model.context_of(state, view))) > 0) ?? Bool.False, run: on_view(Model.finish_review) },
+		]
+	}
+
+	## Whether a room's thread is open, rather than the Review surface's
+	## focus.
+	thread_open : Model.State -> Bool
+	thread_open = |state|
+		match state.sub_focus {
+			Thread(_) => Bool.True
+			_ => Bool.False
+		}
+
+	## Whether the Review surface has lines or a thread focused.
+	review_focused : Model.State -> Bool
+	review_focused = |state|
+		match state.sub_focus {
+			Lines(_) | ReviewThread(_) => Bool.True
+			_ => Bool.False
+		}
+
 	## The workspaces by their ids, in the order the first Workspaces pane
 	## shows them, else as listed.
 	workspace_order : Model.State -> List(Str)
@@ -63,6 +151,20 @@ Commands := [].{
 		}
 	}
 
+	## Goes to the workspace `by` places after the one focused in the order
+	## of `workspace_order`, round from the end to the start, or the first.
+	step_workspace : Model.State, I64 -> Model.State
+	step_workspace = |state, by| {
+		order = Commands.workspace_order(state)
+		count = order.len().to_i64_wrap()
+		at = match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => order.find_first_index(|listed| listed == workspace_id).map_ok(|index| index.to_i64_wrap()) ?? -1
+			_ => -1
+		}
+		next = if (at < 0) 0 else (at + by + count) % count
+		order.get(next.to_u64_wrap()).map_ok(|workspace_id| Model.open(state, Workspace(workspace_id))) ?? state
+	}
+
 	## Runs the first of the commands named that applies, if any does.
 	run_first : Model.State, List(Str) -> Model.State
 	run_first = |state, ids| {
@@ -75,7 +177,11 @@ Commands := [].{
 
 	## Opens the palette, empty, with what is typed in it focused.
 	open_palette : Model.State -> Model.State
-	open_palette = |state| { ..state, palette: { open: Bool.True, query: "", picked: 0 }, menu: "", jump: { serial: state.jump.serial + 1, panel: "palette", replace: "", push: "" } }
+	open_palette = |state| Commands.open_palette_at(state, "")
+
+	## Opens the palette with `query` typed in it, as S does for statuses.
+	open_palette_at : Model.State, Str -> Model.State
+	open_palette_at = |state, query| { ..state, palette: { open: Bool.True, query, picked: 0 }, menu: "", jump: { serial: state.jump.serial + 1, panel: "palette", replace: "", push: "" } }
 
 	## Whether something is open to close: the palette, the keys, a row's
 	## renaming, a menu, Settings or a Workspaces pane's form.

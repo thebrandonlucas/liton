@@ -39,6 +39,38 @@ Markdown := [].{
 
 	blocks : Str -> List(Markdown.Block)
 	blocks = |source| parse(source.replace_each("\r\n", "\n").replace_each("\t", "    ").split_on("\n"), 0, 0).map_with_index(|block, index| { ..block, key: index.to_str() })
+
+	## Blocks with each @mention of a name, in any case, outside code and
+	## links, a span of its own, of that name's `class` beside its own.
+	mentions : List(Markdown.Block), List({ name : Str, class : Str }) -> List(Markdown.Block)
+	mentions = |parsed, names| {
+		marked = |spans| spans.join_map(|span| if (span.class.contains("code") or !span.href.is_empty()) [span] else mentioned(span, names))
+		parsed.map(|block| { ..block, spans: marked(block.spans), items: block.items.map(|item| { ..item, spans: marked(item.spans) }) })
+	}
+}
+
+## A span split where it mentions one of `names`, the first first.
+mentioned : Markdown.Span, List({ name : Str, class : Str }) -> List(Markdown.Span)
+mentioned = |span, names| {
+	lowered = span.text.with_ascii_lowercased()
+	found = names.keep_oks(|named| lowered.split_first("@${named.name.with_ascii_lowercased()}").map_ok(|parts| { at: parts.before.count_utf8_bytes(), named }))
+	first = found.fold(
+		Err(NoMention),
+		|so_far, candidate| match so_far {
+			Ok(earlier) if earlier.at <= candidate.at => so_far
+			_ => Ok(candidate)
+		},
+	)
+	match first {
+		Ok({ at, named }) => {
+			bytes = span.text.to_utf8()
+			length = named.name.count_utf8_bytes() + 1
+			part = |start, len| { ..span, text: Str.from_utf8_lossy(bytes.sublist({ start, len })) }
+			class = Str.join_with([span.class, named.class].drop_if(Str.is_empty), " ")
+			[part(0, at), { ..part(at, length), class }].drop_if(|shown| shown.text.is_empty()).concat(mentioned(part(at + length, bytes.len() - at - length), names))
+		}
+		Err(NoMention) => if (span.text.is_empty()) [] else [span]
+	}
 }
 
 block_of : [Paragraph, Heading, Code, List, Rule], U64, U64 -> Markdown.Block

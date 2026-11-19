@@ -32,8 +32,8 @@ process.on("exit", () => fs.rmSync(scratch, { recursive: true, force: true }));
 check = "liton setup evaluates liton's Litonfile";
 await new Promise((resolve) => execFile(path.join(repo, "zig-out/bin/liton"), ["setup", path.join(repo, "Litonfile.roc")], { cwd: scratch }, (error, _, stderr) => (error ? fail(stderr) : resolve())));
 const setup = JSON.parse(fs.readFileSync(path.join(scratch, "liton.setup.json"), "utf8"));
-const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } } };
-fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, review] }));
+const changes_only = { name: "Changes only", snapshot: { version: 4, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } } };
+fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, changes_only] }));
 check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
@@ -76,6 +76,13 @@ try {
     );
     await target.click();
   };
+  // Whether the main area's workspace has a tab titled `title`, showing `dot` as its status if given; and a click on it.
+  const tab = (title, dot = "") =>
+    until(`a tab ${title} ${dot}`, () => page.evaluate((title, dot) => [...document.querySelectorAll(".workspace-tab")].some((t) => t.textContent.includes(title) && (!dot || !!t.querySelector(`.status-dot.${dot}`))), title, dot));
+  const pick_tab = async (title) => {
+    await tab(title);
+    await (await page.evaluateHandle((title) => [...document.querySelectorAll('.workspace-tab button[role="tab"]')].find((b) => b.textContent.includes(title)), title)).click();
+  };
   const step = async (name, run) => {
     check = name;
     await run();
@@ -85,16 +92,16 @@ try {
     for (const pane of ["Workspaces", "Chat", "Changes"]) await see(pane, ".pane-header .menu-toggle");
     await until("no Capabilities pane", async () => !(await page.evaluate(() => !!document.querySelector('section[aria-label="Capabilities"]'))));
   });
-  await step("the mock's project, its workspaces and their seeded sessions appear in Workspaces", async () => {
-    await see("Workspaces", ".tree-group button", "Liton");
+  await step("the mock's workspaces appear in Workspaces by status, and their seeded sessions as tabs of the one picked", async () => {
+    await see("Workspaces", ".tree-group button", "Needs input");
     // fix-auth holds one session, which stands in its place with its branch.
     await see("Workspaces", ".tree-workspace button", "main");
-    await see("Workspaces", ".tree-session .branch", "fix-auth");
-    for (const title of ["Fix the login redirect", "Find the flaky CI test", "Scratch"]) await see("Workspaces", ".tree-session button", title);
+    await see("Workspaces", ".tree-session .second-line", "fix-auth");
+    await see("Workspaces", ".tree-session button", "Fix the login redirect");
+    await click("Workspaces", ".tree-workspace button", "main");
+    for (const title of ["Find the flaky CI test", "Scratch"]) await tab(title);
   });
-  await step("the flaky CI session is waiting for you", () =>
-    until("its status", () => page.evaluate(() =>
-      [...document.querySelectorAll(".tree-session")].some((s) => s.textContent.includes("Find the flaky CI test") && s.querySelector('[data-testid="row-status"]')?.textContent === "waiting for you"))));
+  await step("the flaky CI session is waiting for you", () => tab("Find the flaky CI test", "waiting"));
   await step("the Inbox preset lists it under Needs you, the title counts it, and opening an unread item reads it", async () => {
     await page.click(".settings-toggle");
     await click("Settings", "button", "Inbox preset");
@@ -102,7 +109,7 @@ try {
     await see("Inbox", ".inbox-section .inbox-item", "Find the flaky CI test");
     await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
     // Unread until opened, then read at once.
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
     await see("Inbox", ".inbox-item.unread > button");
     const title = await page.evaluate(() => document.querySelector(".inbox-item.unread > button").textContent);
     await click("Inbox", ".inbox-item.unread > button", title);
@@ -113,17 +120,18 @@ try {
     assert.ok(await read(), `${title} read after polls`);
     await page.click(".settings-toggle");
     await click("Settings", "button", "Developer preset");
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
   });
   await step("the preset picker offers the setup's own preset, which loads its layout", async () => {
     await page.click(".settings-toggle");
-    await click("Settings", "button", "Review preset");
+    await click("Settings", "button", "Changes only preset");
     await until("only Changes", () => page.evaluate(() => [...document.querySelectorAll("section.pane")].map((s) => s.getAttribute("aria-label")).join() === "Changes"));
     await click("Settings", "button", "Developer preset");
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
   });
-  await step("clicking a workspace shows its session that needs you in Chat, and its git in Changes", async () => {
+  await step("clicking a workspace, then its tab of the session that needs you, shows it in Chat, and the workspace's git in Changes", async () => {
     await click("Workspaces", ".tree-workspace button", "main");
+    await pick_tab("Find the flaky CI test");
     await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
     await see("Changes", ".git-status", "main");
     await see("Changes", ".missing", "Working tree clean");
@@ -157,7 +165,8 @@ try {
     await see("Files", '[data-testid="review-summary"]', "1 round sent");
   });
   await step("selecting it shows its failed tool card and the permission prompt", async () => {
-    await click("Workspaces", ".tree-session button", "Find the flaky CI test");
+    await click("Workspaces", ".tree-workspace button", "main");
+    await pick_tab("Find the flaky CI test");
     await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
     await see("Chat", '.tool-card.failed [data-testid="tool-state"]', "failed");
     await see("Chat", ".tool-card.failed .tool-output", "FAIL (expected 3, got 2)");
@@ -169,7 +178,7 @@ try {
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
   });
   await step("a message sent to Scratch with Enter appears, and leaves the composer empty and focused", async () => {
-    await click("Workspaces", ".tree-session button", "Scratch");
+    await pick_tab("Scratch");
     await see("Chat", ".pane-header .pane-title", "Scratch");
     const composer = 'section[aria-label="Chat"] textarea[aria-label="Message"]';
     await (await page.$(composer)).type("Find the TODOs");
@@ -194,11 +203,11 @@ try {
     await until("the prompt to clear", async () => !(await has("Chat", "div.permission")));
     await see("Chat", '.pane-header [data-testid="session-status"]', "idle");
   });
-  await step("New agent in a workspace shows it starting at once, then running", async () => {
+  await step("New agent in a workspace shows it starting at once as its tab, then running", async () => {
     // The row may start and run within one poll, so watch for it starting.
     await page.evaluate(() => {
       window.sawStarting = false;
-      const starting = () => [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.textContent.includes("starting…"));
+      const starting = () => [...document.querySelectorAll(".workspace-tab")].some((t) => t.textContent.includes("Write the docs") && !!t.querySelector(".status-dot.starting"));
       new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
     await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Fix the login redirect"]');
@@ -208,7 +217,7 @@ try {
     await until("the new agent starting", () => page.evaluate(() => window.sawStarting));
     await see("Chat", ".pane-header .pane-title", "Write the docs");
     await until("the new agent running", () => page.evaluate(() =>
-      [...document.querySelectorAll(".tree-session")].some((row) => row.textContent.includes("Write the docs") && row.querySelector('[data-testid="row-status"]')?.textContent === "running")), 8000);
+      [...document.querySelectorAll(".workspace-tab")].some((t) => t.textContent.includes("Write the docs") && !!t.querySelector(".status-dot.running"))), 8000);
     await see("Chat", '.pane-header [data-testid="session-status"]', "running");
   });
   await step("dragging the Files tab onto the chat moves it to the main area, and dragging it back returns it", async () => {

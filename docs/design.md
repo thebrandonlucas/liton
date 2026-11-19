@@ -47,7 +47,7 @@ What stays out: no plugin API into liton's internals (a part sees only the proto
 
 A setup is what a daemon and its clients start from: the remotes to connect, the transformers to host, the presets and themes Settings offers, with the ones a new browser starts with. Its types are the `setup` package (`setup/Setup.roc`), which the daemon, the UI and the CLI share as they do `capabilities/`. Keys and options are still to come.
 
-- **Declared in Roc.** A `Litonfile.roc` is an app on basic-cli whose `main!` prints a `Setup.Declared` as JSON; apart from that print it is pure, so it does only what it declares. liton's own setup is `setup/Default.roc`: no remotes, attention, and the Developer, Inbox, Tiling and Chat presets, Developer first. The `Litonfile.roc` at the root prints it as it is.
+- **Declared in Roc.** A `Litonfile.roc` is an app on basic-cli whose `main!` prints a `Setup.Declared` as JSON; apart from that print it is pure, so it does only what it declares. liton's own setup is `setup/Default.roc`: no remotes, attention, and the Developer, Inbox, Tiling, Chat, Rooms, Review and Board presets, Developer first. The `Litonfile.roc` at the root prints it as it is.
 - **Built on another.** A setup imports another as a package and changes it with `Setup.with_remote`, `without_remote`, `with_transformer`, `without_transformer`, `with_preset`, `without_preset`, `with_default_preset`, their `_theme` counterparts and `merge`, which adds a second setup's remotes, presets and themes over the first's by name. `examples/litonfile-team/` builds on liton's. An app can't be imported, so what a setup shares is a module of a package, as `Default` is, with a Litonfile beside it that only prints it.
 - **Evaluated once.** `liton setup [path]` runs a Litonfile with `roc`, reads back what it prints and writes it to `liton.setup.json`, its fields in order, so the same Litonfile gives the same bytes. That file is the setup evaluated.
 - **Read by the daemon.** At start the daemon reads the setup `LITON_SETUP` names, by default `liton.setup.json` if there is one, and otherwise liton's own. The environment still overrides it: `LITON_PROVIDERS`'s remotes take the place of the setup's of the same name and add the rest, and `LITON_TRANSFORMERS` adds transformers. A setup that can't be read, or that names a transformer the daemon doesn't have or a malformed remote, stops the daemon with why.
@@ -106,23 +106,20 @@ Hosting: each user runs a personal daemon, and a personal daemon can also join a
 
 ## UI
 
-The UI is four layers. [docs/research/agent-ui-survey.md](research/agent-ui-survey.md) has the survey behind them.
+The UI is four layers. [docs/research/agent-ui-survey.md](research/agent-ui-survey.md) has the survey behind them, and [docs/research/surfaces.md](research/surfaces.md) the design of surfaces and parts.
 
-- **Shell:** an arrangement with named slots, laid over one deterministic tree of splits, tab groups and stacks with relative sizes. Shells constrain the tree rather than replace it:
-  - *Workbench* (the Paseo one): a left drawer of contexts, a main area of tabs on splits, a right drawer of git, diff and files. On a narrow screen the three are panels you swipe between;
-  - *Inbox*: the `attention` list beside the detail of the item it opens;
-  - *Room*: people and agents together, with code panes following the room's focus;
-  - *Tiling*: free splits and tabs, Hyprland-like.
-- **Widget:** one view bound to capabilities. A widget declares, as data apart from its code, the capabilities it needs, the slots it fits and its minimum size, when it is relevant (a small expression over the focus), its typed **options** from a closed set (Bool, Enum, Text, Int, CapabilityRef, ContextRef, ThemeToken) and its styleable **parts**.
-- **Preset:** a shell, the widgets in its slots, their options and a theme. A snapshot holds presets; shipped ones are Developer (Workbench, the default), Inbox, Tiling and Chat, with Team (Room) to come. A daemon's setup declares the presets its clients offer (Setups).
+- **Grid:** a layout is a CSS grid of tiles (`setup/Grid.roc`): column and row tracks with relative sizes, and tiles, each a rectangle of cells showing one or more panes as tabs. Splitting a tile cuts a track, closing one grows its neighbours over its cells, and tracks no tile needs apart merge again. A shell reads the grid:
+  - *Workbench* (the Paseo one): its first column is the left drawer, its last the right drawer, and the tiles between the main area. On a narrow screen each drawer and the main area is a panel you swipe between or pick from a tab bar;
+  - *Tiling*: free tiles, Hyprland-like.
+- **Part:** one view bound to capabilities, in one role: a *navigator* sets the focus, a *view* shows what is focused, large, and an *inspector* shows details beside it. A part declares, as data apart from its code (`ui/Widgets.roc`), its role, the capabilities it needs, the slots it fits and its minimum width, the context kinds it sets and follows, which link the parts of a surface, its typed **options** from a closed set (Bool, Enum, Text, Int, CapabilityRef, ContextRef, ThemeToken) and its styleable **parts**.
+- **Surface:** a preset grown up: a shell, the parts on its grid, their options and a default theme. Shipped ones are Developer (Paseo's workbench, the default), Inbox, Tiling, Chat, Rooms (Buzz), Review (crit.md) and Board (Linear); one is offered only while the daemon offers what its navigators and views need. A daemon's setup declares the presets its clients offer (Setups).
 - **Escape hatches**, each a rung further from the presets: theme tokens; CSS per widget instance, targeting only its declared parts; a declarative widget loaded at runtime, which composes built-in pieces (list, card, text, badge, button, split, timeline) with capability queries and commands, and is safe to share in a snapshot because it does nothing beyond them; and a full Roc widget, compiled in.
 
 Using it:
 
-- **Settings, not chrome:** a settings sidebar, generated from widgets' options, picks the preset, places widgets and sets options. The working UI shows no controls for adding or enabling widgets.
-- **Editing:** dragging a widget snaps it to the slots it fits, previewing the drop and animating the move (waiting on pointer positions and view transitions in roc-signals); the leader-key palette, the snapshot file with live reload, and agents through the daemon's MCP server make the same tree edits.
-- **Named layouts:** you switch between layouts such as `1:code`, `2:team` and `3:ops`.
-- **Keys:** a modal leader key (tmux/i3-like) for layout operations. Panes keep their own keys, and a terminal gets raw input.
+- **Settings, not chrome:** Settings is a page of its own, generated from parts' options: it picks the surface, swaps a part for another of the same role, sets options and theme, shows the host's providers and transformers, and holds the snapshot. The working UI shows no controls for adding or enabling widgets.
+- **Editing:** dragging a pane by its tab or header previews the layout as if dropped and slides the tiles there, into a tile's tabs or beside it; dragging the line between tiles resizes them. Keys focus, move, swap, split, join and resize tiles too. Pointer positions during a drag and the slide are a JavaScript stopgap (`ui/ports.mjs`, a FIXME) until roc-signals offers them.
+- **Commands and keys:** every action is a named command (`ui/Commands.roc`) that ⌘K's palette reaches, beside the places to go. A keymap (`ui/Keymap.roc`) binds keys or sequences to commands: ⌘ or Ctrl with a key, Linear's sequences such as `g` then `3` outside text fields, 1 to 9 to switch surfaces, and a surface's own keys, such as a Board's J and K. ? lists them. A terminal gets raw input.
 - **Narrow screens:** each shell says how its slots collapse below a breakpoint. There is no separate mobile config.
 - **Missing capability:** the pane stays in place as a placeholder. It names the missing capability and the providers that could supply it.
 - **Theme:** a `Setup.Theme` record of tokens: light or dark, an accent and the color its focused edge fades to, text colors, the edges' strengths, the glass (tint, opacity, blur), the background (a gradient or a color), gap, radius, fonts and motion. The UI sets them as custom properties on its root, which the stylesheet alone uses, so widgets hold no theme code. A snapshot names its theme; setups declare and share themes as they do presets.
@@ -155,7 +152,7 @@ A snapshot is a deterministic JSON file. It contains:
 | repo | monorepo |
 | tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md |
 | roc-signals | an SSE subscription effect, as an upstream PR to lukewilliamboswell/roc-signals. Until then the UI polls once a second |
-| layout tree | shells constrain one tree. It is two levels deep for now (columns of stacks or tab groups), since nested `Engine.each` contexts can't recurse; deeper splits wait on a way to compose views recursively |
+| layout | a grid of tiles, not a tree: nested `Engine.each` contexts can't recurse, and a grid's rows and columns give the splits a tree would (docs/research/surfaces.md) |
 
 ## MVP
 
