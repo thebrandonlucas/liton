@@ -570,7 +570,7 @@ Model := [].{
 				match Context.from_str(key) {
 					Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Archive({ workspace_id: workspace_id })))
 					Ok(Session(session_id)) => Model.edit(state, Chat(Archive({ session_id: session_id })))
-					Err(_) => state
+					_ => state
 				}
 		}
 	}
@@ -586,7 +586,7 @@ Model := [].{
 			_ if key.starts_with("group:") => state.workspaces.projects.find_first(|project| "group:${project.id}" == key).map_ok(|project| project.name) ?? ""
 			Ok(Workspace(workspace_id)) => state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.name) ?? ""
 			Ok(Session(session_id)) => Model.session(state, session_id).title
-			Err(_) => ""
+			_ => ""
 		}
 
 	## Renames the row being renamed to the name typed, shown at once, unless
@@ -601,7 +601,7 @@ Model := [].{
 			_ if key.starts_with("group:") => Model.edit(state, Workspaces(RenameProject({ project_id: key.drop_prefix("group:"), name })))
 			Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Rename({ workspace_id, name })))
 			Ok(Session(session_id)) => Model.edit(state, Chat(Rename({ session_id, title: name })))
-			Err(_) => state
+			_ => state
 		}
 	}
 
@@ -1000,6 +1000,7 @@ Model := [].{
 				placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
 				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
 			}
+			Room(_) | Ticket(_) => ""
 		}
 
 	## The sessions that work in a workspace, as they say or its listing does.
@@ -1009,13 +1010,15 @@ Model := [].{
 		state.sessions.keep_if(|listed_session| listed.contains(listed_session.id) or (listed_session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
 	}
 
-	## What a pane's context is called: its session's title, or its
-	## workspace's name.
+	## What a pane's context is called: its session's title, its
+	## workspace's or room's name, or its ticket's key and title.
 	context_title : State, Pane -> Str
 	context_title = |state, shown|
 		match Model.context_of(state, shown) {
 			Session(session_id) => Model.session(state, session_id).title
 			Workspace(workspace_id) => state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| listed.name) ?? workspace_id
+			Room(room_id) => "#${Model.room_of(state, room_id).name}"
+			Ticket(ticket_id) => TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| "${ticket.summary.key} ${ticket.summary.title}") ?? ticket_id
 		}
 
 	entries : State, Str -> List(Chat.Entry)
@@ -1997,6 +2000,7 @@ Model := [].{
 		workspace_id = match Model.context_of(state, shown) {
 			Workspace(id) => id
 			Session(session_id) => state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| listed.id) ?? (Model.session(state, session_id).workspace.map_ok(|placed| placed.id ?? "") ?? "")
+			Room(_) | Ticket(_) => ""
 		}
 		state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| Model.change_counts(state, listed)) ?? Model.no_counts
 	}

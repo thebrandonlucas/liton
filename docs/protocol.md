@@ -270,7 +270,9 @@ message, or its `activeTurn.startedAt`, and ends at the agent's `updatedAt`
 once liton sees it stop, or at the turn's last entry in history fetched
 after it ended. The mock times its own.
 
-A `changes` or `file` context is a session id, or `workspace:<id>`; its scope
+A `changes` or `file` context is a session id, or `workspace:<id>`
+(`room:<id>` and `ticket:<id>` also name contexts, but no workspace, so their
+events are `Unknown`); its scope
 is `Uncommitted`, `AgainstBase` or `Commit:<sha>`. A `changes` event holds the
 workspace (`Unknown` while it can't be read), its status, the scope's changed
 files with their `fingerprint`, and the branch's commits. A `file` event holds

@@ -1,5 +1,6 @@
 import cap.Capability
 import cap.Chat
+import cap.Context
 import cap.Manifest
 import cap.Protocol
 import cap.Workspaces
@@ -223,11 +224,13 @@ theirs = |endpoints, id|
 		.map_ok(|listed| (listed, id.drop_prefix("${listed.name}/")))
 		.map_err(|_| Local)
 
-their_context : List(Remote.Endpoint), [Session(Str), Workspace(Str)] -> Try((Remote.Endpoint, [Session(Str), Workspace(Str)]), [Local])
+their_context : List(Remote.Endpoint), Context.Id -> Try((Remote.Endpoint, Context.Id), [Local])
 their_context = |endpoints, context|
 	match context {
 		Session(id) => theirs(endpoints, id).map_ok(|(listed, their_id)| (listed, Session(their_id)))
 		Workspace(id) => theirs(endpoints, id).map_ok(|(listed, their_id)| (listed, Workspace(their_id)))
+		Room(id) => theirs(endpoints, id).map_ok(|(listed, their_id)| (listed, Room(their_id)))
+		Ticket(id) => theirs(endpoints, id).map_ok(|(listed, their_id)| (listed, Ticket(their_id)))
 	}
 
 session : Str, Chat.Session -> Chat.Session
