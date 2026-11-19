@@ -6,7 +6,7 @@
     (run-effect 2)
     (click (test-id "show-left"))
     (expect-current-location "/#left")
-    (click (role button :name "Fix tests"))
+    (click (role button :name "main"))
     (expect-text (test-id "session-title") "Fix tests")
     (expect-attr (test-id "show-main") aria-pressed "true")
     (expect-current-location "/#main")
@@ -16,10 +16,10 @@
     (expect-current-location "/#left")
     (history-forward)
     (expect-attr (test-id "show-main") aria-pressed "true")
-    ; Back again, then another session: one entry, the list's, stays behind the chat.
+    ; Back again, then the workspace again: one entry, the list's, stays behind the chat.
     (history-back)
-    (click (role button :name "Write docs"))
-    (expect-text (test-id "session-title") "Write docs")
+    (click (role button :name "main"))
+    (expect-text (test-id "session-title") "Fix tests")
     (expect-current-location "/#main")
     (history-back)
     (expect-attr (test-id "show-left") aria-pressed "true")

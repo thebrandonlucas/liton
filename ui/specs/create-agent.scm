@@ -10,9 +10,9 @@
     (fill (label "First prompt") "Write the docs")
     (click (role button :name "Start"))
     ; Shown before the daemon answers: the form closes, and the new agent
-    ; is a row of its workspace and the chat's, starting.
+    ; is a tab of its workspace and the chat's, starting.
     (expect-absent (role button :name "Start"))
-    (expect-visible (role button :name "Write the docs"))
+    (expect-visible (role tab :name "Write the docs"))
     (expect-text (test-id "session-title") "Write the docs")
     (expect-text (test-id "session-status") "starting…")
     (expect-visible (text "starting…"))

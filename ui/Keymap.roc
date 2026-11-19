@@ -12,8 +12,9 @@ Keymap := [].{
 
 	## Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
-	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
-	## goes to a workspace. Escape closes what is open, else cancels a
+	## Mac. 1 to 9, with or without Alt, show a preset, and Cmd or Ctrl or
+	## `g` then 1 to 9 goes to a workspace, and `g` then `r` to the rooms.
+	## Escape closes what is open, else a room's thread, else cancels a
 	## comment, else stops the agent.
 	defaults : List(Binding)
 	defaults = {
@@ -25,11 +26,14 @@ Keymap := [].{
 			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
+			{ keys: ["Escape"], command: "thread.close" },
 			{ keys: ["Escape"], command: "review.cancel" },
 			{ keys: ["Escape"], command: "agent.stop" },
+			{ keys: ["g", "r"], command: "rooms.focus" },
 		]
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
-			.concat(digits.map(|digit| { keys: ["g", digit], command: "workspace.${digit}" }))
+			.concat(digits.join_map(|digit| [{ keys: ["Mod+${digit}"], command: "workspace.${digit}" }, { keys: ["g", digit], command: "workspace.${digit}" }]))
+			.concat(Keymap.workspaces)
 			.concat(Keymap.layout)
 			.concat(Keymap.review)
 	}
@@ -49,6 +53,23 @@ Keymap := [].{
 		{ keys: ["Mod+Enter"], command: "review.submit" },
 		{ keys: ["a"], command: "review.viewed" },
 		{ keys: ["F"], command: "review.finish" },
+	]
+
+	## Paseo's keys between workspaces and tabs: Cmd or Ctrl with [ or ], or
+	## `g` then [ or ], goes to the workspace before or after; Cmd or Ctrl
+	## with T, or `t` then `n`, opens the new tab menu, and with W, or `t`
+	## then `w`, closes the tab. A browser's tab keeps Cmd+T and Cmd+W, and
+	## Ctrl+1 to 9, for itself.
+	workspaces : List(Binding)
+	workspaces = [
+		{ keys: ["Mod+["], command: "workspace.previous" },
+		{ keys: ["g", "["], command: "workspace.previous" },
+		{ keys: ["Mod+]"], command: "workspace.next" },
+		{ keys: ["g", "]"], command: "workspace.next" },
+		{ keys: ["Mod+t"], command: "tab.new" },
+		{ keys: ["t", "n"], command: "tab.new" },
+		{ keys: ["Mod+w"], command: "tab.close" },
+		{ keys: ["t", "w"], command: "tab.close" },
 	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the
