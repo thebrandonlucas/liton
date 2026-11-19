@@ -201,7 +201,7 @@ try {
   await step("liton setup evaluates a Litonfile to the same JSON each time, which the manifest offers", async () => {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
-    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat"], "Developer"]);
+    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Review"], "Developer"]);
     assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme });
     assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain"], "Pastoral"]);
   });
