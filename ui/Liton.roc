@@ -2268,7 +2268,7 @@ Liton := [].{
 		Engine.when(opened.map(|{ root, .. }| root.is_empty()), || Html.p("Open a message's thread to show it here.", "missing"), || Liton.room_thread(model, id, opened, ""))
 	}
 
-	## A room's header, messages and who is typing.
+	## A room's header, messages, who is typing and the agents working.
 	room_main : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> List(Elem(PaneCtx))
 	room_main = |model, id, room_id, shown| {
 		header = Html.div(
@@ -2289,6 +2289,14 @@ Liton := [].{
 			.concat(Conversation.timeline(model, id, { class: "timeline room-timeline", part: "room", jump: Bool.True, earlier: Engine.const(Bool.False), loading: room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")) }, [messages]))
 			.concat([
 				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+				# The agents working in the room or its threads.
+				Html.div(
+					"agents-working",
+					[
+						Engine.each(room_id.map2(model.signal(), |opened, state| Model.agents_working(state, opened)), |name| name, |name| Liton.avatar(name.key().map(|agent_name| { initial: Model.initial_of(agent_name), agent: Bool.True }))),
+						Html.span_s(room_id.map2(model.signal(), |opened, state| Liton.working_text(Model.agents_working(state, opened))), [Engine.attr("role", "status"), Engine.test_id("agents-working")]),
+					],
+				),
 				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
 			])
 	}
@@ -2431,12 +2439,14 @@ Liton := [].{
 					],
 				),
 				Engine.when(
-					row.field(|line| line.threaded and line.status.is_empty() and line.replies > 0),
+					row.field(|line| line.threaded and line.status.is_empty() and (line.replies > 0 or !line.working.is_empty())),
 					||
 						Html.div(
 							"room-thread",
 							[
+								Engine.each(row.field(|line| line.participants), |person| person.name, |person| Liton.avatar(person.field(|shown| { initial: shown.initial, agent: shown.agent }))),
 								Html.button_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
+								Html.span_s(row.field(|line| if (line.working.is_empty()) "" else "working"), [Engine.class("working-badge"), Engine.attr_s("title", row.field(|line| "${line.working} working in the thread")), Engine.test_id("thread-working")]),
 								Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
 							],
 						),
@@ -2446,6 +2456,15 @@ Liton := [].{
 		)
 	}
 
+	## "Scout is working", "Scout and Patch are working", or "" for none.
+	working_text : List(Str) -> Str
+	working_text = |names|
+		match names {
+			[] => ""
+			[one] => "${one} is working"
+			_ => "${Str.join_with(names.drop_last(1), ", ")} and ${names.last() ?? ""} are working"
+		}
+
 	members_text : U64 -> Str
 	members_text = |count| if (count == 1) "1 member" else "${count.to_str()} members"
 
@@ -2453,10 +2472,12 @@ Liton := [].{
 	reaction_choices : List(Str)
 	reaction_choices = ["+", "👀", "🎉"]
 
-	## A thread's replies and who replied, as "2 replies · Scout, Ada".
+	## A thread's replies and who replied, as "2 replies · Scout, Ada", or
+	## "Thread" while an agent works on its first.
 	replies_text : Model.RoomLine -> Str
 	replies_text = |line|
 		match line.replies {
+			0 => "Thread"
 			1 => "1 reply · ${line.repliers}"
 			count => "${count.to_str()} replies · ${line.repliers}"
 		}

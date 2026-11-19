@@ -301,10 +301,10 @@ Model := [].{
 	## by the same author within 5 minutes, so it shows under it; how long ago it was posted (`Model.ago`), and when; its text,
 	## unless deleted; its reactions, each with how many reacted, whether
 	## you did and whether your reaction is on its way; and, in the room, its thread's replies, who replied, and how
-	## long ago last (`threaded`). A message sent and not yet posted says
+	## long ago last (`threaded`), and the agents `working` in it. A message sent and not yet posted says
 	## so (`status`), or why the daemon refused it (`failed`), by the
 	## `serial` of its request.
-	RoomLine : { id : Str, author : Str, initial : Str, agent : Bool, continued : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
+	RoomLine : { id : Str, author : Str, initial : Str, agent : Bool, continued : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, participants : List({ name : Str, initial : Str, agent : Bool }), working : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
 	## A row of a Rooms pane: a room, or with `heading`, the title of a kind
 	## of rooms.
@@ -3027,6 +3027,8 @@ Model := [].{
 			threaded: Bool.False,
 			replies: thread.replies,
 			repliers: Str.join_with(thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id).name), ", "),
+			participants: thread.participants.map(|member_id| Model.room_member(state, posted.room_id, member_id)).map(|member| { name: member.name, initial: Model.initial_of(member.name), agent: member.kind != Person }),
+			working: Str.join_with(Model.thread_working(state, posted, thread), ", "),
 			last_reply: thread.last_reply.map_ok(|time| Model.ago(state, time)) ?? "",
 			status: "",
 			failed: Bool.False,
@@ -3061,11 +3063,11 @@ Model := [].{
 		Model.ask_rooms(state, if (mine) Unreact({ room_id, message_id, emoji }) else React({ room_id, message_id, emoji }))
 	}
 
-	## Who types in a room's messages, or a thread's, as "Scout is typing…":
-	## those who said they type there and posted nothing since.
-	typing : State, Str, Str -> Str
-	typing = |state, room_id, root| {
-		typists = Model.room_log(state, room_id, root).fold(
+	## The members who type in a room's messages, or a thread's: those who
+	## said they type there and posted nothing since.
+	typists : State, Str, Str -> List(Str)
+	typists = |state, room_id, root|
+		Model.room_log(state, room_id, root).fold(
 			[],
 			|so_far, entry|
 				match entry.event {
@@ -3074,7 +3076,33 @@ Model := [].{
 					_ => so_far
 				},
 		)
-		names = typists.map(|member_id| Model.room_member(state, room_id, member_id).name)
+
+	## The agents working in a message's thread, by name: those typing in
+	## it, and those the message mentions that haven't answered in it, for
+	## 10 minutes after it was posted.
+	thread_working : State, Rooms.Message, Rooms.Thread -> List(Str)
+	thread_working = |state, root, summary| {
+		typed = Model.typists(state, root.room_id, root.id)
+		awaited = if (state.now > 0 and state.now - (epoch_ms(root.time) ?? 0) < 600_000) root.mentions.drop_if(|member_id| summary.participants.contains(member_id) or typed.contains(member_id)) else []
+		typed.concat(awaited).map(|member_id| Model.room_member(state, root.room_id, member_id)).keep_if(|member| member.kind != Person).map(|member| member.name)
+	}
+
+	## The agents working in a room, by name: typing in it, or working in
+	## one of its threads (`thread_working`).
+	agents_working : State, Str -> List(Str)
+	agents_working = |state, room_id| {
+		log = Model.room_log(state, room_id, "")
+		threads = Rooms.threads(log)
+		empty = |root| { root, replies: 0, last_reply: Err(Missing), participants: [] }
+		typed = Model.typists(state, room_id, "").map(|member_id| Model.room_member(state, room_id, member_id)).keep_if(|member| member.kind != Person).map(|member| member.name)
+		in_threads = Rooms.messages(log).keep_if(|posted| posted.place == TopLevel).join_map(|root| Model.thread_working(state, root, threads.find_first(|summary| summary.root == root.id) ?? empty(root.id)))
+		typed.concat(in_threads).fold([], |names, name| if (names.contains(name)) names else names.append(name))
+	}
+
+	## Who types in a room's messages, or a thread's, as "Scout is typing…".
+	typing : State, Str, Str -> Str
+	typing = |state, room_id, root| {
+		names = Model.typists(state, room_id, root).map(|member_id| Model.room_member(state, room_id, member_id).name)
 		match names {
 			[] => ""
 			[one] => "${one} is typing…"

@@ -441,6 +441,19 @@ kbd:empty { display: none; }
 .room-thread { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .room-thread button { padding: 0; border: none; background: none; color: var(--accent); font-size: 12px; font-weight: 600; }
 .room-last-reply { color: var(--muted); }
+.room-thread .avatar { width: 20px; height: 20px; border-radius: 6px; font-size: 10px; }
+.room-thread .avatar + .avatar { margin-left: -8px; box-shadow: 0 0 0 2px var(--glass-deep); }
+.room-thread .avatar.agent::before, .room-thread .avatar.agent::after { display: none; }
+/* An agent at work: a pulsing badge on a thread, and a line of the agents
+   working over the composer. */
+.working-badge { padding: 0 6px; border-radius: 9px; background: color-mix(in srgb, var(--accent-to) 18%, transparent); color: var(--accent-to); font-size: 11px; font-weight: 600; animation: working 1.6s ease-in-out infinite; }
+.working-badge:empty { display: none; }
+@keyframes working { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .working-badge { animation: none; } }
+.agents-working { display: flex; align-items: center; gap: 6px; margin: 0 12px 4px; color: var(--muted); font-size: 12px; }
+.agents-working:not(:has(.avatar)) { display: none; }
+.agents-working .avatar { width: 18px; height: 18px; border-radius: 5px; font-size: 9px; }
+.agents-working .avatar.agent::before, .agents-working .avatar.agent::after { display: none; }
 .room-typing { margin: 0 12px 4px; color: var(--muted); font-size: 12px; }
 .room-message.pending { opacity: .6; }
 .room-message.failed .sent-status { color: var(--fail); }
