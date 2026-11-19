@@ -55,7 +55,9 @@ Liton := [].{
 	## anywhere, and with Ctrl or other keys outside a text field, whose
 	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Model.pressed`.
 	page : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> Elem(Ctx)
-	page = |model, drag|
+	page = |model, drag| {
+		# The layout shown: while a pane is dragged, as if dropped where it is.
+		laid = model.signal().map2(drag.signal(), Drag.previewed)
 		Engine.element(
 			"div",
 			[
@@ -77,11 +79,11 @@ Liton := [].{
 							"tile-tabs",
 							[
 								Engine.each(
-									model.signal().map(Model.tiles_in_order),
+									laid.map(Model.tiles_in_order),
 									|tile| tile.id,
 									|row|
 										Html.button_s(
-											row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| Str.join_with(Model.shown_panes(state, tile).map(|pane| Liton.label(state, pane)), " · ")),
+											row.field(|tile| tile).map2(laid.lift_row(), |tile, state| Str.join_with(Model.shown_panes(state, tile).map(|pane| Liton.label(state, pane)), " · ")),
 											[
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_tile)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
@@ -97,11 +99,12 @@ Liton := [].{
 						# a :has() selector there restyled every pane on each change.
 						Html.div_attrs(
 							[
-								Engine.class_s(model.signal().map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}")),
-								Engine.attr_s("style", model.signal().map(Liton.grid_style)),
+								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}")),
+								Engine.attr_s("style", laid.map(Liton.grid_style)),
 							],
-							[Engine.each(model.signal().map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, row))],
+							[Engine.each(laid.map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, laid, row))],
 						),
+						Liton.ghost(model, drag),
 						Liton.settings(model),
 						Liton.toast(model),
 					],
@@ -113,7 +116,75 @@ Liton := [].{
 					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
-			].concat(Liton.effects(model)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
+			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
+		)
+	}
+
+	## While a pane is held, the page reports the pointer (`Drag.pointer`):
+	## its moves drag the pane, and its release drops it.
+	drag_effects : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> List(Elem(Ctx))
+	drag_effects = |model, drag| [
+		Engine.watch_latest(
+			drag.signal().map(Drag.held),
+			|held|
+				match held {
+					Holding({ pointer, .. }) => [Drag.pointer.ask({ pointer: pointer })]
+					NotHolding => []
+				},
+			model.on_result(
+				|state, held, res|
+					match (held, res) {
+						(Holding(holding), Ok(at)) => Drag.dropped(state, holding, at)
+						_ => state
+					},
+			).also(
+				drag.on_result(
+					|gesture, _, res|
+						match res {
+							Ok(at) => Drag.heard(gesture, at)
+							Err(_) => Drag.idle
+						},
+				),
+			),
+		),
+	]
+
+	## A picture of the pane dragged, its title, following the pointer.
+	ghost : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> Elem(Ctx)
+	ghost = |model, drag|
+		Engine.when(
+			drag.signal().map(Drag.dragging),
+			||
+				Html.div_attrs(
+					[
+						Engine.class("drag-ghost"),
+						Engine.test_id("drag-ghost"),
+						Engine.attr("aria-hidden", "true"),
+						Engine.attr_s(
+							"style",
+							drag.signal().map(
+								|gesture|
+									match gesture {
+										Dragging({ at, .. }) => "transform: translate(${at.x.to_str()}px, ${at.y.to_str()}px)"
+										_ => ""
+									},
+							),
+						),
+					],
+					[
+						Engine.text_s(
+							model.signal().map2(
+								drag.signal(),
+								|state, gesture|
+									match gesture {
+										Dragging({ pane, .. }) => Liton.label(state, Model.pane(state, pane))
+										_ => ""
+									},
+							),
+						),
+					],
+				),
+			|| Engine.text(""),
 		)
 
 	## Every request to the daemon is a call or a poll of /liton/v1
@@ -520,24 +591,26 @@ Liton := [].{
 	## a Workbench and closes it in Tiling, and in Tiling its controls, over
 	## its panes, the active one shown. A Workbench slot's first tile is its
 	## panel.
-	tile_view : State(Ctx, Model.State), State(Ctx, Drag.Gesture), RowRef(Ctx, Model.Tile) -> Elem(TileCtx)
-	tile_view = |model0, drag0, row| {
+	tile_view : State(Ctx, Model.State), State(Ctx, Drag.Gesture), Signal(Ctx, Model.State), RowRef(Ctx, Model.Tile) -> Elem(TileCtx)
+	tile_view = |model0, drag0, laid0, row| {
 		model = model0.lift_row()
 		drag = drag0.lift_row()
+		laid = laid0.lift_row()
 		id = row.key()
 		tile = row.field(|shown| shown)
-		slot = id.map2(model.signal(), |tile_id, state| Model.slot_of(state, tile_id))
-		panel = id.map2(model.signal(), |tile_id, state| if (Model.slot_tile(state, Model.slot_of(state, tile_id)) == tile_id) Model.slot_of(state, tile_id) else Free)
+		slot = id.map2(laid, |tile_id, state| Model.slot_of(state, tile_id))
+		panel = id.map2(laid, |tile_id, state| if (Model.slot_tile(state, Model.slot_of(state, tile_id)) == tile_id) Model.slot_of(state, tile_id) else Free)
 		tiling = model.signal().map(|state| state.shell == Tiling)
-		classes = tile.map2(model.signal(), |shown, state| Liton.tile_class(state, shown))
+		classes = tile.map2(laid, |shown, state| Liton.tile_class(state, shown))
+		over = model.signal().map2(drag.signal(), Drag.over)
 		Engine.element(
 			"div",
 			[
-				Engine.class_s(classes.map2(id.map2(drag.signal(), |tile_id, gesture| Liton.tile_drop_class(tile_id, Drag.over(gesture))), Liton.joined_classes)),
-				Html.zone_s(id.map(|tile_id| "tile:${tile_id}")),
+				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
 				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
 				Engine.attr_s("data-tile", id),
-				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
+				# Named, a view transition moves each tile to its new place.
+				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}; view-transition-name: tile-${shown.id}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.update_by(id, |state, tile_id| { ..state, active_tile: tile_id })),
 			],
@@ -551,16 +624,16 @@ Liton := [].{
 					"tile-header",
 					[
 						Engine.each(
-							tile.map2(model.signal(), |shown, state| Model.shown_panes(state, shown)),
+							tile.map2(laid, |shown, state| Model.shown_panes(state, shown)),
 							|pane| pane.id,
 							|tab|
 								Engine.element(
 									"span",
-									[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture))))],
+									[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture)))), Engine.attr_s("data-tab", tab.key())],
 									[
 										Html.button_s(
 											tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
-											[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(model.lift_row(), drag.lift_row(), tab.key(), "tab")),
+											[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(drag.lift_row(), tab.key())),
 											model.lift_row().update_by(tab.key(), Model.activate_tab),
 										),
 										Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
@@ -581,7 +654,7 @@ Liton := [].{
 						),
 					],
 				),
-				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, tile, pane_row)),
+				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
 			],
 		)
 	}
@@ -603,8 +676,8 @@ Liton := [].{
 		"grid-template-columns: ${Str.join_with(state.grid.columns.map_with_index(column), " ")}; grid-template-rows: ${Str.join_with(state.grid.rows.map(|size| "minmax(0, ${size.to_str()}fr)"), " ")}"
 	}
 
-	pane_view : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile), RowRef(TileCtx, Model.Pane) -> Elem(PaneCtx)
-	pane_view = |model0, drag0, tile, row| {
+	pane_view : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.State), Signal(TileCtx, Model.Tile), RowRef(TileCtx, Model.Pane) -> Elem(PaneCtx)
+	pane_view = |model0, drag0, laid, tile, row| {
 		model = model0.lift_row()
 		drag = drag0.lift_row()
 		id = row.key()
@@ -615,8 +688,7 @@ Liton := [].{
 			"section",
 			[
 				Html.aria_label_s(title),
-				Engine.class_s(id.map2(tile.lift_row(), |pane_id, group| { pane_id, group }).map2(model.signal(), |{ pane_id, group }, state| Str.join_with(["pane", if (pane_id != group.active or state.hidden.contains(pane_id)) "hidden" else "", if (pane_id == state.focused_pane) "focused" else ""].drop_if(Str.is_empty), " ")).map2(id.map2(drag.signal(), Liton.pane_drag_class), Liton.joined_classes)),
-				Html.zone_s(id.map(|pane_id| "pane:${pane_id}")),
+				Engine.class_s(id.map2(tile.lift_row(), |pane_id, group| { pane_id, group }).map2(laid.lift_row(), |{ pane_id, group }, state| Str.join_with(["pane", if (pane_id != group.active or state.hidden.contains(pane_id)) "hidden" else "", if (pane_id == state.focused_pane) "focused" else ""].drop_if(Str.is_empty), " ")).map2(id.map2(drag.signal(), Liton.pane_drag_class), Liton.joined_classes)),
 				# Clicking anywhere in it focuses it, or what was clicked in it.
 				Engine.attr("tabindex", "-1"),
 				Engine.on("focus", model.update_by(id.map2(tile.lift_row(), |pane_id, group| { pane: pane_id, tile: group.id }), Model.focus_pane)),
@@ -629,7 +701,7 @@ Liton := [].{
 						# Dragging its header moves the pane, as its tab does.
 						Engine.element(
 							"div",
-							[Engine.class("pane-grip"), Engine.test_id_s(id.map(|pane_id| "grip-${pane_id}"))].concat(Liton.grip(model, drag, id, "head")),
+							[Engine.class("pane-grip"), Engine.test_id_s(id.map(|pane_id| "grip-${pane_id}"))].concat(Liton.grip(drag, id)),
 							[
 								Engine.when(
 									shown.map(|{ pane, state }| pane.widget == "chat" and !Model.session_of(state, pane).is_empty()),
@@ -687,44 +759,30 @@ Liton := [].{
 		)
 	}
 
-	## What lets a tab or header drag pane `id`: its zone, and its pointer's
-	## press, moves, release and cancel. The pointer is captured on the press,
-	## so its moves and release come here wherever it goes.
-	grip : State(ctx, Model.State), State(ctx, Drag.Gesture), Signal(ctx, Str), Str -> List(Engine.Attr(ctx))
-	grip = |model, drag, id, kind| [
-		Html.zone_s(id.map(|pane_id| "${kind}:${pane_id}")),
+	## What lets a tab or header drag pane `id`: its press, and the release
+	## or cancel of a press that never moved, a click. The page reports the
+	## rest of a drag (`Liton.drag_effects`).
+	grip : State(ctx, Drag.Gesture), Signal(ctx, Str) -> List(Engine.Attr(ctx))
+	grip = |drag, id| [
 		Html.on_pointer_down_capture(drag.set_value_by(id, Drag.pressed)),
-		Html.on_pointer_move_paced(drag.set_value_by(model.signal(), Drag.moved)),
-		Html.on_pointer_up(model.set_value_by(drag.signal(), Drag.dropped).also(drag.set_value(Drag.released))),
+		Html.on_pointer_up(drag.set_value(Drag.released)),
 		Html.on_pointer_cancel(drag.set_value(Drag.released)),
 	]
 
-	## How a tile shows a pane dragged over it: dropping into its tabs, or a
-	## new tile opening on one side.
+	## How a tile shows a pane dragged into its tabs. The layout shown as if
+	## dropped shows the rest.
 	tile_drop_class : Str, Model.Drop -> Str
 	tile_drop_class = |tile_id, drop|
 		match drop {
-			_ if Model.drop_tile(drop) != tile_id => ""
-			Beside({ side: Left, .. }) => "drop-left"
-			Beside({ side: Right, .. }) => "drop-right"
-			Beside({ side: Up, .. }) => "drop-up"
-			Beside({ side: Down, .. }) => "drop-down"
-			_ => "drop-into"
+			Into({ tile, .. }) if tile == tile_id => "drop-into"
+			_ => ""
 		}
 
-	## How a tab or pane shows a drag: dragged, or the side the pane drops on.
+	## How a tab or pane shows it is the one dragged.
 	pane_drag_class : Str, Drag.Gesture -> Str
 	pane_drag_class = |pane_id, gesture|
 		match gesture {
-			Dragging(held) =>
-				Liton.joined_classes(
-					if (held.pane == pane_id) "dragged" else "",
-					match held.over {
-						Into({ at: Before(beside), .. }) if beside == pane_id => "drop-before"
-						Into({ at: After(beside), .. }) if beside == pane_id => "drop-after"
-						_ => ""
-					},
-				)
+			Dragging(held) if held.pane == pane_id => "dragged"
 			_ => ""
 		}
 
