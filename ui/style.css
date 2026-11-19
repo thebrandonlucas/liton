@@ -204,7 +204,7 @@ kbd:empty { display: none; }
 .tile:not(.tabbed) .tab, .pane.hidden { display: none; }
 /* A tab: its widget's icon and title, and a × that shows on hover. */
 .tile-header .tab { display: inline-flex; align-items: center; }
-.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-review, .widget-review-files, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
+.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-review, .widget-review-files, .widget-review-threads, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .widget-sessions { --icon: var(--icon-list); }
 .widget-workspaces { --icon: var(--icon-folder); }
@@ -214,6 +214,7 @@ kbd:empty { display: none; }
 .widget-files { --icon: var(--icon-file); }
 .widget-review { --icon: var(--icon-message-square); }
 .widget-review-files { --icon: var(--icon-git-branch); }
+.widget-review-threads { --icon: var(--icon-list); }
 .widget-tickets { --icon: var(--icon-ticket); }
 .widget-ci { --icon: var(--icon-circle-play); }
 .widget-capabilities { --icon: var(--icon-plug); }
@@ -804,6 +805,28 @@ kbd:empty { display: none; }
 .review-card.viewed .file-path { color: var(--muted); }
 .git-file.viewed button { color: var(--muted); }
 .git-file.viewed button::after { content: " ✓" / ""; color: var(--ok); }
+/* Its inspector: the threads listed, the one focused marked, then the review's conversation. */
+.review-threads { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; container-type: inline-size; }
+.review-threads > .choices button { padding: 1px 10px; font-size: 12px; }
+.review-threads .missing { margin: 0; font-size: 12.5px; }
+.review-threads .missing:empty { display: none; }
+.thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.thread-item { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 8px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--edge); border-left: 3px solid var(--warn); border-radius: var(--small-radius); background: var(--glass-deep); font-size: 12.5px; }
+.thread-item.draft { border-left-style: dashed; }
+.thread-item.resolved { border-left-color: var(--ok); opacity: .7; }
+.thread-item.outdated { opacity: .6; }
+.thread-item.focused { border-color: var(--edge-active); box-shadow: 0 0 0 1px var(--edge-active); }
+.thread-place { justify-self: start; padding: 0; border: none; background: none; font: 600 11.5px var(--font-mono); color: var(--accent); text-align: left; overflow-wrap: anywhere; }
+.thread-item .status-word { font-size: 11px; color: var(--muted); }
+.thread-item .status-word.draft { color: var(--warn); }
+.thread-comments { font: 11px var(--font-mono); color: var(--muted); }
+.thread-text { grid-column: 1 / -1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-item .thread-actions { grid-column: 1 / -1; margin: 0; }
+.thread-item .thread-actions button { padding: 0 8px; font-size: 12px; background: none; border-color: transparent; color: var(--muted); }
+.thread-item .thread-actions button:hover { color: var(--text); border-color: var(--edge); }
+.conversation-title { margin: 6px 0 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.conversation .comment { width: auto; position: static; margin: 0 0 6px; }
+.conversation .thread-actions, .conversation .comment-header button:first-of-type { display: none; }
 /* Its navigator: the changed files as Changes' tree, the one in view marked, each with its open threads counted. */
 .review-files { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
 .review-files .choices { align-items: center; font: 11px var(--font-mono); color: var(--muted); }

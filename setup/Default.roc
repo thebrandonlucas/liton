@@ -65,8 +65,8 @@ Default := [].{
 
 	## Review, modelled on crit.md: the changed files, with the workspaces
 	## as a tab beside them, every changed file's diff with the review's
-	## threads at their lines, and the chat, as a Workbench whose main area
-	## is the widest.
+	## threads at their lines, and the threads, with the chat as a tab
+	## beside them, as a Workbench whose main area is the widest.
 	review : Setup.Preset
 	review = {
 		name: "Review",
@@ -78,7 +78,7 @@ Default := [].{
 				tiles: [
 					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "review-files", pinned: "", options: [] }, { id: "pane-4", widget: "workspaces", pinned: "", options: [] }] },
 					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "review", pinned: "", options: [] }] },
-					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "chat", pinned: "", options: [] }] },
+					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "review-threads", pinned: "", options: [] }, { id: "pane-5", widget: "chat", pinned: "", options: [] }] },
 				],
 			},
 			hidden: [],

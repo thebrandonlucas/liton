@@ -872,7 +872,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -883,6 +883,7 @@ Liton := [].{
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Review => Liton.review_view(model, id, row.field(|pane| pane))
 							ReviewFiles => Liton.review_files(model, id, row.field(|pane| pane))
+							ReviewThreads => Liton.review_threads(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
 							Ticket => Liton.ticket_view(model, id)
 							Rooms => Liton.rooms(model)
@@ -1944,6 +1945,62 @@ Liton := [].{
 					"select",
 					[Engine.attr("aria-label", "Scope"), Engine.class("scope"), Engine.prop_s(Engine.Prop.value, model.signal().map(Model.review_scope_name)), Engine.on("change", model.set_value(Model.pick_review_scope))],
 					[Dropdown.option("Uncommitted", "Uncommitted"), Dropdown.option("AgainstBase", "Against the base"), Engine.each(git.map(|known| known.commits), |listed| listed.sha, commit)],
+				),
+			],
+		)
+	}
+
+	## The Review surface's inspector: the review's threads, those open,
+	## resolved or all, each focusing its lines in the view, with Reply and
+	## Resolve or Reopen; then the review's comments on the whole of it, and
+	## one to add.
+	review_threads : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	review_threads = |model, id, pane| {
+		listing = model.signal().map(|state| state.review_desk.listing)
+		show = |title, picked| Html.button(title, [Html.flag("aria-pressed", listing.map(|shown| shown == picked))], model.update(|state| Model.list_threads(state, picked)))
+		key = id.map(|pane_id| "${pane_id}/review")
+		Html.div(
+			"review-threads",
+			[
+				Html.div_attrs([Engine.class("choices"), Engine.attr("role", "group"), Engine.attr("aria-label", "Threads listed")], [show("Open", Open), show("Resolved", Resolved), show("All", All)]),
+				Html.p_s(pane.map2(model.signal(), |shown, state| if (Model.thread_items(state, shown).is_empty()) "No threads here yet. Pick lines in the view to comment on them." else ""), [Engine.class("missing")]),
+				Html.ul([Engine.class("thread-list"), Engine.attr("data-part", "threads")], [Engine.each(pane.map2(model.signal(), |shown, state| Model.thread_items(state, shown)), |item| item.id, |item| Liton.thread_item(model, id, item))]),
+				Html.h3("Review conversation", "conversation-title"),
+				Html.div_attrs([Engine.class("conversation"), Engine.attr("data-part", "conversation")], [Engine.each(pane.map2(model.signal(), |shown, state| Model.overall_comments(state, shown)), |note| note.comment, |note| Liton.comment(model.lift_row(), note.field(|shown| shown).map2(id.lift_row(), |shown, pane_id| { pane_id, note: shown })))]),
+				Html.form(
+					"Add to the review conversation",
+					[Engine.class("review-overall"), Engine.on("submit", model.update_by(id, Model.comment_overall))],
+					[
+						Html.textarea(Engine.const("Comment on the whole review"), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "2"), Engine.attr("placeholder", "On the whole review, in Markdown")], model.set_value_by(key, Model.set_draft)),
+						Html.submit_button("Add", []),
+					],
+				),
+			],
+		)
+	}
+
+	## A thread of the Review surface's inspector: where it is, which
+	## focuses it in the view, its state, its first line and how many
+	## comments it has, and Reply and Resolve or Reopen. Top-level for the
+	## reason `scope_picker` is.
+	thread_item : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.ThreadItem) -> Elem(Row(PaneCtx, Model.ThreadItem))
+	thread_item = |model0, id, item| {
+		model = model0.lift_row()
+		shown = item.field(|listed| listed)
+		acting = |action| shown.map2(id.lift_row(), |listed, pane_id| { pane_id, thread: listed.id, action })
+		Html.li(
+			[Engine.class_s(shown.map(|listed| "thread-item ${listed.state}${if (listed.focused) " focused" else ""}")), Engine.attr("data-part", "thread")],
+			[
+				Html.button_s(shown.map(|listed| listed.place), [Engine.class("thread-place")], model.update_by(acting(Focus), Model.act_on_thread)),
+				Html.span_s(shown.map(|listed| listed.state), [Engine.class_s(shown.map(|listed| "status-word ${listed.state}")), Engine.test_id_s(shown.map(|listed| "thread-state-${listed.id}"))]),
+				Html.span_s(shown.map(|listed| if (listed.comments == 1) "1 comment" else "${listed.comments.to_str()} comments"), [Engine.class("thread-comments")]),
+				Html.p_s(shown.map(|listed| listed.text), [Engine.class("thread-text")]),
+				Html.div(
+					"thread-actions",
+					[
+						Html.button("Reply", [Html.aria_label_s(shown.map(|listed| "Reply to ${listed.place}"))], model.update_by(acting(Reply), Model.act_on_thread)),
+						Html.button_s(shown.map(|listed| if (listed.resolved) "Reopen" else "Resolve"), [Html.aria_label_s(shown.map(|listed| "${if (listed.resolved) "Reopen" else "Resolve"} ${listed.place}"))], model.update_by(acting(Resolve), Model.act_on_thread)),
+					],
 				),
 			],
 		)

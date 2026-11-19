@@ -4,12 +4,13 @@
 ## asked to scroll to (`scroll`, by their references), counted by `serial`,
 ## and the file of the latest until its card is on screen (`scrolling_to`,
 ## "" for none), the files whose cards are on screen (`seen`), and the
-## files marked viewed, which the browser keeps (`viewed_key`).
+## files marked viewed, which the browser keeps (`viewed_key`), and the
+## threads its inspector lists: those open, resolved, or all.
 import cap.WorkspaceGit
 
 ReviewDesk := [].{
 
-	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed) }
+	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed), listing : [Open, Resolved, All] }
 
 	## A file of a context's scope marked viewed, by its diff's fingerprint
 	## then (`WorkspaceGit.fingerprint`), so a change to it unmarks it.
@@ -36,7 +37,7 @@ ReviewDesk := [].{
 
 	## The uncommitted changes, every folder open, until changed.
 	initial : State
-	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [] }
+	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [], listing: Open }
 
 	## Folds a folder of the navigator, or unfolds it.
 	toggle_folder : State, Str -> State

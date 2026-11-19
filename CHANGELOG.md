@@ -94,6 +94,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Mark a file of the Review view Viewed to fold it to its header and tick it in the navigator; the bar counts the files viewed, as in "1 / 3 files viewed". A file whose diff changes since is no longer viewed. The browser keeps what you viewed.
 - The Review view's bar counts the comments on the files reviewed; its ‹ and › focus the previous or next thread, in the order of the files and their lines, and scroll to it.
 - Finish review, in the Review view's bar, sends your drafts to the agent as the next round at once. The bar says which round your drafts make, while it is sending, that the round is waiting for the agent while it works, and once it has answered.
+- The Review preset's right drawer lists the review's threads, those open, resolved or all, in the order of the files and lines, outdated ones too. Pick one to focus its lines in the view; reply to it, resolve it or reopen it right there. Below them, the review conversation holds the comments on the whole review, and takes another.
 
 ### Changed
 

@@ -1447,7 +1447,7 @@ Model := [].{
 		}
 		# The panes of a widget on screen that show a context.
 		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and (Model.pane_visible(state, shown.id) or Model.main_diff(state) == shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
-		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git).concat(showing("review").concat(showing("review-files")).join_map(|shown| Model.review_subjects(state, shown))) else []
+		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git).concat(showing("review").concat(showing("review-files")).concat(showing("review-threads")).join_map(|shown| Model.review_subjects(state, shown))) else []
 		files = |shown| {
 			context = Model.context_of(state, shown)
 			{ folders, file, .. } = Model.file_pane(state, shown.id)
@@ -1458,7 +1458,7 @@ Model := [].{
 		# pane shows.
 		desks = laid_out.keep_if(|shown| (shown.widget == "tickets" or shown.widget == "ticket") and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
-		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).map(|shown| Threads(Model.context_of(state, shown))) else []
+		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
@@ -2749,6 +2749,55 @@ Model := [].{
 		{ ..state, sub_focus: ReviewThread(thread.id), review_desk: ReviewDesk.scrolled_to(state.review_desk, thread.anchor.path, refs) }
 	}
 
+	## A thread as the Review surface's inspector lists it: where it is,
+	## its state, its first comment's first line, how many comments it has,
+	## and whether it is focused.
+	ThreadItem : { id : Str, place : Str, state : Str, text : Str, comments : U64, resolved : Bool, focused : Bool }
+
+	## The threads of the review a Review inspector shows, those its listing
+	## picks, in the order of the view's files and lines, then those of other
+	## files or scopes and those outdated.
+	thread_items : State, Pane -> List(ThreadItem)
+	thread_items = |state, shown| {
+		all = Model.review_of(state, Model.context_of(state, shown)).threads
+		in_view = Model.review_threads(state, shown)
+		listed = in_view.concat(all.drop_if(|thread| in_view.any(|first| first.id == thread.id)))
+		kept =
+			match state.review_desk.listing {
+				Open => listed.drop_if(|thread| thread.resolved)
+				Resolved => listed.keep_if(|thread| thread.resolved)
+				All => listed
+			}
+		thread_state = |thread| if (thread.resolved) "resolved" else if (thread.outdated) "outdated" else if (thread.comments.any(|comment| comment.state == Draft)) "draft" else "open"
+		kept.map(|thread| { id: thread.id, place: Review.lines(thread.anchor), state: thread_state(thread), text: thread.comments.first().map_ok(|comment| comment.text.trim().split_on("\n").first() ?? "") ?? "", comments: thread.comments.len(), resolved: thread.resolved, focused: state.sub_focus == ReviewThread(thread.id) })
+	}
+
+	## Lists a Review inspector's open threads, its resolved ones, or all.
+	list_threads : State, [Open, Resolved, All] -> State
+	list_threads = |state, listing| { ..state, review_desk: { ..state.review_desk, listing } }
+
+	## Acts on a thread listed in a Review inspector: focuses it in the
+	## Review view, scrolled to and shown on a phone, with a reply to it
+	## open for `Reply`; or resolves it, or reopens it, at once.
+	act_on_thread : State, { pane_id : Str, thread : Str, action : [Focus, Reply, Resolve] } -> State
+	act_on_thread = |state, { pane_id, thread: thread_id, action }| {
+		context = Model.context_of(state, Model.pane(state, pane_id))
+		found = Model.review_of(state, context).threads.find_first(|thread| thread.id == thread_id)
+		view = Model.panes(state).find_first(|shown| shown.widget == "review" and !state.hidden.contains(shown.id))
+		match (found, view, action) {
+			(Ok(thread), _, Resolve) => Model.ask_review(state, if (thread.resolved) Reopen({ context: Context.to_str(context), thread_id }) else Resolve({ context: Context.to_str(context), thread_id }))
+			(Ok(thread), Ok(shown), _) => {
+				on_it = Model.focus_thread(Model.jump_to(Model.activate_tab(state, shown.id), Model.tile_of(state, shown.id).map_ok(|tile| tile.id) ?? "", Push), shown.id, thread)
+				if (action == Reply) Model.compose(on_it, { pane_id: shown.id, thread: thread_id, editing: "" }) else on_it
+			}
+			_ => state
+		}
+	}
+
+	## The comments of a Review inspector's review on the whole of it.
+	overall_comments : State, Pane -> List(Model.Note)
+	overall_comments = |state, shown| Model.review_of(state, Model.context_of(state, shown)).comments.map(|comment| { thread: "", comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: Bool.True, resolved: Bool.False, draft: comment.state == Draft, focused: Bool.False })
+
 	## Where a Review view's review is: drafts to finish into the round
 	## after the last sent, a round on its way to the agent, a round sent
 	## while the agent works on it or once it has, or nothing yet.
@@ -3265,7 +3314,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3290,6 +3339,7 @@ Model := [].{
 				"files" => Files
 				"review" => Review
 				"review-files" => ReviewFiles
+				"review-threads" => ReviewThreads
 				"tickets" => Tickets
 				"ticket" => Ticket
 				"rooms" => Rooms

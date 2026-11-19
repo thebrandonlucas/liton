@@ -126,6 +126,18 @@ Widgets := [].{
 			parts: ["header", "file", "hunk", "line", "comment", "composer"],
 		},
 		{
+			id: "review-threads",
+			title: "Threads",
+			role: Inspector,
+			needs: [Capability.workspace_git_v1, Capability.review_v1],
+			slots: [Right, Left],
+			minimum_width: 240,
+			sets: [],
+			follows: [Session, Workspace],
+			options: [],
+			parts: ["header", "threads", "thread", "conversation", "composer"],
+		},
+		{
 			id: "files",
 			title: "Files",
 			role: Inspector,
