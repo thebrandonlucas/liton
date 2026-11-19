@@ -781,6 +781,10 @@ Model := [].{
 		each_workspace = |change_one| { ..state, workspaces: { ..listed, workspaces: listed.workspaces.map(change_one) } }
 		match change {
 			Chat(Rename({ session_id, title })) => { ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, title } else listed_session) }
+			Chat(Configure({ session_id, model, mode, thinking })) => {
+				named = |chosen, kept| if (chosen.is_ok()) chosen else kept
+				{ ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, model: named(model, listed_session.model), mode: named(mode, listed_session.mode), thinking: named(thinking, listed_session.thinking) } else listed_session) }
+			}
 			Workspaces(Rename({ workspace_id, name })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, name } else workspace)
 			Workspaces(RenameProject({ project_id, name })) => { ..state, workspaces: { ..listed, projects: listed.projects.map(|project| if (project.id == project_id) { ..project, name } else project) } }
 			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
@@ -789,6 +793,63 @@ Model := [].{
 			_ => state
 		}
 	}
+
+	## What a session's composer chip switches.
+	Setting : [Mode, Model, Thinking]
+
+	## The kind of agent a session runs, as its provider lists it.
+	agent_of : State, Chat.Session -> Try(Chat.Agent, [NotListed])
+	agent_of = |state, shown_session| state.agents.find_first(|kind| kind.provider == shown_session.provider and kind.agent == shown_session.agent).map_err(|_| NotListed)
+
+	## A session's setting and what it can switch to, each a value and its
+	## label: its modes, its agent's models, or the thinking levels of the
+	## model it runs. A value none of them is comes first, by its id.
+	setting : State, Str, Setting -> { value : Str, label : Str, choices : List({ value : Str, label : Str }) }
+	setting = |state, session_id, which| {
+		shown_session = Model.session(state, session_id)
+		models = Model.agent_of(state, shown_session).map_ok(|kind| kind.models ?? []) ?? []
+		(current, offered) =
+			match which {
+				Mode => (shown_session.mode, (shown_session.modes ?? (Model.agent_of(state, shown_session).map_ok(|kind| kind.modes ?? []) ?? [])).map(|mode| { value: mode.id, label: mode.label }))
+				Model => (shown_session.model, models.map(|model| { value: model.id, label: model.label }))
+				Thinking => (shown_session.thinking, (models.find_first(|model| Ok(model.id) == shown_session.model).map_ok(|model| model.thinking) ?? []).map(|level| { value: level.id, label: level.label }))
+			}
+		value = current ?? ""
+		listed_choices = if (value.is_empty() or offered.any(|choice| choice.value == value)) offered else offered.prepend({ value, label: value })
+		{ value, label: listed_choices.find_first(|choice| choice.value == value).map_ok(|choice| choice.label) ?? value, choices: listed_choices }
+	}
+
+	## Switches a session's mode, model or thinking level, shown at once as
+	## pending (`Model.configuring`) until a listing shows it, or undone
+	## with why.
+	configure : State, Str, Setting, Str -> State
+	configure = |state, session_id, which, value| {
+		chosen = if (value.is_empty()) Err(Missing) else Ok(value)
+		if session_id.is_empty() or value.is_empty() or Model.setting(state, session_id, which).value == value {
+			state
+		} else {
+			match which {
+				Mode => Model.edit(state, Chat(Configure({ session_id, model: Err(Missing), mode: chosen, thinking: Err(Missing) })))
+				Model => Model.edit(state, Chat(Configure({ session_id, model: chosen, mode: Err(Missing), thinking: Err(Missing) })))
+				Thinking => Model.edit(state, Chat(Configure({ session_id, model: Err(Missing), mode: Err(Missing), thinking: chosen })))
+			}
+		}
+	}
+
+	## Whether a switch of a session's setting is on its way.
+	configuring : State, Str, Setting -> Bool
+	configuring = |state, session_id, which|
+		state.editing.any(
+			|asked| match asked.edit {
+				Chat(Configure(configured)) if configured.session_id == session_id =>
+					match which {
+						Mode => configured.mode.is_ok()
+						Model => configured.model.is_ok()
+						Thinking => configured.thinking.is_ok()
+					}
+				_ => Bool.False
+			},
+		)
 
 	## Copies a code block, shown as copied at once.
 	copy : State, { key : Str, text : Str } -> State
@@ -1806,6 +1867,9 @@ Model := [].{
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
+		# The kinds of agent, with their models and modes, for chat panes'
+		# composers, followed last.
+		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
 		# The rooms, and the messages and members of the room each Room or
@@ -1816,7 +1880,7 @@ Model := [].{
 		}
 		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread", "members"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget != "rooms").join_map(room_topics).prepend(RoomList) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 

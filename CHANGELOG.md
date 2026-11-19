@@ -116,6 +116,7 @@ All notable changes to liton are documented in this file. The format is based on
 - chat.v1 sessions tell the mode their agent works in, its thinking level, the modes it can switch to and what its last turn used (`mode`, `thinking`, `modes`, `usage`), and the `agents` topic each kind's models with their thinking levels, and its modes. `Configure` switches a session's model, mode or thinking level, and `Create` starts an agent in a mode and at a thinking level.
 - The mock's agents offer two models each, with low, medium and high thinking, and modes such as Plan; their sessions switch them with `Configure` and tell what their last turn used, more with each message.
 - Paseo's agents tell, as chat.v1 sessions, the mode they work in and the modes they can switch to, their thinking level, and what their last turn used: the context window filled, tokens and cost.
+- A chat's composer has a chip each for its session's mode, model and thinking level, in place of the model's name alone. Pick another in one to switch the agent to it: it shows at once, marked as switching, until the daemon has switched it, or goes back with why.
 
 ### Changed
 

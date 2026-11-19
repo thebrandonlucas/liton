@@ -2295,7 +2295,14 @@ Liton := [].{
 					id,
 					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [] },
 					[
-						Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
+						Html.div(
+							"composer-chips",
+							[
+								Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+								Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
+								Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+							],
+						),
 						Microphone.controls(model0, id),
 						# One round button: Send, or Stop while the agent works and
 						# nothing is typed, then a ring until it stops.
@@ -2325,6 +2332,20 @@ Liton := [].{
 			_ if Model.busy(session.status) and Model.draft(state, pane.id).is_empty() => Stop
 			_ => Send
 		}
+	}
+
+	## A drop-down in a chat pane's composer, named `name`, that switches the
+	## setting `which` of the session the pane shows (`Model.setting`),
+	## pending until it is switched; `otherwise` while it offers no choices.
+	setting_chip : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Model.Setting, Str, Elem(PaneCtx) -> Elem(PaneCtx)
+	setting_chip = |model, id, which, name, otherwise| {
+		session_id = id.map2(model.signal(), |pane_id, state| Model.session_of(state, Model.pane(state, pane_id)))
+		shown = session_id.map2(model.signal(), |session, state| { setting: Model.setting(state, session, which), pending: Model.configuring(state, session, which) })
+		Engine.when(
+			shown.map(|chip| !chip.setting.choices.is_empty()),
+			|| Dropdown.select(Engine.const(name), shown.map(|chip| chip.setting.value), [Engine.class_s(shown.map(|chip| if (chip.pending) "chip pending" else "chip")), Engine.attr_s("title", shown.map(|chip| if (chip.pending) "${name}: switching to ${chip.setting.label}…" else "${name}: ${chip.setting.label}"))], Liton.choices(shown.map(|chip| chip.setting.choices)), model.set_value_by(session_id, |state, session, value| Model.configure(state, session, which, value))),
+			|| otherwise,
+		)
 	}
 
 	## The composer's chip: the model a session runs, or its agent when the
