@@ -38,4 +38,45 @@ Conversation := [].{
 			Engine.when(loading, || Html.p("Loading…", "missing"), || Engine.text("")),
 		]
 	}
+
+	## A composer of the draft kept under `key`, a form named `form`: the
+	## names `completions` offers for what is being typed, such as a room's
+	## members for a mention, each of which completes it; the box; and under
+	## it a row of what the caller puts there, such as chips, dictation and
+	## Send or Stop. Submitting it sends the draft with `send`.
+	composer : State(ctx, Model.State), Signal(ctx, Str), { form : Str, name : Str, placeholder : Signal(ctx, Str), send : Model.State, Str -> Model.State, completions : Model.State, Str -> List(Str) }, List(Elem(ctx)) -> Elem(ctx)
+	composer = |model, key, { form, name, placeholder, send, completions }, row|
+		Html.form(
+			form,
+			[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(key, send))],
+			[
+				Html.div(
+					"mention-choices",
+					[
+						Engine.each(
+							key.map2(model.signal(), |draft_key, state| completions(state, draft_key)),
+							|choice| choice,
+							|choice| Html.button_s(choice.key().map(|named| "@${named}"), [], model.lift_row().update_by(choice.key().map2(key.lift_row(), |named, draft_key| { key: draft_key, name: named }), Model.mention)),
+						),
+					],
+				),
+				Conversation.input(model, key, { name: name, placeholder: placeholder }, send),
+				Html.div("composer-row", row),
+			],
+		)
+
+	## The composer's round Send button, named `name` for screen readers.
+	send_button : Str -> Elem(ctx)
+	send_button = |name| Html.submit_button("", [Engine.class("send"), Html.aria_label(name)])
+
+	## A box that grows with the draft kept under `key` to a few lines, with
+	## the reference `composer-<key>`, which no other box shares. Enter sends it and Shift+Enter starts a new line,
+	## except on a touch screen, where Enter starts one and Send sends. Enter
+	## that ends an IME composition is never heard.
+	input : State(ctx, Model.State), Signal(ctx, Str), { name : Str, placeholder : Signal(ctx, Str) }, (Model.State, Str -> Model.State) -> Elem(ctx)
+	input = |model, key, { name, placeholder }, send| {
+		enter = Engine.Chord.plain("Enter")
+		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
+		Html.textarea(Engine.const(name), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "1"), Engine.attr_s("placeholder", placeholder), Engine.ref_s(key.map(|draft_key| "composer-${draft_key}")), Engine.on_key({ keymap: sends }, model.update_by(key, send))], model.set_value_by(key, Model.set_draft))
+	}
 }

@@ -1668,29 +1668,24 @@ Liton := [].{
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
-				Html.form(
-					"Send a message",
-					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
+				Conversation.composer(
+					model0,
+					id,
+					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [] },
 					[
-						Liton.composer_input(model0, id, { name: "Message", placeholder: Engine.const("Message the agent") }, Microphone.send),
-						Html.div(
-							"composer-row",
-							[
-								Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
-								Microphone.controls(model0, id),
-								# One round button: Send, or Stop while the agent works and
-								# nothing is typed, then a ring until it stops.
-								Engine.switch(
-									shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
-									[Send, Stop, Stopping],
-									|action|
-										match action {
-											Send => Html.submit_button("", [Engine.class("send"), Html.aria_label("Send")])
-											Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
-											Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
-										},
-								),
-							],
+						Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
+						Microphone.controls(model0, id),
+						# One round button: Send, or Stop while the agent works and
+						# nothing is typed, then a ring until it stops.
+						Engine.switch(
+							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+							[Send, Stop, Stopping],
+							|action|
+								match action {
+									Send => Conversation.send_button("Send")
+									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+								},
 						),
 					],
 				),
@@ -1718,17 +1713,6 @@ Liton := [].{
 			Ok(model) => { name: model.drop_prefix("${session.agent}-"), title: "${session.agent}, running ${model}" }
 			Err(Missing) => { name: session.agent, title: if (session.agent.is_empty()) "" else "${session.agent}: its provider doesn't say which model it runs" }
 		}
-
-	## A box that grows with the draft kept under `key` to a few lines, with
-	## the reference `composer-<key>`, which no other box shares. Enter sends it and Shift+Enter starts a new line,
-	## except on a touch screen, where Enter starts one and Send sends. Enter
-	## that ends an IME composition is never heard.
-	composer_input : State(ctx, Model.State), Signal(ctx, Str), { name : Str, placeholder : Signal(ctx, Str) }, (Model.State, Str -> Model.State) -> Elem(ctx)
-	composer_input = |model, key, { name, placeholder }, send| {
-		enter = Engine.Chord.plain("Enter")
-		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
-		Html.textarea(Engine.const(name), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "1"), Engine.attr_s("placeholder", placeholder), Engine.ref_s(key.map(|draft_key| "composer-${draft_key}")), Engine.on_key({ keymap: sends }, model.update_by(key, send))], model.set_value_by(key, Model.set_draft))
-	}
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls
@@ -2278,23 +2262,11 @@ Liton := [].{
 	room_composer : State(PaneCtx, Model.State), Signal(PaneCtx, Str), [Room, Thread], Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_composer = |model, id, place, placeholder| {
 		key = id.map(|pane_id| if (place == Thread) "${pane_id}/thread" else pane_id)
-		Html.form(
-			if (place == Thread) "Reply in the thread" else "Send to the room",
-			[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(key, Model.send_to_room))],
-			[
-				Html.div(
-					"mention-choices",
-					[
-						Engine.each(
-							key.map2(model.signal(), |draft_key, state| Model.mention_choices(state, draft_key)),
-							|name| name,
-							|row| Html.button_s(row.key().map(|name| "@${name}"), [], model.lift_row().update_by(row.key().map2(key.lift_row(), |name, draft_key| { key: draft_key, name }), Model.mention)),
-						),
-					],
-				),
-				Liton.composer_input(model, key, { name: if (place == Thread) "Your reply" else "Your message", placeholder }, Model.send_to_room),
-				Html.div("composer-row", [Html.submit_button("", [Engine.class("send"), Html.aria_label(if (place == Thread) "Send the reply" else "Send to the room")])]),
-			],
+		Conversation.composer(
+			model,
+			key,
+			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices },
+			[Conversation.send_button(if (place == Thread) "Send the reply" else "Send to the room")],
 		)
 	}
 
