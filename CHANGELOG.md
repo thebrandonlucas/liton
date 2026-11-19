@@ -93,6 +93,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Review view's bar names the branch and picks what to review: the uncommitted changes, the changes against the base, or one of the branch's commits. The view and its navigator show the files picked at once.
 - Mark a file of the Review view Viewed to fold it to its header and tick it in the navigator; the bar counts the files viewed, as in "1 / 3 files viewed". A file whose diff changes since is no longer viewed. The browser keeps what you viewed.
 - The Review view's bar counts the comments on the files reviewed; its ‹ and › focus the previous or next thread, in the order of the files and their lines, and scroll to it.
+- Finish review, in the Review view's bar, sends your drafts to the agent as the next round at once. The bar says which round your drafts make, while it is sending, that the round is waiting for the agent while it works, and once it has answered.
 
 ### Changed
 

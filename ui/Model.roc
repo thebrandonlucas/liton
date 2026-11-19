@@ -2749,6 +2749,35 @@ Model := [].{
 		{ ..state, sub_focus: ReviewThread(thread.id), review_desk: ReviewDesk.scrolled_to(state.review_desk, thread.anchor.path, refs) }
 	}
 
+	## Where a Review view's review is: drafts to finish into the round
+	## after the last sent, a round on its way to the agent, a round sent
+	## while the agent works on it or once it has, or nothing yet.
+	review_round : State, Pane -> [Drafts({ round : U32, drafts : U64 }), Sending(U32), Waiting(U32), Answered(U32), NoDrafts]
+	review_round = |state, shown| {
+		context = Model.context_of(state, shown)
+		review = Model.review_of(state, context)
+		sending = state.reviewing.any(|asked| asked.accepted == 0 and Review.context(asked.request) == Context.to_str(context) and Model.sends_round(asked.request))
+		drafts = Review.drafts(review)
+		if drafts > 0 {
+			Drafts({ round: review.round + 1, drafts })
+		} else if sending {
+			Sending(review.round)
+		} else if review.round == 0 {
+			NoDrafts
+		} else if Model.busy(Model.session(state, Model.session_of(state, shown)).status) {
+			Waiting(review.round)
+		} else {
+			Answered(review.round)
+		}
+	}
+
+	sends_round : Review.Request -> Bool
+	sends_round = |request|
+		match request {
+			Send(_) => Bool.True
+			_ => Bool.False
+		}
+
 	## The reference of a comment as a pane shows it.
 	comment_ref : Str, Str -> Str
 	comment_ref = |pane_id, comment_id| "${pane_id}/comment/${comment_id}"

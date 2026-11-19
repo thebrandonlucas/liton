@@ -789,6 +789,11 @@ kbd:empty { display: none; }
 .comment-steps button { min-width: 24px; padding: 0 6px; background: none; color: var(--muted); }
 .comment-steps button:hover { color: var(--text); }
 .comment-count { font: 11.5px var(--font-mono); color: var(--muted); }
+/* Finish review, the bar's one strong button, after what it says of the round. */
+.review-round { margin-left: auto; font-size: 12px; color: var(--muted); }
+.review-round.active { color: var(--text); }
+.finish-review { padding: 2px 12px; font-weight: 600; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.finish-review:disabled { opacity: .45; cursor: default; }
 .comment.focused { border-color: var(--edge-active); box-shadow: 0 0 0 1px var(--edge-active); }
 .viewed-toggle { flex: none; padding: 0 8px; font-size: 12px; color: var(--muted); background: none; }
 .viewed-toggle::before { content: "☐ " / ""; }

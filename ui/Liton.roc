@@ -1913,7 +1913,8 @@ Liton := [].{
 
 	## The Review view's bar: the branch, how many files are marked viewed,
 	## how many comments its threads have, with the previous and next thread,
-	## and the scope its parts show,
+	## the round and Finish review, which sends the drafts to the agent as
+	## the next round, and the scope its parts show,
 	## uncommitted or against the base, or one of the branch's commits;
 	## another shows its files at once.
 	review_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
@@ -1933,6 +1934,12 @@ Liton := [].{
 						Html.button("›", [Html.aria_label("Next comment"), Engine.attr("title", "Next comment")], model.update_by(pane.map(|shown| shown.id), |state, pane_id| Model.step_thread(state, pane_id, Next))),
 					],
 				),
+				Html.span_s(pane.map2(model.signal(), |shown, state| Liton.round_text(Model.review_round(state, shown))), [Engine.class_s(pane.map2(model.signal(), |shown, state| if (Model.review_round(state, shown) == NoDrafts) "review-round" else "review-round active")), Engine.test_id("review-round")]),
+				Html.button(
+					"Finish review",
+					[Engine.class("finish-review"), Engine.attr("title", "Send the drafts to the agent as one message"), Html.boolean("disabled", pane.map2(model.signal(), |shown, state| Review.drafts(Model.review_of(state, Model.context_of(state, shown))) == 0))],
+					model.update_by(pane.map(|shown| shown.id), Model.send_review),
+				),
 				Engine.element(
 					"select",
 					[Engine.attr("aria-label", "Scope"), Engine.class("scope"), Engine.prop_s(Engine.Prop.value, model.signal().map(Model.review_scope_name)), Engine.on("change", model.set_value(Model.pick_review_scope))],
@@ -1941,6 +1948,17 @@ Liton := [].{
 			],
 		)
 	}
+
+	## What a Review view's bar says of its round (`Model.review_round`).
+	round_text : [Drafts({ round : U32, drafts : U64 }), Sending(U32), Waiting(U32), Answered(U32), NoDrafts] -> Str
+	round_text = |round|
+		match round {
+			Drafts({ round: number, drafts }) => "Round ${number.to_str()} · ${if (drafts == 1) "1 draft" else "${drafts.to_str()} drafts"}"
+			Sending(number) => "Sending round ${number.to_str()}…"
+			Waiting(number) => "Round ${number.to_str()} sent · waiting for the agent"
+			Answered(number) => "Round ${number.to_str()} sent · the agent has answered"
+			NoDrafts => "No drafts yet"
+		}
 
 	## The Review surface's navigator: its changed files as a tree, as
 	## Changes lists them, each with how many threads are open on it; the
