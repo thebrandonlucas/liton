@@ -31,9 +31,10 @@ Conversation := [].{
 				"timeline-scroll",
 				latest.concat([
 					Html.ul([Engine.class(class), Engine.attr("data-part", part)], entries),
-					# Last, so shown first: the timeline is reversed. ui/ports.mjs
-					# presses it as it scrolls into view.
-					Engine.when(earlier, || Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier")], model.update_by(key, Model.show_earlier))]), || Engine.text("")),
+					# Last, so shown first: the timeline is reversed. It shows
+					# more once scrolled to within a screen of it, so earlier
+					# entries come as they are read.
+					Engine.when(earlier, || Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier"), Engine.on_seen({ ahead: Bool.True }, model.set_value_by(key, |state, pane_id, seen| if (seen.intersecting) Model.show_earlier(state, pane_id) else state))], model.update_by(key, Model.show_earlier))]), || Engine.text("")),
 				]),
 			),
 			Engine.when(loading, || Html.p("Loading…", "missing"), || Engine.text("")),
