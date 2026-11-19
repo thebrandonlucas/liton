@@ -2094,9 +2094,9 @@ Model := [].{
 		listed = in_order.keep_if(|workspace| workspace.pinned).concat(in_order.drop_if(|workspace| workspace.pinned))
 		groups =
 			if Model.option(shown, "group_by") == "Status" {
-				Attention.ranks.map(|rank| { key: "group:${attention_word(rank)}", title: sentence_case(attention_word(rank)), members: listed.keep_if(|workspace| workspace.state == rank), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
+				[NeedsInput, ReadyToReview, Working, Done].map(|status| { key: "group:${status_word(status)}", title: status_word(status), dot: "group-${status_class(status)}", members: listed.keep_if(|workspace| Model.workspace_status(state, workspace) == status), creatable: Bool.False }).drop_if(|group| group.members.is_empty())
 			} else {
-				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
+				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), dot: "", members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 				Model.ordered(projects, order, |group| group.members.map(workspace_changed).fold(0, U64.max), |group| group.title)
 			}
 		blank = { key: "", kind: Group, title: "", detail: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
@@ -2121,11 +2121,23 @@ Model := [].{
 		}
 		groups.join_map(
 			|group| {
-				header = { ..blank, key: group.key, title: group.title, counts: { ..Model.no_counts, members: group.members.len().to_str() }, folded: folded.contains(group.key), creatable: group.creatable }
+				header = { ..blank, key: group.key, title: group.title, dot: group.dot, counts: { ..Model.no_counts, members: group.members.len().to_str() }, folded: folded.contains(group.key), creatable: group.creatable }
 				if (header.folded) [header] else group.members.join_map(workspace_rows_of).prepend(header)
 			},
 		)
 	}
+
+	## Where a workspace's status lists it, in Paseo's order: needing input
+	## while an agent waits for you or failed, ready to review once done
+	## with something unread and changes, working, or done, as an idle one is.
+	workspace_status : State, Workspaces.Workspace -> [NeedsInput, ReadyToReview, Working, Done]
+	workspace_status = |state, workspace|
+		match workspace.state {
+			NeedsYou | Failed => NeedsInput
+			Working => Working
+			_ if workspace.session_ids.any(|session_id| Model.unread(state, session_id)) and Model.change_counts(state, workspace) != Model.no_counts => ReadyToReview
+			_ => Done
+		}
 
 	## A session's row, in a Workspaces or a Sessions pane.
 	session_row : State, Chat.Session -> Row
@@ -3269,6 +3281,26 @@ attention_word = |rank|
 		Idle => "idle"
 	}
 
+## A group of workspaces by their status, as the Workspaces pane heads it.
+status_word : [NeedsInput, ReadyToReview, Working, Done] -> Str
+status_word = |status|
+	match status {
+		NeedsInput => "Needs input"
+		ReadyToReview => "Ready to review"
+		Working => "Working"
+		Done => "Done"
+	}
+
+## The class of a group's icon (ui/style.css), `group-` and this.
+status_class : [NeedsInput, ReadyToReview, Working, Done] -> Str
+status_class = |status|
+	match status {
+		NeedsInput => "waiting"
+		ReadyToReview => "review"
+		Working => "working"
+		Done => "done"
+	}
+
 ## The class of a status dot (ui/style.css) showing `rank`.
 attention_dot : Attention.State -> Str
 attention_dot = |rank|
@@ -3281,7 +3313,8 @@ attention_dot = |rank|
 	}
 
 # Workspaces list under their project, each with its sessions. Folding a
-# project hides them, and grouping by status lists what needs you first.
+# project hides them, and grouping by status lists what needs you first, in
+# Paseo's order.
 expect {
 	project = { id: "p1", provider: "mock", name: "app", directory: "/app" }
 	workspace = |id, rank, session_ids| { id, provider: "mock", project_id: "p1", name: id, directory: "/app", kind: Checkout, branch: Branch("main"), state: rank, dirty: Bool.False, changes: Counted({ additions: 2, deletions: 1 }), pinned: Bool.False, labels: [], session_ids }
@@ -3293,7 +3326,8 @@ expect {
 	keys(state) == ["group:p1", "s1", "workspace:w2"]
 		and keys(folded) == ["group:p1"]
 		and keys(Model.pick_row(folded, { pane_id: "pane-4", key: "group:p1" })) == keys(state)
-		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "s1"]
+		and keys(by_status) == ["group:Needs input", "workspace:w2", "group:Done", "s1"]
+		and keys({ ..by_status, attention: [{ ..Attention.item(Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix", status: Finished }), []), unread: Bool.True }] }) == ["group:Needs input", "workspace:w2", "group:Ready to review", "s1"]
 		and keys({ ..state, sessions: state.sessions.append(Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Docs", status: Idle })), workspaces: { ..listed, workspaces: [workspace("w1", Idle, ["s1", "s2"])] } }) == ["group:p1", "workspace:w1", "s1", "s2"]
 		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
 		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == [Workspace("w1")]
