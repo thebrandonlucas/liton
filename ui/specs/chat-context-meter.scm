@@ -1,0 +1,18 @@
+(test "Liton — a chat's composer shows how much of the context window its session's last turn filled as a ring, which opens the tokens it used and its cost, and shows none while the provider tells nothing"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"context_used\":41000,\"context_max\":200000,\"input_tokens\":52000,\"cached_input_tokens\":40000,\"output_tokens\":3100,\"cost_usd\":0.42}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"agents\",\"cursor\":\"a1\",\"events\":[{\"Agents\":[]}]}]}")
+    (run-effect 2)
+    (expect-attr (role button :name "Context: 21% used") title "Context: 41k of 200k (21%)")
+    (expect-absent (test-id "context-usage"))
+    (click (role button :name "Context: 21% used"))
+    (expect-attr (role button :name "Context: 21% used") aria-expanded "true")
+    (expect-text (test-id "context-usage") "Last turnContext41k of 200k (21%)Input52kCached input40kOutput3.1kCost$0.42")
+    (click (role button :name "Context: 21% used"))
+    (expect-absent (test-id "context-usage"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"model\":\"claude-sonnet-4-5\"}]}]}]}")
+    (run-effect 3)
+    (expect-absent (role button :name "Context: 21% used"))
+  )
+)

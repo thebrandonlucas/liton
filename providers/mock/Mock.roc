@@ -107,6 +107,12 @@ Mock := [].{
 		]
 	}
 
+	## What follows a message that steers the turn the agent works on: the
+	## message, and a word that it takes it into account, the rest of its
+	## script going on.
+	on_steer : Str, U64 -> List(Scheduled)
+	on_steer = |text, _| [{ delay_ms: 0, event: UserMessage({ text: text }) }, { delay_ms: 600, event: AgentMessage({ text: "Noted, I'll take that into account: \"${text}\"" }) }]
+
 	## What follows an answer to a pending permission request, with the
 	## choice taken, if it offered its own.
 	on_answer : Str, Bool, Try(Str, [Missing]), U64 -> List(Scheduled)
@@ -183,9 +189,58 @@ Mock := [].{
 				},
 		)
 
-	## The kinds of agent the mock provider starts.
+	## The kinds of agent the mock provider starts, each with two models of
+	## three thinking levels and three modes, as Claude's and Codex's in Paseo.
 	agents : List(Chat.Agent)
-	agents = [{ provider: "mock", agent: "claude" }, { provider: "mock", agent: "codex" }]
+	agents = {
+		levels = |default| [{ id: "low", label: "Low", default: Bool.False }, { id: "medium", label: "Medium", default: Bool.False }, { id: "high", label: "High", default: Bool.False }].map(|level| { ..level, default: level.id == default })
+		[
+			{
+				..Chat.agent_kind({ provider: "mock", agent: "claude" }),
+				models: Ok([{ id: "claude-sonnet-4-5", label: "Sonnet 4.5", default: Bool.True, context_max: Ok(200_000), thinking: levels("medium") }, { id: "claude-opus-4-1", label: "Opus 4.1", default: Bool.False, context_max: Ok(200_000), thinking: levels("high") }]),
+				modes: Ok([{ id: "default", label: "Always ask" }, { id: "acceptEdits", label: "Accept edits" }, { id: "plan", label: "Plan" }, { id: "bypassPermissions", label: "Bypass" }]),
+				default_mode: Ok("default"),
+			},
+			{
+				..Chat.agent_kind({ provider: "mock", agent: "codex" }),
+				models: Ok([{ id: "gpt-5-codex", label: "GPT-5 Codex", default: Bool.True, context_max: Ok(272_000), thinking: levels("medium") }, { id: "gpt-5", label: "GPT-5", default: Bool.False, context_max: Ok(272_000), thinking: levels("medium") }]),
+				modes: Ok([{ id: "read-only", label: "Read only" }, { id: "auto", label: "Auto" }, { id: "full-access", label: "Full access" }]),
+				default_mode: Ok("auto"),
+			},
+		]
+	}
+
+	## A mock session's model, mode and thinking level, as the daemon keeps
+	## them: each "" for its agent's default.
+	Settings : { model : Str, mode : Str, thinking : Str }
+
+	## The settings a `Configure` leaves a session of `agent` with, each it
+	## names one its agent offers, or why not. A model whose levels lack the
+	## thinking level kept goes back to its default one.
+	configured : Str, Settings, { model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) } -> Try(Settings, Str)
+	configured = |agent, settings, { model, mode, thinking }| {
+		kind = Mock.agents.find_first(|offered| offered.agent == agent) ?? Chat.agent_kind({ provider: "mock", agent })
+		models = kind.models ?? []
+		next_model = model ?? settings.model
+		levels = models.find_first(|offered| offered.id == Mock.or_default(next_model, Mock.default_model(models))).map_ok(|offered| offered.thinking) ?? []
+		kept_thinking = if (levels.any(|level| level.id == settings.thinking)) settings.thinking else ""
+		next = { model: next_model, mode: mode ?? settings.mode, thinking: thinking ?? kept_thinking }
+		if !(next.model == "" or models.any(|offered| offered.id == next.model)) {
+			Err("the mock's ${agent} runs no model ${next.model}")
+		} else if !(next.mode == "" or (kind.modes ?? []).any(|offered| offered.id == next.mode)) {
+			Err("the mock's ${agent} has no mode ${next.mode}")
+		} else if !(next.thinking == "" or levels.any(|level| level.id == next.thinking)) {
+			Err("the model has no thinking level ${next.thinking}")
+		} else {
+			Ok(next)
+		}
+	}
+
+	default_model : List(Chat.Model) -> Str
+	default_model = |models| models.find_first(|offered| offered.default).map_ok(|offered| offered.id) ?? ""
+
+	or_default : Str, Str -> Str
+	or_default = |chosen, default| if (chosen.is_empty()) default else chosen
 
 	## A workspace made of a project: a checkout of its directory, on main, or
 	## a worktree beside it on `branch`.
@@ -201,13 +256,20 @@ Mock := [].{
 	## workspace of `listed_workspaces` it works in and its branch, when the turn it
 	## is working on started, waiting for you or not, and when it last
 	## changed.
-	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
-	session = |{ id, agent, title }, listed_workspaces, timed| {
+	## Its model, mode and thinking level are those of `settings`, or else its
+	## agent's defaults, and what its last turn used grows with each message.
+	session : { id : Str, agent : Str, title : Str, settings : Settings }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
+	session = |{ id, agent, title, settings }, listed_workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
 		placed = listed_workspaces.find_first(|shown| shown.session_ids.contains(id))
+		kind = Mock.agents.find_first(|offered| offered.agent == agent) ?? Chat.agent_kind({ provider: "mock", agent })
+		model = Mock.or_default(settings.model, Mock.default_model(kind.models ?? []))
+		running = (kind.models ?? []).find_first(|offered| offered.id == model)
+		default_thinking = running.map_ok(|offered| offered.thinking.find_first(|level| level.default).map_ok(|level| level.id) ?? "") ?? ""
+		told = |chosen| if (chosen.is_empty()) Err(Missing) else Ok(chosen)
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
-			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),
+			model: told(model),
 			workspace: placed.map_ok(|shown| { id: Ok(shown.id), directory: shown.directory }).map_err(|_| Missing),
 			branch: placed.map_ok(
 				|shown| match shown.branch {
@@ -217,8 +279,30 @@ Mock := [].{
 			) ?? Err(Missing),
 			running_since: Mock.turn_started(timed).map_ok(Chat.timestamp),
 			updated: timed.last().map_ok(|shown| Chat.timestamp(shown.visible_at)).map_err(|_| Missing),
+			mode: told(Mock.or_default(settings.mode, kind.default_mode ?? "")),
+			thinking: told(Mock.or_default(settings.thinking, default_thinking)),
+			modes: kind.modes,
+			usage: Mock.usage(timed.count_if(|shown| Mock.asks(shown.event)), running.map_ok(|offered| offered.context_max ?? 0) ?? 0),
 		}
 	}
+
+	## What a session's last turn used after `turns` messages, in a context
+	## window of `context_max` tokens: none before the first.
+	usage : U64, U64 -> Try(Chat.Usage, [Missing])
+	usage = |turns, context_max|
+		if turns == 0 {
+			Err(Missing)
+		} else {
+			input = 9_000 * turns
+			Ok({ context_used: Ok(U64.min(8_000 + 11_500 * turns, context_max)), context_max: Ok(context_max), input_tokens: Ok(input), cached_input_tokens: Ok(input - 9_000), output_tokens: Ok(1_200 * turns), cost_usd: Ok(0.06 * turns.to_dec()) })
+		}
+
+	asks : Chat.Event -> Bool
+	asks = |event|
+		match event {
+			UserMessage(_) => Bool.True
+			_ => Bool.False
+		}
 
 	## A session's status: the last status its timeline reports.
 	status : List(Chat.Entry) -> Chat.Status
@@ -337,6 +421,9 @@ size_of = |body|
 		LinkTo(target) => target.count_utf8_bytes()
 	}
 
+defaults : Mock.Settings
+defaults = { model: "", mode: "", thinking: "" }
+
 login_fix : WorkspaceGit.FileDiff
 login_fix = {
 	file: { path: "src/Auth.roc", change: Modified, additions: 1, deletions: 1, body: Text },
@@ -350,13 +437,13 @@ login_test = {
 }
 
 expect {
-	running = Mock.session({ id: "flaky-ci", agent: "codex", title: "CI" }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }, { visible_at: 1_767_258_000_000, event: StatusChanged(Running) }, { visible_at: 1_767_258_060_000, event: AgentMessage({ text: "x" }) }])
+	running = Mock.session({ id: "flaky-ci", agent: "codex", title: "CI", settings: defaults }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }, { visible_at: 1_767_258_000_000, event: StatusChanged(Running) }, { visible_at: 1_767_258_060_000, event: AgentMessage({ text: "x" }) }])
 	running.status == Running
 		and running.workspace == Ok({ id: Ok("main"), directory: "/mock/liton" })
 		and running.branch == Ok("main")
 		and running.running_since == Ok("2026-01-01T09:00:00.000Z")
 		and running.updated == Ok("2026-01-01T09:01:00.000Z")
-		and Mock.session({ id: "notes", agent: "claude", title: "" }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }]).running_since == Err(Missing)
+		and Mock.session({ id: "notes", agent: "claude", title: "", settings: defaults }, Mock.workspaces, [{ visible_at: 0, event: StatusChanged(Idle) }]).running_since == Err(Missing)
 }
 
 expect Mock.on_message("hi", 7).len() == 7
@@ -420,7 +507,7 @@ expect {
 	answered = Mock.ended(Mock.turn_started(timed), 1_767_258_000_000, Mock.on_answer("p", Bool.False, Err(Missing), 3))
 	Mock.turn_started(timed) == Ok(1_000)
 		and Mock.turn_started(timed.append({ visible_at: 3_000, event: StatusChanged(Idle) })) == Err(Missing)
-		and Mock.session({ id: "notes", agent: "claude", title: "" }, Mock.workspaces, timed).running_since == Ok("1970-01-01T00:00:01.000Z")
+		and Mock.session({ id: "notes", agent: "claude", title: "", settings: defaults }, Mock.workspaces, timed).running_since == Ok("1970-01-01T00:00:01.000Z")
 		and answered.map(|scheduled| scheduled.event).take_last(2) == [TurnEnded({ started: Ok("1970-01-01T00:00:01.000Z"), ended: "2026-01-01T09:00:00.500Z" }), StatusChanged(Idle)]
 }
 
@@ -439,3 +526,22 @@ expect {
 
 expect Mock.offering({ agents: Bool.False, rooms: Bool.True, tickets: Bool.True }).capabilities == [Capability.rooms_v1, Capability.tickets_v1]
 expect Mock.offering({ agents: Bool.True, rooms: Bool.True, tickets: Bool.True }) == Mock.provider
+
+# A session runs its agent's defaults until configured, and its usage grows with each message.
+expect {
+	asked = |count| List.repeat({ visible_at: 0, event: UserMessage({ text: "Hi" }) }, count)
+	fresh = Mock.session({ id: "notes", agent: "claude", title: "", settings: defaults }, [], [])
+	planned = Mock.session({ id: "notes", agent: "claude", title: "", settings: { model: "claude-opus-4-1", mode: "plan", thinking: "" } }, [], asked(2))
+	(fresh.model, fresh.mode, fresh.thinking, fresh.usage) == (Ok("claude-sonnet-4-5"), Ok("default"), Ok("medium"), Err(Missing))
+		and (planned.model, planned.mode, planned.thinking) == (Ok("claude-opus-4-1"), Ok("plan"), Ok("high"))
+		and planned.usage.map_ok(|used| (used.context_used, used.context_max, used.cost_usd)) == Ok((Ok(31_000), Ok(200_000), Ok(0.12)))
+}
+
+expect {
+	set = |settings, model, mode, thinking| Mock.configured("claude", settings, { model, mode, thinking })
+	set(defaults, Ok("claude-opus-4-1"), Err(Missing), Ok("low")) == Ok({ model: "claude-opus-4-1", mode: "", thinking: "low" })
+		and set(defaults, Err(Missing), Ok("plan"), Err(Missing)) == Ok({ ..defaults, mode: "plan" })
+		and set(defaults, Ok("gpt-5"), Err(Missing), Err(Missing)) == Err("the mock's claude runs no model gpt-5")
+		and set(defaults, Err(Missing), Ok("auto"), Err(Missing)) == Err("the mock's claude has no mode auto")
+		and set(defaults, Err(Missing), Err(Missing), Ok("max")) == Err("the model has no thinking level max")
+}

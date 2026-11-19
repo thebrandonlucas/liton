@@ -289,7 +289,7 @@ offered = {
 expect {
 	decoded : Try(Protocol.Call(Chat.Request), _)
 	decoded = Json.parse("{\"capability\":\"chat.v1\",\"request\":{\"SendMessage\":{\"session_id\":\"s1\",\"text\":\"Hi\"}}}")
-	decoded == Ok({ capability: "chat.v1", provider: Err(Missing), request: SendMessage({ session_id: "s1", text: "Hi" }) })
+	decoded == Ok({ capability: "chat.v1", provider: Err(Missing), request: SendMessage({ session_id: "s1", text: "Hi", while_running: Err(Missing) }) })
 }
 
 expect {

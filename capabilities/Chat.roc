@@ -11,7 +11,9 @@ Chat := [].{
 	## when it doesn't: the model it runs, the directory it works in (with its
 	## workspace's id when the provider has one) and the branch checked out
 	## there, when its running turn started and when it last changed, as times
-	## such as 2026-01-01T09:00:00.000Z.
+	## such as 2026-01-01T09:00:00.000Z. Then the mode it works in and its
+	## thinking level, by their ids, the modes it can switch to, and what its
+	## last turn used.
 	Session : {
 		id : Str,
 		provider : Str,
@@ -23,7 +25,28 @@ Chat := [].{
 		branch : Try(Str, [Missing]),
 		running_since : Try(Str, [Missing]),
 		updated : Try(Str, [Missing]),
+		mode : Try(Str, [Missing]),
+		thinking : Try(Str, [Missing]),
+		modes : Try(List(Option), [Missing]),
+		usage : Try(Usage, [Missing]),
 	}
+
+	## A mode an agent works in, such as Claude's plan mode, or another
+	## choice a provider names.
+	Option : { id : Str, label : Str }
+
+	## What a session's last turn used, each left out when its provider
+	## doesn't tell: the tokens of the context window it filled and holds at
+	## most, the tokens it read (`cached_input_tokens` of them from a cache)
+	## and wrote, and what it cost in US dollars.
+	Usage : { context_used : Try(U64, [Missing]), context_max : Try(U64, [Missing]), input_tokens : Try(U64, [Missing]), cached_input_tokens : Try(U64, [Missing]), output_tokens : Try(U64, [Missing]), cost_usd : Try(Dec, [Missing]) }
+
+	## A model an agent can run: whether it is its provider's default, the
+	## tokens its context window holds, if told, and its thinking levels.
+	Model : { id : Str, label : Str, default : Bool, context_max : Try(U64, [Missing]), thinking : List(Level) }
+
+	## A thinking level of a model, such as low or high.
+	Level : { id : Str, label : Str, default : Bool }
 
 	## A permission request: the tool asking and a line of what it would do,
 	## then what the provider tells beyond that, each left out otherwise: its
@@ -65,27 +88,38 @@ Chat := [].{
 	## session a title, or with "" the one its provider gives it; `Archive`
 	## stops it, if it runs, and lists it no more. A session has no pin of
 	## its own: a client pins the workspace it works in (workspaces.v1).
+	## `Configure` switches a session's model, mode or thinking level, those
+	## it names, at once. A message sent while the agent works on a turn
+	## interrupts it, or with `while_running` `Steer` joins it.
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
-		SendMessage({ session_id : Str, text : Str }),
+		SendMessage({ session_id : Str, text : Str, while_running : Try([Interrupt, Steer], [Missing]) }),
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		Cancel({ session_id : Str }),
 		Create(Create),
 		Rename({ session_id : Str, title : Str }),
 		Archive({ session_id : Str }),
+		Configure({ session_id : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }),
 	]
 
 	## A session to start: where it works (a workspace, or a directory), the
-	## agent and, if not its default, the model, and the first prompt.
-	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), prompt : Str }
+	## agent and, if not their defaults, the model, mode and thinking level,
+	## and the first prompt.
+	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str }
 
 	## What a request answers: sessions, a timeline's entries, whether the
 	## provider took it, or the id of a session started.
 	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str), Started({ session_id : Str })]
 
-	## A kind of agent a provider can start, such as `claude`.
-	Agent : { provider : Str, agent : Str }
+	## A kind of agent a provider can start, such as `claude`, and, when its
+	## provider tells, the models and modes it offers and the mode it starts
+	## in.
+	Agent : { provider : Str, agent : Str, models : Try(List(Model), [Missing]), modes : Try(List(Option), [Missing]), default_mode : Try(Str, [Missing]) }
+
+	## A kind of agent the provider tells nothing more of.
+	agent_kind : { provider : Str, agent : Str } -> Agent
+	agent_kind = |{ provider, agent }| { provider, agent, models: Err(Missing), modes: Err(Missing), default_mode: Err(Missing) }
 
 	## A session a provider keeps but doesn't run, such as a sandboxed agent's,
 	## read only, and the directory it worked in.
@@ -93,7 +127,7 @@ Chat := [].{
 
 	## A session the provider tells nothing more of.
 	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
-	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing) }
+	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing), mode: Err(Missing), thinking: Err(Missing), modes: Err(Missing), usage: Err(Missing) }
 
 	## A permission request the provider tells no more of.
 	permission : { request_id : Str, tool : Str, description : Str } -> Permission

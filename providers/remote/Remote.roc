@@ -71,6 +71,7 @@ Remote := [].{
 			Cancel({ session_id }) => Remote.owner(endpoints, session_id)
 			Rename({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			Archive({ session_id }) => Remote.owner(endpoints, session_id)
+			Configure({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			Create({ place: Workspace(workspace_id), .. }) => Remote.owner(endpoints, workspace_id)
 			Create({ place: Directory(_), .. }) => Err(Local)
 		}
@@ -114,6 +115,7 @@ Remote := [].{
 				Cancel({ session_id }) => Cancel({ session_id: their_id(session_id) })
 				Rename(renamed) => Rename({ ..renamed, session_id: their_id(renamed.session_id) })
 				Archive({ session_id }) => Archive({ session_id: their_id(session_id) })
+				Configure(configured) => Configure({ ..configured, session_id: their_id(configured.session_id) })
 				Create(created) =>
 					match created.place {
 						Workspace(workspace_id) => Create({ ..created, place: Workspace(their_id(workspace_id)) })
@@ -277,7 +279,7 @@ expect {
 
 expect Remote.serves("peer", Err(Missing)) and Remote.serves("peer", Ok("peer/mock")) and !Remote.serves("peer", Ok("mock"))
 
-expect Remote.call("peer", Ok("peer/c/mock"), SendMessage({ session_id: "peer/c/s1", text: "Hi" })) == { capability: "chat.v1", provider: Ok("c/mock"), request: SendMessage({ session_id: "c/s1", text: "Hi" }) }
+expect Remote.call("peer", Ok("peer/c/mock"), SendMessage({ session_id: "peer/c/s1", text: "Hi", while_running: Err(Missing) })) == { capability: "chat.v1", provider: Ok("c/mock"), request: SendMessage({ session_id: "c/s1", text: "Hi", while_running: Err(Missing) }) }
 expect Remote.call("peer", Err(Missing), AnswerPermission({ session_id: "peer/s1", request_id: "r1", allowed: Bool.True, choice: Ok("implement") })).request == AnswerPermission({ session_id: "s1", request_id: "r1", allowed: Bool.True, choice: Ok("implement") })
 expect Remote.call("peer", Err(Missing), Cancel({ session_id: "peer/s1" })).request == Cancel({ session_id: "s1" }) and Remote.chat_owner([echo, peer], Cancel({ session_id: "peer/s1" })) == Ok(peer)
 
@@ -307,7 +309,7 @@ expect [1, 2, 3, 6, 9].map(Remote.backoff_ms) == [1_000, 2_000, 4_000, 60_000, 6
 # A remote's workspace or project a Create names reaches it as it names it,
 # and what it made comes back under its name.
 expect {
-	created = { place: Workspace("peer/w1"), agent: "claude", model: Err(Missing), prompt: "Hi" }
+	created = { place: Workspace("peer/w1"), agent: "claude", model: Err(Missing), mode: Err(Missing), thinking: Err(Missing), prompt: "Hi" }
 	Remote.chat_owner([echo, peer], Create(created)) == Ok(peer) and Remote.call("peer", Err(Missing), Create(created)).request == Create({ ..created, place: Workspace("w1") }) and Remote.chat_answer("peer", Ok(Started({ session_id: "s9" }))) == Ok(Started({ session_id: "peer/s9" }))
 }
 expect Remote.workspaces_call("peer", Ok("peer/mock"), Pin({ workspace_id: "peer/w1", pinned: Bool.True })).request == Pin({ workspace_id: "w1", pinned: Bool.True })

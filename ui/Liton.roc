@@ -2218,8 +2218,8 @@ Liton := [].{
 	}
 
 	## A Workspaces pane's form, while open in it: an agent to start in a
-	## workspace, of a kind its provider offers, with a model and a first
-	## prompt; or a workspace to create of a project, a worktree on a new
+	## workspace, of a kind its provider offers, with a model, a mode and a
+	## thinking level, picked of those it offers, and a first prompt; or a workspace to create of a project, a worktree on a new
 	## branch or a checkout. Either shows starting at once. Both are one
 	## form, whose class shows the fields of the one open, to keep the
 	## module small.
@@ -2228,6 +2228,16 @@ Liton := [].{
 		form = id.map2(model.signal(), |pane_id, state| if (state.form.pane == pane_id) state.form else Model.closed_form)
 		set = |change| model.set_value(|state, text| { ..state, form: change(state.form, text) })
 		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", form.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part)], set(change))
+		# What the agent picked offers: a drop-down of each, its first
+		# option its default, while it offers any.
+		offered = form.map2(model.signal(), |shown, state| Model.form_choices(state, shown))
+		default_option = |said| Engine.element("option", [Engine.prop(Engine.Prop.value, "")], [Engine.text_s(said)])
+		picker = |name, value, listed, default_label, change|
+			Engine.when(
+				offered.map(|offers| !listed(offers).is_empty()),
+				|| Dropdown.select(Engine.const(name), form.map(value), [Engine.class("agent-field")], [default_option(offered.map(default_label))].concat(Liton.choices(offered.map(listed))), set(change)),
+				|| Engine.text(""),
+			)
 		Engine.when(
 			form.map(|shown| shown.kind != Closed),
 			||
@@ -2236,8 +2246,14 @@ Liton := [].{
 					[Engine.class_s(form.map(|shown| if (shown.kind == Agent) "create-form for-agent" else "create-form for-workspace")), Engine.on("submit", model.update(Model.submit_form))],
 					[
 						Html.p_s(form.map2(model.signal(), |shown, state| if (shown.kind == Agent) "New agent in ${state.workspaces.workspaces.find_first(|listed| listed.id == shown.place).map_ok(|listed| listed.name) ?? shown.place}" else "New workspace"), [Engine.class("create-title")]),
-						Dropdown.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field")], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| { ..shown, agent: text })),
-						field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
+						Dropdown.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field")], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(Model.pick_agent)),
+						Engine.when(
+							offered.map(|offers| offers.models.is_empty()),
+							|| field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
+							|| Dropdown.select(Engine.const("Model"), form.map(|shown| shown.model), [Engine.class("agent-field")], [default_option(offered.map(|offers| offers.defaults.model))].concat(Liton.choices(offered.map(|offers| offers.models))), model.set_value(|state, text| { ..state, form: Model.pick_model(state, state.form, text) })),
+						),
+						picker("Mode", |shown| shown.mode, |offers| offers.modes, |offers| offers.defaults.mode, |shown, text| { ..shown, mode: text }),
+						picker("Thinking", |shown| shown.thinking, |offers| offers.levels, |offers| offers.defaults.thinking, |shown, text| { ..shown, thinking: text }),
 						field("First prompt", "agent-field", "First prompt (optional)", |shown| shown.prompt, |shown, text| { ..shown, prompt: text }),
 						Dropdown.select(Engine.const("Project"), form.map(|shown| shown.place), [Engine.class("workspace-field")], Liton.choices(model.signal().map(|state| state.workspaces.projects.map(|project| { value: project.id, label: project.name }))), set(|shown, text| { ..shown, place: text })),
 						Dropdown.select(Engine.const("Kind"), form.map(|shown| if (shown.worktree) "Worktree" else "Checkout"), [Engine.class("workspace-field")], [Dropdown.option("Worktree", "Worktree on a new branch"), Dropdown.option("Checkout", "Checkout of the project")], set(|shown, text| { ..shown, worktree: text == "Worktree" })),
@@ -2331,9 +2347,17 @@ Liton := [].{
 				Conversation.composer(
 					model0,
 					id,
-					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [] },
+					{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 					[
-						Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
+						Html.div(
+							"composer-chips",
+							[
+								Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+								Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
+								Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+							],
+						),
+						Liton.context_meter(model0, id),
 						Microphone.controls(model0, id),
 						# One round button: Send, or Stop while the agent works and
 						# nothing is typed, then a ring until it stops.
@@ -2363,6 +2387,73 @@ Liton := [].{
 			_ if Model.busy(session.status) and Model.draft(state, pane.id).is_empty() => Stop
 			_ => Send
 		}
+	}
+
+	## A drop-down in a chat pane's composer, named `name`, that switches the
+	## setting `which` of the session the pane shows (`Model.setting`),
+	## pending until it is switched; `otherwise` while it offers no choices.
+	setting_chip : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Model.Setting, Str, Elem(PaneCtx) -> Elem(PaneCtx)
+	setting_chip = |model, id, which, name, otherwise| {
+		session_id = id.map2(model.signal(), |pane_id, state| Model.session_of(state, Model.pane(state, pane_id)))
+		shown = session_id.map2(model.signal(), |session, state| { setting: Model.setting(state, session, which), pending: Model.configuring(state, session, which) })
+		Engine.when(
+			shown.map(|chip| !chip.setting.choices.is_empty()),
+			|| Dropdown.select(Engine.const(name), shown.map(|chip| chip.setting.value), [Engine.class_s(shown.map(|chip| if (chip.pending) "chip pending" else "chip")), Engine.attr_s("title", shown.map(|chip| if (chip.pending) "${name}: switching to ${chip.setting.label}…" else "${name}: ${chip.setting.label}"))], Liton.choices(shown.map(|chip| chip.setting.choices)), model.set_value_by(session_id, |state, session, value| Model.configure(state, session, which, value))),
+			|| otherwise,
+		)
+	}
+
+	## A ring in a chat pane's composer of how much of its session's context
+	## window the last turn filled, while its provider tells what it used,
+	## that opens a list of the tokens it read and wrote and what it cost.
+	context_meter : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	context_meter = |model, id| {
+		key = id.map(|pane_id| "${pane_id} context")
+		used = id.map2(model.signal(), |pane_id, state| Model.usage_shown(state, Model.session_of(state, Model.pane(state, pane_id))))
+		shown = used.map(|told| told ?? { percent: 0, context: "", input: "", cached: "", output: "", cost: "" })
+		open = key.map2(model.signal(), |menu_key, state| state.menu == menu_key)
+		row = |named, value| Html.div_s(value.map(|said| if (said.is_empty()) "usage-row hidden" else "usage-row"), [Html.span_s(Engine.const(named), []), Html.span_s(value, [])])
+		Engine.when(
+			used.map(|told| told.is_ok()),
+			||
+				Html.div(
+					"context-meter",
+					[
+						Engine.element(
+							"button",
+							[
+								Engine.attr("type", "button"),
+								Engine.class("context-ring"),
+								Engine.attr_s("style", shown.map(|told| "--used: ${told.percent.to_str()}")),
+								Html.aria_label_s(shown.map(|told| "Context: ${told.percent.to_str()}% used")),
+								Engine.attr_s("title", shown.map(|told| if (told.context.is_empty()) "What the last turn used" else "Context: ${told.context}")),
+								Engine.attr("aria-haspopup", "true"),
+								Html.flag("aria-expanded", open),
+								Engine.on_click(model.update_by(key, Model.toggle_menu)),
+							],
+							[],
+						),
+						Engine.when(
+							open,
+							||
+								Engine.element(
+									"div",
+									[Engine.class("menu usage"), Engine.test_id("context-usage")],
+									[
+										Html.p_s(Engine.const("Last turn"), [Engine.class("usage-title")]),
+										row("Context", shown.map(|told| told.context)),
+										row("Input", shown.map(|told| told.input)),
+										row("Cached input", shown.map(|told| told.cached)),
+										row("Output", shown.map(|told| told.output)),
+										row("Cost", shown.map(|told| told.cost)),
+									],
+								),
+							|| Engine.text(""),
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
 	}
 
 	## The composer's chip: the model a session runs, or its agent when the
@@ -3297,7 +3388,7 @@ Liton := [].{
 		Conversation.composer(
 			model,
 			key,
-			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices },
+			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices, shift_tab: Ignored },
 			[Conversation.send_button(if (place == Thread) "Send the reply" else "Send to the room")],
 		)
 	}
