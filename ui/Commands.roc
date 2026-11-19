@@ -22,6 +22,10 @@ Commands := [].{
 			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: |shown| shown.sub_focus != None, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
 			{ id: "rooms.focus", title: "Go to the rooms", group: "Rooms", applies: |shown| Model.panes(shown).any(|pane| pane.widget == "rooms"), run: Model.focus_rooms },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
+			{ id: "workspace.previous", title: "Go to the workspace before", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, -1) },
+			{ id: "workspace.next", title: "Go to the workspace after", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, 1) },
+			{ id: "tab.new", title: "Open the new tab menu", group: "Tabs", applies: |shown| !Model.tab_menu_items(shown).is_empty(), run: |shown| { ..shown, menu: if (shown.menu == Model.tab_menu) "" else Model.tab_menu } },
+			{ id: "tab.close", title: "Close the tab", group: "Tabs", applies: |shown| Model.shown_closing_tab(shown).is_ok(), run: Model.close_shown_tab },
 		]
 			.concat(Commands.layout)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
@@ -63,6 +67,20 @@ Commands := [].{
 				)
 			Err(NotFound) => listed.map(|workspace| workspace.id)
 		}
+	}
+
+	## Goes to the workspace `by` places after the one focused in the order
+	## of `workspace_order`, round from the end to the start, or the first.
+	step_workspace : Model.State, I64 -> Model.State
+	step_workspace = |state, by| {
+		order = Commands.workspace_order(state)
+		count = order.len().to_i64_wrap()
+		at = match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => order.find_first_index(|listed| listed == workspace_id).map_ok(|index| index.to_i64_wrap()) ?? -1
+			_ => -1
+		}
+		next = if (at < 0) 0 else (at + by + count) % count
+		order.get(next.to_u64_wrap()).map_ok(|workspace_id| Model.open(state, Workspace(workspace_id))) ?? state
 	}
 
 	## Runs the first of the commands named that applies, if any does.

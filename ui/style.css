@@ -1,6 +1,6 @@
 /* The theme is custom properties on .liton (ui/Themes.roc): color-scheme,
    --accent, --accent-to, --text, --muted, --edge-alpha, --edge-active-alpha,
-   --glass-tint, --glass-alpha, --backdrop, --backdrop-bar, --sheet-alpha,
+   --unfocused-opacity, --glass-tint, --glass-alpha, --backdrop, --backdrop-bar, --sheet-alpha,
    --background, --gap, --radius, --font-ui, --font-mono, --font-display and
    --motion. All else derives from them here. */
 :root { color-scheme: light dark; }
@@ -71,6 +71,9 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
   --icon-circle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='12' x2='12' y1='8' y2='12'/><line x1='12' x2='12.01' y1='16' y2='16'/></svg>");
+  --icon-search: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.3-4.3'/></svg>");
+  --icon-circle-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='m9 12 2 2 4-4'/></svg>");
+  --icon-circle-dot: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><circle cx='12' cy='12' r='1'/></svg>");
   --icon-triangle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
   --icon-list: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 6h.01'/><path d='M3 12h.01'/><path d='M3 18h.01'/><path d='M8 6h13'/><path d='M8 12h13'/><path d='M8 18h13'/></svg>");
   --icon-folder: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'/></svg>");
@@ -229,6 +232,36 @@ kbd:empty { display: none; }
 .tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
 @media (hover: none) { .tile-header .tab-close { opacity: 1; } }
+/* The workspace a Workbench shows: its header, its name, project and
+   menu between the drawers' buttons, over its tabs, in place of its panes'
+   headers. */
+.workspace-view-header { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.workspace-header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 4px; }
+.workspace-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.workspace-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.workspace-header .row-menu-toggle { --icon: var(--icon-ellipsis); --icon-size: 14px; padding: 2px 4px; border-color: transparent; background: none; color: var(--muted); }
+.workspace-header .git-actions { margin-left: auto; }
+.workspace-header button.drawer-toggle, .workspace-header .settings-toggle { flex: none; padding: 3px 6px; border-color: transparent; background: none; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.workspace-header button:hover { color: var(--text); border-color: var(--edge); }
+.pane[data-tab-view] > .pane-header { display: none; }
+/* The tabs of the workspace a Workbench shows: its sessions' chats, each
+   with its status, its views and +. */
+.workspace-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.workspace-tab { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; border-radius: var(--small-radius); color: var(--muted); }
+.workspace-tab:hover { background: var(--tool); }
+.workspace-tab.shown { background: var(--selected); color: var(--text); }
+.workspace-tab .tab-select { min-width: 0; max-width: 220px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border: none; background: none; color: inherit; font-size: 13px; }
+.workspace-tab .tab-select::before { flex: none; }
+.workspace-tab .with-status::before, .workspace-tab .tab-select:not(.with-status) .status-dot { display: none; }
+.workspace-tab .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tab .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 2px 4px; margin-right: 4px; border-color: transparent; background: none; color: inherit; opacity: 0; }
+.workspace-tab:hover .tab-close, .workspace-tab.shown .tab-close, .workspace-tab .tab-close:focus-visible { opacity: 1; }
+.workspace-tabs .new-tab { --icon: var(--icon-plus); --icon-size: 14px; flex: none; padding: 4px 6px; border-color: transparent; background: none; color: var(--muted); }
+.workspace-tabs .new-tab:hover, .workspace-tabs .new-tab[aria-expanded="true"] { color: var(--text); }
+.tab-menu .menu { left: 0; right: auto; }
+.tab-menu .menu button { text-align: left; padding: 4px 8px; border-color: transparent; background: none; color: var(--text); font-size: 12.5px; }
+.tab-menu .menu button:hover { background: var(--tool); }
+@media (hover: none) { .workspace-tab .tab-close { opacity: 1; } }
 /* Dragging a pane by its tab or header: the tile it drops into or the side
    of it a new tile opens on, the bar where it lands, and the pane dragged,
    faded. */
@@ -241,13 +274,10 @@ kbd:empty { display: none; }
 .resize-line.bottom { left: 0; right: 0; bottom: -4px; height: 8px; cursor: row-resize; }
 .resize-line:hover { background: color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 4px; }
 @media (max-width: 640px) { .resize-line { display: none; } }
-/* The title of the pane dragged follows the pointer, a little below it. */
+/* The title of the pane dragged follows the pointer, a little below it,
+   moved on the compositor (ui/ports.mjs). */
 .drag-ghost { position: fixed; left: 12px; top: 14px; z-index: 10; pointer-events: none; padding: 4px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius);
-  background: var(--sheet); box-shadow: var(--shadow); color: var(--accent); font: 12px var(--font-mono); white-space: nowrap; view-transition-name: drag-ghost; }
-/* The tiles move to the layout a drag previews (ui/ports.mjs). */
-::view-transition-group(*) { animation-duration: 180ms; animation-timing-function: ease-out; }
-::view-transition { pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none; } }
+  background: var(--sheet); box-shadow: var(--shadow); color: var(--accent); font: 12px var(--font-mono); white-space: nowrap; will-change: transform; }
 .tab.dragged, .pane.dragged { opacity: .5; }
 .pane { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; outline: none;
   background: var(--glass); backdrop-filter: var(--backdrop); -webkit-backdrop-filter: var(--backdrop);
@@ -262,7 +292,7 @@ kbd:empty { display: none; }
   opacity: 0; transition: opacity var(--slow) ease; }
 .pane.focused { border-color: transparent; }
 .pane.focused::after { opacity: var(--edge-active-alpha); }
-.grid.focusing .pane:not(.focused) { opacity: .86; }
+.grid.focusing .pane:not(.focused) { opacity: var(--unfocused-opacity); }
 .pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--edge); font: 12px/1.2 var(--font-mono); }
 .pane-heading { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; }
 .pane-title { font-weight: 600; color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -320,6 +350,12 @@ kbd:empty { display: none; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 4; }
 .pane:has(.menu) { z-index: 6; overflow: visible; }
 .missing { padding: 12px; color: var(--muted); }
+/* An empty state: centred, quiet, what is missing and the action that fills it. */
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; }
+.empty-title { margin: 0; font-size: 16px; color: var(--text); }
+.empty-text { margin: 0 0 8px; max-width: 420px; color: var(--muted); }
+.empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.empty-action { padding: 6px 14px; }
 
 .inbox-item:hover { background: var(--tool); }
 .inbox-item.focused { background: var(--selected); }
@@ -341,13 +377,31 @@ kbd:empty { display: none; }
 .tree-row .added:not(:empty) ~ .age { margin-left: 0; }
 .tree-row span:not(.status-dot):empty { display: none; }
 .tree-group { margin-top: 8px; padding-left: 4px; }
-.tree-group .status-dot { display: none; }
+.tree-group .status-dot:not([class*="group-"]) { display: none; }
+/* A status's group, by its icon: needs input, ready to review, working, done. */
+.tree-group .status-dot[class*="group-"] { width: 14px; height: 14px; background: var(--group-color); -webkit-mask: var(--group-icon) center / contain no-repeat; mask: var(--group-icon) center / contain no-repeat; }
+.group-waiting { --group-icon: var(--icon-circle-alert); --group-color: var(--warn); }
+.group-review { --group-icon: var(--icon-circle-check); --group-color: var(--ok); }
+.group-working { --group-icon: var(--icon-circle-dot); --group-color: var(--running); }
+.group-done { --group-icon: var(--icon-circle-check); --group-color: var(--muted); }
+.group-pinned { --group-icon: var(--icon-pin); --group-color: var(--muted); }
+/* A row's second line, muted: a workspace's project, and its host. */
+.tree-row:has(> .second-line:not(:empty)) { flex-wrap: wrap; row-gap: 0; }
+.tree-row:has(> .second-line:not(:empty)) > .row-title { flex: 1 1 0; }
+.tree-row .second-line { order: 1; flex-basis: 100%; padding-left: 21px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-group .row-title { font: 600 12px var(--font-ui); color: var(--muted); }
 .tree-group .row-title::before { content: "▾ " / ""; }
 .tree-group.folded .row-title::before { content: "▸ " / ""; }
 .tree-workspace .row-title { font-weight: 600; }
 .tree-session { padding-left: calc(8px + var(--depth, 0) * 16px); }
 .workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* The navigator's rows over the list: New workspace and Search, with its keys. */
+.nav-rows { display: flex; flex-direction: column; gap: 1px; padding: 6px 6px 8px; border-bottom: 1px solid var(--edge); }
+.nav-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: none; background: none; text-align: left; font-size: 13.5px; color: var(--text); }
+.nav-row:hover { background: var(--tool); }
+.nav-row::before { content: ""; flex: none; width: 15px; height: 15px; background: var(--muted); -webkit-mask: var(--nav-icon) center / contain no-repeat; mask: var(--nav-icon) center / contain no-repeat; }
+.nav-new-workspace { --nav-icon: var(--icon-plus); }
+.nav-search { --nav-icon: var(--icon-search); }
 .tree-row .new-agent { flex: none; margin-left: auto; padding: 2px 5px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
 .tree-row .added:not(:empty) ~ .new-agent, .tree-row .age:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }

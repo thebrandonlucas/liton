@@ -486,12 +486,13 @@ Liton := [].{
 	## with the drawers' buttons at its ends, or the left drawer's, with
 	## Settings, which CSS moves to its bottom left on a wide screen. While
 	## the left drawer is hidden or empty, Settings is in the main area's.
+	## A workspace tile's header has them in its place.
 	header_place : Model.State, Model.Tile, Str -> [MainTab, MainTabWithSettings, LeftTab, Elsewhere]
 	header_place = |state, tile, pane_id| {
 		left_shown = !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty())
 		first = tile.id == Model.slot_tile(state, Model.slot_of(state, tile.id))
 		match Model.slot_of(state, tile.id) {
-			_ if state.shell != Workbench or tile.active != pane_id or !first => Elsewhere
+			_ if state.shell != Workbench or tile.active != pane_id or !first or Model.workspace_tile(state) == Ok(tile.id) => Elsewhere
 			Main => if (left_shown) MainTab else MainTabWithSettings
 			Left => LeftTab
 			_ => Elsewhere
@@ -503,7 +504,7 @@ Liton := [].{
 	keys_help = |system| {
 		key = |command| Keymap.text_of(system, Keymap.defaults, command)
 		heard = if (system == Mac) "in a text box too" else "outside a text box"
-		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## A side sheet that picks the preset, lists each slot's or tile's panes
@@ -725,8 +726,7 @@ Liton := [].{
 				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
 				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
 				Engine.attr_s("data-tile", id),
-				# Named, a view transition moves each tile to its new place.
-				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}; view-transition-name: tile-${shown.id}")),
+				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.update_by(id, |state, tile_id| { ..state, active_tile: tile_id })),
 			],
@@ -736,39 +736,10 @@ Liton := [].{
 					[Left, Main, Right, Free],
 					|shown| if (shown == Free) Engine.text("") else Engine.element("span", [Engine.ref(Model.panel_ref(shown)), Engine.attr("tabindex", "-1"), Engine.class("panel-anchor")], []),
 				),
-				Html.div(
-					"tile-header",
-					[
-						Engine.each(
-							tile.map2(laid, |shown, state| Model.shown_panes(state, shown)),
-							|pane| pane.id,
-							|tab|
-								Engine.element(
-									"span",
-									[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture)))), Engine.attr_s("data-tab", tab.key())],
-									[
-										Html.button_s(
-											tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
-											[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(drag.lift_row(), tab.key())),
-											model.lift_row().update_by(tab.key(), Model.activate_tab),
-										),
-										Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
-									],
-								),
-						),
-						Engine.when(
-							tiling,
-							||
-								Html.div(
-									"tile-controls",
-									[
-										Html.icon_button("−", Engine.const("Make tile narrower"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Narrower))),
-										Html.icon_button("+", Engine.const("Make tile wider"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Wider))),
-									],
-								),
-							|| Engine.text(""),
-						),
-					],
+				Engine.when(
+					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
+					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, drag, tile)]),
+					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
 				# Handles on its right and bottom edges move the lines there.
@@ -791,6 +762,146 @@ Liton := [].{
 			],
 		)
 	}
+
+	## A tile's bar of its tabs, each with a × that hides it in a Workbench
+	## and closes it in Tiling, and in Tiling its controls.
+	tile_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.State), Signal(TileCtx, Str), Signal(TileCtx, Model.Tile), Signal(TileCtx, Bool) -> Elem(TileCtx)
+	tile_tabs = |model, drag, laid, id, tile, tiling|
+		Html.div(
+			"tile-header",
+			[
+				Engine.each(
+					tile.map2(laid, |shown, state| Model.shown_panes(state, shown)),
+					|pane| pane.id,
+					|tab|
+						Engine.element(
+							"span",
+							[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture)))), Engine.attr_s("data-tab", tab.key())],
+							[
+								Html.button_s(
+									tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
+									[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(drag.lift_row(), tab.key())),
+									model.lift_row().update_by(tab.key(), Model.activate_tab),
+								),
+								Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
+							],
+						),
+				),
+				Engine.when(
+					tiling,
+					||
+						Html.div(
+							"tile-controls",
+							[
+								Html.icon_button("−", Engine.const("Make tile narrower"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Narrower))),
+								Html.icon_button("+", Engine.const("Make tile wider"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Wider))),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+
+	## The header of the workspace a Workbench shows as tabs: the left
+	## drawer's button, its name and project, its ⋯ menu (`Model.row_menu`),
+	## and the right drawer's button with its changes; Settings while the
+	## left drawer is hidden.
+	workspace_header : State(TileCtx, Model.State) -> Elem(TileCtx)
+	workspace_header = |model| {
+		header = model.signal().map(Model.workspace_header)
+		left_shown = model.signal().map(|state| !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty()))
+		Html.div(
+			"workspace-header",
+			[
+				Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)),
+				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")]),
+				Html.span_s(header.map(|shown| shown.project), [Engine.class("workspace-project")]),
+				Engine.when(header.map(|shown| !shown.key.is_empty()), || Liton.row_menu(model, header.map(|shown| { pane_id: Model.header_menu, key: shown.key }), Engine.const("Workspace")), || Engine.text("")),
+				# FIXME: Paseo's run ▷, open in editor and git split button
+				# (Commit, then View PR or Merge PR, or Archive) go here, once a
+				# capability offers them: workspace.git.v1 only reads, so it
+				# needs Commit and Push commands, and a forge capability (or
+				# workspace.git) CreatePullRequest, MergePullRequest and the PR's
+				# state.
+				Html.div("git-actions", []),
+				Liton.drawer_toggle(model, Right, header.map(|shown| shown.counts)),
+				Engine.when(left_shown, || Engine.text(""), || Liton.settings_toggle(model, "icon settings-toggle")),
+			],
+		)
+	}
+
+	## The workspace tile's tabs (`Model.tab_rows`): a chat of each of the
+	## focused workspace's sessions with its status, then the views it
+	## opened and the tile's other panes, which drag as a tile's tabs do,
+	## each with a × that closes it, and + with its menu of a new agent in
+	## the workspace and the tile's panes hidden (`Model.tab_menu_items`).
+	workspace_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
+	workspace_tabs = |model, drag, tile|
+		Html.div_attrs(
+			[Engine.class("workspace-tabs"), Engine.attr("role", "tablist"), Html.aria_label_s(Engine.const("Tabs"))],
+			[
+				Engine.each(
+					tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown)),
+					|tab| tab.key,
+					|tab| {
+						# Another pane's tab drags it, as a tile's tab does.
+						pane_id = tab.field(
+							|shown|
+								match shown.tab {
+									Pane(id) => id
+									Tab(_) => ""
+								},
+						)
+						button = |dragging|
+							Engine.element(
+								"button",
+								[
+									Engine.attr("type", "button"),
+									Engine.attr("role", "tab"),
+									Engine.class_s(tab.field(|shown| "tab-select widget-${shown.widget}${if (shown.dot.is_empty() or shown.dot == "idle") "" else " with-status"}")),
+									Html.flag("aria-selected", tab.field(|shown| shown.shown)),
+									Engine.on_click(model.lift_row().update_by(tab.field(|shown| shown.tab), Model.pick_tab)),
+								].concat(dragging),
+								[
+									Html.span_s(Engine.const(""), [Engine.class_s(tab.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+									Html.span_s(tab.field(|shown| shown.title), [Engine.class("tab-title")]),
+								],
+							)
+						Engine.element(
+							"span",
+							[Engine.class_s(tab.field(|shown| if (shown.shown) "workspace-tab shown" else "workspace-tab")), Engine.attr_s("data-tab", pane_id)],
+							[
+								Engine.when(pane_id.map(|id| id.is_empty()), || button([]), || button(Liton.grip(drag.lift_row(), pane_id))),
+								Engine.when(tab.field(|shown| shown.closes), || Liton.icon_button(tab.field(|shown| "Close ${shown.title}"), "icon tab-close", model.lift_row().update_by(tab.field(|shown| shown.tab), Model.close_picked_tab)), || Engine.text("")),
+							],
+						)
+					},
+				),
+				Html.div(
+					"row-menu tab-menu",
+					[
+						Engine.element(
+							"button",
+							[
+								Engine.attr("type", "button"),
+								Engine.class("icon new-tab"),
+								Html.aria_label("New tab"),
+								Engine.attr_s("title", model.signal().map(|state| "New tab (${Keymap.text_of(state.operating_system, Keymap.defaults, "tab.new")})")),
+								Engine.attr("aria-haspopup", "true"),
+								Html.flag("aria-expanded", model.signal().map(|state| state.menu == Model.tab_menu)),
+								Engine.on_click(model.update(|state| Model.toggle_menu(state, Model.tab_menu))),
+							],
+							[],
+						),
+						Engine.when(
+							model.signal().map(|state| state.menu == Model.tab_menu),
+							|| Html.div("menu", [Engine.each(model.signal().map(Model.tab_menu_items), |item| item.label, |item| Html.button_s(item.field(|shown| shown.label), [], model.lift_row().update_by(item.field(|shown| shown.pane), Model.pick_tab_menu)))]),
+							|| Engine.text(""),
+						),
+					],
+				),
+			],
+		)
 
 	across : [Across(U64), Down(U64)] -> Bool
 	across = |line|
@@ -830,6 +941,8 @@ Liton := [].{
 			[
 				Html.aria_label_s(title),
 				Engine.class_s(id.map2(tile.lift_row(), |pane_id, group| { pane_id, group }).map2(laid.lift_row(), |{ pane_id, group }, state| Str.join_with(["pane", if (pane_id != group.active or state.hidden.contains(pane_id)) "hidden" else "", if (pane_id == state.focused_pane) "focused" else ""].drop_if(Str.is_empty), " ")).map2(id.map2(drag.signal(), Liton.pane_drag_class), Liton.joined_classes)),
+				# A tab of the workspace a Workbench shows has no header of its own.
+				Engine.attr_presence("data-tab-view", id.map2(model.signal(), |pane_id, state| if (Model.workspace_view(state, pane_id)) Present("") else Absent)),
 				# Clicking anywhere in it focuses it, or what was clicked in it.
 				Engine.attr("tabindex", "-1"),
 				Engine.on("focus", model.update_by(id.map2(tile.lift_row(), |pane_id, group| { pane: pane_id, tile: group.id }), Model.focus_pane)),
@@ -872,11 +985,11 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView, Welcome, NoAgents],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
-							Workspaces => Html.div("workspaces-pane", [Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
+							Workspaces => Html.div("workspaces-pane", [Liton.nav_rows(model, id, shown), Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -891,6 +1004,13 @@ Liton := [].{
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							NoView => Html.p("liton can't show this widget yet.", "missing")
+							Welcome => Liton.welcome(model)
+							NoAgents =>
+								Liton.empty_state(
+									shown.map(|{ state, .. }| "No agents in ${Model.workspace_header(state).title} yet"),
+									"Start one to work in this workspace: it shows here as a tab.",
+									[Html.button("Start an agent", [Engine.class("empty-action")], model.update(Model.new_agent_tab))],
+								)
 							Missing =>
 								Html.p_s(
 									shown.map(|{ pane, state }| "This widget needs ${Model.missing(state, pane)}, which no connected provider supplies. Connect one that does, and it fills in here."),
@@ -933,8 +1053,8 @@ Liton := [].{
 	joined_classes = |first, second| Str.join_with([first, second].drop_if(Str.is_empty), " ")
 
 	## A tile's classes: its slot's, `tabbed` while it shows more than one
-	## pane, `shown` while a narrow screen shows it, and `collapsed` while its
-	## drawer is.
+	## pane, `shown` while a narrow screen shows it, `collapsed` while its
+	## drawer is, and `workspace-tile` while it shows a workspace's tabs.
 	tile_class : Model.State, Model.Tile -> Str
 	tile_class = |state, tile| {
 		slot = Model.slot_of(state, tile.id)
@@ -943,6 +1063,7 @@ Liton := [].{
 			if (Model.shown_panes(state, tile).len() > 1) "tabbed" else "",
 			if (tile.id == state.active_tile) "shown" else "",
 			if (state.collapsed.contains(slot)) "collapsed" else "",
+			if (Model.workspace_tile(state) == Ok(tile.id)) "workspace-tile" else "",
 		]
 		Str.join_with(classes.drop_if(|class| class.is_empty()).prepend("tile"), " ")
 	}
@@ -1496,12 +1617,65 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
 								Html.span_s(row.field(|shown| shown.age), [Engine.class("age"), Engine.test_id("row-age")]),
+								Html.span_s(row.field(|shown| shown.second_line), [Engine.class("second-line")]),
 								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else if (shown.kind == Session) "New agent beside ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
 							].concat(if (menus == Menus) [Liton.row_menu(model, asked, row.field(|shown| shown.title))] else []),
 						)
 					},
 				),
 			],
+		)
+
+	## What the main area says while no workspace is picked: on a first run,
+	## that projects come from the daemon's providers, with what is connected
+	## a click away; else to pick a workspace or create one.
+	welcome : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	welcome = |model|
+		Engine.when(
+			model.signal().map(|state| state.workspaces.projects.is_empty()),
+			||
+				Liton.empty_state(
+					Engine.const("No projects yet"),
+					"liton shows the projects of the providers its daemon connects. Start the daemon with PASEO_PASSWORD set to connect Paseo, or LITON_PROVIDERS for other providers, and their projects and workspaces appear here.",
+					[Html.button("See what's connected", [Engine.class("empty-action")], model.update(|state| Model.add_pane(state, "capabilities")))],
+				),
+			||
+				Liton.empty_state(
+					Engine.const("Pick a workspace"),
+					"Its agents show here as tabs, its changes and files beside them.",
+					[Html.button("Create a workspace", [Engine.class("empty-action")], model.update(Model.new_workspace))],
+				),
+		)
+
+	## An empty state: what is missing, why, and the actions that fill it.
+	empty_state : Signal(ctx, Str), Str, List(Elem(ctx)) -> Elem(ctx)
+	empty_state = |title, text, actions|
+		Html.div_attrs(
+			[Engine.class("empty-state"), Engine.test_id("empty-state")],
+			[
+				Html.p_s(title, [Engine.class("empty-title")]),
+				Html.p(text, "empty-text"),
+				Html.div("empty-actions", actions),
+			],
+		)
+
+	## A Workspaces pane's rows over its list where it lists sessions as
+	## tabs, as Paseo's navigator has them: New workspace, and Search, which
+	## opens the palette. Paseo's History and Schedules wait on a history of
+	## the focus and an automations capability.
+	nav_rows : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	nav_rows = |model, id, shown|
+		Engine.when(
+			shown.map(|{ pane, .. }| Model.option(pane, "sessions") == "Tabs"),
+			||
+				Html.div(
+					"nav-rows",
+					[
+						Html.button("New workspace", [Engine.class("nav-row nav-new-workspace"), Engine.test_id("nav-new-workspace")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
+						Html.button_s(model.signal().map(|state| "Search ${Keymap.text_of(state.operating_system, Keymap.defaults, "palette")}"), [Engine.class("nav-row nav-search"), Html.aria_label_s(Engine.const("Search"))], model.update(Commands.open_palette)),
+					],
+				),
+			|| Engine.text(""),
 		)
 
 	## A row's title, which picks it, or while it is being renamed, a field

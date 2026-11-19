@@ -1,17 +1,17 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
 ## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling,
-## Chat and Rooms presets, Developer first, and the Pastoral, Hypr, Plain and Sky themes,
-## Pastoral first. The UI offers these presets and themes when its daemon
+## Chat and Rooms presets, Developer first, and the Pastoral, Hypr, Plain,
+## Neutral and Sky themes, Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
 import Setup
 
 Default := [].{
 
-	## A Workbench of workspaces and their sessions, the chat following the
-	## focus with a tab beside it of the ticket opened, hidden until one is,
-	## and the changes and files of the workspace or session focused and the
-	## tickets, as tabs.
+	## A Workbench as Paseo's: the workspaces by their status, the one
+	## picked as tabs of its sessions' chats and the ticket opened, and the
+	## changes and files of the workspace and the tickets, as tabs, in the
+	## Neutral theme.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -22,14 +22,14 @@ Default := [].{
 				columns: [1, 1, 1],
 				rows: [1],
 				tiles: [
-					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [{ key: "group_by", value: "Status" }, { key: "sessions", value: "Tabs" }] }] },
 					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }, { id: "pane-8", widget: "ticket", pinned: "", options: [] }] },
 					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }, { id: "pane-5", widget: "tickets", pinned: "", options: [] }] },
 				],
 			},
 			collapsed: [],
 			hidden: ["pane-8"],
-			theme: "",
+			theme: "Neutral",
 		},
 	}
 
@@ -52,6 +52,7 @@ Default := [].{
 						tile,
 			),
 			collapsed: [Right],
+			theme: "",
 		},
 	}
 
@@ -60,7 +61,7 @@ Default := [].{
 	chat : Setup.Preset
 	chat = {
 		name: "Chat",
-		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right] },
+		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right], theme: "" },
 	}
 
 	## Talking in rooms, as Buzz does: the rooms, the room picked large, and
@@ -172,6 +173,26 @@ Default := [].{
 		motion: Reduced,
 	}
 
+	## Flat and neutral, as Paseo is: near-black opaque tiles side by side,
+	## the platform's font, and no focused edge, so no pane dims either.
+	neutral : Setup.Theme
+	neutral = {
+		name: "Neutral",
+		scheme: Dark,
+		accent: "#fafafa",
+		accent_to: "#fafafa",
+		text: "#fafafa",
+		muted: "#a1a5a4",
+		edge: 6,
+		edge_active: 6,
+		glass: { tint: "#1e2120", opacity: 100, blur: 0 },
+		background: Flat("#1b1d1c"),
+		gap: 0,
+		radius: 8,
+		fonts: { ui: Default.system_font, mono: Default.mono_font, display: Default.system_font },
+		motion: Normal,
+	}
+
 	## Light and soft, for talking in rooms: white tiles with neutral grey
 	## edges on a pale sky, the focused edge fading to violet.
 	sky : Setup.Theme
@@ -201,5 +222,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.sky], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral, Default.sky], default_theme: "Pastoral" }
 }

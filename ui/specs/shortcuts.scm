@@ -9,7 +9,7 @@
     (expect-visible (text "Open or close the palette"))
     (expect-visible (text "Ctrl+K"))
     (expect-visible (text "1 or Alt+1"))
-    (expect-visible (text "G then 3"))
+    (expect-visible (text "Ctrl+3 or G then 3"))
     (press "Escape")
     (expect-absent (role dialog :name "Keys"))
     ; The palette shows it too, and ? again hides it.
