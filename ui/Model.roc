@@ -2590,6 +2590,39 @@ Model := [].{
 			[] => state
 		}
 
+	## Holds a ticket's card, or moves it over a group of the Board, by the
+	## group's key ("" for none), or lets it go.
+	drag_card : State, [Hold(Str), Over(Str), Let] -> State
+	drag_card = |state, how| {
+		dragged = state.tickets.dragged
+		moved =
+			match how {
+				Hold(ticket_id) => { ticket: ticket_id, moved: Bool.False, over: "" }
+				Over(key) if !dragged.ticket.is_empty() => { ..dragged, moved: Bool.True, over: key }
+				Over(_) => dragged
+				Let => { ticket: "", moved: Bool.False, over: "" }
+			}
+		if (moved == dragged) state else { ..state, tickets: { ..state.tickets, dragged: moved } }
+	}
+
+	## Drops the card held on the group under it: the ticket takes the
+	## group's status, or its source's first of the group's kind, at once.
+	drop_card : State, Str -> State
+	drop_card = |state, pane_id| {
+		{ ticket: ticket_id, over, .. } = state.tickets.dragged
+		let_go = Model.drag_card(state, Let)
+		group = TicketDesk.groups(state.tickets, pane_id, Model.board_layout(state, pane_id)).find_first(|shown| shown.key == over)
+		ticket = TicketDesk.listing_shown(state.tickets).tickets.find_first(|shown| shown.id == ticket_id)
+		match (group, ticket) {
+			(Ok(into), Ok(moved)) if !into.tickets.contains(moved) =>
+				match TicketDesk.status_for(state.tickets, moved, { id: over.drop_prefix("status:"), name: into.title, kind: into.kind }) {
+					Ok(status_id) => Model.ask_tickets(let_go, SetStatus({ ticket_id, status_id }))
+					Err(_) => let_go
+				}
+			_ => let_go
+		}
+	}
+
 	## Shows a Board pane's list again in place of the ticket it opened.
 	back_to_list : State, Str -> State
 	back_to_list = |state, pane_id| { ..state, tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, opened: Bool.False }) }

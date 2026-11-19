@@ -1531,8 +1531,16 @@ Liton := [].{
 						laid_out("Board", Board),
 					],
 				),
-				Html.div(
-					"board-groups",
+				# A card held moves over the groups, each a pointer zone once it
+				# moves (so a click is in no zone), and
+				# dropped on another takes its status (`Model.drop_card`).
+				Html.div_attrs(
+					[
+						Engine.class("board-groups"),
+						Html.on_pointer_move_paced(model.set_value(|state, pointer| if (pointer.buttons == 0) Model.drag_card(state, Let) else Model.drag_card(state, Over(Liton.zone_under(pointer))))),
+						Html.on_pointer_up(model.set_value_by(id, |state, pane_id, _| Model.drop_card(state, pane_id))),
+						Html.on_pointer_cancel(model.update(|state| Model.drag_card(state, Let))),
+					],
 					[
 						Engine.each(
 							groups,
@@ -1540,7 +1548,7 @@ Liton := [].{
 							|group_row|
 								Engine.element(
 									"section",
-									[Engine.class("board-group"), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title))],
+									[Engine.class_s(group_row.key().map2(model.signal().lift_row(), |key, state| if (state.tickets.dragged.over == key and !state.tickets.dragged.ticket.is_empty()) "board-group drop-over" else "board-group")), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title)), Html.zone_s(group_row.key().map2(model.signal().lift_row(), |key, state| if (state.tickets.dragged.moved) key else ""))],
 									[
 										Html.div("board-group-header", [Html.span_s(group_row.field(|group| group.title), [Engine.class("group-title")]), Html.span_s(group_row.field(|group| group.tickets.len().to_str()), [Engine.class("count"), Engine.test_id_s(group_row.key().map(|key| "group-${key}"))])]),
 										Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), id.lift_row(), row))]),
@@ -1562,7 +1570,7 @@ Liton := [].{
 		state = model.signal().lift_row()
 		session = row.key().map2(state, |ticket_id, shown| Liton.ticket_session(shown, ticket_id))
 		Html.li(
-			[Engine.class_s(row.key().map2(id.lift_row(), |ticket_id, pane_id| { ticket_id, pane_id }).map2(state, |{ ticket_id, pane_id }, shown| Str.join_with(["board-ticket", if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "focused" else "", if (TicketDesk.board(shown.tickets, pane_id).selected.contains(ticket_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}"))],
+			[Engine.class_s(row.key().map2(id.lift_row(), |ticket_id, pane_id| { ticket_id, pane_id }).map2(state, |{ ticket_id, pane_id }, shown| Str.join_with(["board-ticket", if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "focused" else "", if (TicketDesk.board(shown.tickets, pane_id).selected.contains(ticket_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}")), Html.on_pointer_down(model.lift_row().set_value_by(row.key(), |shown, ticket_id, pointer| if (pointer.button == Main and pointer.kind != Touch) Model.drag_card(shown, Hold(ticket_id)) else shown))],
 			[
 				Engine.element(
 					"button",
@@ -1576,6 +1584,14 @@ Liton := [].{
 			],
 		)
 	}
+
+	## The pointer zone under a pointer, "" for none.
+	zone_under : Engine.Pointer -> Str
+	zone_under = |pointer|
+		match pointer.at {
+			In({ zone, .. }) => zone
+			Outside => ""
+		}
 
 	## The first session working on a ticket: its title, status and dot, ""
 	## for none.

@@ -507,6 +507,8 @@ kbd:empty { display: none; }
 .board.columns .board-group-header { background: none; }
 .board.columns .board-rows { display: flex; flex-direction: column; gap: 6px; padding: 0 6px 6px; min-height: 40px; }
 .board.columns .board-ticket { flex-wrap: wrap; gap: 4px 8px; padding: 8px 10px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); }
+.board.columns .board-ticket { cursor: grab; user-select: none; -webkit-user-select: none; }
+.board-group.drop-over { outline: 2px dashed var(--edge-active); outline-offset: -2px; }
 .board.columns .board-ticket .ticket-title { flex-basis: 100%; white-space: normal; }
 .properties { padding: 8px 10px; }
 .properties-title { margin: 0; font-weight: 600; }

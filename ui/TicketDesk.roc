@@ -29,10 +29,12 @@ TicketDesk := [].{
 
 	## `waiting` are requests to send once those before them are, as only
 	## one goes at a time; they show at once too.
-	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board) }
+	## `dragged` is the ticket whose card is held on a Board, whether it has
+	## moved since, and the group under the pointer, by its key, "" for none.
+	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), dragged : { ticket : Str, moved : Bool, over : Str } }
 
 	initial : State
-	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [] }
+	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View

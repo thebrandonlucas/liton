@@ -145,6 +145,7 @@ All notable changes to liton are documented in this file. The format is based on
 - In the Board preset, outside a text box, J or K (or the down and up arrows) move a cursor through the tickets, Properties following it, and Enter opens the ticket under it in place of the list, as clicking one does: its body, comments and a box to comment, and where it is in the list, such as 2 / 5, with J, K and the ↑ and ↓ buttons stepping through the list. Escape or ← List goes back to the list.
 - Ctrl+B or ⌘B, or the List and Board buttons, switch the Board preset's tickets between the list and a board: a column for each status of the source shown (for each kind of status while several sources are), each counted, its tickets as cards. The pane keeps the layout picked. In the Board preset ⌘B no longer hides the left drawer; its button still does.
 - In the Board preset, X selects the ticket under the cursor (Escape selects none), and S or A open the palette at Set status to… or Assign…, to change the status or assignees of the tickets selected, or of the one under the cursor, at once. Tickets of other sources take their own status of the same kind.
+- Drag a ticket's card to another column of the board, or row to another group of the list, to set its status there at once; the column under the pointer is outlined while you hold it. With a mouse or pen; on a touch screen use S.
 
 ### Fixed
 

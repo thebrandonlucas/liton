@@ -1,0 +1,37 @@
+(test "Liton — dragging a card on a Board to another column sets its status at once, until the daemon refuses it"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"fix-auth\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix the login redirect\",\"updated\":\"2026-01-01T08:00:00.000Z\"},{\"agent\":\"codex\",\"id\":\"docs\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write the docs\",\"updated\":\"2026-01-01T09:00:00.000Z\"}]}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/docs\",\"cursor\":\"t1\",\"events\":[]}]}")
+    (run-effect 3)
+    ; The Board preset is the fifth.
+    (press "5")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/docs\",\"cursor\":\"t1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Tickets\":{\"sources\":[{\"id\":\"gh\",\"provider\":\"mock\",\"name\":\"mock/liton\",\"url\":\"https://example.com/gh\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"}]},{\"id\":\"LIT\",\"provider\":\"mock\",\"name\":\"Liton team\",\"url\":\"https://example.com/LIT\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"todo\",\"name\":\"Todo\",\"kind\":\"Open\"},{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},{\"id\":\"done\",\"name\":\"Done\",\"kind\":\"Done\"}]}],\"tickets\":[{\"id\":\"LIT-12\",\"provider\":\"mock\",\"source\":\"LIT\",\"key\":\"LIT-12\",\"title\":\"Logging in sends you back to /login\",\"url\":\"https://example.com/LIT-12\",\"status\":{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},\"assignees\":[{\"id\":\"ada\",\"name\":\"Ada\"}],\"labels\":[\"bug\"],\"waiting_on\":[],\"updated\":\"2026-01-01T08:30:00.000Z\",\"branch\":\"fix-auth\"},{\"id\":\"LIT-15\",\"provider\":\"mock\",\"source\":\"LIT\",\"key\":\"LIT-15\",\"title\":\"Show tickets as a board\",\"url\":\"https://example.com/LIT-15\",\"status\":{\"id\":\"todo\",\"name\":\"Todo\",\"kind\":\"Open\"},\"assignees\":[],\"labels\":[\"feature\"],\"waiting_on\":[],\"updated\":\"2026-01-01T08:00:00.000Z\"},{\"id\":\"gh#9\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#9\",\"title\":\"Document the review flow\",\"url\":\"https://example.com/gh#9\",\"status\":{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},\"assignees\":[],\"labels\":[\"docs\"],\"waiting_on\":[],\"updated\":\"2026-01-01T07:00:00.000Z\"},{\"id\":\"gh#4\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#4\",\"title\":\"Archive sessions from their menu\",\"url\":\"https://example.com/gh#4\",\"status\":{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"},\"assignees\":[{\"id\":\"bo\",\"name\":\"Bo\"}],\"labels\":[],\"waiting_on\":[],\"updated\":\"2025-12-20T09:00:00.000Z\"}]}}]},{\"capability\":\"tickets.v1\",\"topic\":\"links\",\"cursor\":\"k1\",\"events\":[{\"Links\":[{\"session_id\":\"fix-auth\",\"ticket_id\":\"LIT-12\",\"inferred\":true}]}]}]}")
+    (run-effect 4)
+    (press "Control+b")
+    (expect-text (test-id "group-kind:Open") "2")
+    ; A card dragged onto another column takes its status at once, its source's of that kind; over a column, the column is marked.
+    (pointer-down (test-id "ticket-gh#9"))
+    (pointer-move (test-id "ticket-gh#9"))
+    (pointer-move (role region :name "Done") :at 50 50)
+    (expect-attr (role region :name "Done") class "board-group drop-over")
+    (pointer-up (role region :name "Done") :at 50 50)
+    (expect-attr (role region :name "Done") class "board-group")
+    (expect-text (test-id "group-kind:Open") "1")
+    (expect-text (test-id "group-kind:Done") "2")
+    (stub-http "status" :url "/liton/v1/call" :status 200 :body "{\"Err\":{\"code\":\"Refused\",\"message\":\"the tracker is read-only\"}}")
+    (run-effect 5)
+    ; Refused, it goes back, with why.
+    (expect-text (test-id "group-kind:Open") "2")
+    (expect-visible (text "the tracker is read-only"))
+    ; Dropped on its own column, nothing changes.
+    (pointer-down (test-id "ticket-LIT-12"))
+    (pointer-move (test-id "ticket-LIT-12"))
+    (pointer-move (role region :name "Started") :at 50 50)
+    (pointer-up (role region :name "Started") :at 50 50)
+    (expect-text (test-id "group-kind:Started") "1")
+    (expect-pending-effects 0)
+  )
+)
