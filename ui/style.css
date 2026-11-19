@@ -372,6 +372,8 @@ kbd:empty { display: none; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 4; }
 .pane:has(.menu) { z-index: 6; overflow: visible; }
 .missing { padding: 12px; color: var(--muted); }
+/* A row a click anywhere in opens, as its main control does (Liton.row_activates). */
+[data-activates="row"]:not(.room-group) { cursor: pointer; }
 /* A spinner where something is loading (ui/Spinner.roc): small beside it,
    or larger and centred in the space of what loads as a whole; a still
    ring where reduced motion is asked for. */

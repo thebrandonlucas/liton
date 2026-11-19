@@ -188,6 +188,7 @@ All notable changes to liton are documented in this file. The format is based on
 - In the Board preset, F opens the palette at Filter: to keep only a kind of status, your tickets, those unassigned or a label's, shown above the tickets with × to clear it; / goes to the search. Save view keeps the filter, with the scope and search, as a view of its own under Scopes, which this browser remembers until you forget it with its ×.
 - A Graphite theme, dense and dark like Linear's, with opaque tiles a hairline apart and one indigo accent: the Board preset shows it, and Settings offers it for any layout.
 - What is loading, such as a chat's timeline, a room, Files, Changes, Review, Tickets and a ticket, shows a spinner rather than the word Loading, larger where a whole pane loads; screen readers still hear "Loading", and it stands still where the system asks for reduced motion.
+- A row opens wherever you click in it, not only on its title: a workspace or session, a room, a ticket in the list or on the board, a file in Files, Changes or Review, an inbox item and a review thread. Its + and ⋮, Join or Leave and other buttons still do only their own thing.
 
 ### Fixed
 
