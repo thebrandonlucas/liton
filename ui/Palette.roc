@@ -5,11 +5,13 @@ import Commands
 import Keymap
 import Model
 import TicketDesk
+import Widgets
+import cap.Context
 
 Palette := [].{
 
 	## An entry, by a `key` that says what running it does: `command:<id>`,
-	## `session:<id>`, `workspace:<id>`, `room:<id>` or `ticket:<id>`.
+	## `session:<id>`, or the context to focus as `Context.to_str` names it.
 	## `keys` is how its binding is written, "" for none, and `picked`
 	## whether Enter runs it.
 	Entry : { key : Str, title : Str, group : Str, keys : Str, picked : Bool }
@@ -30,39 +32,14 @@ Palette := [].{
 			.concat(Palette.other_places(state))
 	}
 
-	## Rooms and tickets, while a Rooms or a Tickets pane is in the layout to
-	## open them in.
+	## Rooms and tickets, while the layout has a view to show them in.
 	other_places : Model.State -> List(Entry)
 	other_places = |state| {
 		entry = |key, title, group| { key, title, group, keys: "", picked: Bool.False }
-		laid_out = |widget| Model.panes(state).any(|pane| pane.widget == widget)
-		rooms = if (laid_out("rooms")) Model.rooms_listed(state).map(|room| entry("room:${room.id}", room.name, "Room")) else []
-		tickets = if (laid_out("tickets")) TicketDesk.listing_shown(state.tickets).tickets.map(|ticket| entry("ticket:${ticket.id}", "${ticket.key} ${ticket.title}", "Ticket")) else []
+		viewed = |kind| Model.panes(state).any(|pane| Widgets.shows(Widgets.find(pane.widget), View, kind))
+		rooms = if (viewed(Room)) Model.rooms_listed(state).map(|room| entry(Context.to_str(Room(room.id)), room.name, "Room")) else []
+		tickets = if (viewed(Ticket)) TicketDesk.listing_shown(state.tickets).tickets.map(|ticket| entry(Context.to_str(Ticket(ticket.id)), "${ticket.key} ${ticket.title}", "Ticket")) else []
 		rooms.concat(tickets)
-	}
-
-	## Opens a room or a ticket in the first Rooms or Tickets pane, shown.
-	open_other_place : Model.State, Str -> Model.State
-	open_other_place = |state, key| {
-		in_pane = |widget, open| Model.panes(state).find_first(|pane| pane.widget == widget).map_ok(|pane| Palette.reveal(open(state, pane.id), pane.id)) ?? state
-		if key.starts_with("room:") {
-			in_pane("rooms", |opened, pane_id| Model.open_room(opened, { pane_id, room_id: key.drop_prefix("room:") }))
-		} else if key.starts_with("ticket:") {
-			in_pane("tickets", |opened, pane_id| Model.open_ticket(opened, { pane_id, ticket_id: key.drop_prefix("ticket:") }))
-		} else {
-			state
-		}
-	}
-
-	## Shows a pane focused: out of hiding, its column's tab, its drawer
-	## open, and its column on a narrow screen.
-	reveal : Model.State, Str -> Model.State
-	reveal = |state, pane_id| {
-		revealed = Model.show_pane(state, pane_id)
-		match state.columns.find_first(|column| column.panes.any(|listed| listed.id == pane_id)) {
-			Ok(column) => Model.jump_to({ ..revealed, collapsed: revealed.collapsed.drop_if(|slot| slot == Model.slot_of(revealed, column.id)) }, column.id, Push)
-			Err(NotFound) => revealed
-		}
 	}
 
 	## How well what is typed matches a title, the lower the better: as its
@@ -117,7 +94,7 @@ Palette := [].{
 	}
 
 	## Closes the palette and runs an entry, which then lists first while
-	## it matches.
+	## it matches. A place is focused, its view brought forward.
 	run : Model.State, Str -> Model.State
 	run = |state0, key| {
 		state = { ..state0, palette: { ..state0.palette, open: Bool.False }, ran: state0.ran.drop_if(|ran| ran == key).prepend(key).take_first(20) }
@@ -125,10 +102,8 @@ Palette := [].{
 			Commands.run_first(state, [key.drop_prefix("command:")])
 		} else if key.starts_with("session:") {
 			Model.open(state, Session(key.drop_prefix("session:")))
-		} else if key.starts_with("workspace:") {
-			Model.open(state, Workspace(key.drop_prefix("workspace:")))
 		} else {
-			Palette.open_other_place(state, key)
+			Context.from_str(key).map_ok(|context| Model.open(state, context)) ?? state
 		}
 	}
 

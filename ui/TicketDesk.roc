@@ -11,8 +11,8 @@ TicketDesk := [].{
 	## daemon accepted it (0 while it waits).
 	Asked : { serial : U64, request : Tickets.Request, accepted : U64 }
 
-	## A pane's filter, and the ticket it shows, "" for its list.
-	View : { pane : Str, filter : Tickets.Filter, ticket : Str }
+	## A Tickets pane's filter.
+	View : { pane : Str, filter : Tickets.Filter }
 
 	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), views : List(View) }
 
@@ -21,7 +21,7 @@ TicketDesk := [].{
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View
-	view = |desk, pane| desk.views.find_first(|shown| shown.pane == pane) ?? { pane, filter: Tickets.open, ticket: "" }
+	view = |desk, pane| desk.views.find_first(|shown| shown.pane == pane) ?? { pane, filter: Tickets.open }
 
 	with_view : State, Str, (View -> View) -> State
 	with_view = |desk, pane, change| { ..desk, views: desk.views.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.view(desk, pane))) }

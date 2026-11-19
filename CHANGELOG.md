@@ -134,6 +134,8 @@ All notable changes to liton are documented in this file. The format is based on
 - In Tiling, a pane's menu switches its column between a stack and tabs, in place of the column's Stack and Tabs buttons, and offers it only when the column holds more than one pane.
 - A pane's menu names where it moves the pane: "Move to right drawer" or "Move to main area" in the Developer, Inbox and Chat presets, for each place its widget fits, and "Move to the column on the left" or "Move to a new column on the right" in Tiling, rather than ← and → arrows.
 - The Inbox preset has Rooms as a tab beside the Inbox, in the left drawer.
+- A room picked in Rooms now shows in a Room pane, its own widget, rather than in place of the list: the list stays beside it, marking the room shown. The Inbox preset has a Room tab beside the chat, which picking a room brings forward, as picking a session brings the chat back. Pin a Room pane from its menu to keep it on one room. A saved layout's Rooms pane gets a Room pane beside it.
+- A ticket picked in Tickets now shows in a Ticket pane, its own widget, rather than in place of the list: the list keeps its filters and marks the ticket shown. The Developer preset has a Ticket tab beside the chat, hidden until you pick a ticket, which brings it forward, as picking a session brings the chat back. Pin a Ticket pane from its menu to keep it on one ticket. A saved layout's Tickets pane gets a Ticket pane beside it.
 
 ### Fixed
 

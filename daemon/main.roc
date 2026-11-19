@@ -458,7 +458,7 @@ interested! = |context, subject| {
 }
 
 ## Notes that a poll watches what is asked of a context's workspace.
-git_interested! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Asked => Try({}, _)
+git_interested! : Context, Focus.Id, WorkspaceGit.Asked => Try({}, _)
 git_interested! = |context, focus, asked|
 	match located!(context, focus)? {
 		PaseoDirectory(directory) => git_wanted!(context.db, directory, asked)
@@ -467,7 +467,7 @@ git_interested! = |context, focus, asked|
 
 ## Notes that a poll watches a directory's listing ("tree") or a file
 ## ("file") of a context's workspace.
-files_interested! : Context, [Session(Str), Workspace(Str)], Str, Str => Try({}, _)
+files_interested! : Context, Focus.Id, Str, Str => Try({}, _)
 files_interested! = |context, focus, kind, path|
 	match located!(context, focus)? {
 		PaseoDirectory(directory) => wanted!(context.db, kind, Json.to_str({ directory, path }))
@@ -477,7 +477,7 @@ files_interested! = |context, focus, kind, path|
 ## A files.v1 topic's event: the directory (`Tree`) or file (`Contents`) at
 ## `path` of a context's workspace, as its provider has it; `Unknown` while
 ## Paseo hasn't answered, or there is no workspace.
-explored! : Context, [Tree, Contents], [Session(Str), Workspace(Str)], Str => Try(Protocol.Event, _)
+explored! : Context, [Tree, Contents], Focus.Id, Str => Try(Protocol.Event, _)
 explored! = |context, what, focus, path| {
 	unknown = if (what == Tree) Tree({ path, listing: Unknown }) else Contents({ path, read: Unknown })
 	match located!(context, focus)? {
@@ -973,7 +973,7 @@ routed_provider! = |context, provider, session_id| {
 
 ## What a provider has of a context's workspace for what is asked, `Unknown`
 ## when the workspace can't be read.
-git_found! : Context, [Session(Str), Workspace(Str)], WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [Unknown]), _)
+git_found! : Context, Focus.Id, WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [Unknown]), _)
 git_found! = |context, focus, poll|
 	match located!(context, focus)? {
 		MockWorkspace(workspace_id) => Ok(Ok(Mock.git(workspace_id, poll.scope, poll.file)))
@@ -990,8 +990,8 @@ git_found! = |context, focus, poll|
 	}
 
 ## Where a context's workspace is: a mock workspace, or a Paseo directory. A
-## session's is the one it works in.
-located! : Context, [Session(Str), Workspace(Str)] => Try([MockWorkspace(Str), PaseoDirectory(Str), Nowhere], _)
+## session's is the one it works in; a room or a ticket has none.
+located! : Context, Focus.Id => Try([MockWorkspace(Str), PaseoDirectory(Str), Nowhere], _)
 located! = |context, focus|
 	match focus {
 		Session(session_id) =>
@@ -1012,6 +1012,7 @@ located! = |context, focus|
 			} else {
 				Ok(Nowhere)
 			}
+		Room(_) | Ticket(_) => Ok(Nowhere)
 	}
 
 ## A directory Paseo can tell the git of. A remote agent's, such as a

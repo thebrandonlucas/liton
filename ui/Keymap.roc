@@ -122,7 +122,7 @@ expect {
 expect {
 	listed = { ..Model.initial(""), workspaces: { projects: [{ id: "p1", provider: "mock", name: "app", directory: "/w" }], workspaces: [{ id: "w1", provider: "mock", project_id: "p1", name: "main", directory: "/w", kind: Checkout, branch: NotGit, state: Idle, dirty: Bool.False, changes: Uncounted, pinned: Bool.False, labels: [], session_ids: [] }] } }
 	waiting = Keymap.pressed(Keymap.defaults, listed, "g")
-	waiting.keys_typed.keys == ["g"] and Keymap.pressed(Keymap.defaults, waiting, "1").focus == Workspace("w1") and Keymap.pressed(Keymap.defaults, waiting, "Escape").keys_typed.keys == [] and Keymap.paused(waiting, waiting.keys_typed.serial).keys_typed.keys == [] and Model.preset_shown(Keymap.pressed(Keymap.defaults, waiting, "3"), "Tiling")
+	waiting.keys_typed.keys == ["g"] and Model.focused(Keymap.pressed(Keymap.defaults, waiting, "1"), [Workspace]) == Workspace("w1") and Keymap.pressed(Keymap.defaults, waiting, "Escape").keys_typed.keys == [] and Keymap.paused(waiting, waiting.keys_typed.serial).keys_typed.keys == [] and Model.preset_shown(Keymap.pressed(Keymap.defaults, waiting, "3"), "Tiling")
 }
 
 expect Keymap.text(["Mod+,"]) == "Ctrl+," and Keymap.text(["g", "3"]) == "G then 3" and Keymap.text(["Escape"]) == "Escape"
