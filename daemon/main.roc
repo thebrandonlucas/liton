@@ -659,13 +659,18 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 		Create(asked_create) => started!(context, provider, asked_create)
+		Configure({ session_id, .. }) =>
+			match routed_provider!(context, provider, session_id)? {
+				NoSession => Ok(no_session(session_id))
+				_ => Ok(Ok(Rejected("its provider can't switch a session's model, mode or thinking yet")))
+			}
 	}
 }
 
 ## Starts an agent in a workspace of the provider that has it, or in a
 ## directory of Paseo's, when the call names it.
 started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat.Response), _)
-started! = |context, provider, { place, agent, model, prompt }| {
+started! = |context, provider, { place, agent, model, prompt, .. }| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
 	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []

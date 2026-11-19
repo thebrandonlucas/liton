@@ -223,7 +223,7 @@ Paseo := [].{
 	agent_kinds = |text, request_id| {
 		answered : Try({ message : { payload : { providers : List({ provider : Str, available : Bool }) } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "list_available_providers_response", request_id)?)
-		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| { provider: Paseo.provider.id, agent: listed.provider }))
+		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| Chat.agent_kind({ provider: Paseo.provider.id, agent: listed.provider })))
 	}
 
 	## A version 4 UUID, as Paseo takes for an agent's id, from `seed`.
@@ -939,4 +939,4 @@ expect {
 	Paseo.created(made, "r1") == Ok("a1") and Paseo.created(refused, "r1") == Err(Refused("Unknown provider")) and Paseo.created(made, "r2") == Err(OtherMessage)
 }
 
-expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([{ provider: "paseo", agent: "claude" }])
+expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([Chat.agent_kind({ provider: "paseo", agent: "claude" })])

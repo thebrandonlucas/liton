@@ -180,7 +180,7 @@ Mock := [].{
 
 	## The kinds of agent the mock provider starts.
 	agents : List(Chat.Agent)
-	agents = [{ provider: "mock", agent: "claude" }, { provider: "mock", agent: "codex" }]
+	agents = [Chat.agent_kind({ provider: "mock", agent: "claude" }), Chat.agent_kind({ provider: "mock", agent: "codex" })]
 
 	## A workspace made of a project: a checkout of its directory, on main, or
 	## a worktree beside it on `branch`.

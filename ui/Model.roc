@@ -3711,7 +3711,7 @@ Model := [].{
 		prompt = form.prompt.trim()
 		if form.kind == Agent {
 			call : { capability : Str, request : Chat.Request }
-			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), prompt }) }
+			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), mode: Err(Missing), thinking: Err(Missing), prompt }) }
 			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
 			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
 			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))

@@ -19,14 +19,26 @@ Fixtures := [].{
 		AnswerPermission({ session_id: "s1", request_id: "p2", allowed: Bool.True, choice: Ok("implement") }),
 		Rename({ session_id: "s1", title: "Fix the tests" }),
 		Archive({ session_id: "s1" }),
+		Configure({ session_id: "s1", model: Ok("claude-opus-4"), mode: Err(Missing), thinking: Ok("high") }),
+		Create({ place: Workspace("main"), agent: "claude", model: Err(Missing), mode: Ok("plan"), thinking: Ok("low"), prompt: "" }),
 	]
 
 	responses : List(Chat.Response)
 	responses = [
-		Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission })]),
+		Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission }), Fixtures.configured]),
 		Accepted,
 		Rejected("no session s2"),
 	]
+
+	## A session telling its mode, thinking level, modes and usage.
+	configured : Chat.Session
+	configured = {
+		..Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Plan the docs", status: Idle }),
+		mode: Ok("plan"),
+		thinking: Ok("high"),
+		modes: Ok([{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }]),
+		usage: Ok({ context_used: Ok(41_000), context_max: Ok(200_000), input_tokens: Ok(52_000), cached_input_tokens: Ok(40_000), output_tokens: Ok(3_100), cost_usd: Ok(0.42) }),
+	}
 
 	timeline : List(Chat.Entry)
 	timeline = [
