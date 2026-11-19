@@ -25,14 +25,16 @@ try {
 //   boxes taken then), so a layout previewed under the pointer doesn't
 //   change what it is over.
 // - View transitions: a way for an update to ask that the DOM change it
-//   makes be animated with `document.startViewTransition`.
+//   makes be animated with `document.startViewTransition`, applying it
+//   within the transition's update rather than at a frame the update holds
+//   back (here the app's report drain falls back to its 100 ms timer).
 // While a pane's tab or header is held (`Drag.pointer`), this reports the
 // pointer: once it has moved 4 pixels, each move, with the tile
 // (`data-tile`) and tab (`data-tab`) under it as they were at the press,
 // and how far across and down that tab or tile it is in ten thousandths;
 // then the release, or a cancel for Escape, a cancelled pointer or a press
-// that never moved. A move to another part of a tile, and the release or
-// cancel ending a drag, are reported inside a view transition, so the
+// that never moved. A move to another part of a tile, and a cancel or a
+// release outside the tiles, are reported inside a view transition, so the
 // tiles move to the layout previewed rather than jump, unless motion is
 // reduced (the system's setting or the theme's). While a line between
 // tiles is held (`column` or `row` names it), each move instead reports how
@@ -40,9 +42,20 @@ try {
 // from the grid's computed `grid-template-columns` or `-rows` at the press.
 const boxes = (attribute) => [...document.querySelectorAll(`[${attribute}]`)].map((element) => ({ id: element.getAttribute(attribute), box: element.getBoundingClientRect() }));
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches || getComputedStyle(document.querySelector(".liton") ?? document.body).getPropertyValue("--motion").trim() === "0";
+// The page doesn't render while a transition's update runs, so the update
+// ends when the grid changes, as the app draws the message `change` emits
+// (its report drain then waits on a timer rather than a frame), or after a
+// while if nothing changes. A transition skipped by the next is no error.
 const transition = (change) => {
   if (!document.startViewTransition || reduced()) return change();
-  document.startViewTransition(() => new Promise((done) => { change(); requestAnimationFrame(() => requestAnimationFrame(done)); }));
+  const running = document.startViewTransition(() => new Promise((done) => {
+    const grid = document.querySelector(".grid");
+    const ended = () => { watch.disconnect(); clearTimeout(timer); done(); };
+    const watch = new MutationObserver(ended), timer = setTimeout(ended, 300);
+    if (grid) watch.observe(grid, { subtree: true, childList: true, attributes: true });
+    change();
+  }));
+  for (const settled of [running.ready, running.finished, running.updateCallbackDone]) settled.catch(() => {});
 };
 // How far across the tracks beside `line` the point `at` is, in ten
 // thousandths, by the grid's tracks as the browser laid them out.
@@ -53,6 +66,13 @@ const across_tracks = (axis, line) => {
   const from = origin + sizes.slice(0, line - 1).reduce((sum, size) => sum + size, 0), both = sizes[line - 1] + sizes[line];
   return (at) => Math.max(0, Math.min(10000, Math.round((at - from) * 10000 / both)));
 };
+// The latest press and move of each pointer, so a drag whose report starts
+// after the pointer has moved reports from the press.
+const pointers = new Map();
+for (const type of ["pointerdown", "pointermove"]) window.addEventListener(type, (event) => {
+  const seen = pointers.get(event.pointerId);
+  pointers.set(event.pointerId, { down: type === "pointerdown" || !seen ? { x: event.clientX, y: event.clientY } : seen.down, last: event });
+}, true);
 const drag = ({ pointer, column, row }, { emit }) => {
   const tiles = boxes("data-tile"), tabs = boxes("data-tab");
   const resizing = column > 0 ? across_tracks("column", column) : row > 0 ? across_tracks("row", row) : null;
@@ -77,7 +97,14 @@ const drag = ({ pointer, column, row }, { emit }) => {
     part = now;
     transition(() => emit(at));
   };
-  const up = (event) => event.pointerId === pointer && (moved && !resizing ? transition(() => emit(report("Released", event))) : emit(report(moved ? "Released" : "Cancelled", event)));
+  // A release over a tile drops the pane where the layout shows it already;
+  // one outside the tiles puts the layout back, which a transition shows.
+  const up = (event) => {
+    if (event.pointerId !== pointer) return;
+    const at = report(moved ? "Released" : "Cancelled", event);
+    if (moved && !resizing && !at.tile) transition(() => emit(at));
+    else emit(at);
+  };
   const cancel = (event) => event.pointerId === pointer && transition(() => emit(report("Cancelled", event)));
   const key = (event) => {
     if (event.key !== "Escape" || !moved) return;
@@ -85,6 +112,11 @@ const drag = ({ pointer, column, row }, { emit }) => {
     event.preventDefault();
     transition(() => emit({ phase: "Cancelled", x: 0, y: 0, tile: "", tab: "", across: 0, down: 0 }));
   };
+  const seen = pointers.get(pointer);
+  if (seen) {
+    start = seen.down;
+    if (seen.last.type === "pointermove") move(seen.last);
+  }
   const listeners = [["pointermove", move], ["pointerup", up], ["pointercancel", cancel], ["keydown", key]];
   for (const [type, listener] of listeners) window.addEventListener(type, listener, true);
   return () => { for (const [type, listener] of listeners) window.removeEventListener(type, listener, true); };
