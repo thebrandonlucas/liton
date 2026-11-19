@@ -179,7 +179,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 
 /* The deck: a slim strip of its surfaces under the tiles, the one shown
    lit. A surface switched to slides in from the side it lies on, a new
-   animation (-0, -1) for each switch; not where motion is reduced. */
+   animation (-0, -1) for each switch; not where motion is reduced. It
+   moves only: fading it too redrew every glass pane's blur at each frame,
+   which dropped about half the slide's frames. */
 .deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--room) calc(var(--room) + env(safe-area-inset-bottom)); }
 .deck-surface { padding: 1px 10px; border: 1px solid transparent; border-radius: 999px; background: none;
   color: var(--muted); font: 11px var(--font-mono); letter-spacing: .02em; opacity: .7; }
@@ -189,10 +191,10 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .grid.deck-in-next-1 { animation: deck-in-next-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
 .grid.deck-in-previous-0 { animation: deck-in-previous-0 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
 .grid.deck-in-previous-1 { animation: deck-in-previous-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
-@keyframes deck-in-next-0 { from { transform: translateX(12%); opacity: 0; } }
-@keyframes deck-in-next-1 { from { transform: translateX(12%); opacity: 0; } }
-@keyframes deck-in-previous-0 { from { transform: translateX(-12%); opacity: 0; } }
-@keyframes deck-in-previous-1 { from { transform: translateX(-12%); opacity: 0; } }
+@keyframes deck-in-next-0 { from { transform: translateX(12%); } }
+@keyframes deck-in-next-1 { from { transform: translateX(12%); } }
+@keyframes deck-in-previous-0 { from { transform: translateX(-12%); } }
+@keyframes deck-in-previous-1 { from { transform: translateX(-12%); } }
 @media (prefers-reduced-motion: reduce) { .grid[class*="deck-in-"] { animation: none; } }
 
 /* Settings' Deck: a row for each surface, its name, then its moves. */

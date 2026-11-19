@@ -240,6 +240,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A theme you picked stays when you open another surface or reset one to its preset, rather than turning to the surface's own, such as Developer's Neutral. A browser that has no theme of its own yet still shows each surface's.
 - Drag the workspace shown in the main area to another place by any of its tabs, a session's, the diff's or a ticket's, or by its name in its header, as you drag other panes. A ticket scrolls within its pane, so its comment box is always in reach, and its status, assignees and labels line up as rows of a name and a value.
 - Every menu, a pane's, a row's or the workspace's ⋮, the new tab menu, a room's and the context meter's, closes as you click its button again, click or tap anywhere outside it, press Escape, move focus out of it or choose an item, and no longer opens cut off by the pane it is in. On a phone it rises from the bottom of the screen.
+- Switching the deck's surface, by a swipe, the strip or the keys, slides without dropping frames over glass panes, and a two-finger swipe needs a shorter stroke, 100 pixels rather than 160, to turn the page.
 
 ### Removed
 
