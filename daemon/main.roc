@@ -575,15 +575,16 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 				_ => Ok(Ok(Entries(timelines!(context, [{ session_id, after }])?.first().map_ok(|timeline| timeline.entries) ?? [])))
 			}
-		SendMessage({ session_id, text: message }) =>
+		SendMessage({ session_id, text: message, while_running }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
-					schedule!(db, session_id, |next| Mock.on_message(message, next))?
+					timeline = visible!(db, session_id, 0)?
+					schedule!(db, session_id, |next| if (while_running == Ok(Steer) and Mock.status(timeline) == Running) Mock.on_steer(message, next) else Mock.on_message(message, next))?
 					Ok(Ok(Accepted))
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-send-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.send_request(session_id, message, request_id), request_id, Paseo.sent)
+					outcome = written!(daemon, Paseo.send_request(session_id, message, while_running, request_id), request_id, Paseo.sent)
 					forget_check!(db, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -919,7 +920,7 @@ review_call! = |context, asked| {
 	match (asked, Review.applied(stored.review, asked)) {
 		(_, Err(problem)) => Ok(Err(refused(problem)))
 		(Send({ session_id, .. }), Ok(_)) =>
-			match chat_call!(context, Err(Missing), SendMessage({ session_id, text: Review.message(stored.review) }))? {
+			match chat_call!(context, Err(Missing), SendMessage({ session_id, text: Review.message(stored.review), while_running: Err(Missing) }))? {
 				Err(error) => Ok(Err(error))
 				Ok(Rejected(reason)) => Ok(Err({ code: Refused, message: reason }))
 				Ok(_) => Ok(answered(review_changed!(context.db, key, |review| Review.applied(review, asked))?, |review| Sent({ round: review.round })))

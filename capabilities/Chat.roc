@@ -86,11 +86,12 @@ Chat := [].{
 	## stops it, if it runs, and lists it no more. A session has no pin of
 	## its own: a client pins the workspace it works in (workspaces.v1).
 	## `Configure` switches a session's model, mode or thinking level, those
-	## it names, at once.
+	## it names, at once. A message sent while the agent works on a turn
+	## interrupts it, or with `while_running` `Steer` joins it.
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
-		SendMessage({ session_id : Str, text : Str }),
+		SendMessage({ session_id : Str, text : Str, while_running : Try([Interrupt, Steer], [Missing]) }),
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		Cancel({ session_id : Str }),
 		Create(Create),

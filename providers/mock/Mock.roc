@@ -102,6 +102,12 @@ Mock := [].{
 		]
 	}
 
+	## What follows a message that steers the turn the agent works on: the
+	## message, and a word that it takes it into account, the rest of its
+	## script going on.
+	on_steer : Str, U64 -> List(Scheduled)
+	on_steer = |text, _| [{ delay_ms: 0, event: UserMessage({ text: text }) }, { delay_ms: 600, event: AgentMessage({ text: "Noted, I'll take that into account: \"${text}\"" }) }]
+
 	## What follows an answer to a pending permission request, with the
 	## choice taken, if it offered its own.
 	on_answer : Str, Bool, Try(Str, [Missing]), U64 -> List(Scheduled)

@@ -125,10 +125,15 @@ Paseo := [].{
 	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle, turn: Err(Missing) }
 
 	## Prompts an agent, interrupting it if it is running, as Paseo's own app
-	## does. Paseo answers once the agent took the prompt (see `sent`).
-	send_request : Str, Str, Str -> Str
-	send_request = |agent_id, text, request_id|
-		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text } })
+	## does, or steering its turn as `while_running` asks (Paseo's
+	## `activeTurnBehavior`, from 0.5). Paseo answers once the agent took the
+	## prompt (see `sent`).
+	send_request : Str, Str, Try([Interrupt, Steer], [Missing]), Str -> Str
+	send_request = |agent_id, text, while_running, request_id| {
+		behavior : Try(Str, [Missing])
+		behavior = while_running.map_ok(|asked| if (asked == Steer) "steer" else "interrupt")
+		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text, activeTurnBehavior: behavior } })
+	}
 
 	## Whether a `send_agent_message_response` says the agent took the prompt.
 	sent : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
@@ -954,7 +959,8 @@ request = |message| "{\"message\":${message},\"type\":\"session\"}"
 
 expect Paseo.permission_answer("a1", "p1", Bool.False, Err(Missing)) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
 expect Paseo.permission_answer("a1", "p1", Bool.True, Ok("implement")) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"allow\",\"selectedActionId\":\"implement\"},\"type\":\"agent_permission_response\"}")
-expect Paseo.send_request("a1", "Go on", "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Go on", Err(Missing), "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Also the docs", Ok(Steer), "w1") == request("{\"activeTurnBehavior\":\"steer\",\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Also the docs\",\"type\":\"send_agent_message_request\"}")
 
 expect {
 	answer = |fields| session("{\"type\":\"send_agent_message_response\",\"payload\":{\"requestId\":\"w1\",\"agentId\":\"a1\",${fields}}}")

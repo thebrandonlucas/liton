@@ -171,7 +171,7 @@ Microphone := [].{
 				{ ..typed, drafts_rewritten: { pane: voice.pane, count: typed.drafts_rewritten.count + 1 }, voice: done }
 			}
 			Ok(Transcript({ text, .. })) if Speech.echoes(text, Microphone.replies(state).last().map_ok(|reply| reply.text) ?? "") => { ..changed_to(done), notice: "Not sent: it sounded like the reply read back" }
-			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim() }))
+			Ok(Transcript({ text, .. })) => Model.send(changed_to(done), SendMessage({ session_id: voice.session, text: text.trim(), while_running: Err(Missing) }))
 			Ok(NotTranscribed(reason)) if voice.mode == Dictation => changed_to({ ..done, phase: Failed(reason) })
 			Ok(NotTranscribed(reason)) => { ..changed_to(done), notice: "Not transcribed: ${reason}" }
 			Ok(Speaking(speaking)) => changed_to({ ..voice, speaking })

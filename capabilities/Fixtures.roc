@@ -14,7 +14,8 @@ Fixtures := [].{
 	requests = [
 		ListSessions,
 		WatchSession({ session_id: "s1", after: 0 }),
-		SendMessage({ session_id: "s1", text: "Fix the failing test" }),
+		SendMessage({ session_id: "s1", text: "Fix the failing test", while_running: Err(Missing) }),
+		SendMessage({ session_id: "s1", text: "Check the docs too", while_running: Ok(Steer) }),
 		AnswerPermission({ session_id: "s1", request_id: "p1", allowed: Bool.True, choice: Err(Missing) }),
 		AnswerPermission({ session_id: "s1", request_id: "p2", allowed: Bool.True, choice: Ok("implement") }),
 		Rename({ session_id: "s1", title: "Fix the tests" }),

@@ -115,6 +115,12 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
 and `Unlink` (Tickets, below).
 
+`{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
+it works on a turn, the message interrupts it, or with `"while_running":
+"Steer"` joins the turn, as Paseo's `activeTurnBehavior` `steer`; Paseo
+sends `"Interrupt"` as `interrupt`, and the mock takes a steer as a word that
+it goes on.
+
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
 Paseo, its `cancel_agent_request`). A session that isn't running is left as
