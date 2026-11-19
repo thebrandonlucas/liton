@@ -869,7 +869,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -882,6 +882,7 @@ Liton := [].{
 							Ticket => Liton.ticket_view(model, id)
 							Rooms => Liton.rooms(model)
 							Room => Liton.room_view(model, id)
+							Thread => Liton.thread_view(model, id)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -2201,16 +2202,26 @@ Liton := [].{
 
 	## A room shown: its name and topic, Join or Leave, and its messages,
 	## the newest at the bottom, with who is typing. A forum's are its posts.
-	## A thread opened shows beside them, or in their place in a narrow pane.
+	## A thread opened shows in the Thread pane, or without one, beside
+	## them, or in their place in a narrow pane.
 	room_opened : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_opened = |model, id| {
 		opened = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id))
 		room_id = opened.map(|shown| shown.room_id)
 		shown = room_id.map2(model.signal(), |opened_id, state| Model.room_of(state, opened_id))
+		beside = opened.map2(model.signal(), |{ root, .. }, state| !root.is_empty() and !Model.threads_apart(state))
 		Html.div_s(
-			shown.map2(opened, |room, { root, .. }| Str.join_with(["room", if (room.kind == Forum) "forum" else "", if (root.is_empty()) "" else "threaded"].drop_if(Str.is_empty), " ")),
-			[Html.div("room-main", Liton.room_main(model, id, room_id, shown)), Engine.when(opened.map(|{ root, .. }| !root.is_empty()), || Liton.room_thread(model, id, opened), || Engine.text(""))],
+			shown.map2(beside, |room, threaded| Str.join_with(["room", if (room.kind == Forum) "forum" else "", if (threaded) "threaded" else ""].drop_if(Str.is_empty), " ")),
+			[Html.div("room-main", Liton.room_main(model, id, room_id, shown)), Engine.when(beside, || Liton.room_thread(model, id, opened, "Thread"), || Engine.text(""))],
 		)
+	}
+
+	## A Thread pane: the thread open in the room it follows, or where to
+	## open one.
+	thread_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	thread_view = |model, id| {
+		opened = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id))
+		Engine.when(opened.map(|{ root, .. }| root.is_empty()), || Html.p("Open a message's thread to show it here.", "missing"), || Liton.room_thread(model, id, opened, ""))
 	}
 
 	## A room's header, messages and who is typing.
@@ -2233,14 +2244,14 @@ Liton := [].{
 			])
 	}
 
-	## The thread a Rooms pane opened: its top-level message, its replies and
-	## who is typing in it, and × to close it.
-	room_thread : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.RoomPane) -> Elem(PaneCtx)
-	room_thread = |model, id, opened| {
-		header = Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))])
+	## The thread a Room or Thread pane opened: its top-level message, its
+	## replies and who is typing in it, and × to close it, under `title`.
+	room_thread : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.RoomPane), Str -> Elem(PaneCtx)
+	room_thread = |model, id, opened, title| {
+		header = Html.div("room-header", [Html.span_s(Engine.const(title), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))])
 		replies = Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
 		Html.section(
-			"Thread",
+			if (title.is_empty()) "Thread messages" else title,
 			"room-thread-pane",
 			[header]
 				.concat(Conversation.timeline(model, id.map(|pane_id| "${pane_id}/thread"), { class: "timeline room-timeline", part: "thread", jump: Bool.True, earlier: Engine.const(Bool.False), loading: opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)) }, [replies]))

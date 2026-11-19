@@ -380,6 +380,7 @@ kbd:empty { display: none; }
 .room { container-type: inline-size; flex: 1; min-height: 0; display: flex; }
 .room-main, .room-thread-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .room-thread-pane { border-left: 1px solid var(--edge); }
+.pane > .room-thread-pane { border-left: none; }
 /* A thread shows beside its room, or in its place in a narrow pane. */
 @container (max-width: 520px) { .room.threaded .room-main { display: none; } .room-thread-pane { border-left: none; } }
 .room-header { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--edge); }

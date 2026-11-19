@@ -161,6 +161,18 @@ Widgets := [].{
 			options: [],
 			parts: ["header", "room", "message", "thread", "composer"],
 		},
+		{
+			id: "thread",
+			title: "Thread",
+			role: Inspector,
+			needs: [Capability.rooms_v1],
+			slots: [Right, Main],
+			minimum_width: 280,
+			sets: [],
+			follows: [Room],
+			options: [],
+			parts: ["header", "message", "composer"],
+		},
 		{ id: "capabilities", title: "Capabilities", role: View, needs: [], slots: [Left, Main, Right], minimum_width: 200, sets: [], follows: [], options: [], parts: ["header", "manifest"] },
 		{ id: "ci", title: "CI runs", role: Inspector, needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, sets: [], follows: [Session, Workspace], options: [], parts: ["header"] },
 	]

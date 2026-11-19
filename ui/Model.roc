@@ -1456,14 +1456,14 @@ Model := [].{
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		# The rooms, and the messages and members of the room each Room pane
-		# shows, and of the thread open in it.
+		# The rooms, and the messages and members of the room each Room or
+		# Thread pane shows, and of the thread open in it.
 		room_topics = |shown| {
 			{ room_id, root, .. } = Model.room_pane(state, shown.id)
 			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
 		}
-		rooms_shown = laid_out.keep_if(|shown| (shown.widget == "rooms" or shown.widget == "room") and Model.pane_visible(state, shown.id))
-		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget == "room").join_map(room_topics).prepend(RoomList) else []
+		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread"].contains(shown.widget) and Model.pane_visible(state, shown.id))
+		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget != "rooms").join_map(room_topics).prepend(RoomList) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -2768,10 +2768,36 @@ Model := [].{
 		{ pane: pane_id, room_id, root }
 	}
 
-	## Opens a thread beside the room a Rooms pane shows, by its root, or
-	## closes it with "".
+	## Opens a thread of the room a Room or Thread pane shows, by its root,
+	## or closes it with "": in a Thread pane, shown at once, or else beside
+	## the room. Closed, the Thread pane hides, and a narrow screen shows
+	## the room again.
 	open_thread : State, { pane_id : Str, root : Str } -> State
-	open_thread = |state, { pane_id, root }| { ..state, sub_focus: if (root.is_empty()) None else Thread({ room_id: Model.room_pane(state, pane_id).room_id, root }) }
+	open_thread = |state, { pane_id, root }| {
+		threaded = { ..state, sub_focus: if (root.is_empty()) None else Thread({ room_id: Model.room_pane(state, pane_id).room_id, root }) }
+		back_to_room = |closed| Model.tiles_in_order(closed).find_first(|tile| tile.panes.any(|shown| shown.widget == "room")).map_ok(|tile| Model.jump_to(closed, tile.id, Replace)) ?? closed
+		match Model.panes(state).find_first(|shown| shown.widget == "thread") {
+			Ok(inspector) if root.is_empty() => if (Model.pane_visible(state, inspector.id)) back_to_room(Model.hide_pane(threaded, inspector.id)) else threaded
+			Ok(inspector) => Model.reveal(threaded, inspector.id)
+			Err(NotFound) => threaded
+		}
+	}
+
+	## Whether the layout has a Thread pane, where a room's thread opens.
+	threads_apart : State -> Bool
+	threads_apart = |state| Model.panes(state).any(|shown| shown.widget == "thread")
+
+	## Shows a pane: not hidden, its tab forward and its drawer open, and on
+	## a narrow screen, its panel.
+	reveal : State, Str -> State
+	reveal = |state, pane_id|
+		match Model.tile_of(state, pane_id) {
+			Ok(tile) => {
+				slot = Model.slot_of(state, tile.id)
+				Model.jump_to(Model.activate_tab({ ..state, hidden: state.hidden.drop_if(|hidden_id| hidden_id == pane_id), collapsed: state.collapsed.drop_if(|collapsed| collapsed == slot) }, pane_id), tile.id, Push)
+			}
+			Err(NotFound) => state
+		}
 
 	## A room as listed, or as its id alone tells.
 	room_of : State, Str -> Rooms.Room
@@ -3006,7 +3032,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3033,6 +3059,7 @@ Model := [].{
 				"ticket" => Ticket
 				"rooms" => Rooms
 				"room" => Room
+				"thread" => Thread
 				"capabilities" => Capabilities
 				_ => NoView
 			}
