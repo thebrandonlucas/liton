@@ -1794,7 +1794,8 @@ asked! = |db, connection, { kind, subject }, request_id|
 ## those their agents finished, gives up on those that failed or took
 ## `PaseoSummaries.given_up_ms` (archiving the agent), then starts an
 ## agent for each session due one. A session whose summary failed, or
-## whose agent offers no small model, waits for its next turn.
+## whose agent offers no small model, waits for its next turn; one whose
+## agent's models Paseo doesn't list yet waits for them.
 summarized! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
 summarized! = |db, connection, configured| {
 	now = now_ms!()
@@ -1825,11 +1826,13 @@ summarized! = |db, connection, configured| {
 		listed = Json.parse(row.listed)
 		listed.map_ok(|session| session.status) ?? Running
 	}
-	candidates = rows.map(|row| { session_id: row.session_id, status: status_of(row), ended_through: row.ended_through.to_u64_wrap(), ended_ms: row.ended_ms, summarized_through: row.through.to_u64_wrap(), writing: row.agent_id != "" })
 	kinds_rows : List({ value : Str })
 	kinds_rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
 	kinds : Try(List(Chat.Agent), _)
 	kinds = Json.parse(kinds_rows.first().map_ok(|row| row.value) ?? "")
+	candidates = rows
+		.drop_if(|row| PaseoSummaries.model(kinds ?? [], row.agent, configured) == Err(NotListed))
+		.map(|row| { session_id: row.session_id, status: status_of(row), ended_through: row.ended_through.to_u64_wrap(), ended_ms: row.ended_ms, summarized_through: row.through.to_u64_wrap(), writing: row.agent_id != "" })
 	for session_id in PaseoSummaries.due(candidates, now) {
 		row = rows.find_first(|each| each.session_id == session_id)?
 		ended : Try(Chat.Event, _)
@@ -1843,6 +1846,7 @@ summarized! = |db, connection, configured| {
 		skipped! = || Sqlite.execute!({ db, query: "INSERT INTO summaries (session_id, through) VALUES (:session_id, :through) ON CONFLICT (session_id) DO UPDATE SET through = excluded.through;", params: { session_id, through: row.ended_through } })
 		match PaseoSummaries.model(kinds ?? [], row.agent, configured) {
 			Err(Missing) => skipped!()?
+			Err(NotListed) => {}
 			Ok(chosen) => {
 				previous : Try(Chat.Summary, _)
 				previous = Json.parse(row.value)
