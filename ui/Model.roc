@@ -1930,7 +1930,8 @@ Model := [].{
 	## a chat pane shows; the attention items, which the title counts; of
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows, and of each Review pane every file's; of each Files pane on screen, its root, the directories
-	## open and the file it shows; the workspaces, while a pane lists them;
+	## open and the file it shows; the workspaces, while a pane lists them
+	## or an inbox's filters, Pin and New agent use them;
 	## the review of the context of each, Files, Changes or Review, on screen; and
 	## of Tickets panes on screen, the tickets, the links and the ticket each
 	## shows. Until the manifest arrives, every capability counts as offered.
@@ -1962,7 +1963,7 @@ Model := [].{
 		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
-		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces" or shown.widget == "inbox")) [WorkspaceList, Agents] else []
 		# The kinds of agent, with their models and modes, for chat panes'
 		# composers, followed last.
 		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
