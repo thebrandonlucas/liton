@@ -40,7 +40,8 @@ Keymap := [].{
 	## The Board's keys, Linear's: J or K, or the arrows, move the cursor
 	## down or up, Enter opens the ticket under it, and X selects it; S
 	## and A change the status or assignees of those selected, else of
-	## the one under the cursor, in the palette.
+	## the one under the cursor, in the palette; F filters the tickets
+	## there, and / searches them.
 	board : List(Binding)
 	board = [
 		{ keys: ["j"], command: "board.next" },
@@ -51,6 +52,8 @@ Keymap := [].{
 		{ keys: ["x"], command: "board.select" },
 		{ keys: ["s"], command: "ticket.status" },
 		{ keys: ["a"], command: "ticket.assign" },
+		{ keys: ["f"], command: "board.filter" },
+		{ keys: ["/"], command: "board.search" },
 	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the

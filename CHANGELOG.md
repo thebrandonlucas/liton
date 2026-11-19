@@ -146,6 +146,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Ctrl+B or ⌘B, or the List and Board buttons, switch the Board preset's tickets between the list and a board: a column for each status of the source shown (for each kind of status while several sources are), each counted, its tickets as cards. The pane keeps the layout picked. In the Board preset ⌘B no longer hides the left drawer; its button still does.
 - In the Board preset, X selects the ticket under the cursor (Escape selects none), and S or A open the palette at Set status to… or Assign…, to change the status or assignees of the tickets selected, or of the one under the cursor, at once. Tickets of other sources take their own status of the same kind.
 - Drag a ticket's card to another column of the board, or row to another group of the list, to set its status there at once; the column under the pointer is outlined while you hold it. With a mouse or pen; on a touch screen use S.
+- In the Board preset, F opens the palette at Filter: to keep only a kind of status, your tickets, those unassigned or a label's, shown above the tickets with × to clear it; / goes to the search. Save view keeps the filter, with the scope and search, as a view of its own under Scopes, which this browser remembers until you forget it with its ×.
 
 ### Fixed
 

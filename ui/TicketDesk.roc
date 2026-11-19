@@ -15,8 +15,12 @@ TicketDesk := [].{
 	View : { pane : Str, filter : Tickets.Filter }
 
 	## Which tickets Board panes show, as a Scopes pane picked: every one,
-	## the user's, those assigned to nobody, or a source's.
-	Scope : [All, Mine, Unassigned, Source(Str)]
+	## the user's, those assigned to nobody, a source's, or those a view
+	## saved passes.
+	Scope : [All, Mine, Unassigned, Source(Str), Saved(Str)]
+
+	## A filter saved by name, which this browser keeps.
+	SavedView : { name : Str, filter : Tickets.Filter }
 
 	## A Board pane's own filter, over its scope's, whether it shows the
 	## ticket under the cursor `opened` in place of the list, and the
@@ -31,10 +35,10 @@ TicketDesk := [].{
 	## one goes at a time; they show at once too.
 	## `dragged` is the ticket whose card is held on a Board, whether it has
 	## moved since, and the group under the pointer, by its key, "" for none.
-	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), dragged : { ticket : Str, moved : Bool, over : Str } }
+	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), saved : List(SavedView), dragged : { ticket : Str, moved : Bool, over : Str } }
 
 	initial : State
-	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
+	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], saved: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View
@@ -53,9 +57,10 @@ TicketDesk := [].{
 	with_board : State, Str, (Board -> Board) -> State
 	with_board = |desk, pane, change| { ..desk, boards: desk.boards.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.board(desk, pane))) }
 
-	scope_filter : Scope -> Tickets.Filter
-	scope_filter = |scope|
+	scope_filter : State, Scope -> Tickets.Filter
+	scope_filter = |desk, scope|
 		match scope {
+			Saved(name) => desk.saved.find_first(|kept| kept.name == name).map_ok(|kept| kept.filter) ?? TicketDesk.everything
 			All => TicketDesk.everything
 			Mine => { ..TicketDesk.everything, assignee: Me }
 			Unassigned => { ..TicketDesk.everything, assignee: Nobody }
@@ -65,7 +70,7 @@ TicketDesk := [].{
 	## A Board pane's filter: its scope's, narrowed by what its own sets.
 	board_filter : State, Str -> Tickets.Filter
 	board_filter = |desk, pane| {
-		scoped = TicketDesk.scope_filter(desk.scope)
+		scoped = TicketDesk.scope_filter(desk, desk.scope)
 		own = TicketDesk.board(desk, pane).filter
 		{
 			sources: if (own.sources.is_empty()) scoped.sources else own.sources,
@@ -119,7 +124,29 @@ TicketDesk := [].{
 			Mine => "Mine"
 			Unassigned => "Unassigned"
 			Source(source_id) => TicketDesk.source_name(desk, source_id)
+			Saved(name) => name
 		}
+
+	## What a filter keeps, as "Started · Mine · bug", "" for every ticket.
+	described : State, Tickets.Filter -> Str
+	described = |desk, filter| {
+		parts = [
+			if (filter.kinds.is_empty()) "" else TicketDesk.kinds_name(filter.kinds),
+			match filter.assignee {
+				Me => "Mine"
+				Nobody => "Unassigned"
+				_ => ""
+			},
+			Str.join_with(filter.sources.map(|source_id| TicketDesk.source_name(desk, source_id)), ", "),
+			filter.label,
+			if (filter.text.is_empty()) "" else "“${filter.text}”",
+		]
+		Str.join_with(parts.drop_if(Str.is_empty), " · ")
+	}
+
+	## The labels the tickets have, each once, in order.
+	labels : State -> List(Str)
+	labels = |desk| desk.listing.tickets.join_map(|ticket| ticket.labels).fold([], |found, label| if (found.contains(label)) found else found.append(label)).sort_with(|a, b| bytes_order(a.to_utf8(), b.to_utf8()))
 
 	## The scopes a Scopes pane offers, each by a key, with how many tickets
 	## it has.
@@ -129,10 +156,11 @@ TicketDesk := [].{
 		key = |scope|
 			match scope {
 				Source(source_id) => "source:${source_id}"
+				Saved(name) => "view:${name}"
 				_ => TicketDesk.scope_name(desk, scope)
 			}
-		counted = |scope| { key: key(scope), scope, name: TicketDesk.scope_name(desk, scope), count: listing.tickets.count_if(|ticket| Tickets.matches(TicketDesk.scope_filter(scope), listing, ticket)) }
-		[All, Mine, Unassigned].concat(desk.listing.sources.map(|source| Source(source.id))).map(counted)
+		counted = |scope| { key: key(scope), scope, name: TicketDesk.scope_name(desk, scope), count: listing.tickets.count_if(|ticket| Tickets.matches(TicketDesk.scope_filter(desk, scope), listing, ticket)) }
+		[All, Mine, Unassigned].concat(desk.listing.sources.map(|source| Source(source.id))).concat(desk.saved.map(|kept| Saved(kept.name))).map(counted)
 	}
 
 	## The sources and tickets with the status and assignee changes on their

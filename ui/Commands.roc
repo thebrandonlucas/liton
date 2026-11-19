@@ -35,6 +35,8 @@ Commands := [].{
 	board = |state| {
 		reached = |shown| !Model.board_in_reach(shown).is_empty()
 		acted_on = |shown| reached(shown) and !Model.tickets_acted_on(shown).is_empty()
+		filtered = |shown| reached(shown) and TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).filter != TicketDesk.everything
+		filter = |key, title, change| { id: "board.filter.${key}", title: "Filter: ${title}", group: "Board", applies: reached, run: |shown| Model.filter_board(shown, Model.board_in_reach(shown), change) }
 		# The statuses and people of the source of the first ticket acted on.
 		source = Model.tickets_acted_on(state).first().map_ok(|ticket| ticket.source).ok_or("")
 		known = state.tickets.listing.sources.find_first(|listed| listed.id == source)
@@ -51,8 +53,15 @@ Commands := [].{
 			{ id: "board.clear", title: "Select no tickets", group: "Board", applies: |shown| reached(shown) and !TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).selected.is_empty(), run: |shown| Model.select_ticket(shown, Clear) },
 			{ id: "ticket.status", title: "Change the status…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Set status to ") },
 			{ id: "ticket.assign", title: "Change the assignees…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Assign ") },
+			{ id: "board.search", title: "Search the tickets", group: "Board", applies: reached, run: Model.search_board },
+			{ id: "board.filter", title: "Filter the tickets…", group: "Board", applies: reached, run: |shown| Commands.open_palette_at(shown, "Filter: ") },
+			{ id: "board.unfilter", title: "Clear the filter", group: "Board", applies: filtered, run: |shown| Model.filter_board(shown, Model.board_in_reach(shown), |_| TicketDesk.everything) },
+			{ id: "board.save", title: "Save the filter as a view", group: "Board", applies: |shown| filtered(shown) or (reached(shown) and !TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).filter.text.is_empty()), run: |shown| Model.save_view(shown, Model.board_in_reach(shown)) },
 			{ id: "board.layout", title: "Switch between the list and the board", group: "Board", applies: reached, run: |shown| Model.set_option(shown, Model.board_in_reach(shown), "layout", if (Model.board_layout(shown, Model.board_in_reach(shown)) == Board) "List" else "Board") },
 		]
+			.concat(TicketDesk.kinds.map(|named| filter(named.name, named.name, |kept| { ..kept, kinds: named.kinds })))
+			.concat([filter("mine", "assigned to me", |kept| { ..kept, assignee: Me }), filter("unassigned", "unassigned", |kept| { ..kept, assignee: Nobody }), filter("anyone", "assigned to anyone", |kept| { ..kept, assignee: Anyone })])
+			.concat(TicketDesk.labels(state.tickets).map(|label| filter("label.${label}", "labelled ${label}", |kept| { ..kept, label })))
 			.concat(statuses.map(|status| { id: "ticket.status.${status.id}", title: "Set status to ${status.name}", group: "Ticket", applies: acted_on, run: |shown| Model.set_statuses(shown, status) }))
 			.concat(people.map(|person| { id: "ticket.assign.${person.id}", title: if (assigned(state, person.id)) "Unassign ${person.name}" else "Assign to ${person.name}", group: "Ticket", applies: acted_on, run: |shown| Model.assign_all(shown, person.id, !assigned(shown, person.id)) }))
 	}

@@ -50,13 +50,17 @@ Liton := [].{
 	platform_key : Str
 	platform_key = "liton.platform"
 
+	## The ticket views saved, which this browser keeps.
+	views_key : Str
+	views_key = "liton.ticket-views"
+
 	coarse_pointer_query : Str
 	coarse_pointer_query = "(pointer: coarse)"
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		{ storage_keys: [Liton.snapshot_key, Liton.views_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Model.restore_views(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -311,6 +315,7 @@ Liton := [].{
 			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
+		Engine.watch_changes(model.signal().map(|state| Json.to_str(state.tickets.saved)), |text| [Engine.command(StorageSet(Liton.views_key, text))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
@@ -1474,6 +1479,11 @@ Liton := [].{
 									[Engine.attr("type", "button"), Engine.class("scope"), Html.aria_label_s(row.field(|listed| listed.name)), Html.flag("aria-pressed", row.field(|listed| listed.scope).map2(model.signal().lift_row(), |scope, state| state.tickets.scope == scope)), Engine.on_click(model.lift_row().update_by(row.field(|listed| listed.scope), Model.pick_scope))],
 									[Html.span_s(row.field(|listed| listed.name), [Engine.class("scope-name")]), Html.span_s(row.field(|listed| listed.count.to_str()), [Engine.class("count")])],
 								),
+								Engine.when(
+									row.key().map(|key| key.starts_with("view:")),
+									|| Html.button("×", [Engine.class("forget"), Html.aria_label_s(row.field(|listed| "Forget ${listed.name}"))], model.lift_row().update_by(row.field(|listed| listed.name), Model.forget_view)),
+									|| Engine.text(""),
+								),
 							],
 						),
 				),
@@ -1525,8 +1535,14 @@ Liton := [].{
 					"board-bar",
 					[
 						Html.span_s(model.signal().map(|state| TicketDesk.scope_name(state.tickets, state.tickets.scope)), [Engine.class("board-scope")]),
-						Html.text_input(Engine.const("Search tickets"), "search", id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter.text), [Engine.attr("placeholder", "Search")], model.set_value_by(id, |state, pane_id, text| Model.filter_board(state, pane_id, |filter| { ..filter, text }))),
+						Html.text_input(Engine.const("Search tickets"), "search", id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter.text), [Engine.attr("placeholder", "Search"), Engine.ref_s(id.map(|pane_id| "search-${pane_id}"))], model.set_value_by(id, |state, pane_id, text| Model.filter_board(state, pane_id, |filter| { ..filter, text }))),
 						Html.span_s(id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).selected.len()).map(|count| if (count == 0) "" else "${count.to_str()} selected"), [Engine.class("selected-count"), Engine.test_id("selected-count")]),
+						Html.span_s(id.map2(model.signal(), |pane_id, state| TicketDesk.described(state.tickets, { ..TicketDesk.board(state.tickets, pane_id).filter, text: "" })), [Engine.class("board-filter"), Engine.test_id("board-filter")]),
+						Engine.when(
+							id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter != TicketDesk.everything),
+							|| Html.div("board-filter-actions", [Html.button("Save view", [], model.update_by(id, Model.save_view)), Html.button("×", [Html.aria_label("Clear the filter")], model.update_by(id, |state, pane_id| Model.filter_board(state, pane_id, |_| TicketDesk.everything)))]),
+							|| Engine.text(""),
+						),
 						laid_out("List", List),
 						laid_out("Board", Board),
 					],

@@ -2590,6 +2590,33 @@ Model := [].{
 			[] => state
 		}
 
+	## Saves the filter of the Board in reach as a view named for what it
+	## keeps, shows that view, and clears the Board's own filter.
+	save_view : State, Str -> State
+	save_view = |state, pane_id| {
+		filter = TicketDesk.board_filter(state.tickets, pane_id)
+		name = TicketDesk.described(state.tickets, filter)
+		saved = state.tickets.saved.drop_if(|kept| kept.name == name).append({ name, filter })
+		cleared = TicketDesk.with_board({ ..state.tickets, saved, scope: Saved(name) }, pane_id, |board| { ..board, filter: TicketDesk.everything })
+		{ ..state, tickets: cleared }
+	}
+
+	## Forgets a view saved, showing every ticket if it was shown.
+	forget_view : State, Str -> State
+	forget_view = |state, name| { ..state, tickets: { ..state.tickets, saved: state.tickets.saved.drop_if(|kept| kept.name == name), scope: if (state.tickets.scope == Saved(name)) All else state.tickets.scope } }
+
+	## The views this browser kept, as JSON.
+	restore_views : State, Str -> State
+	restore_views = |state, text| {
+		decoded : Try(List(TicketDesk.SavedView), _)
+		decoded = Json.parse(text)
+		{ ..state, tickets: { ..state.tickets, saved: decoded ?? [] } }
+	}
+
+	## Focuses the search of the Board in reach.
+	search_board : State -> State
+	search_board = |state| { ..state, jump: { serial: state.jump.serial + 1, panel: "search-${Model.board_in_reach(state)}", replace: "", push: "" } }
+
 	## Holds a ticket's card, or moves it over a group of the Board, by the
 	## group's key ("" for none), or lets it go.
 	drag_card : State, [Hold(Str), Over(Str), Let] -> State
@@ -3607,3 +3634,9 @@ bytes_order = |left, right|
 		(Ok(_), Err(_)) => After
 		_ => Same
 	}
+
+# The views saved come back as this browser kept them.
+expect {
+	saved = [{ name: "Started · bug", filter: { ..TicketDesk.everything, kinds: [Started], label: "bug", assignee: Person("ada") } }]
+	Model.restore_views(Model.initial(""), Json.to_str(saved)).tickets.saved == saved and Model.restore_views(Model.initial(""), "nonsense").tickets.saved == []
+}
