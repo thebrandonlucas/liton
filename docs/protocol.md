@@ -776,6 +776,15 @@ it, if given; following several topics, it wraps each event as
 followed. Either exits 2 on a usage error or when the daemon can't be
 reached.
 
+`liton pair`, run on the daemon's machine, prints a pairing code for a new
+device (Authentication) and a link to pair a browser with it. It writes the
+code in the daemon's database, at `LITON_DB` (default `liton.db`), as only
+someone who can write it already holds the daemon's every secret. `liton
+login <code>` pairs the CLI itself and keeps its token in
+`$XDG_CONFIG_HOME/liton/tokens` (by default under `~/.config`), readable by
+its owner alone, for the daemon at `LITON_URL`; `LITON_TOKEN` takes its
+place when set.
+
 `liton setup [path]` speaks no protocol: it runs a Litonfile (by default
 `./Litonfile.roc`, or the one in a directory given) with `roc`, and writes the
 setup it prints to `liton.setup.json` (design.md, Setups). It exits 1 when

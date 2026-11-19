@@ -6,7 +6,7 @@ Cli := [].{
 
 	## What the arguments ask for. A call given no request, or `-`, reads it
 	## from stdin.
-	Command : [Help, Usage(Str), Manifest, Setup(Str), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
+	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
 
 	usage : Str
 	usage =
@@ -15,6 +15,8 @@ Cli := [].{
 		\\  liton call <capability> [<request JSON>|-]
 		\\  liton watch <capability> <topic> [--after <cursor>] [<capability> <topic> ...] [--interval <ms>]
 		\\  liton setup [<Litonfile.roc or its directory>]
+		\\  liton pair
+		\\  liton login <pairing code>
 		\\  liton help
 		\\
 		\\Speaks liton's capability protocol to the daemon at LITON_URL (default
@@ -25,12 +27,21 @@ Cli := [].{
 		\\capability and topic when it follows several, until interrupted. `setup`
 		\\runs a Litonfile (default ./Litonfile.roc) with roc and writes the setup it
 		\\prints to liton.setup.json.
+		\\
+		\\`pair`, run on the daemon's machine, prints a pairing code for a new
+		\\device, good once for 10 minutes, which it writes in the daemon's
+		\\database at LITON_DB (default liton.db). `login` pairs this command line
+		\\with the daemon by such a code, and keeps its token, readable by you
+		\\alone, in $XDG_CONFIG_HOME/liton/tokens (default ~/.config). LITON_TOKEN,
+		\\if set, is used in place of the token kept.
 
 	parse : List(Str) -> Command
 	parse = |arguments|
 		match arguments {
 			["help"] | ["--help"] | ["-h"] => Help
 			["manifest"] => Manifest
+			["pair"] => Pair
+			["login", code] => Login(code)
 			["setup"] => Setup("Litonfile.roc")
 			["setup", path] => Setup(if (path.ends_with(".roc")) path else "${path.drop_suffix("/")}/Litonfile.roc")
 			["call", capability] | ["call", capability, "-"] => Call({ capability, request: Stdin })
@@ -68,6 +79,24 @@ Cli := [].{
 			failures: topics.keep_oks(|update| update.error.map_ok(|error| "${update.capability} ${update.topic}: ${described(error)}")),
 		}
 	}
+
+	## A pairing code of 8 `random` bytes, as the daemon's `Auth.code`
+	## writes one: `ABCD-EFGH`, of 32 symbols without I, O, 0 or 1.
+	pairing_code : List(U8) -> Str
+	pairing_code = |random| {
+		symbols = random.map(|byte| "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".to_utf8().get((byte % 32).to_u64()) ?? 'A')
+		Str.from_utf8_lossy(symbols.take_first(4).append('-').concat(symbols.drop_first(4)))
+	}
+
+	## The token `kept`, the lines `<daemon URL> <token>` of the tokens file,
+	## holds for `daemon`.
+	kept_token : Str, Str -> Try(Str, [NoToken])
+	kept_token = |kept, daemon| kept.split_on("\n").find_first(|line| line.starts_with("${daemon} ")).map_ok(|line| line.drop_prefix("${daemon} ").trim()).map_err(|_| NoToken)
+
+	## The tokens file `kept`, with `token` for `daemon` in place of any
+	## it held.
+	with_token : Str, Str, Str -> Str
+	with_token = |kept, daemon, token| Str.join_with(kept.split_on("\n").drop_if(|line| line.starts_with("${daemon} ") or line.trim() == "").append("${daemon} ${token}"), "\n").concat("\n")
 }
 
 described : Protocol.Error -> Str
@@ -127,3 +156,8 @@ expect {
 	several = Cli.polled(wanted, answer)
 	several.lines == ["{\"capability\":\"chat.v1\",\"event\":{\"Entry\":{\"event\":{\"StatusChanged\":\"Running\"},\"sequence\":1}},\"topic\":\"timeline/s1\"}"] and several.failures == ["chat.v2 sessions: Unsupported: the daemon offers no chat.v2"]
 }
+
+expect Cli.parse(["pair"]) == Pair and Cli.parse(["login", "ABCD-EFGH"]) == Login("ABCD-EFGH")
+expect Cli.pairing_code([0, 1, 2, 3, 31, 32, 255, 8]) == "ABCD-9A9J"
+expect Cli.kept_token("http://a:1 x.y\nhttp://b:2 z.w\n", "http://b:2") == Ok("z.w") and Cli.kept_token("http://a:10 x.y\n", "http://a:1") == Err(NoToken)
+expect Cli.with_token("http://a:1 x.y\nhttp://b:2 z.w\n", "http://a:1", "n.m") == "http://b:2 z.w\nhttp://a:1 n.m\n"

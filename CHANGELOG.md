@@ -6,6 +6,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Added
 
+- `liton pair`, run on the daemon's machine with `LITON_DB` set as the daemon's, prints a pairing code for a new device and a link that pairs a browser with it; `liton login <code>` pairs the command line itself, keeping its token readable by you alone.
 - `zig build run` serves liton at http://127.0.0.1:8095 (`LITON_HOST` and `LITON_PORT` change it): panes, each a widget bound to a capability the daemon advertises. Add panes from Settings; a widget whose capability no provider supplies shows what it needs.
 - Sessions, Chat and Capabilities widgets on chat.v1. Chat panes follow the session selected in Sessions, or are pinned to one; they show the agent's messages, tool calls and results, and ask you to allow or deny what it requests.
 - Settings, behind the toolbar's one button, picks the Developer or Tiling preset, adds widgets (marking those no provider supports yet) and shows the layout as a snapshot, JSON to copy or to paste and load; the browser keeps the last layout. The working UI shows no buttons for adding widgets.
