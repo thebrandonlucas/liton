@@ -174,6 +174,9 @@ Model := [].{
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
+		## What is typed in Rooms panes' search, which narrows their rooms.
+		room_search : Str,
+
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
 		## is the one picked, or "" for the default. `glass` is whether tiles
@@ -298,6 +301,10 @@ Model := [].{
 	## `serial` of its request.
 	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
+	## A row of a Rooms pane: a room, or with `heading`, the title of a kind
+	## of rooms.
+	RoomRow : { key : Str, heading : Str, room : Rooms.Room }
+
 	## A Files pane's directories open, and the file it shows, "" for none.
 	FilePane : { pane : Str, folders : List(Str), file : Str }
 
@@ -396,6 +403,7 @@ Model := [].{
 				room_members: [],
 				room_logs: [],
 				room_asks: [],
+				room_search: "",
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
@@ -2737,6 +2745,24 @@ Model := [].{
 					Join({ room_id }) => joined(listed, room_id, Bool.True)
 					Leave({ room_id }) => joined(listed, room_id, Bool.False)
 					_ => listed
+				},
+		)
+	}
+
+	## The rooms a Rooms pane lists, those whose name or topic has what is
+	## typed in its search, under a heading of their kind: channels, forums,
+	## announcements, then direct messages. A row's key is the room's id, or
+	## a heading's `kind:` and its title.
+	room_rows : State -> List(RoomRow)
+	room_rows = |state| {
+		typed = state.room_search.trim().with_ascii_lowercased()
+		matches = |room| room.name.with_ascii_lowercased().contains(typed) or (room.topic ?? "").with_ascii_lowercased().contains(typed)
+		listed = Model.rooms_listed(state).keep_if(matches)
+		[(Channel, "Channels"), (Forum, "Forums"), (Announce, "Announcements"), (Direct, "Direct messages")].join_map(
+			|(kind, title)|
+				match listed.keep_if(|room| room.kind == kind) {
+					[] => []
+					rooms => rooms.map(|room| { key: room.id, heading: "", room }).prepend({ key: "kind:${title}", heading: title, room: Rooms.room({ id: "", provider: "", name: "", kind }) })
 				},
 		)
 	}

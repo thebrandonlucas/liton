@@ -2166,32 +2166,65 @@ Liton := [].{
 	room_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_view = |model, id| Engine.when(id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id.is_empty()), || Html.p("Pick a room in Rooms to show it here.", "missing"), || Liton.room_opened(model, id))
 
-	## A Rooms pane: the rooms the daemon lists, the one focused marked, each
-	## one's name, which focuses it, its kind and what is unread in it, and
-	## Join or Leave.
+	## A Rooms pane: a search, which narrows the rooms at once, over the
+	## rooms the daemon lists under a heading of their kind
+	## (`Model.room_rows`), the one focused marked, each one's name, which
+	## focuses it, a dot while it has unread messages, how many mention you,
+	## and Join or Leave.
 	rooms : State(PaneCtx, Model.State) -> Elem(PaneCtx)
 	rooms = |model0|
-		Html.ul(
-			[Engine.class("room-list"), Engine.attr("data-part", "list")],
+		Html.div(
+			"rooms-nav",
 			[
-				Engine.each(
-					model0.signal().map(Model.rooms_listed),
-					|room| room.id,
-					|row| {
-						model = model0.lift_row()
-						Html.li(
-							[Engine.class_s(row.key().map2(model.signal(), |room_id, state| if (Model.focused(state, [Room]) == Room(room_id)) "focused" else "").map2(row.field(|room| if (room.joined) "room-row" else "room-row not-joined"), Liton.joined_classes)), Engine.attr("data-part", "room")],
+				Html.text_input(Engine.const("Search rooms"), "search", model0.signal().map(|state| state.room_search), [Engine.class("room-search"), Engine.attr("placeholder", "Search rooms"), Engine.attr("autocomplete", "off")], model0.set_value(|state, typed| { ..state, room_search: typed })),
+				Html.ul([Engine.class("room-list"), Engine.attr("data-part", "list")], [Engine.each(model0.signal().map(Model.room_rows), |row| row.key, |row| Liton.room_row(model0, row))]),
+				Engine.when(model0.signal().map(|state| Model.room_rows(state).is_empty() and !state.rooms.is_empty()), || Html.p("No rooms match.", "missing"), || Engine.text("")),
+			],
+		)
+
+	## A heading of a kind of rooms, or a room's row.
+	room_row : State(PaneCtx, Model.State), RowRef(PaneCtx, Model.RoomRow) -> Elem(Row(PaneCtx, Model.RoomRow))
+	room_row = |model0, row| {
+		model = model0.lift_row()
+		room = row.field(|shown| shown.room)
+		heading = row.field(|shown| shown.heading)
+		# One element, as a row of `each` must be.
+		Html.li(
+			[Engine.class_s(row.field(|shown| shown).map2(model.signal(), |shown, state| if (!shown.heading.is_empty()) "room-group" else Liton.joined_classes(Liton.room_row_class(shown.room), if (Model.focused(state, [Room]) == Room(shown.key)) "focused" else ""))), Engine.attr("data-part", "room")],
+			[
+				Engine.when(
+					heading.map(|title| !title.is_empty()),
+					|| Engine.text_s(heading),
+					||
+						Html.div(
+							"room-line",
 							[
-								Html.button_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
-								Html.span_s(row.field(|room| Liton.room_kind(room.kind)), [Engine.class("room-kind")]),
-								Html.span_s(row.field(|room| Liton.room_unread(room.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
-								Liton.join_controls(model, row.field(|room| room)),
+								Html.button_s(room.map(Liton.room_name), [Engine.class("room-name")], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
+								Html.span_s(room.map(|shown| Liton.room_unread(shown.kind, shown.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
+								Liton.join_controls(model, room),
 							],
-						)
-					},
+						),
 				),
 			],
 		)
+	}
+
+	## A room's name as listed: a direct conversation's as it is, the
+	## others' after #.
+	room_name : Rooms.Room -> Str
+	room_name = |room| if (room.kind == Direct) room.name else "#${room.name}"
+
+	## A room's row: unread while it has messages you haven't read, and
+	## muted while you aren't in it.
+	room_row_class : Rooms.Room -> Str
+	room_row_class = |room| {
+		unread =
+			match room.unread {
+				Counted({ messages, .. }) => messages > 0
+				Unknown => Bool.False
+			}
+		Str.join_with(["room-row", if (unread) "unread" else "", if (room.joined) "" else "not-joined"].drop_if(Str.is_empty), " ")
+	}
 
 	## Whether you are in a room, and Join or Leave it, which shows at once.
 	join_controls : State(ctx, Model.State), Signal(ctx, Rooms.Room) -> Elem(ctx)
@@ -2406,21 +2439,14 @@ Liton := [].{
 			count => "${count.to_str()} replies · ${line.repliers}"
 		}
 
-	room_kind : Rooms.Kind -> Str
-	room_kind = |kind|
-		match kind {
-			Channel => "channel"
-			Forum => "forum"
-			Direct => "direct"
-			Announce => "announcements"
-		}
-
-	## What is unread in a room: messages, then mentions of you, as "3 @1".
-	room_unread : [Counted({ messages : U32, mentions : U32 }), Unknown] -> Str
-	room_unread = |unread|
+	## What a room's row counts: the mentions of you, as "@1", or in a
+	## direct conversation, the messages unread.
+	room_unread : Rooms.Kind, [Counted({ messages : U32, mentions : U32 }), Unknown] -> Str
+	room_unread = |kind, unread|
 		match unread {
-			Counted({ messages, mentions }) => Str.join_with([if (messages > 0) messages.to_str() else "", if (mentions > 0) "@${mentions.to_str()}" else ""].drop_if(Str.is_empty), " ")
-			Unknown => ""
+			Counted({ mentions, .. }) if mentions > 0 => "@${mentions.to_str()}"
+			Counted({ messages, .. }) if kind == Direct and messages > 0 => messages.to_str()
+			_ => ""
 		}
 
 	## The providers and transformers, each with what it offers.

@@ -371,18 +371,32 @@ kbd:empty { display: none; }
 .create-actions { display: flex; gap: 6px; }
 .create-actions button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .inbox { overflow-y: auto; padding: 6px; }
-/* Rooms: each room on a line, its name, kind and unread, and Join or Leave. */
+/* Rooms: a search over the rooms under their kinds, each on a line: its
+   name, bold with a dot while unread, the mentions of you, and Join, or
+   Leave as the pointer is over it. */
+.rooms-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.room-search { margin: 8px 8px 2px; padding: 6px 10px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--field); color: inherit; font: inherit; }
 .room-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
-.room-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: var(--small-radius); }
+.room-group { padding: 10px 10px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.room-row, .room-line { display: flex; align-items: center; gap: 8px; }
+.room-row { padding: 4px 10px; border-radius: var(--small-radius); }
+.room-line { flex: 1; min-width: 0; }
 .room-row:hover { background: var(--tool); }
 .room-row.focused { background: var(--selected); }
-.room-name { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.room-kind, .room-joined { color: var(--muted); font: 11px var(--font-mono); white-space: nowrap; }
-.room-row .room-kind { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.room-unread { margin-left: auto; color: var(--accent); font: 600 11px var(--font-mono); }
-.room-row.not-joined .room-name { color: var(--muted); font-weight: 400; }
+.room-name { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
+.room-row.unread .room-name, .room-row.focused .room-name { font-weight: 650; color: var(--text); }
+.room-row.unread::after { content: ""; order: 1; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text); }
+.room-row.unread:has(.room-unread:not(:empty))::after { display: none; }
+.room-joined { color: var(--muted); font: 11px var(--font-mono); white-space: nowrap; }
+.room-unread { margin-left: auto; padding: 0 6px; border-radius: 9px; background: var(--text); color: var(--glass-deep); font: 600 11px/18px var(--font-ui); }
+.room-unread:empty { display: none; }
+.room-row.not-joined .room-name { opacity: .7; }
 .room-row .room-name { border: none; padding: 0; background: none; text-align: left; }
-.room-join { display: flex; align-items: center; gap: 8px; }
+.room-join { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.room-row .room-unread + .room-join { margin-left: 0; }
+.room-row:not(.not-joined) .room-join button { opacity: 0; }
+.room-row:hover .room-join button, .room-row .room-join button:focus-visible { opacity: 1; }
+@media (hover: none) { .room-row .room-join button { opacity: 1; } }
 /* A room: its header over its messages, each its author, time and text,
    reactions and thread; a forum's posts are cards. */
 .room { container-type: inline-size; flex: 1; min-height: 0; display: flex; }
