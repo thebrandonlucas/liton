@@ -277,7 +277,7 @@ try {
     const rooms = async () => (await call("rooms.v1", "ListRooms")).Ok.Rooms;
     assert.deepEqual((await rooms()).map((r) => [r.id, r.kind, r.joined]), [["general", "Channel", true], ["ideas", "Forum", true], ["releases", "Announce", false], ["scout", "Direct", true]]);
     const [listed, members, general, thread, missing] = await poll(room("rooms"), room("members/general"), room("messages/general"), room("thread/general/general-1"), room("messages/nope"));
-    assert.deepEqual([listed.events[0].Rooms.length, members.events[0].Members.map((m) => m.id)], [3, ["you", "ada", "scout", "patch"]]);
+    assert.deepEqual([listed.events[0].Rooms.length, members.events[0].Members.map((m) => m.id)], [4, ["you", "ada", "scout", "patch"]]);
     assert.deepEqual([general.events.map((e) => e.RoomEntry.sequence), thread.events.map((e) => e.RoomEntry.sequence)], [[1, 3, 5], [2, 4]]);
     assert.equal(missing.error.code, "NotFound");
     assert.deepEqual(await send("general", "@Scout run the tests"), { Ok: { Sent: { message_id: "general-6" } } });
