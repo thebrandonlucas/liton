@@ -1462,7 +1462,7 @@ Model := [].{
 			{ room_id, root, .. } = Model.room_pane(state, shown.id)
 			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
 		}
-		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread"].contains(shown.widget) and Model.pane_visible(state, shown.id))
+		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread", "members"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget != "rooms").join_map(room_topics).prepend(RoomList) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
@@ -2822,6 +2822,53 @@ Model := [].{
 	room_members_of : State, Str -> List(Rooms.Member)
 	room_members_of = |state, room_id| state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
 
+	## A room's members as a Members pane lists them: people, then agents,
+	## each by name, with how present, their role unless a plain member's,
+	## and whose agent each is, where its provider verified it.
+	room_people : State, Str -> List({ id : Str, name : Str, initial : Str, agent : Bool, presence : Str, detail : Str })
+	room_people = |state, room_id| {
+		me = Model.room_of(state, room_id).me ?? ""
+		person = |member| {
+			owner =
+				match member.kind {
+					Agent({ owner: Ok(owner_id) }) => if (owner_id == me) "yours" else "${Model.room_member(state, room_id, owner_id).name}'s"
+					_ => ""
+				}
+			role =
+				match member.role {
+					Owner => "owner"
+					Admin => "admin"
+					Guest => "guest"
+					Member => ""
+				}
+			presence =
+				match member.presence {
+					Online => "online"
+					Away => "away"
+					Offline => "offline"
+					Unknown => ""
+				}
+			{ id: member.id, name: member.name, initial: Model.initial_of(member.name), agent: member.kind != Person, presence, detail: Str.join_with([if (member.id == me) "you" else "", role, owner].drop_if(Str.is_empty), " · ") }
+		}
+		members = Model.room_members_of(state, room_id)
+		members.keep_if(|member| member.kind == Person).concat(members.drop_if(|member| member.kind == Person)).map(person)
+	}
+
+	## A name's first letter, capitalised, for its avatar.
+	initial_of : Str -> Str
+	initial_of = |name| {
+		letter = Str.from_utf8_lossy(name.to_utf8().take_first(1)).with_ascii_uppercased()
+		if (letter.is_empty()) "?" else letter
+	}
+
+	## Shows the Members pane, or hides it while it shows.
+	toggle_members : State -> State
+	toggle_members = |state|
+		match Model.panes(state).find_first(|shown| shown.widget == "members") {
+			Ok(members) => if (Model.pane_visible(state, members.id)) Model.hide_pane(state, members.id) else Model.reveal(state, members.id)
+			Err(NotFound) => state
+		}
+
 	## A room's member as its members topic tells, or as its id alone does.
 	room_member : State, Str, Str -> Rooms.Member
 	room_member = |state, room_id, member_id| Model.room_members_of(state, room_id).find_first(|known| known.id == member_id) ?? { id: member_id, provider: "", name: member_id, picture: Err(Missing), kind: Person, role: Member, presence: Unknown }
@@ -3032,7 +3079,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3060,6 +3107,7 @@ Model := [].{
 				"rooms" => Rooms
 				"room" => Room
 				"thread" => Thread
+				"members" => Members
 				"capabilities" => Capabilities
 				_ => NoView
 			}

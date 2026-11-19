@@ -869,7 +869,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -883,6 +883,7 @@ Liton := [].{
 							Rooms => Liton.rooms(model)
 							Room => Liton.room_view(model, id)
 							Thread => Liton.thread_view(model, id)
+							Members => Liton.members_view(model, id)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -2233,6 +2234,11 @@ Liton := [].{
 				Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
 				Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
 				Liton.join_controls(model, shown),
+				Engine.when(
+					model.signal().map(|state| Model.panes(state).any(|pane| pane.widget == "members")),
+					|| Html.button_s(room_id.map2(model.signal(), |opened, state| Liton.members_text(Model.room_members_of(state, opened).len())), [Engine.class("room-members"), Html.flag("aria-pressed", model.signal().map(|state| Model.panes(state).any(|pane| pane.widget == "members" and Model.pane_visible(state, pane.id))))], model.update(Model.toggle_members)),
+					|| Engine.text(""),
+				),
 			],
 		)
 		messages = Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
@@ -2243,6 +2249,43 @@ Liton := [].{
 				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
 			])
 	}
+
+	## A Members pane: the people and agents in the room it follows, each
+	## with an avatar, an agent's marked, how present, their role and whose
+	## agent each is.
+	members_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	members_view = |model, id| {
+		room_id = id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id)
+		Engine.when(
+			room_id.map(Str.is_empty),
+			|| Html.p("Pick a room in Rooms to see who is in it.", "missing"),
+			||
+				Html.ul(
+					[Engine.class("member-list"), Engine.attr("data-part", "list")],
+					[
+						Engine.each(
+							room_id.map2(model.signal(), |shown, state| Model.room_people(state, shown)),
+							|person| person.id,
+							|row|
+								Html.li(
+									[Engine.class_s(row.field(|person| if (person.agent) "member agent" else "member")), Engine.attr("data-part", "member")],
+									[
+										Liton.avatar(row.field(|person| { initial: person.initial, agent: person.agent })),
+										Html.span_s(row.field(|person| person.name), [Engine.class("member-name")]),
+										Html.span_s(row.field(|person| person.detail), [Engine.class("member-detail")]),
+										Html.span_s(row.field(|person| person.presence), [Engine.class_s(row.field(|person| "presence ${person.presence}"))]),
+									],
+								),
+						),
+					],
+				),
+		)
+	}
+
+	## A person's round avatar, their initial, or an agent's square one
+	## with a robot's badge, which a screen reader names.
+	avatar : Signal(ctx, { initial : Str, agent : Bool }) -> Elem(ctx)
+	avatar = |shown| Html.span_s(shown.map(|{ initial, .. }| initial), [Engine.class_s(shown.map(|{ agent, .. }| if (agent) "avatar agent" else "avatar")), Engine.attr("aria-hidden", "true")])
 
 	## The thread a Room or Thread pane opened: its top-level message, its
 	## replies and who is typing in it, and × to close it, under `title`.
@@ -2342,6 +2385,9 @@ Liton := [].{
 			],
 		)
 	}
+
+	members_text : U64 -> Str
+	members_text = |count| if (count == 1) "1 member" else "${count.to_str()} members"
 
 	## The reactions a message offers to make: a +, as a like, and two more.
 	reaction_choices : List(Str)
