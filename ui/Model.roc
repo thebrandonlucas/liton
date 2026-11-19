@@ -199,6 +199,9 @@ Model := [].{
 		palette : { open : Bool, query : Str, picked : U64 },
 		ran : List(Str),
 
+		## Whether the list of keys and what they run is shown.
+		show_shortcuts : Bool,
+
 		## The time, in milliseconds since 1970, as of the last minute that
 		## began, or second while a chat on screen shows a turn running: what
 		## rows count the time since their last activity from, and the chat
@@ -344,6 +347,7 @@ Model := [].{
 				keys_typed: { keys: [], serial: 0 },
 				palette: { open: Bool.False, query: "", picked: 0 },
 				ran: [],
+				show_shortcuts: Bool.False,
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),

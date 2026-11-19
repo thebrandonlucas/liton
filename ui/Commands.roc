@@ -17,6 +17,7 @@ Commands := [].{
 			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
 			{ id: "palette", title: "Open the palette", group: "View", applies: |shown| !shown.palette.open, run: Commands.open_palette },
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
+			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
@@ -57,17 +58,19 @@ Commands := [].{
 	open_palette : Model.State -> Model.State
 	open_palette = |state| { ..state, palette: { open: Bool.True, query: "", picked: 0 }, menu: "", jump: { serial: state.jump.serial + 1, panel: "palette", replace: "", push: "" } }
 
-	## Whether something is open to close: the palette, a row's renaming, a
-	## menu, Settings or a Workspaces pane's form.
+	## Whether something is open to close: the palette, the keys, a row's
+	## renaming, a menu, Settings or a Workspaces pane's form.
 	closes : Model.State -> Bool
-	closes = |state| state.palette.open or !state.renaming.key.is_empty() or state.show_settings or !state.menu.is_empty() or state.form.kind != Closed
+	closes = |state| state.palette.open or state.show_shortcuts or !state.renaming.key.is_empty() or state.show_settings or !state.menu.is_empty() or state.form.kind != Closed
 
-	## Closes the palette, else leaves a row's renaming, else closes a menu
-	## and Settings, else a Workspaces pane's form.
+	## Closes the palette, else the keys, else leaves a row's renaming, else
+	## closes a menu and Settings, else a Workspaces pane's form.
 	close : Model.State -> Model.State
 	close = |state|
 		if state.palette.open {
 			{ ..state, palette: { ..state.palette, open: Bool.False } }
+		} else if state.show_shortcuts {
+			{ ..state, show_shortcuts: Bool.False }
 		} else if !state.renaming.key.is_empty() {
 			{ ..state, renaming: Model.not_renaming }
 		} else if state.show_settings or !state.menu.is_empty() {

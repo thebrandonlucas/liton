@@ -112,6 +112,7 @@ Liton := [].{
 					|| Engine.text(""),
 				),
 				Liton.palette(model),
+				Liton.shortcuts(model),
 			].concat(Liton.effects(model)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 
@@ -322,6 +323,33 @@ Liton := [].{
 		)
 	}
 
+	## The keys and what each runs, as `Keymap.defaults` binds them, which
+	## Escape or a click outside closes.
+	shortcuts : State(Ctx, Model.State) -> Elem(Ctx)
+	shortcuts = |model|
+		Engine.when(
+			model.signal().map(|state| state.show_shortcuts),
+			||
+				Html.div(
+					"palette-layer",
+					[
+						Html.div_attrs([Engine.class("palette-backdrop"), Engine.on_click(model.update(Commands.close))], []),
+						Html.section_attrs(
+							"Keys",
+							[Engine.class("palette shortcuts"), Engine.attr("role", "dialog")],
+							[
+								Html.h2("Keys", ""),
+								Html.ul(
+									[Engine.class("palette-entries")],
+									[Engine.each(model.signal().map(|state| Keymap.listed(Keymap.defaults, state)), |bound| bound.title, |row| Html.li([Engine.class("shortcut")], [Html.span_s(row.field(|bound| bound.title), [Engine.class("palette-title")]), Engine.element("kbd", [], [Engine.text_s(row.field(|bound| bound.keys))])]))],
+								),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
+
 	## What went wrong last, over the tiles until dismissed or replaced.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
 	toast = |model|
@@ -405,7 +433,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, Ctrl+K (or ⌘K) the palette of commands and places, and Escape closes the palette, a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, Ctrl+K (or ⌘K) the palette of commands and places, ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

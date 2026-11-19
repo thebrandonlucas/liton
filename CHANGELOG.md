@@ -85,6 +85,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Developer preset has Tickets as the right drawer's third tab, after Changes and Files.
 - Outside a text box, G then 1 to 9 goes to that workspace, in the order the Workspaces pane lists them. Escape, or a pause of a second and a half, cancels the G.
 - Ctrl+K, or ⌘K in a text box too, opens a palette of the commands that apply now and the sessions, workspaces, rooms and tickets to go to, each with its keys. Type to filter it, pick with the arrows or Ctrl+N and Ctrl+P, and run with Enter or a click; what you ran lists first next time, and Escape closes it.
+- ? outside a text box lists the keys and what each runs; ? again or Escape hides the list. The palette's Show or hide the keys shows it too.
 
 ### Changed
 

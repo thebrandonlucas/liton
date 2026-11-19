@@ -22,6 +22,7 @@ Keymap := [].{
 			{ keys: ["Mod+e"], command: "drawer.right" },
 			{ keys: ["Mod+,"], command: "settings" },
 			{ keys: ["Mod+k"], command: "palette" },
+			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
 			{ keys: ["Escape"], command: "agent.stop" },
 		]
@@ -92,6 +93,17 @@ Keymap := [].{
 		}
 		Str.join_with(keys.map(written), " then ")
 	}
+
+	## Each command bound, by its title, with its bindings written.
+	listed : List(Binding), Model.State -> List({ title : Str, keys : Str })
+	listed = |bindings, state|
+		Commands.all(state).keep_oks(
+			|command|
+				match bindings.keep_if(|binding| binding.command == command.id).map(|binding| Keymap.text(binding.keys)) {
+					[] => Err(Unbound)
+					written => Ok({ title: command.title, keys: Str.join_with(written, " or ") })
+				},
+		)
 
 	## How the first binding of a command is written, "" for none.
 	text_of : List(Binding), Str -> Str
