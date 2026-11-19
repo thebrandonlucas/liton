@@ -1,6 +1,6 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
 ## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling,
-## Chat and Board presets, Developer first, and the Pastoral, Hypr and Plain themes,
+## Chat and Board presets, Developer first, and the Pastoral, Hypr, Plain and Graphite themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
@@ -82,6 +82,7 @@ Default := [].{
 						{ ..tile, active: "pane-4", panes: [{ id: "pane-4", widget: "ticket-properties", pinned: "", options: [] }] },
 			),
 			hidden: ["pane-3"],
+			theme: "Graphite",
 		},
 	}
 
@@ -170,6 +171,27 @@ Default := [].{
 		motion: Reduced,
 	}
 
+	## Dense and dark, as Linear is: opaque near-black tiles a hairline
+	## apart on black, grey edges and one quiet indigo accent, nothing
+	## blurred. The Board preset's.
+	graphite : Setup.Theme
+	graphite = {
+		name: "Graphite",
+		scheme: Dark,
+		accent: "#5e6ad2",
+		accent_to: "#5e6ad2",
+		text: "#e2e4e7",
+		muted: "#8a8f98",
+		edge: 16,
+		edge_active: 60,
+		glass: { tint: "#101112", opacity: 100, blur: 0 },
+		background: Flat("#08090a"),
+		gap: 1,
+		radius: 4,
+		fonts: { ui: "Inter, ${Default.system_font}", mono: Default.mono_font, display: "Inter, ${Default.system_font}" },
+		motion: Normal,
+	}
+
 	## The platform's own faces, so no font is downloaded; JetBrains Mono where
 	## it is installed.
 	system_font : Str
@@ -179,5 +201,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.graphite], default_theme: "Pastoral" }
 }
