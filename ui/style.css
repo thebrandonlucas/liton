@@ -372,6 +372,17 @@ kbd:empty { display: none; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 4; }
 .pane:has(.menu) { z-index: 6; overflow: visible; }
 .missing { padding: 12px; color: var(--muted); }
+/* A row a click anywhere in opens, as its main control does (Liton.row_activates). */
+[data-activates="row"]:not(.room-group) { cursor: pointer; }
+/* A spinner where something is loading (ui/Spinner.roc): small beside it,
+   or larger and centred in the space of what loads as a whole; a still
+   ring where reduced motion is asked for. */
+.spinner { display: inline-block; flex: none; width: 14px; height: 14px; border: 2px solid var(--edge); border-top-color: var(--muted); border-radius: 50%; vertical-align: middle;
+  animation: spin calc(var(--motion) * 800ms) linear infinite; }
+.spinner.large { width: 22px; height: 22px; }
+.spinner-pane { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 64px; padding: 16px; }
+.timeline-scroll:has(+ .spinner-pane) { flex: none; }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: var(--edge); border-style: dotted; } }
 /* An empty state: centred, quiet, what is missing and the action that fills it. */
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; }
 .empty-title { margin: 0; font-size: 16px; color: var(--text); }
@@ -624,7 +635,9 @@ kbd:empty { display: none; }
 .ticket-meta span:empty { display: none; }
 .ticket-meta .age { margin-left: auto; }
 .ticket-empty { margin: 8px 10px; color: var(--muted); font-size: 13px; }
-.ticket { display: flex; flex-direction: column; gap: 8px; padding: 2px 4px; }
+/* A ticket scrolls within its pane, down to its comment box. */
+.ticket { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 8px; }
+.ticket > * { flex: none; }
 .ticket-bar { display: flex; align-items: center; gap: 8px; }
 .ticket-bar button { padding: 1px 8px; font-size: 12px; }
 .ticket-link { margin-left: auto; font-size: 12px; color: var(--accent); }
@@ -633,7 +646,10 @@ kbd:empty { display: none; }
 .ticket-comments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .ticket-comment { padding: 6px 10px; border: 1px solid var(--edge); border-left: 3px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); font-size: 13px; }
 .ticket-comment.pending { border-left-style: dashed; opacity: .75; }
-.ticket-fields { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+/* A ticket's fields are rows of a name and a value, the values lined up. */
+.ticket-fields { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.ticket-field { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; margin: 0; padding: 0; border: none; }
+.ticket-field .field-name { flex: none; width: 80px; padding: 0; }
 .ticket-fields select { padding: 2px 4px; }
 .ticket-saving { font: 11px var(--font-mono); color: var(--muted); }
 /* The Board preset: scopes, the tickets in dense single-line rows grouped
@@ -676,13 +692,12 @@ kbd:empty { display: none; }
 .board.columns .board-ticket .ticket-title { flex-basis: 100%; white-space: normal; }
 .properties { padding: 8px 10px; }
 .properties-title { margin: 0; font-weight: 600; }
-.properties .ticket-fields { flex-direction: column; align-items: stretch; }
-.ticket-labels { display: flex; gap: 8px; font-size: 12.5px; }
+.ticket-labels { font-size: 12.5px; }
 .field-name { color: var(--muted); }
 .ticket-session .status-word { font: 11px var(--font-mono); color: var(--muted); }
 .ticket-saving:empty { display: none; }
-.ticket-people { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 0; border: none; flex-basis: 100%; }
-.ticket-people legend { float: left; margin-right: 4px; padding: 0; color: var(--muted); }
+/* Floated, the legend is a flex item, in line with the boxes. */
+.ticket-people legend { float: left; }
 .ticket-people label { display: inline-flex; gap: 4px; align-items: center; }
 .ticket-sessions { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .ticket-sessions:empty { display: none; }

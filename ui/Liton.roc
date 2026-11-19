@@ -28,6 +28,7 @@ import Widgets
 import Dropdown
 import Drag
 import Wallpaper
+import Spinner
 
 Liton := [].{
 
@@ -911,7 +912,7 @@ Liton := [].{
 				),
 				Engine.when(
 					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
-					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, drag, tile)]),
+					|| Html.div("workspace-view-header", [Liton.workspace_header(model, drag, tile), Liton.workspace_tabs(model, drag, tile)]),
 					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
@@ -978,16 +979,18 @@ Liton := [].{
 	## The header of the workspace a Workbench shows as tabs: the left
 	## drawer's button, its name and project, its ⋯ menu (`Model.row_menu`),
 	## and the right drawer's button with its changes; Settings while the
-	## left drawer is hidden.
-	workspace_header : State(TileCtx, Model.State) -> Elem(TileCtx)
-	workspace_header = |model| {
+	## left drawer is hidden. Dragging its name moves the workspace's view,
+	## as its chat's tab does.
+	workspace_header : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
+	workspace_header = |model, drag, tile| {
+		chat_pane = tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown).find_first(|row| row.widget == "chat").map_ok(|row| row.pane) ?? "")
 		header = model.signal().map(Model.workspace_header)
 		left_shown = model.signal().map(|state| !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty()))
 		Html.div(
 			"workspace-header",
 			[
 				Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)),
-				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")]),
+				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")].concat(Liton.grip(drag, chat_pane))),
 				Html.span_s(header.map(|shown| shown.project), [Engine.class("workspace-project")]),
 				Engine.when(header.map(|shown| !shown.key.is_empty()), || Liton.row_menu(model, header.map(|shown| { pane_id: Model.header_menu, key: shown.key }), Engine.const("Workspace")), || Engine.text("")),
 				# FIXME: Paseo's run ▷, open in editor and git split button
@@ -1017,14 +1020,8 @@ Liton := [].{
 					tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown)),
 					|tab| tab.key,
 					|tab| {
-						# Another pane's tab drags it, as a tile's tab does.
-						pane_id = tab.field(
-							|shown|
-								match shown.tab {
-									Pane(id) => id
-									Tab(_) => ""
-								},
-						)
+						# A tab drags the pane that shows it, as a tile's tab does.
+						pane_id = tab.field(|shown| shown.pane)
 						button = |dragging|
 							Engine.element(
 								"button",
@@ -1362,6 +1359,14 @@ Liton := [].{
 	icon_button : Signal(ctx, Str), Str, HandlerOf(ctx, Engine.Click) -> Elem(ctx)
 	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
 
+	## What makes a list's row answer a click anywhere in it, not only on
+	## its main control's text, with `activate`, that control's own handler.
+	## A click reaches the nearest handler, so the row's other controls, such
+	## as + and ⋮, keep theirs; the main control stays the row's one
+	## focusable control, named for screen readers.
+	row_activates : HandlerOf(ctx, Engine.Click) -> List(Engine.Attr(ctx))
+	row_activates = |activate| [Engine.on_click(activate), Engine.attr("data-activates", "row")]
+
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, where it
 	## moves, and in Tiling Close; in a Workbench, Hide, and Show for each
 	## pane its tile hides. Each closes the menu.
@@ -1479,10 +1484,11 @@ Liton := [].{
 						title = row.field(|item| item.title)
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
+						opens = model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))
 						Html.li(
-							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")],
+							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
 							[
-								Html.button_s(title, [], model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))),
+								Html.button_s(title, [], opens),
 								Html.div(
 									"session-meta",
 									[
@@ -1629,12 +1635,13 @@ Liton := [].{
 							|ticket| ticket.id,
 							|row| {
 								state = model.signal().lift_row()
+								opens = model.lift_row().update_by(row.key(), |shown, ticket_id| Model.open(shown, Ticket(ticket_id)))
 								Html.li(
-									[Engine.class_s(row.key().map2(state, |ticket_id, shown| if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "ticket-row focused" else "ticket-row")), Engine.attr("data-part", "ticket")],
+									[Engine.class_s(row.key().map2(state, |ticket_id, shown| if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "ticket-row focused" else "ticket-row")), Engine.attr("data-part", "ticket")].concat(Liton.row_activates(opens)),
 									[
 										Engine.element(
 											"button",
-											[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key(), |shown, ticket_id| Model.open(shown, Ticket(ticket_id))))],
+											[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(opens)],
 											[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
 										),
 										Html.div(
@@ -1652,7 +1659,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.p_s(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+				Spinner.or_text(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) Loading else Said(if (shown.is_empty()) "No tickets match." else "")), Pane, [Engine.class("ticket-empty")]),
 			],
 		)
 	}
@@ -1703,19 +1710,26 @@ Liton := [].{
 		)
 
 	## A ticket's status and its assignees, of its source's people, each
-	## changed at once, saving until the daemon has it.
+	## changed at once, saving until the daemon has it, each a row of its
+	## name and its value.
 	ticket_fields : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
 	ticket_fields = |model, summary|
 		Html.div_attrs(
 			[Engine.class("ticket-fields"), Engine.attr("data-part", "fields")],
 			[
-				Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
-				Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+				Html.div(
+					"ticket-field",
+					[
+						Html.span_s(Engine.const("Status"), [Engine.class("field-name"), Engine.attr("aria-hidden", "true")]),
+						Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
+						Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+					],
+				),
 				Engine.element(
 					"fieldset",
-					[Engine.class("ticket-people")],
+					[Engine.class("ticket-field ticket-people")],
 					[
-						Engine.element("legend", [], [Engine.text("Assignees")]),
+						Engine.element("legend", [Engine.class("field-name")], [Engine.text("Assignees")]),
 						Engine.each(
 							summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.people) ?? []).map(|person| { ticket_id: listed.id, person, assigned: listed.assignees.contains(person) })),
 							|choice| choice.person.id,
@@ -1765,7 +1779,7 @@ Liton := [].{
 	ticket_discussion = |model, id, opened_ticket| {
 		shown = opened_ticket.map2(model.signal(), |opened_id, state| TicketDesk.ticket_shown(state.tickets, opened_id) ?? TicketDesk.missing)
 		[
-			Html.p_s(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
+			Spinner.or_text(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) Said("") else Loading), Pane, [Engine.class("ticket-empty")]),
 			Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
 			Html.ul(
 				[Engine.class("ticket-comments")],
@@ -1915,7 +1929,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.p_s(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.all(|group| group.tickets.is_empty())) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+				Spinner.or_text(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) Loading else Said(if (shown.all(|group| group.tickets.is_empty())) "No tickets match." else "")), Pane, [Engine.class("ticket-empty")]),
 			],
 		)
 	}
@@ -1927,12 +1941,13 @@ Liton := [].{
 	board_ticket = |model, id, row| {
 		state = model.signal().lift_row()
 		session = row.key().map2(state, |ticket_id, shown| Liton.ticket_session(shown, ticket_id))
+		opens = model.lift_row().update_by(row.key().map2(id.lift_row(), |ticket_id, pane_id| { pane_id, ticket_id }), Model.open_in_board)
 		Html.li(
-			[Engine.class_s(row.key().map2(id.lift_row(), |ticket_id, pane_id| { ticket_id, pane_id }).map2(state, |{ ticket_id, pane_id }, shown| Str.join_with(["board-ticket", if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "focused" else "", if (TicketDesk.board(shown.tickets, pane_id).selected.contains(ticket_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}")), Html.on_pointer_down(model.lift_row().set_value_by(row.key(), |shown, ticket_id, pointer| if (pointer.button == Main and pointer.kind != Touch) Model.drag_card(shown, Hold(ticket_id)) else shown))],
+			[Engine.class_s(row.key().map2(id.lift_row(), |ticket_id, pane_id| { ticket_id, pane_id }).map2(state, |{ ticket_id, pane_id }, shown| Str.join_with(["board-ticket", if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "focused" else "", if (TicketDesk.board(shown.tickets, pane_id).selected.contains(ticket_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}")), Html.on_pointer_down(model.lift_row().set_value_by(row.key(), |shown, ticket_id, pointer| if (pointer.button == Main and pointer.kind != Touch) Model.drag_card(shown, Hold(ticket_id)) else shown))].concat(Liton.row_activates(opens)),
 			[
 				Engine.element(
 					"button",
-					[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key().map2(id.lift_row(), |ticket_id, pane_id| { pane_id, ticket_id }), Model.open_in_board))],
+					[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(opens)],
 					[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
 				),
 				Html.span_s(row.field(|ticket| Str.join_with(ticket.labels, " · ")), [Engine.class("labels")]),
@@ -1991,7 +2006,7 @@ Liton := [].{
 						Liton.ticket_bar(model, summary),
 						Html.p_s(summary.map(|listed| listed.title), [Engine.class("properties-title")]),
 						Liton.ticket_fields(model, summary),
-						Html.div("ticket-labels", [Html.span_s(Engine.const("Labels"), [Engine.class("field-name")]), Html.span_s(summary.map(|listed| if (listed.labels.is_empty()) "None" else Str.join_with(listed.labels, " · ")), [Engine.class("labels")])]),
+						Html.div("ticket-field ticket-labels", [Html.span_s(Engine.const("Labels"), [Engine.class("field-name")]), Html.span_s(summary.map(|listed| if (listed.labels.is_empty()) "None" else Str.join_with(listed.labels, " · ")), [Engine.class("labels")])]),
 						Liton.ticket_sessions(model, summary),
 					],
 				),
@@ -2050,15 +2065,16 @@ Liton := [].{
 								},
 						)
 						asked = row.key().map2(id.lift_row(), |key, pane_id| { pane_id, key })
+						picks = model.update_by(asked, Model.pick_row)
 						Html.li(
 							[
 								Engine.class_s(row.field(|shown| shown).map2(kind, |shown, name| "tree-row tree-${name}${if (shown.focused) " focused" else ""}${if (shown.folded) " folded" else ""}${if (shown.creatable) " creatable" else ""}${if (shown.pinned) " pinned" else ""}${if (menus == Menus and Liton.has_menu(shown)) " has-menu" else ""}")),
 								Engine.attr_s("data-part", kind),
 								Engine.attr_s("style", row.field(|shown| "--depth: ${shown.depth.to_str()}")),
-							].concat(if (menus == Menus) [Engine.on_with("contextmenu", { prevent: Bool.True }, model.update_by(asked, |state, at| if (Model.row_menu(state, at.key).is_empty()) state else { ..state, menu: Model.row_menu_key(at) }))] else []),
+							].concat(Liton.row_activates(picks)).concat(if (menus == Menus) [Engine.on_with("contextmenu", { prevent: Bool.True }, model.update_by(asked, |state, at| if (Model.row_menu(state, at.key).is_empty()) state else { ..state, menu: Model.row_menu_key(at) }))] else []),
 							[
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
-								if (menus == Menus) Liton.row_title(model, asked, row.field(|shown| shown.title)) else Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
+								if (menus == Menus) Liton.row_title(model, asked, row.field(|shown| shown.title)) else Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], picks),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
 								Html.span_s(row.field(|shown| shown.counts.members), [Engine.class("counts")]),
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
@@ -2132,7 +2148,7 @@ Liton := [].{
 	row_title = |model, asked, title|
 		Engine.when(
 			asked.map2(model.signal(), |at, state| state.renaming.pane == at.pane_id and state.renaming.key == at.key),
-			|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
+			|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row)), Engine.on_click(model.update(|state| state))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
 			|| Html.button_s(title, [Engine.class("row-title")], model.update_by(asked, Model.pick_row)),
 		)
 
@@ -2445,7 +2461,7 @@ Liton := [].{
 					|showing|
 						match showing {
 							NoSession => Html.p("Pick a session to see its changes.", "missing")
-							Loading => Html.p("Loading…", "missing")
+							Loading => Spinner.spinner("Loading", Pane)
 							Unreadable => Html.p("Can't read this workspace right now.", "missing")
 							NotGit => Html.p("Not a git workspace.", "missing")
 							Shown =>
@@ -2462,7 +2478,7 @@ Liton := [].{
 											],
 										),
 										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
-										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
+										Engine.when(files.map(|listed| listed == Loading), || Spinner.spinner("Loading", Pane), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
 										Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(shown.map(|{ pane: pane_shown, state }| Model.changed_tree(state, pane_shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.changed_row(model, id, row))]),
 										Engine.when(id.map2(model.signal(), |pane_id, state| Model.main_diff(state) != pane_id), || Liton.file_diff(model, id, pane), || Engine.text("")),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
@@ -2553,7 +2569,7 @@ Liton := [].{
 					|showing|
 						match showing {
 							NoSession => Html.p("Pick a session to review its changes.", "missing")
-							Loading => Html.p("Loading…", "missing")
+							Loading => Spinner.spinner("Loading", Pane)
 							Unreadable => Html.p("Can't read this workspace right now.", "missing")
 							NotGit => Html.p("Not a git workspace.", "missing")
 							Shown =>
@@ -2562,7 +2578,7 @@ Liton := [].{
 									[
 										Liton.review_bar(model, pane),
 										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
-										Html.p_s(cards.map(|listed| if (listed == Loading) "Loading…" else if (listed == Cards([])) "No changes to review." else ""), [Engine.class("missing")]),
+										Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
 										Engine.each(
 											cards.map(
 												|listed|
@@ -2664,10 +2680,11 @@ Liton := [].{
 		model = model0.lift_row()
 		shown = item.field(|listed| listed)
 		acting = |action| shown.map2(id.lift_row(), |listed, pane_id| { pane_id, thread: listed.id, action })
+		focuses = model.update_by(acting(Focus), Model.act_on_thread)
 		Html.li(
-			[Engine.class_s(shown.map(|listed| "thread-item ${listed.state}${if (listed.focused) " focused" else ""}")), Engine.attr("data-part", "thread")],
+			[Engine.class_s(shown.map(|listed| "thread-item ${listed.state}${if (listed.focused) " focused" else ""}")), Engine.attr("data-part", "thread")].concat(Liton.row_activates(focuses)),
 			[
-				Html.button_s(shown.map(|listed| listed.place), [Engine.class("thread-place")], model.update_by(acting(Focus), Model.act_on_thread)),
+				Html.button_s(shown.map(|listed| listed.place), [Engine.class("thread-place")], focuses),
 				Html.span_s(shown.map(|listed| listed.state), [Engine.class_s(shown.map(|listed| "status-word ${listed.state}")), Engine.test_id_s(shown.map(|listed| "thread-state-${listed.id}"))]),
 				Html.span_s(shown.map(|listed| if (listed.comments == 1) "1 comment" else "${listed.comments.to_str()} comments"), [Engine.class("thread-comments")]),
 				Html.p_s(shown.map(|listed| listed.text), [Engine.class("thread-text")]),
@@ -2711,7 +2728,7 @@ Liton := [].{
 						Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")]),
 					],
 				),
-				Html.p_s(files.map(|listed| if (listed == Loading) "Loading…" else if (listed == Files([])) "No changes." else ""), [Engine.class("missing")]),
+				Spinner.or_text(files.map(|listed| if (listed == Loading) Loading else Said(if (listed == Files([])) "No changes." else "")), Pane, [Engine.class("missing")]),
 				Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(pane.map2(model.signal(), |shown, state| Model.review_tree(state, shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.review_file_row(model, id, row))]),
 			],
 		)
@@ -2725,8 +2742,9 @@ Liton := [].{
 	review_file_row = |model, id, row| {
 		shown = row.field(|listed| listed)
 		asked = shown.map2(id.lift_row(), |listed, pane_id| { pane_id, path: listed.path, folder: listed.folder })
+		picks = model.lift_row().update_by(asked, Model.pick_review_file)
 		Html.li(
-			[Engine.class_s(shown.map(|listed| if (listed.viewed) "git-file viewed" else if (!listed.folder) "git-file" else if (listed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|listed| "--depth: ${listed.depth.to_str()}"))],
+			[Engine.class_s(shown.map(|listed| if (listed.viewed) "git-file viewed" else if (!listed.folder) "git-file" else if (listed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|listed| "--depth: ${listed.depth.to_str()}"))].concat(Liton.row_activates(picks)),
 			[
 				Html.button_s(
 					shown.map(|listed| listed.path.split_last("/").map_ok(|parts| parts.after) ?? listed.path),
@@ -2735,7 +2753,7 @@ Liton := [].{
 						Engine.attr_presence("aria-current", shown.map(|listed| if (listed.focused) Present("true") else Absent)),
 						Engine.attr_presence("aria-expanded", shown.map(|listed| if (listed.folder) Present(if (listed.folded) "false" else "true") else Absent)),
 					],
-					model.lift_row().update_by(asked, Model.pick_review_file),
+					picks,
 				),
 				Html.span_s(shown.map(|listed| if (listed.folder) "" else Liton.change_text(listed.file.change)), [Engine.class_s(shown.map(|listed| "change ${Liton.change_text(listed.file.change)}"))]),
 				Html.span_s(shown.map(|listed| if (listed.threads == 0) "" else listed.threads.to_str()), [Engine.class("thread-count"), Engine.attr("title", "Open threads"), Engine.test_id("thread-count")]),
@@ -2764,7 +2782,7 @@ Liton := [].{
 						Html.button("Viewed", [Engine.class("viewed-toggle"), Html.aria_label_s(card.key().map(|path| "Viewed ${path}")), Html.flag("aria-pressed", card.field(|shown| shown.viewed)), Engine.attr("title", "Mark the file viewed, which folds it")], model.lift_row().update_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), Model.toggle_viewed)),
 					],
 				),
-				Html.p_s(card.field(|shown| shown.note), [Engine.class("missing")]),
+				Spinner.or_text(card.field(|shown| shown.note), Inline, [Engine.class("missing")]),
 				Html.div("review-diff", [Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows))]),
 			],
 		)
@@ -2780,13 +2798,13 @@ Liton := [].{
 			"files",
 			[
 				Liton.review_panel(model, id, pane),
-				Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), [Engine.class("missing")]),
+				Spinner.or_text(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), Pane, [Engine.class("missing")]),
 				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown)), NoMenus),
 				Html.div_attrs(
 					[Engine.class("file-view"), Engine.attr("data-part", "file")],
 					[
 						Html.p_s(id.map2(model.signal(), |pane_id, state| Model.file_pane(state, pane_id).file), [Engine.class("file-path")]),
-						Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), [Engine.class("missing"), Engine.test_id("file-status")]),
+						Spinner.or_text(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), Inline, [Engine.class("missing"), Engine.test_id("file-status")]),
 						Liton.code_view(model, id, Engine.const("code-view file"), shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
 					],
 				),
@@ -2931,8 +2949,9 @@ Liton := [].{
 		shown = row.field(|changed| changed)
 		asked = shown.map2(id.lift_row(), |changed, pane_id| { pane_id, path: changed.path, folder: changed.folder })
 		picked = asked.map2(model.signal().lift_row(), |{ pane_id, path, folder }, state| !folder and Model.git_pane(state, pane_id).file == Selected(path))
+		picks = model.lift_row().update_by(asked, Model.pick_changed)
 		Html.li(
-			[Engine.class_s(shown.map(|changed| if (!changed.folder) "git-file" else if (changed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|changed| "--depth: ${changed.depth.to_str()}"))],
+			[Engine.class_s(shown.map(|changed| if (!changed.folder) "git-file" else if (changed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|changed| "--depth: ${changed.depth.to_str()}"))].concat(Liton.row_activates(picks)),
 			[
 				Html.button_s(
 					shown.map(|changed| changed.path.split_last("/").map_ok(|parts| parts.after) ?? changed.path),
@@ -2941,7 +2960,7 @@ Liton := [].{
 						Engine.attr_presence("aria-pressed", shown.map2(picked, |changed, is_picked| if (changed.folder) Absent else Present(if (is_picked) "true" else "false"))),
 						Engine.attr_presence("aria-expanded", shown.map(|changed| if (changed.folder) Present(if (changed.folded) "false" else "true") else Absent)),
 					],
-					model.lift_row().update_by(asked, Model.pick_changed),
+					picks,
 				),
 				Html.span_s(shown.map(|changed| if (changed.folder) "" else Liton.change_text(changed.file.change)), [Engine.class_s(shown.map(|changed| "change ${Liton.change_text(changed.file.change)}"))]),
 				Html.span_s(shown.map(|changed| Liton.file_lines(changed.file)), [Engine.class("lines")]),
@@ -2966,7 +2985,7 @@ Liton := [].{
 			|hunks_shown|
 				match hunks_shown {
 					NoFile => Engine.text("")
-					Loading => Html.p("Loading…", "missing")
+					Loading => Spinner.spinner("Loading", Pane)
 					Shown => Liton.git_diff(model, id, pane)
 				},
 		)
@@ -3158,9 +3177,10 @@ Liton := [].{
 		model = model0.lift_row()
 		room = row.field(|shown| shown.room)
 		heading = row.field(|shown| shown.heading)
+		opens = model.update_by(row.field(|shown| shown), |state, shown| if (shown.heading.is_empty()) Model.open(state, Room(shown.key)) else state)
 		# One element, as a row of `each` must be.
 		Html.li(
-			[Engine.class_s(row.field(|shown| shown).map2(model.signal(), |shown, state| if (!shown.heading.is_empty()) "room-group" else Liton.joined_classes(Liton.room_row_class(shown.room), if (Model.focused(state, [Room]) == Room(shown.key)) "focused" else ""))), Engine.attr("data-part", "room")],
+			[Engine.class_s(row.field(|shown| shown).map2(model.signal(), |shown, state| if (!shown.heading.is_empty()) "room-group" else Liton.joined_classes(Liton.room_row_class(shown.room), if (Model.focused(state, [Room]) == Room(shown.key)) "focused" else ""))), Engine.attr("data-part", "room")].concat(Liton.row_activates(opens)),
 			[
 				Engine.when(
 					heading.map(|title| !title.is_empty()),
@@ -3169,7 +3189,7 @@ Liton := [].{
 						Html.div(
 							"room-line",
 							[
-								Html.button_s(room.map(Liton.room_name), [Engine.class("room-name"), Engine.ref_s(row.key().map(|room_id| "room-${room_id}")), Engine.on_seen({}, model.set_value_by(row.key(), |state, room_id, seen| Model.room_seen(state, room_id, seen.intersecting)))], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
+								Html.button_s(room.map(Liton.room_name), [Engine.class("room-name"), Engine.ref_s(row.key().map(|room_id| "room-${room_id}")), Engine.on_seen({}, model.set_value_by(row.key(), |state, room_id, seen| Model.room_seen(state, room_id, seen.intersecting)))], opens),
 								Html.span_s(room.map(|shown| Liton.room_unread(shown.kind, shown.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
 								Liton.join_controls(model, room),
 							],

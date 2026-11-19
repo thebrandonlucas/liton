@@ -5,10 +5,10 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Scratch\"}]}]}]}")
     (run-effect 2)
     ; The chat follows Scratch before its timeline arrives.
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
     (run-effect 3)
-    (expect-absent (text "Loading…"))
+    (expect-absent (role status :name "Loading"))
     (fill (label "Message") "Find the TODOs")
     (click (role button :name "Send"))
     ; Shown before the daemon answers the send.

@@ -193,6 +193,8 @@ All notable changes to liton are documented in this file. The format is based on
 - Drag a ticket's card to another column of the board, or row to another group of the list, to set its status there at once; the column under the pointer is outlined while you hold it. With a mouse or pen; on a touch screen use S.
 - In the Board preset, F opens the palette at Filter: to keep only a kind of status, your tickets, those unassigned or a label's, shown above the tickets with × to clear it; / goes to the search. Save view keeps the filter, with the scope and search, as a view of its own under Scopes, which this browser remembers until you forget it with its ×.
 - A Graphite theme, dense and dark like Linear's, with opaque tiles a hairline apart and one indigo accent: the Board preset shows it, and Settings offers it for any layout.
+- What is loading, such as a chat's timeline, a room, Files, Changes, Review, Tickets and a ticket, shows a spinner rather than the word Loading, larger where a whole pane loads; screen readers still hear "Loading", and it stands still where the system asks for reduced motion.
+- A row opens wherever you click in it, not only on its title: a workspace or session, a room, a ticket in the list or on the board, a file in Files, Changes or Review, an inbox item and a review thread. Its + and ⋮, Join or Leave and other buttons still do only their own thing.
 
 ### Fixed
 
@@ -214,6 +216,9 @@ All notable changes to liton are documented in this file. The format is based on
 - A daemon that connects no providers, such as one started with `LITON_MOCK=off` and nothing else, no longer leaves the page saying "Connecting to the daemon…": the main area says nothing is connected and how to connect something, with the host's settings a click away.
 - On a phone, each tab of the tab bar at the bottom shows the icon of the pane it shows, in every preset: the Rooms preset's Thread tab no longer shows a branch, and a drawer whose panes are all hidden is still named.
 - A room's name shows once: its pane's header names it with its topic, members and ⋯ menu, beside the drawers' buttons, in place of a second header under it. The Thread pane's header has its × to close the thread, and the Review, Ticket and Board panes' headers no longer repeat what their views name.
+- Archiving the workspace shown, from its row's or its header's ⋯ menu, now named Archive workspace since it archives its agents too, shows the latest workspace left at once, or asks you to pick one when none is left. It no longer leaves the main area showing the workspace's id with no agents, where starting one failed with "no workspace".
+- A theme you picked stays when you open another surface or reset one to its preset, rather than turning to the surface's own, such as Developer's Neutral. A browser that has no theme of its own yet still shows each surface's.
+- Drag the workspace shown in the main area to another place by any of its tabs, a session's, the diff's or a ticket's, or by its name in its header, as you drag other panes. A ticket scrolls within its pane, so its comment box is always in reach, and its status, assignees and labels line up as rows of a name and a value.
 
 ### Removed
 
