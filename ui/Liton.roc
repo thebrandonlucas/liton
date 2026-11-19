@@ -2499,8 +2499,88 @@ Liton := [].{
 						),
 					],
 				),
-			]),
+			]).prepend(Liton.session_overview(model0, id, shown)),
 		)
+	}
+
+	## Over a chat pane showing only the latest (its option `show`), the
+	## session's status, where it works and how long it has worked or since
+	## it was active; Show the whole chat, Snooze, Pin its workspace and
+	## Rename; and its summary's place. A pane that shows the whole chat
+	## after showing the latest has Show the latest only.
+	session_overview : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	session_overview = |model, id, shown| {
+		session = shown.map(|{ pane, state }| Model.session(state, Model.session_of(state, pane)))
+		agent = shown.map(|{ pane, state }| Liton.agent_of(state, pane))
+		show = |value| model.update_by(id, |state, pane_id| Model.with_snapshot_text(Model.set_option(state, pane_id, "show", value)))
+		workspace = session.map2(model.signal(), |listed, state| if (state.capabilities.contains(Capability.workspaces_v1)) Model.row_workspace(state, listed.id) else Err(NotFound))
+		icon = |name, class, handler| Liton.icon_button(Engine.const(name), "icon ${class}", handler)
+		Engine.switch(
+			shown.map(|{ pane, state }| if (Model.session_of(state, pane).is_empty()) NoSession else if (Model.option(pane, "show") == "Latest") Latest else if (pane.options.any(|set| set.key == "show")) Whole else NoSession),
+			[Latest, Whole, NoSession],
+			|showing|
+				match showing {
+					Latest =>
+						Html.div_attrs(
+							[Engine.class("session-overview"), Engine.attr("data-part", "overview")],
+							[
+								Html.div(
+									"overview-line",
+									[
+										Html.span_s(agent.map(|told| told.status), [Engine.class_s(agent.map(|told| "status-word ${told.dot}")), Engine.test_id("overview-status")]),
+										Html.span_s(agent.map(|told| told.place), [Engine.class("overview-place")]),
+										Html.span_s(shown.map(|{ pane, state }| Liton.activity_text(state, pane)), [Engine.class("overview-activity"), Engine.test_id("overview-activity")]),
+									],
+								),
+								Html.div(
+									"overview-actions",
+									[
+										icon("Show the whole chat", "expand", show("Whole chat")),
+										Engine.when(
+											session.map2(model.signal(), |listed, state| state.attention.any(|item| item.session_id == listed.id)),
+											|| icon("Snooze", "snooze", model.update_by(session, |state, listed| Model.set_aside(state, listed.id, Snoozed(Model.inbox_snooze_minutes(state))))),
+											|| Engine.text(""),
+										),
+										Engine.when(
+											workspace.map(|found| found.is_ok()),
+											|| Liton.icon_button(workspace.map(|found| if (found.map_ok(|listed| listed.pinned) ?? Bool.False) "Unpin its workspace" else "Pin its workspace"), "icon pin", model.update_by(workspace, |state, found| found.map_ok(|listed| Model.edit(state, Workspaces(Pin({ workspace_id: listed.id, pinned: !listed.pinned })))) ?? state)),
+											|| Engine.text(""),
+										),
+										Engine.when(
+											model.signal().map(|state| state.capabilities.contains(Capability.chat_v1)),
+											|| icon("Rename", "rename", model.update_by(id.map2(session, |pane_id, listed| { pane_id, key: listed.id }), |state, { pane_id, key }| Model.row_act(state, { pane_id, key, action: Rename }))),
+											|| Engine.text(""),
+										),
+									],
+								),
+								Engine.when(
+									id.map2(model.signal(), |pane_id, state| state.renaming.pane == pane_id),
+									|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
+									|| Engine.text(""),
+								),
+								# The session's summary goes here once a capability offers
+								# one (a Goal, what is Done and what it does Now); until
+								# then it shows nothing.
+								Html.div_attrs([Engine.class("session-summary"), Engine.attr("data-part", "summary"), Engine.attr("hidden", "")], []),
+							],
+						)
+					Whole => Html.div("overview-whole", [Html.button("Show the latest only", [Engine.class("show-latest")], show("Latest"))])
+					NoSession => Engine.text("")
+				},
+		)
+	}
+
+	## How long the agent of a chat pane's session has worked on its turn,
+	## or else how long ago it was active, as `Model.age` says it.
+	activity_text : Model.State, Model.Pane -> Str
+	activity_text = |state, pane| {
+		ago = Model.age(state, Model.session(state, Model.session_of(state, pane)))
+		match Model.working(state, pane) {
+			Ok(worked) if !worked.is_empty() => "running for ${worked}"
+			_ if ago.is_empty() => ""
+			_ if ago == "now" => "active now"
+			_ => "active ${ago} ago"
+		}
 	}
 
 	## What a composer's round button does: send, or stop its session's agent

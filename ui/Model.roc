@@ -959,12 +959,17 @@ Model := [].{
 	window_of : State, Pane -> U64
 	window_of = |state, shown| {
 		session_id = Model.session_of(state, shown)
-		state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
+		if (Model.option(shown, "show") == "Latest") Model.latest_window else state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
 	}
+
+	## How many of a timeline's latest entries a chat pane showing only the
+	## latest shows.
+	latest_window : U64
+	latest_window = 8
 
 	## Whether a chat pane leaves out earlier entries of its timeline.
 	has_earlier : State, Pane -> Bool
-	has_earlier = |state, shown| Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
+	has_earlier = |state, shown| Model.option(shown, "show") != "Latest" and Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
 
 	## Shows half of `Model.window` more of a chat pane's earlier entries.
 	show_earlier : State, Str -> State
@@ -2366,6 +2371,11 @@ Model := [].{
 	## Whether a session's item is unread, as the inbox shows it.
 	unread : State, Str -> Bool
 	unread = |state, session_id| state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| state.attending.fold(item, |shown, asked| Model.attended(shown, asked.request)).unread) ?? Bool.False
+
+	## How long Snooze sets an item aside where no inbox pane says: as the
+	## first inbox pane's does, else an hour.
+	inbox_snooze_minutes : State -> U32
+	inbox_snooze_minutes = |state| Model.panes(state).find_first(|shown| shown.widget == "inbox").map_ok(Model.snooze_minutes) ?? 60
 
 	## How long an inbox pane's Snooze sets an item aside, in minutes.
 	snooze_minutes : Pane -> U32

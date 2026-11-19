@@ -69,6 +69,8 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-pin: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 17v5'/><path d='M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'/></svg>");
   --icon-clock: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='13' r='8'/><path d='M12 9v4l2 2'/><path d='M5 3 2 6'/><path d='m22 6-3-3'/></svg>");
   --icon-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+  --icon-maximize: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 3h6v6'/><path d='m21 3-7 7'/><path d='m3 21 7-7'/><path d='M9 21H3v-6'/></svg>");
+  --icon-pencil: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z'/><path d='m15 5 4 4'/></svg>");
   --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
@@ -652,6 +654,23 @@ kbd:empty { display: none; }
 .inbox-actions .mark { --icon: var(--icon-circle-dot); }
 .inbox-actions .settle { --icon: var(--icon-check); }
 .inbox-item.working .mark { display: none; }
+/* A chat showing the latest: its session's status, where it works and how
+   long it has worked over its actions, then its latest activity. */
+.session-overview { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 10px; border-bottom: 1px solid var(--edge); }
+.overview-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+.overview-line .status-word { font-weight: 600; text-transform: capitalize; }
+.overview-line .status-word.running { color: var(--ok); }
+.overview-line .status-word.waiting { color: var(--warn); }
+.overview-line .status-word.failed { color: var(--fail); }
+.overview-actions { display: flex; gap: 4px; }
+.overview-actions .icon { padding: 4px 7px; border-color: transparent; background: none; color: var(--muted); }
+.overview-actions .icon:hover { color: var(--text); }
+.overview-actions .expand { --icon: var(--icon-maximize); }
+.overview-actions .snooze { --icon: var(--icon-clock); }
+.overview-actions .pin { --icon: var(--icon-pin); }
+.overview-actions .rename { --icon: var(--icon-pencil); }
+.overview-whole { display: flex; justify-content: flex-end; padding: 4px 10px 0; }
+.overview-whole .show-latest { font-size: 12px; padding: 1px 8px; }
 /* Selecting rows: Select, and those unread, idle or running; then what acts on those selected. */
 .inbox-select, .inbox-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .inbox-select { padding: 4px 10px 8px; border-bottom: 1px solid var(--edge); }

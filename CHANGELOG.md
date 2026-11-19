@@ -121,6 +121,7 @@ All notable changes to liton are documented in this file. The format is based on
 - New agent picks the model, mode and thinking level to start with from those its kind of agent offers, each its default unless you pick another; a kind that tells no models still takes one by name.
 - Shift+Tab in a chat's message box switches the agent to its next mode, as in Paseo; ⌘K offers Set mode…, Set model… and Set thinking… for the chat focused, and each choice by name, such as Set model to Opus 4.1.
 - While an agent works, what you send from its chat steers the turn it is working on instead of interrupting it, as the message box now says ("Steer: add to the turn it is working on"); Stop still interrupts it. chat.v1's `SendMessage` takes `while_running`, `Interrupt` or `Steer`.
+- A chat pane can show only the latest (its Show option in Settings): over its last few entries and its composer, the session's status, where it works and how long it has worked or since it was active, with buttons to show the whole chat, snooze it, pin its workspace and rename it. Show the latest only, over the whole chat, goes back.
 
 ### Changed
 
