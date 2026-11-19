@@ -291,10 +291,16 @@ Model := [].{
 
 	## The columns of a snapshot of `version`, with a part split since then
 	## followed by the part split from it: before version 7, a Rooms pane
-	## showed a room too, which a Room pane beside it now does.
+	## showed a room too, which a Room pane beside it now does, and a Tickets
+	## pane a ticket, as a Ticket pane now does.
 	split_parts : U32, List(Column) -> List(Column)
 	split_parts = |version, columns| {
-		split = |listed_pane| if (version < 7 and listed_pane.widget == "rooms") [listed_pane, { id: "${listed_pane.id}-room", widget: "room", pinned: "", options: [] }] else [listed_pane]
+		split = |listed_pane|
+			match listed_pane.widget {
+				"rooms" if version < 7 => [listed_pane, { id: "${listed_pane.id}-room", widget: "room", pinned: "", options: [] }]
+				"tickets" if version < 7 => [listed_pane, { id: "${listed_pane.id}-ticket", widget: "ticket", pinned: "", options: [] }]
+				_ => [listed_pane]
+			}
 		columns.map(|column| { ..column, panes: column.panes.join_map(split) })
 	}
 
@@ -1286,9 +1292,10 @@ Model := [].{
 			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
 		}
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
-		# A ticket list's, its sessions' links, and the ticket each shows.
-		ticket_views = laid_out.keep_if(|shown| shown.widget == "tickets" and Model.pane_visible(state, shown.id)).map(|shown| TicketDesk.view(state.tickets, shown.id))
-		tickets = if (offered(Capability.tickets_v1) and !ticket_views.is_empty()) [TicketList, TicketLinks].concat(ticket_views.map(|view| view.ticket).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
+		# The tickets and their sessions' links, and the ticket each Ticket
+		# pane shows.
+		desks = laid_out.keep_if(|shown| (shown.widget == "tickets" or shown.widget == "ticket") and Model.pane_visible(state, shown.id))
+		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
@@ -1725,15 +1732,15 @@ Model := [].{
 	}
 
 	## Focuses a context, so panes that follow its kind show it, and shows
-	## a view following it: one on screen, or else the first, its tab
-	## brought forward, and its column, which on a narrow screen is a jump
-	## to it. A session opened is seen.
+	## a view following it: one on screen, else the first not hidden, else
+	## the first, its tab brought forward, and its column, which on a narrow
+	## screen is a jump to it. A session opened is seen.
 	open : State, Context.Id -> State
 	open = |state, context| {
 		seen = Model.mark_seen(Model.focus_on(state, context), [Context.to_str(context)], Bool.True)
-		views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and !state.hidden.contains(shown.id) and Widgets.shows(Widgets.find(shown.widget), View, Context.kind(context)))
-		match views.find_first(|shown| Model.pane_visible(state, shown.id)).on_err(|_| views.first()).map_ok(|view| view.id) {
-			Ok(view_id) => state.columns.find_first(|column| column.panes.any(|shown| shown.id == view_id)).map_ok(|column| Model.jump_to(Model.activate_tab(seen, view_id), column.id, Push)) ?? seen
+		views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Context.kind(context)))
+		match views.find_first(|shown| Model.pane_visible(state, shown.id)).on_err(|_| views.find_first(|shown| !state.hidden.contains(shown.id))).on_err(|_| views.first()).map_ok(|view| view.id) {
+			Ok(view_id) => state.columns.find_first(|column| column.panes.any(|shown| shown.id == view_id)).map_ok(|column| Model.jump_to(Model.activate_tab({ ..seen, hidden: seen.hidden.drop_if(|hidden_id| hidden_id == view_id) }, view_id), column.id, Push)) ?? seen
 			Err(_) => seen
 		}
 	}
@@ -2309,9 +2316,13 @@ Model := [].{
 		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
 	}
 
-	## Shows a ticket in a Tickets pane, or its list again for "".
-	open_ticket : State, { pane_id : Str, ticket_id : Str } -> State
-	open_ticket = |state, { pane_id, ticket_id }| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, ticket: ticket_id }) }
+	## The ticket a Ticket pane shows, "" for none.
+	ticket_of : State, Str -> Str
+	ticket_of = |state, pane_id|
+		match Model.context_of(state, Model.pane(state, pane_id)) {
+			Ticket(ticket_id) => ticket_id
+			_ => ""
+		}
 
 	## Changes the filter of a Tickets pane's list.
 	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
@@ -2368,12 +2379,12 @@ Model := [].{
 		if (session_id.is_empty() or Model.starting(state, session_id)) state else Model.ask_tickets(state, Link({ session_id, ticket_id }))
 	}
 
-	## Comments a Tickets pane's draft on the ticket it shows.
+	## Comments a Ticket pane's draft on the ticket it shows.
 	comment_ticket : State, Str -> State
 	comment_ticket = |state, pane_id| {
 		key = "${pane_id}/ticket"
 		text = Model.draft(state, key).trim()
-		ticket_id = TicketDesk.view(state.tickets, pane_id).ticket
+		ticket_id = Model.ticket_of(state, pane_id)
 		if (text.is_empty() or ticket_id.is_empty()) state else Model.ask_tickets(Model.set_draft(state, key, ""), Comment({ ticket_id, body: text }))
 	}
 
@@ -2840,7 +2851,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2864,6 +2875,7 @@ Model := [].{
 				"changes" => Changes
 				"files" => Files
 				"tickets" => Tickets
+				"ticket" => Ticket
 				"rooms" => Rooms
 				"room" => Room
 				"capabilities" => Capabilities
@@ -2952,7 +2964,7 @@ expect {
 	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
 	version_3 : { version : U32, shell : Model.Shell, columns : List(Model.OldColumn) }
 	version_3 = { version: 3, shell: Workbench, columns: old_columns_of(Model.developer) }
-	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of(Model.developer))
+	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of({ ..Model.developer, hidden: [] }))
 }
 
 expect {
@@ -2964,7 +2976,7 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2", "pane-8"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
 expect {
@@ -2981,9 +2993,9 @@ expect {
 	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
 	tiling = Model.layout(state, Model.tiling)
 	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
-	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3", "pane-5"]]
+	ids(reordered) == [["pane-1"], ["pane-2", "pane-8"], ["pane-4", "pane-3", "pane-5"]]
 		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
-		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3", "pane-5"]]
+		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4", "pane-8"], ["pane-3", "pane-5"]]
 		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
 		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
 		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
@@ -3012,7 +3024,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ticket", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
 }
 
 expect {

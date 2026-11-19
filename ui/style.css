@@ -428,6 +428,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .ticket-list { list-style: none; margin: 0; padding: 0; }
 .ticket-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border-radius: var(--small-radius); transition: background-color var(--fast) ease; }
 .ticket-row:hover { background: var(--tool); }
+.ticket-row.focused { background: var(--selected); }
 .ticket-row .ticket-title { min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticket-row .ticket-title:active { transform: none; }
 .ticket-key { margin-right: 6px; font: 12px var(--font-mono); color: var(--muted); }

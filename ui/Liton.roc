@@ -634,7 +634,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -644,6 +644,7 @@ Liton := [].{
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
+							Ticket => Liton.ticket_view(model, id)
 							Rooms => Liton.rooms(model)
 							Room => Liton.room_view(model, id)
 							Capabilities => Liton.capabilities(model)
@@ -1029,18 +1030,13 @@ Liton := [].{
 			if (pane.pinned.is_empty()) "following ${title}" else "pinned to ${title}"
 		}
 
-	## A Tickets pane: the ticket it opened, or its filters, which
-	## `Tickets.matches` applies, over its tickets, the latest changed first,
-	## each with its key, title, which opens it, status, assignees, source
-	## and how long ago it changed.
+	## A Tickets pane: its filters, which `Tickets.matches` applies, over its
+	## tickets, the latest changed first, the one focused marked, each with
+	## its key, title, which focuses it, status, assignees, source and how
+	## long ago it changed.
 	tickets : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	tickets = |model, id| {
 		view = id.map2(model.signal(), |pane_id, state| TicketDesk.view(state.tickets, pane_id))
-		Engine.when(view.map(|shown| shown.ticket.is_empty()), || Liton.ticket_list(model, id, view), || Liton.ticket_detail(model, id, view))
-	}
-
-	ticket_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
-	ticket_list = |model, id, view| {
 		filtered = |change| model.set_value_by(id, |state, pane_id, text| Model.filter_tickets(state, pane_id, |filter| change(filter, text)))
 		listed = view.map2(model.signal(), |shown, state| TicketDesk.listed(state.tickets, shown))
 		Html.div(
@@ -1064,11 +1060,11 @@ Liton := [].{
 							|row| {
 								state = model.signal().lift_row()
 								Html.li(
-									[Engine.class("ticket-row"), Engine.attr("data-part", "ticket")],
+									[Engine.class_s(row.key().map2(state, |ticket_id, shown| if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "ticket-row focused" else "ticket-row")), Engine.attr("data-part", "ticket")],
 									[
 										Engine.element(
 											"button",
-											[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key().map2(id.lift_row(), |ticket_id, pane_id| { pane_id, ticket_id }), Model.open_ticket))],
+											[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key(), |shown, ticket_id| Model.open(shown, Ticket(ticket_id))))],
 											[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
 										),
 										Html.div(
@@ -1091,16 +1087,22 @@ Liton := [].{
 		)
 	}
 
-	## A Tickets pane's ticket: the way back to the list, its key, a link to
-	## it where its source keeps it, its title, status, assignees, source and
+	## A Ticket pane: the ticket it shows, or where to pick one.
+	ticket_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	ticket_view = |model, id| {
+		ticket_id = id.map2(model.signal(), |pane_id, state| Model.ticket_of(state, pane_id))
+		Engine.when(ticket_id.map(Str.is_empty), || Html.p("Pick a ticket in Tickets to show it here.", "missing"), || Liton.ticket_detail(model, id, ticket_id))
+	}
+
+	## A ticket shown: its key, a link to it where its source keeps it, its title, status, assignees, source and
 	## labels, the sessions working on it, each to open or unlink, and to
 	## link the session focused; its body and comments as Markdown; and its
 	## status, its
 	## assignees, of its source's people, and a comment to add, each shown
 	## at once, saving until the daemon has it.
-	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, TicketDesk.View) -> Elem(PaneCtx)
-	ticket_detail = |model, id, view| {
-		shown = view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| TicketDesk.ticket_shown(state.tickets, ticket_id) ?? TicketDesk.missing)
+	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	ticket_detail = |model, id, opened_ticket| {
+		shown = opened_ticket.map2(model.signal(), |opened_id, state| TicketDesk.ticket_shown(state.tickets, opened_id) ?? TicketDesk.missing)
 		summary = shown.map(|opened| opened.summary)
 		Html.div_attrs(
 			[Engine.class("ticket"), Engine.attr("data-part", "ticket")],
@@ -1108,7 +1110,6 @@ Liton := [].{
 				Html.div(
 					"ticket-bar",
 					[
-						Html.button("← Tickets", [Html.aria_label("Back to the tickets")], model.update_by(id, |state, pane_id| Model.open_ticket(state, { pane_id, ticket_id: "" }))),
 						Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
 						Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]),
 					],
@@ -1166,7 +1167,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.p_s(view.map2(model.signal(), |{ ticket: ticket_id, .. }, state| if (TicketDesk.loaded(state.tickets, ticket_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
+				Html.p_s(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
 				Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
 				Html.ul(
 					[Engine.class("ticket-comments")],
