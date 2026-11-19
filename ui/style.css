@@ -797,6 +797,10 @@ kbd:empty { display: none; }
 .review-round.active { color: var(--text); }
 .finish-review { padding: 2px 12px; font-weight: 600; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .finish-review:disabled { opacity: .45; cursor: default; }
+.since-round { padding: 1px 10px; font-size: 12px; background: none; color: var(--muted); }
+.since-round[aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.since-round-note { margin: 0; padding: 6px 10px; border: 1px dashed var(--edge-active); border-radius: var(--small-radius); font-size: 12.5px; color: var(--muted); }
+.since-round-note:empty { display: none; }
 .comment.focused { border-color: var(--edge-active); box-shadow: 0 0 0 1px var(--edge-active); }
 .viewed-toggle { flex: none; padding: 0 8px; font-size: 12px; color: var(--muted); background: none; }
 .viewed-toggle::before { content: "☐ " / ""; }

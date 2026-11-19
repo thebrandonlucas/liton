@@ -2685,10 +2685,63 @@ Model := [].{
 
 	## A Review surface's changed files, in the order its navigator's tree
 	## lists them, once its poll answers.
+	## Only those changed since the latest round, while it shows those and
+	## this browser kept that round's files.
 	review_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
-	review_files = |state, shown| {
+	review_files = |state, shown|
+		match (Model.all_review_files(state, shown), Model.round_kept(state, shown)) {
+			(Files(files), Ok(kept)) if state.review_desk.since_round => Files(files.drop_if(|file| kept.files.contains({ path: file.path, fingerprint: Model.as_viewed(state, shown, file.path).fingerprint })))
+			(listed, _) => listed
+		}
+
+	all_review_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
+	all_review_files = |state, shown| {
 		in_tree = |files| changed_rows(files, [], "", 0).keep_if(|row| !row.folder).keep_oks(|row| files.find_first(|file| file.path == row.path))
 		Model.git_changes_of(state, Model.context_of(state, shown), state.review_desk.scope).map_ok(|changes| Files(in_tree(changes.files))) ?? Loading
+	}
+
+	## The files of a Review surface's scope as this browser saw them when
+	## it sent the review's latest round, if it did.
+	round_kept : State, Pane -> Try(ReviewDesk.Round, [NotFound])
+	round_kept = |state, shown| {
+		context = Context.to_str(Model.context_of(state, shown))
+		round = Model.review_of(state, Model.context_of(state, shown)).round
+		state.review_desk.rounds.find_first(|kept| kept.context == context and kept.scope == state.review_desk.scope and kept.round == round)
+	}
+
+	## Finishes a Review view's review: sends its drafts as the next round
+	## (`send_review`), keeping the files of its scope as they are now, to
+	## tell later which changed since.
+	finish_review : State, Str -> State
+	finish_review = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		context = Model.context_of(state, shown)
+		files =
+			match Model.all_review_files(state, shown) {
+				Files(listed) => listed.map(|file| { path: file.path, fingerprint: Model.as_viewed(state, shown, file.path).fingerprint })
+				Loading => []
+			}
+		sent = Model.send_review(state, pane_id)
+		if (sent.reviewing.len() > state.reviewing.len()) { ..sent, review_desk: ReviewDesk.sent_round(sent.review_desk, { context: Context.to_str(context), scope: state.review_desk.scope, round: Model.review_of(state, context).round + 1, files }) } else sent
+	}
+
+	## Shows only the files changed since the latest round, or all again.
+	toggle_since_round : State -> State
+	toggle_since_round = |state| { ..state, review_desk: { ..state.review_desk, since_round: !state.review_desk.since_round, seen: [], scrolling_to: "" } }
+
+	## What a Review view says of the files changed since the latest round,
+	## while it shows only those: how many, or why it can't tell.
+	since_round_text : State, Pane -> Str
+	since_round_text = |state, shown| {
+		round = Model.review_of(state, Model.context_of(state, shown)).round.to_str()
+		match (state.review_desk.since_round, Model.round_kept(state, shown), Model.review_files(state, shown)) {
+			(Bool.False, _, _) => ""
+			(_, Ok(_), Files([])) => "Nothing changed since round ${round}."
+			(_, Ok(_), Files([_])) => "1 file changed since round ${round}."
+			(_, Ok(_), Files(files)) => "${files.len().to_str()} files changed since round ${round}."
+			(_, Ok(_), Loading) => ""
+			(_, Err(_), _) => "liton can't tell what changed since round ${round}: this browser didn't send it, and no provider keeps the code each round was sent against (review.v1 round diffs)."
+		}
 	}
 
 	## The file the Review surface has in view, "" for none.

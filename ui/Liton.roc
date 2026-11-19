@@ -1892,6 +1892,7 @@ Liton := [].{
 									"review-cards",
 									[
 										Liton.review_bar(model, pane),
+										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
 										Html.p_s(cards.map(|listed| if (listed == Loading) "Loading…" else if (listed == Cards([])) "No changes to review." else ""), [Engine.class("missing")]),
 										Engine.each(
 											cards.map(
@@ -1915,7 +1916,8 @@ Liton := [].{
 	## The Review view's bar: the branch, how many files are marked viewed,
 	## how many comments its threads have, with the previous and next thread,
 	## the round and Finish review, which sends the drafts to the agent as
-	## the next round, and the scope its parts show,
+	## the next round, once one is sent, Since round, which shows only the
+	## files changed since, and the scope its parts show,
 	## uncommitted or against the base, or one of the branch's commits;
 	## another shows its files at once.
 	review_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
@@ -1939,7 +1941,12 @@ Liton := [].{
 				Html.button(
 					"Finish review",
 					[Engine.class("finish-review"), Engine.attr("title", "Send the drafts to the agent as one message"), Html.boolean("disabled", pane.map2(model.signal(), |shown, state| Review.drafts(Model.review_of(state, Model.context_of(state, shown))) == 0))],
-					model.update_by(pane.map(|shown| shown.id), Model.send_review),
+					model.update_by(pane.map(|shown| shown.id), Model.finish_review),
+				),
+				Engine.when(
+					pane.map2(model.signal(), |shown, state| Model.review_of(state, Model.context_of(state, shown)).round > 0),
+					|| Html.button_s(pane.map2(model.signal(), |shown, state| "Since round ${Model.review_of(state, Model.context_of(state, shown)).round.to_str()}"), [Engine.class("since-round"), Html.flag("aria-pressed", model.signal().map(|state| state.review_desk.since_round)), Engine.attr("title", "Show only the files changed since the latest round")], model.update(Model.toggle_since_round)),
+					|| Engine.text(""),
 				),
 				Engine.element(
 					"select",

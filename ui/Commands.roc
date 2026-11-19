@@ -64,7 +64,7 @@ Commands := [].{
 			{ id: "review.submit", title: "Keep the comment as a draft", group: "Review", applies: composing, run: Model.submit_comment },
 			{ id: "review.cancel", title: "Cancel the comment", group: "Review", applies: composing, run: |state| { ..state, composer: Model.closed_composer } },
 			{ id: "review.viewed", title: "Mark the file in view viewed", group: "Review", applies: |state| viewing(state) and !Model.review_focus(state).is_empty(), run: on_view(|state, pane_id| Model.toggle_viewed(state, { pane_id, path: Model.review_focus(state) })) },
-			{ id: "review.finish", title: "Finish the review", group: "Review", applies: |state| Model.review_shown(state).map_ok(|view| Review.drafts(Model.review_of(state, Model.context_of(state, view))) > 0) ?? Bool.False, run: on_view(Model.send_review) },
+			{ id: "review.finish", title: "Finish the review", group: "Review", applies: |state| Model.review_shown(state).map_ok(|view| Review.drafts(Model.review_of(state, Model.context_of(state, view))) > 0) ?? Bool.False, run: on_view(Model.finish_review) },
 		]
 	}
 

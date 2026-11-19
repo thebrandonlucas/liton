@@ -4,13 +4,26 @@
 ## asked to scroll to (`scroll`, by their references), counted by `serial`,
 ## and the file of the latest until its card is on screen (`scrolling_to`,
 ## "" for none), the files whose cards are on screen (`seen`), and the
-## files marked viewed, which the browser keeps (`viewed_key`), and the
-## threads its inspector lists: those open, resolved, or all.
+## files marked viewed, which the browser keeps (`viewed_key`), the
+## threads its inspector lists: those open, resolved, or all; and the diff
+## of each file as each round was sent from here (`rounds`), and whether
+## its parts show only the files changed since the latest
+## (`since_round`).
 import cap.WorkspaceGit
 
 ReviewDesk := [].{
 
-	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed), listing : [Open, Resolved, All] }
+	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed), listing : [Open, Resolved, All], rounds : List(Round), since_round : Bool }
+
+	## The files of a context's scope as round `round` was sent, each by its
+	## diff's fingerprint (`Viewed`'s).
+	##
+	## FIXME: the diff between rounds needs the daemon to keep, with each
+	## round review.v1 sends, the code it was sent against, and
+	## workspace.git.v1 to diff two such trees; no provider offers either
+	## yet. Until then this browser keeps which files' diffs it saw at each
+	## Send, which tells the files changed since but not how, and is gone on
+	## a reload or in another browser.
 
 	## A file of a context's scope marked viewed, by its diff's fingerprint
 	## then (`WorkspaceGit.fingerprint`), so a change to it unmarks it.
@@ -37,7 +50,13 @@ ReviewDesk := [].{
 
 	## The uncommitted changes, every folder open, until changed.
 	initial : State
-	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [], listing: Open }
+	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [], listing: Open, rounds: [], since_round: Bool.False }
+
+	Round : { context : Str, scope : WorkspaceGit.Scope, round : U32, files : List({ path : Str, fingerprint : Str }) }
+
+	## Keeps a round's files, in place of any kept of the same round.
+	sent_round : State, Round -> State
+	sent_round = |desk, sent| { ..desk, rounds: desk.rounds.drop_if(|kept| kept.context == sent.context and kept.scope == sent.scope and kept.round == sent.round).append(sent) }
 
 	## Folds a folder of the navigator, or unfolds it.
 	toggle_folder : State, Str -> State
