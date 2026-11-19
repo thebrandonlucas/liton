@@ -767,14 +767,20 @@ kbd:empty { display: none; }
 .review-overall { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
 .review-overall textarea { flex: 1; min-width: 0; padding: 4px 8px; resize: vertical; field-sizing: content; max-height: 8em; font: 12.5px/1.4 var(--font-ui); }
 
-/* The Review surface's view: every file a card, one under another, its
-   header staying in sight while its diff scrolls under it. */
-.review { flex: 1; min-height: 0; overflow-y: auto; }
+/* The Review surface's view: its bar, then every file a card, one under
+   another, its header staying in sight under the bar while its diff
+   scrolls under it. */
+.review { flex: 1; min-height: 0; overflow-y: auto; --review-bar: 38px; }
 .review > .missing { padding: 8px 12px; }
-.review-cards { display: flex; flex-direction: column; gap: 10px; padding: 8px 12px 40vh; }
+.review-cards { display: flex; flex-direction: column; gap: 10px; padding: 0 12px 40vh; }
 .review-cards > .missing:empty, .review-card > .missing:empty { display: none; }
-.review-card { container-type: inline-size; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); overflow-x: auto; }
-.review-card-header { position: sticky; top: 0; left: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 5px 10px; background: var(--sheet); border-bottom: 1px solid var(--edge); }
+.review-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: var(--review-bar); box-sizing: border-box; padding: 4px 0; background: var(--sheet); border-bottom: 1px solid var(--edge); font-size: 12.5px; }
+.review-bar .branch { font: 600 12.5px var(--font-mono); color: var(--accent); }
+.review-bar .branch:empty { display: none; }
+.review-bar .scope { max-width: 22em; padding: 2px 6px; font: 12px var(--font-ui); }
+.review-card { border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); }
+.review-diff { container-type: inline-size; overflow-x: auto; }
+.review-card-header { position: sticky; top: var(--review-bar); z-index: 1; display: flex; gap: 8px; align-items: center; padding: 5px 10px; background: var(--sheet); border-bottom: 1px solid var(--edge); }
 .review-card-header .file-path { position: static; flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: none; }
 .review-card-header .lines { font: 11px var(--font-mono); color: var(--muted); }
 .review-card > .missing { margin: 0; padding: 6px 12px; }

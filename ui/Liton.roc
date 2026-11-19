@@ -1889,6 +1889,7 @@ Liton := [].{
 								Html.div(
 									"review-cards",
 									[
+										Liton.review_bar(model, pane),
 										Html.p_s(cards.map(|listed| if (listed == Loading) "Loading…" else if (listed == Cards([])) "No changes to review." else ""), [Engine.class("missing")]),
 										Engine.each(
 											cards.map(
@@ -1904,6 +1905,26 @@ Liton := [].{
 									],
 								)
 						},
+				),
+			],
+		)
+	}
+
+	## The Review view's bar: the branch, and the scope its parts show,
+	## uncommitted or against the base, or one of the branch's commits;
+	## another shows its files at once.
+	review_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	review_bar = |model, pane| {
+		git = pane.map2(model.signal(), |shown, state| Model.git_of(state, shown))
+		commit = |row| Engine.element("option", [Engine.prop_s(Engine.Prop.value, row.key().map(|sha| "commit:${sha}"))], [Engine.text_s(row.field(|listed| "${listed.short_sha} ${listed.subject}"))])
+		Html.div_attrs(
+			[Engine.class("review-bar"), Engine.attr("data-part", "header")],
+			[
+				Html.span_s(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
+				Engine.element(
+					"select",
+					[Engine.attr("aria-label", "Scope"), Engine.class("scope"), Engine.prop_s(Engine.Prop.value, model.signal().map(Model.review_scope_name)), Engine.on("change", model.set_value(Model.pick_review_scope))],
+					[Dropdown.option("Uncommitted", "Uncommitted"), Dropdown.option("AgainstBase", "Against the base"), Engine.each(git.map(|known| known.commits), |listed| listed.sha, commit)],
 				),
 			],
 		)
@@ -1978,7 +1999,7 @@ Liton := [].{
 					],
 				),
 				Html.p_s(card.field(|shown| shown.note), [Engine.class("missing")]),
-				Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows)),
+				Html.div("review-diff", [Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows))]),
 			],
 		)
 	}

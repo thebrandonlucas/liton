@@ -2727,6 +2727,27 @@ Model := [].{
 			{ ..shown, sub_focus: File(path), review_desk: ReviewDesk.scrolled_to(state.review_desk, path, views.map(|view| ReviewDesk.card_ref(view.id, path))) }
 		}
 
+	## Shows a scope in the Review surface's parts at once, named as its
+	## picker names them: `Uncommitted`, `AgainstBase` or `commit:` and a
+	## commit's hash. No file of it is in view until its cards come on
+	## screen.
+	pick_review_scope : State, Str -> State
+	pick_review_scope = |state, picked| {
+		scope = if (picked == "AgainstBase") AgainstBase else if (picked.starts_with("commit:")) Commit(picked.drop_prefix("commit:")) else Uncommitted
+		desk = state.review_desk
+		{ ..state, review_desk: { ..desk, scope, seen: [], scrolling_to: "" }, sub_focus: if (Model.review_focus(state).is_empty()) state.sub_focus else None }
+	}
+
+	## The scope the Review surface's parts show, as `pick_review_scope`
+	## names it.
+	review_scope_name : State -> Str
+	review_scope_name = |state|
+		match state.review_desk.scope {
+			Uncommitted => "Uncommitted"
+			AgainstBase => "AgainstBase"
+			Commit(sha) => "commit:${sha}"
+		}
+
 	## Takes a Review view's card of `path` coming on screen or leaving it:
 	## the file in view is the first on screen, once a file scrolled to is.
 	card_seen : State, { pane_id : Str, path : Str }, Bool -> State
