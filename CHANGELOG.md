@@ -6,6 +6,8 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Added
 
+- A browser the daemon doesn't answer as it isn't paired shows "Pair this browser", with a box for a pairing code, in place of errors; a link ending `#pair=CODE` pairs it at once. Settings → Devices lists the devices paired, with when each was paired and last seen, revokes one (revoking this browser signs it out), and makes a code and link to pair another device.
+- `liton pair`, run on the daemon's machine with `LITON_DB` set as the daemon's, prints a pairing code for a new device and a link that pairs a browser with it; `liton login <code>` pairs the command line itself, keeping its token readable by you alone.
 - `zig build run` serves liton at http://127.0.0.1:8095 (`LITON_HOST` and `LITON_PORT` change it): panes, each a widget bound to a capability the daemon advertises. Add panes from Settings; a widget whose capability no provider supplies shows what it needs.
 - Sessions, Chat and Capabilities widgets on chat.v1. Chat panes follow the session selected in Sessions, or are pinned to one; they show the agent's messages, tool calls and results, and ask you to allow or deny what it requests.
 - Settings, behind the toolbar's one button, picks the Developer or Tiling preset, adds widgets (marking those no provider supports yet) and shows the layout as a snapshot, JSON to copy or to paste and load; the browser keeps the last layout. The working UI shows no buttons for adding widgets.
@@ -134,6 +136,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Changed
 
+- **Breaking:** the daemon answers only paired devices at `/liton/v1`, unless it listens on loopback alone and no proxy forwarded the request (docs/protocol.md, Authentication). A device pairs with a one-time code at `POST /liton/v1/pair`, a browser keeping its token as an HttpOnly cookie and other clients sending it as `Authorization: Bearer`; give a federating daemon its remotes' tokens with `LITON_PROVIDER_TOKENS`. `LITON_AUTH=required` asks for pairing on loopback too, as a proxy on the same machine needs, and `LITON_AUTH=off` turns it off.
 - liton's development environment has one Roc compiler, nightly-2026-11-15, for the daemon and the UI alike: `roc-ui` is gone, and `zig build`'s `-Droc-ui` defaults to the `-Droc` compiler. A release build of the daemon takes minutes rather than about twenty.
 - **Breaking:** the daemon refuses a request from a page of another site, so a website open in your browser can't send your agents work: one whose `Origin` isn't the daemon's own address, a POST not sent as `application/json`, and one to a host name other than `LITON_HOST`, `localhost` or one `LITON_ALLOWED_HOSTS` lists. Behind a proxy or a domain of its own, set `LITON_ALLOWED_HOSTS` to its name, such as `LITON_ALLOWED_HOSTS=liton.example`. A client of the protocol sends its calls and polls with `Content-Type: application/json`.
 - **Breaking:** the Paseo and speech rigs run from liton's development tool rather than shell scripts: `zig build devtool -- paseo daemon` (and `paseo cli`, `paseo relay`, `paseo bridge`) in place of `rig/paseo/*.sh`, and `zig build devtool -- speech sherpa` (and `speech whisper`, `speech model`) in place of `rig/speech/*.sh`, with the same settings.

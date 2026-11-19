@@ -1328,3 +1328,20 @@ kbd:empty { display: none; }
 @keyframes panel-main { 0%, 24% { --tab-on: 0; color: var(--muted); } 25%, 75% { --tab-on: 1; color: var(--accent); } 76%, 100% { --tab-on: 0; color: var(--muted); } }
 @keyframes panel-right { 0%, 74% { --tab-on: 0; color: var(--muted); } 75%, 100% { --tab-on: 1; color: var(--accent); } }
 @keyframes fade-in { from { opacity: 0; } }
+
+/* The pair screen, in place of the UI while this browser isn't paired
+   (ui/Pairing.roc), and Settings' Devices. */
+.pair-screen { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: var(--glass-deep); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar); }
+.pair-card { width: min(420px, 100%); display: grid; gap: 12px; padding: 24px; background: var(--sheet); border: 1px solid var(--edge-active); border-radius: var(--radius); box-shadow: var(--shadow); }
+.pair-card h2 { margin: 0; font: italic 500 24px/1.2 var(--font-display); color: var(--accent); }
+.pair-card .help { margin: 0; color: var(--muted); line-height: 1.45; }
+.pair-code { padding: 10px 12px; font: 20px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; text-align: center; }
+.pair-card button { padding: 8px 12px; }
+.pair-card button.primary, .pair-card button[type="submit"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.pair-failed { margin: 0; min-height: 1.2em; color: var(--fail); font-size: 13px; }
+.settings-row.device-row { display: flex; align-items: center; gap: 10px; }
+.device-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.device-row button:disabled, .settings-row > button:disabled { opacity: .6; }
+.settings-row > button { justify-self: start; }
+.pair-offered-code { font: 22px var(--font-mono); letter-spacing: .12em; color: var(--text); }
+.pair-link { overflow-wrap: anywhere; user-select: all; }
