@@ -475,6 +475,9 @@ kbd:empty { display: none; }
 .room-members { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 12px; }
 .room-members::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-users) center / contain no-repeat; mask: var(--icon-users) center / contain no-repeat; }
 .room-members[aria-pressed="true"] { background: var(--selected); }
+.room-header .room-menu { position: relative; }
+.room-header:not(:has(.room-members)) .room-menu { margin-left: auto; }
+.room-preview { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 12px 6px; padding: 6px 10px; border-radius: var(--small-radius); background: var(--tool); color: var(--muted); font-size: 13px; }
 .mention-choices { display: flex; flex-wrap: wrap; gap: 4px; }
 .mention-choices:empty { display: none; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }

@@ -2268,7 +2268,9 @@ Liton := [].{
 		Engine.when(opened.map(|{ root, .. }| root.is_empty()), || Html.p("Open a message's thread to show it here.", "missing"), || Liton.room_thread(model, id, opened, ""))
 	}
 
-	## A room's header, messages, who is typing and the agents working.
+	## A room's header: its name, topic, members and ⋯ menu; its messages,
+	## who is typing and the agents working; and Join, if you aren't in it,
+	## over its composer.
 	room_main : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> List(Elem(PaneCtx))
 	room_main = |model, id, room_id, shown| {
 		header = Html.div(
@@ -2276,12 +2278,12 @@ Liton := [].{
 			[
 				Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
 				Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
-				Liton.join_controls(model, shown),
 				Engine.when(
 					model.signal().map(|state| Model.panes(state).any(|pane| pane.widget == "members")),
 					|| Html.button_s(room_id.map2(model.signal(), |opened, state| Liton.members_text(Model.room_members_of(state, opened).len())), [Engine.class("room-members"), Html.flag("aria-pressed", model.signal().map(|state| Model.panes(state).any(|pane| pane.widget == "members" and Model.pane_visible(state, pane.id))))], model.update(Model.toggle_members)),
 					|| Engine.text(""),
 				),
+				Liton.room_menu(model, id, shown),
 			],
 		)
 		messages = Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
@@ -2296,6 +2298,12 @@ Liton := [].{
 						Engine.each(room_id.map2(model.signal(), |opened, state| Model.agents_working(state, opened)), |name| name, |name| Liton.avatar(name.key().map(|agent_name| { initial: Model.initial_of(agent_name), agent: Bool.True }))),
 						Html.span_s(room_id.map2(model.signal(), |opened, state| Liton.working_text(Model.agents_working(state, opened))), [Engine.attr("role", "status"), Engine.test_id("agents-working")]),
 					],
+				),
+				# A room you aren't in, read before you join it.
+				Engine.when(
+					shown.map(|room| !room.joined),
+					|| Html.div("room-preview", [Html.span_s(shown.map(|room| "You haven't joined ${Liton.room_name(room)}."), []), Liton.join_controls(model, shown)]),
+					|| Engine.text(""),
 				),
 				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
 			])
@@ -2464,6 +2472,36 @@ Liton := [].{
 			[one] => "${one} is working"
 			_ => "${Str.join_with(names.drop_last(1), ", ")} and ${names.last() ?? ""} are working"
 		}
+
+	## A room's ⋯ menu: Copy link, which copies the room as its context
+	## names it, and Leave or Join, each closing it.
+	room_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> Elem(PaneCtx)
+	room_menu = |model, id, room| {
+		# Named after its pane, which keeps it open as it is focused.
+		key = id.map(|pane_id| "${pane_id} room")
+		Html.div(
+			"pane-menu room-menu",
+			[
+				Engine.element(
+					"button",
+					[Engine.attr("type", "button"), Engine.class("icon menu-toggle"), Html.aria_label("Room actions"), Engine.attr("title", "Room actions"), Engine.attr("aria-haspopup", "true"), Html.flag("aria-expanded", key.map2(model.signal(), |menu, state| state.menu == menu)), Engine.on_click(model.update_by(key, Model.toggle_menu))],
+					[],
+				),
+				Engine.when(
+					key.map2(model.signal(), |menu, state| state.menu == menu),
+					||
+						Html.div(
+							"menu",
+							[
+								Html.button_s(room.map(|shown| "Copy link to ${Liton.room_name(shown)}"), [], model.update_by(room.map(|shown| shown.id), |state, room_id| { ..Model.copy_room_link(state, room_id), menu: "" })),
+								Html.button_s(room.map(|shown| if (shown.joined) "Leave ${Liton.room_name(shown)}" else "Join ${Liton.room_name(shown)}"), [], model.update_by(room.map(|shown| shown.id), |state, room_id| { ..Model.toggle_joined(state, room_id), menu: "" })),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+	}
 
 	members_text : U64 -> Str
 	members_text = |count| if (count == 1) "1 member" else "${count.to_str()} members"

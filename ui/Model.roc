@@ -3066,6 +3066,10 @@ Model := [].{
 	copy_link : State, { pane_id : Str, message_id : Str } -> State
 	copy_link = |state, { pane_id, message_id }| Model.copy(state, { key: "link:${message_id}", text: "${Context.to_str(Room(Model.room_pane(state, pane_id).room_id))}/${message_id}" })
 
+	## Copies a link to a room, as its context names it: `room:<room>`.
+	copy_room_link : State, Str -> State
+	copy_room_link = |state, room_id| Model.copy(state, { key: "room-link:${room_id}", text: Context.to_str(Room(room_id)) })
+
 	## Reacts to a message in the room a Rooms pane opened with `emoji`, or
 	## takes back your reaction if `mine`, shown at once.
 	toggle_reaction : State, { pane_id : Str, message_id : Str, emoji : Str, mine : Bool } -> State
