@@ -3,16 +3,40 @@
 ## parts show, the folders its navigator folds, the cards its view is
 ## asked to scroll to (`scroll`, by their references), counted by `serial`,
 ## and the file of the latest until its card is on screen (`scrolling_to`,
-## "" for none), and the files whose cards are on screen (`seen`).
+## "" for none), the files whose cards are on screen (`seen`), and the
+## files marked viewed, which the browser keeps (`viewed_key`).
 import cap.WorkspaceGit
 
 ReviewDesk := [].{
 
-	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str) }
+	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed) }
+
+	## A file of a context's scope marked viewed, by its diff's fingerprint
+	## then (`WorkspaceGit.fingerprint`), so a change to it unmarks it.
+	Viewed : { context : Str, scope : WorkspaceGit.Scope, path : Str, fingerprint : Str }
+
+	## The key the browser keeps the files viewed under.
+	viewed_key : Str
+	viewed_key = "liton.review.viewed"
+
+	## The files viewed the browser kept, as `viewed_key` holds them.
+	restored : Str -> List(Viewed)
+	restored = |text| {
+		parsed : Try(List(Viewed), _)
+		parsed = Json.parse(text)
+		parsed ?? []
+	}
+
+	## Marks a file viewed, as its diff is now, or unmarks it.
+	toggle_viewed : State, Viewed -> State
+	toggle_viewed = |desk, marked| {
+		same = |kept| kept.context == marked.context and kept.scope == marked.scope and kept.path == marked.path
+		{ ..desk, viewed: if (desk.viewed.contains(marked)) desk.viewed.drop_if(same) else desk.viewed.drop_if(same).append(marked) }
+	}
 
 	## The uncommitted changes, every folder open, until changed.
 	initial : State
-	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [] }
+	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [] }
 
 	## Folds a folder of the navigator, or unfolds it.
 	toggle_folder : State, Str -> State

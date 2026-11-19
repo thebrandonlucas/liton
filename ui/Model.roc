@@ -2700,14 +2700,14 @@ Model := [].{
 
 	## A row of a Review navigator's tree, as Changes' are, with how many
 	## threads are open on its lines and whether the view has it in view.
-	ReviewRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File, threads : U64, focused : Bool }
+	ReviewRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File, threads : U64, focused : Bool, viewed : Bool }
 
 	review_tree : State, Pane -> List(ReviewRow)
 	review_tree = |state, shown| {
 		threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| !thread.resolved)
 		scope = Model.review_scope(state.review_desk.scope)
 		focus = Model.review_focus(state)
-		row = |listed| { path: listed.path, folder: listed.folder, folded: listed.folded, depth: listed.depth, file: listed.file, threads: if (listed.folder) 0 else threads.keep_if(|thread| Review.shows(thread.anchor, listed.path, scope)).len(), focused: !listed.folder and listed.path == focus }
+		row = |listed| { path: listed.path, folder: listed.folder, folded: listed.folded, depth: listed.depth, file: listed.file, threads: if (listed.folder) 0 else threads.keep_if(|thread| Review.shows(thread.anchor, listed.path, scope)).len(), focused: !listed.folder and listed.path == focus, viewed: !listed.folder and Model.viewed_file(state, shown, listed.path) }
 		match Model.review_files(state, shown) {
 			Files(files) => changed_rows(files, state.review_desk.folded, "", 0).map(row)
 			Loading => []
@@ -2725,6 +2725,36 @@ Model := [].{
 			views = Model.panes(state).keep_if(|shown| shown.widget == "review" and !state.hidden.contains(shown.id))
 			shown = views.first().map_ok(|view| Model.jump_to(Model.activate_tab(state, view.id), Model.tile_of(state, view.id).map_ok(|tile| tile.id) ?? "", Push)) ?? state
 			{ ..shown, sub_focus: File(path), review_desk: ReviewDesk.scrolled_to(state.review_desk, path, views.map(|view| ReviewDesk.card_ref(view.id, path))) }
+		}
+
+	## A file of a Review surface's scope as it is now, to mark viewed: by
+	## the fingerprint of its diff, once its hunks are known.
+	as_viewed : State, Pane, Str -> ReviewDesk.Viewed
+	as_viewed = |state, shown, path| {
+		context = Model.context_of(state, shown)
+		scope = state.review_desk.scope
+		file = Model.git_changes_of(state, context, scope).map_ok(|changes| changes.files.find_first(|listed| listed.path == path) ?? { path, change: Modified, additions: 0, deletions: 0, body: Text }) ?? { path, change: Modified, additions: 0, deletions: 0, body: Text }
+		hunks = state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == path).map_ok(|known| known.hunks) ?? []
+		{ context: Context.to_str(context), scope, path, fingerprint: WorkspaceGit.fingerprint(scope, [{ file, hunks }]) }
+	}
+
+	## Whether a file of a Review surface's scope is marked viewed, and
+	## hasn't changed since.
+	viewed_file : State, Pane, Str -> Bool
+	viewed_file = |state, shown, path| state.review_desk.viewed.contains(Model.as_viewed(state, shown, path))
+
+	## Marks a file of a Review surface's scope viewed, or unmarks it, at
+	## once.
+	toggle_viewed : State, { pane_id : Str, path : Str } -> State
+	toggle_viewed = |state, { pane_id, path }| { ..state, review_desk: ReviewDesk.toggle_viewed(state.review_desk, Model.as_viewed(state, Model.pane(state, pane_id), path)) }
+
+	## How many of a Review surface's files are marked viewed, as "1 / 3
+	## files viewed".
+	viewed_count : State, Pane -> Str
+	viewed_count = |state, shown|
+		match Model.review_files(state, shown) {
+			Files(files) => "${files.keep_if(|file| Model.viewed_file(state, shown, file.path)).len().to_str()} / ${files.len().to_str()} files viewed"
+			Loading => ""
 		}
 
 	## Shows a scope in the Review surface's parts at once, named as its
@@ -2763,8 +2793,8 @@ Model := [].{
 	}
 
 	## A file of a Review pane as a card: its diff's rows, annotated, or why
-	## it shows none (`note`).
-	ReviewCard : { path : Str, file : WorkspaceGit.File, rows : List(CodeRow), note : Str }
+	## it shows none (`note`), and whether it is marked viewed.
+	ReviewCard : { path : Str, file : WorkspaceGit.File, rows : List(CodeRow), note : Str, viewed : Bool }
 
 	## The files of a Review pane's scope as cards, in the order the scope
 	## lists them, once its poll answers.
@@ -2782,7 +2812,7 @@ Model := [].{
 					(Text, Err(_)) => "Loading…"
 					(Text, Ok(_)) => ""
 				}
-			{ path: file.path, file, rows, note }
+			{ path: file.path, file, rows, note, viewed: Model.viewed_file(state, shown, file.path) }
 		}
 		match Model.review_files(state, shown) {
 			Files(files) => Cards(files.map(card))

@@ -55,8 +55,8 @@ Liton := [].{
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key, ReviewDesk.viewed_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -313,6 +313,7 @@ Liton := [].{
 			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
+		Engine.watch_changes(model.signal().map(|state| state.review_desk.viewed), |viewed| [Engine.command(StorageSet(ReviewDesk.viewed_key, Json.to_str(viewed)))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
@@ -1910,7 +1911,8 @@ Liton := [].{
 		)
 	}
 
-	## The Review view's bar: the branch, and the scope its parts show,
+	## The Review view's bar: the branch, how many files are marked viewed,
+	## and the scope its parts show,
 	## uncommitted or against the base, or one of the branch's commits;
 	## another shows its files at once.
 	review_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
@@ -1921,6 +1923,7 @@ Liton := [].{
 			[Engine.class("review-bar"), Engine.attr("data-part", "header")],
 			[
 				Html.span_s(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
+				Html.span_s(pane.map2(model.signal(), |shown, state| Model.viewed_count(state, shown)), [Engine.class("viewed-count"), Engine.test_id("viewed-count")]),
 				Engine.element(
 					"select",
 					[Engine.attr("aria-label", "Scope"), Engine.class("scope"), Engine.prop_s(Engine.Prop.value, model.signal().map(Model.review_scope_name)), Engine.on("change", model.set_value(Model.pick_review_scope))],
@@ -1955,14 +1958,15 @@ Liton := [].{
 	}
 
 	## A row of the Review surface's navigator, as `changed_row` draws
-	## Changes', with how many threads are open on the file. Top-level for
+	## Changes', with how many threads are open on the file, marked once
+	## the file is viewed. Top-level for
 	## the reason `scope_picker` is.
 	review_file_row : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.ReviewRow) -> Elem(Row(PaneCtx, Model.ReviewRow))
 	review_file_row = |model, id, row| {
 		shown = row.field(|listed| listed)
 		asked = shown.map2(id.lift_row(), |listed, pane_id| { pane_id, path: listed.path, folder: listed.folder })
 		Html.li(
-			[Engine.class_s(shown.map(|listed| if (!listed.folder) "git-file" else if (listed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|listed| "--depth: ${listed.depth.to_str()}"))],
+			[Engine.class_s(shown.map(|listed| if (listed.viewed) "git-file viewed" else if (!listed.folder) "git-file" else if (listed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|listed| "--depth: ${listed.depth.to_str()}"))],
 			[
 				Html.button_s(
 					shown.map(|listed| listed.path.split_last("/").map_ok(|parts| parts.after) ?? listed.path),
@@ -1981,14 +1985,15 @@ Liton := [].{
 	}
 
 	## A file of a Review pane as a card: its path, how it changed and by
-	## how many lines, over its diff. Its coming on screen and leaving it
+	## how many lines, and Viewed, which marks it viewed and folds its diff,
+	## over its diff. Its coming on screen and leaving it
 	## tells the file in view (`Model.card_seen`). Top-level for the reason
 	## `scope_picker` is.
 	review_card : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Model.ReviewCard) -> Elem(Row(PaneCtx, Model.ReviewCard))
 	review_card = |model, id, pane, card| {
 		file = card.field(|shown| shown.file)
 		Html.div_attrs(
-			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path))), Engine.on_seen({}, model.lift_row().set_value_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), |state, at, seen| Model.card_seen(state, at, seen.intersecting)))],
+			[Engine.class_s(card.field(|shown| if (shown.viewed) "review-card viewed" else "review-card")), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path))), Engine.on_seen({}, model.lift_row().set_value_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), |state, at, seen| Model.card_seen(state, at, seen.intersecting)))],
 			[
 				Html.div(
 					"review-card-header",
@@ -1996,6 +2001,7 @@ Liton := [].{
 						Html.span_s(card.key(), [Engine.class("file-path")]),
 						Html.span_s(file.map(|shown| Liton.change_text(shown.change)), [Engine.class_s(file.map(|shown| "badge change ${Liton.change_text(shown.change)}"))]),
 						Html.span_s(file.map(Liton.file_lines), [Engine.class("lines")]),
+						Html.button("Viewed", [Engine.class("viewed-toggle"), Html.aria_label_s(card.key().map(|path| "Viewed ${path}")), Html.flag("aria-pressed", card.field(|shown| shown.viewed)), Engine.attr("title", "Mark the file viewed, which folds it")], model.lift_row().update_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), Model.toggle_viewed)),
 					],
 				),
 				Html.p_s(card.field(|shown| shown.note), [Engine.class("missing")]),

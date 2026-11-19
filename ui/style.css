@@ -784,6 +784,16 @@ kbd:empty { display: none; }
 .review-card-header .file-path { position: static; flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: none; }
 .review-card-header .lines { font: 11px var(--font-mono); color: var(--muted); }
 .review-card > .missing { margin: 0; padding: 6px 12px; }
+.review-bar .viewed-count { font: 11.5px var(--font-mono); color: var(--muted); }
+.viewed-toggle { flex: none; padding: 0 8px; font-size: 12px; color: var(--muted); background: none; }
+.viewed-toggle::before { content: "☐ " / ""; }
+.viewed-toggle[aria-pressed="true"] { color: var(--ok); border-color: var(--ok); }
+.viewed-toggle[aria-pressed="true"]::before { content: "☑ " / ""; }
+/* A file viewed folds to its header, and its row in the navigator dims. */
+.review-card.viewed > .review-diff, .review-card.viewed > .missing { display: none; }
+.review-card.viewed .file-path { color: var(--muted); }
+.git-file.viewed button { color: var(--muted); }
+.git-file.viewed button::after { content: " ✓" / ""; color: var(--ok); }
 /* Its navigator: the changed files as Changes' tree, the one in view marked, each with its open threads counted. */
 .review-files { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
 .review-files .choices { align-items: center; font: 11px var(--font-mono); color: var(--muted); }
