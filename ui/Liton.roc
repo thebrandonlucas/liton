@@ -161,8 +161,17 @@ Liton := [].{
 	slide_class = |state|
 		if (state.deck_slide.serial == 0) "" else " deck-in-${if (state.deck_slide.toward == Next) "next" else "previous"}-${(state.deck_slide.serial % 2).to_str()}"
 
+	## How far across the zone under it a pointer is, in ten thousandths.
+	across_zone : Engine.Pointer -> U16
+	across_zone = |pointer|
+		match pointer.at {
+			In({ x, .. }) => x
+			Outside => 5000
+		}
+
 	## The deck's surfaces, by name, the one shown pressed, while it holds
-	## more than one: a click goes to one.
+	## more than one: a click goes to one, and a swipe across them, as a
+	## phone's, to the next or previous.
 	deck_indicator : State(Ctx, Model.State) -> Elem(Ctx)
 	deck_indicator = |model|
 		Engine.when(
@@ -170,7 +179,16 @@ Liton := [].{
 			||
 				Engine.element(
 					"nav",
-					[Engine.class("deck"), Html.aria_label("Deck"), Engine.test_id("deck")],
+					[
+						Engine.class("deck"),
+						Html.aria_label("Deck"),
+						Engine.test_id("deck"),
+						# A pointer zone on a touch screen only, so a mouse's click is in none.
+						Html.zone_s(model.signal().map(|state| if (state.coarse_pointer) "deck" else "")),
+						Engine.on_pointer(Down, model.set_value(|state, pointer| { ..state, deck_press: Down({ pointer: pointer.id, across: Liton.across_zone(pointer) }) })),
+						Html.on_pointer_up(model.set_value(|state, pointer| Model.deck_swiped(state, { pointer: pointer.id, across: Liton.across_zone(pointer) }))),
+						Html.on_pointer_cancel(model.set_value(|state, _| { ..state, deck_press: Up })),
+					],
 					[
 						Engine.each(
 							model.signal().map(Model.deck_titles),
@@ -377,6 +395,21 @@ Liton := [].{
 		Engine.watch(model.signal().map(|state| state.surface), |surface| [Engine.command(StorageSet(Liton.surface_key, surface))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.review_desk.viewed), |viewed| [Engine.command(StorageSet(ReviewDesk.viewed_key, Json.to_str(viewed)))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
+		# A trackpad's swipe across the page goes to the deck's next or
+		# previous surface, while nothing covers it.
+		Engine.watch(
+			model.signal().map(|state| state.deck.len() > 1),
+			|several| if (several) [Ports.swipe.ask({})] else [],
+			model.on_result(
+				|state, _, res|
+					match res {
+						_ if state.show_settings or state.palette.open => state
+						Ok("next") => Model.step_surface(state, Next)
+						Ok("previous") => Model.step_surface(state, Previous)
+						_ => state
+					},
+			),
+		),
 		# Another window's change to the deck, such as a surface added there,
 		# shows here too.
 		Engine.watch(
@@ -577,7 +610,7 @@ Liton := [].{
 	keys_help = |system| {
 		key = |command| Keymap.text_of(system, Keymap.defaults, command)
 		heard = if (system == Mac) "in a text box too" else "outside a text box"
-		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. D then ] or [ goes to the deck's next or previous surface, and D then 1 to 9 to that one. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. D then ] or [ goes to the deck's next or previous surface, and D then 1 to 9 to that one, as a swipe across a trackpad with two fingers, or across the deck's strip on a phone, goes to the next or previous: three fingers are the system's, which a page can't hear. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## Settings, a page of its own: a rail of its sections, App's, the

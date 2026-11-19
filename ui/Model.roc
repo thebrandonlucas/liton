@@ -169,6 +169,11 @@ Model := [].{
 		## previous, each switch counted: the surface shown slides in.
 		deck_slide : { serial : U64, toward : [Next, Previous] },
 
+		## A press on the deck's strip, by its pointer and how far across the
+		## strip it began, in ten thousandths, until it lifts: a swipe across
+		## the strip goes to the next or previous surface.
+		deck_press : [Up, Down({ pointer : U32, across : U16 })],
+
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
@@ -445,6 +450,7 @@ Model := [].{
 				deck: kept ?? Model.deck_of(Default.setup.presets, Default.developer, Default.setup.deck),
 				deck_shown: 0,
 				deck_slide: { serial: 0, toward: Next },
+				deck_press: Up,
 				git: [],
 				git_changes: [],
 				git_hunks: [],
@@ -542,6 +548,19 @@ Model := [].{
 		index = if (toward == Next) (state.deck_shown + 1) % count else (state.deck_shown + count - 1) % count
 		stepped = if (count < 2) state else Model.show_surface(state, index)
 		{ ..stepped, deck_slide: { ..stepped.deck_slide, toward } }
+	}
+
+	## A press lifted off the deck's strip: a swipe a fifth of its width or
+	## more toward its start goes to the next surface, toward its end to
+	## the previous, as a page is turned.
+	deck_swiped : State, { pointer : U32, across : U16 } -> State
+	deck_swiped = |state, { pointer, across }| {
+		lifted = { ..state, deck_press: Up }
+		match state.deck_press {
+			Down(press) if press.pointer == pointer and press.across >= across + 2000 => Model.step_surface(lifted, Next)
+			Down(press) if press.pointer == pointer and across >= press.across + 2000 => Model.step_surface(lifted, Previous)
+			_ => lifted
+		}
 	}
 
 	## The deck's surfaces by their places, titled by their names, else

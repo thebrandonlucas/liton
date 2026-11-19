@@ -5,7 +5,8 @@
    --motion. All else derives from them here. */
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: Canvas; }
+/* A two-finger swipe across goes to the deck's next surface, not back. */
+html, body { margin: 0; height: 100%; background: Canvas; overscroll-behavior-x: none; }
 #app { height: 100%; }
 .liton {
   --edge: color-mix(in srgb, var(--accent) var(--edge-alpha), transparent);
