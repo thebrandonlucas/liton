@@ -71,6 +71,7 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
   --icon-circle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><line x1='12' x2='12' y1='8' y2='12'/><line x1='12' x2='12.01' y1='16' y2='16'/></svg>");
+  --icon-search: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.3-4.3'/></svg>");
   --icon-circle-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='m9 12 2 2 4-4'/></svg>");
   --icon-circle-dot: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><circle cx='12' cy='12' r='1'/></svg>");
   --icon-triangle-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
@@ -377,6 +378,13 @@ kbd:empty { display: none; }
 .tree-workspace .row-title { font-weight: 600; }
 .tree-session { padding-left: calc(8px + var(--depth, 0) * 16px); }
 .workspaces-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* The navigator's rows over the list: New workspace and Search, with its keys. */
+.nav-rows { display: flex; flex-direction: column; gap: 1px; padding: 6px 6px 8px; border-bottom: 1px solid var(--edge); }
+.nav-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: none; background: none; text-align: left; font-size: 13.5px; color: var(--text); }
+.nav-row:hover { background: var(--tool); }
+.nav-row::before { content: ""; flex: none; width: 15px; height: 15px; background: var(--muted); -webkit-mask: var(--nav-icon) center / contain no-repeat; mask: var(--nav-icon) center / contain no-repeat; }
+.nav-new-workspace { --nav-icon: var(--icon-plus); }
+.nav-search { --nav-icon: var(--icon-search); }
 .tree-row .new-agent { flex: none; margin-left: auto; padding: 2px 5px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
 .tree-row .added:not(:empty) ~ .new-agent, .tree-row .age:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }

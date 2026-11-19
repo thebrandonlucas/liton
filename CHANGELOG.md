@@ -91,6 +91,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Workspaces' new Sessions option, Tabs, lists each workspace as one row; in a Workbench, picking it shows its sessions as tabs above the chat, each with its status, then the diff you opened in the main area and the ticket you opened, which × closes. Each workspace keeps its own tabs and shows the one you left it on, and + starts an agent in it.
 - Over a workspace's tabs, a header names it and its project, with its ⋯ menu (new agent, rename, pin, archive) between the drawers' buttons, the right one counting its changed lines.
 - Workspaces grouped by status lists the pinned ones first under Pinned, apart from the rest, and each workspace's project, and its host where several providers list workspaces, on a muted line under it.
+- Over Workspaces' list, when it lists sessions as tabs as the Developer preset's does, New workspace opens the form to create one, and Search opens the palette.
 
 ### Changed
 

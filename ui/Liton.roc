@@ -963,7 +963,7 @@ Liton := [].{
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
-							Workspaces => Html.div("workspaces-pane", [Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
+							Workspaces => Html.div("workspaces-pane", [Liton.nav_rows(model, id, shown), Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -1589,6 +1589,25 @@ Liton := [].{
 					},
 				),
 			],
+		)
+
+	## A Workspaces pane's rows over its list where it lists sessions as
+	## tabs, as Paseo's navigator has them: New workspace, and Search, which
+	## opens the palette. Paseo's History and Schedules wait on a history of
+	## the focus and an automations capability.
+	nav_rows : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	nav_rows = |model, id, shown|
+		Engine.when(
+			shown.map(|{ pane, .. }| Model.option(pane, "sessions") == "Tabs"),
+			||
+				Html.div(
+					"nav-rows",
+					[
+						Html.button("New workspace", [Engine.class("nav-row nav-new-workspace"), Engine.test_id("nav-new-workspace")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
+						Html.button_s(model.signal().map(|state| "Search ${Keymap.text_of(state.operating_system, Keymap.defaults, "palette")}"), [Engine.class("nav-row nav-search"), Html.aria_label_s(Engine.const("Search"))], model.update(Commands.open_palette)),
+					],
+				),
+			|| Engine.text(""),
 		)
 
 	## A row's title, which picks it, or while it is being renamed, a field
