@@ -173,7 +173,8 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   padding: 8px; display: flex; flex-direction: column; gap: 6px;
   background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
   border: 1px solid var(--edge-active); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
-.palette input { padding: 8px 10px; font-size: 15px; }
+.palette input { padding: 8px 10px; font-size: 15px; appearance: none; }
+.palette input::-webkit-search-cancel-button, .palette input::-webkit-search-decoration { appearance: none; display: none; }
 .palette-entries { list-style: none; margin: 0; padding: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 .palette-entry { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; text-align: left; border-color: transparent; background: none; }
 .palette-entry[aria-selected="true"] { background: var(--selected); border-color: var(--edge); }
