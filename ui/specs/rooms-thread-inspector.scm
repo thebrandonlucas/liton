@@ -21,6 +21,7 @@
     (run-effect 5)
     (expect-visible (text "src/Auth.roc"))
     (expect-text (test-id "thread-typing") "Ada is typing…")
+    (expect-visible (role button :name "Jump to latest reply"))
     (click (role button :name "Close the thread"))
     (expect-attr (test-id "slot-right") class "tile slot slot-right collapsed")
     (expect-absent (text "src/Auth.roc"))

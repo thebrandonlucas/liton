@@ -156,6 +156,7 @@ All notable changes to liton are documented in this file. The format is based on
 - An @mention in a room's message shows as a chip, an agent's with a robot before its name.
 - A room's header holds its name, topic, members and a ⋯ menu, which copies a link to the room or leaves it. A room you haven't joined says so over its composer, with Join.
 - The mock provider's rooms include a direct conversation with its agent Scout, and start with it and #ideas unread, #ideas mentioning you.
+- A thread's jump button says "Jump to latest reply", apart from its room's "Jump to latest".
 
 ### Fixed
 

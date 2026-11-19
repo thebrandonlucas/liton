@@ -9,17 +9,18 @@ Conversation := [].{
 
 	## A timeline of the entries a caller draws, as a list of class `class`
 	## and part `part`, with "Loading…" under it while `loading`. Its key
-	## names the pane's jumps and anchor. With `jump`, Jump to latest scrolls
-	## back to the newest entry; while `earlier`, Show earlier shows more.
-	timeline : State(ctx, Model.State), Signal(ctx, Str), { class : Str, part : Str, jump : Bool, earlier : Signal(ctx, Bool), loading : Signal(ctx, Bool) }, List(Elem(ctx)) -> List(Elem(ctx))
+	## names the pane's jumps and anchor. A `jump` button, such as Jump to
+	## latest, scrolls back to the newest entry ("" for none); while
+	## `earlier`, Show earlier shows more.
+	timeline : State(ctx, Model.State), Signal(ctx, Str), { class : Str, part : Str, jump : Str, earlier : Signal(ctx, Bool), loading : Signal(ctx, Bool) }, List(Elem(ctx)) -> List(Elem(ctx))
 	timeline = |model, key, { class, part, jump, earlier, loading }, entries| {
 		# Shown by CSS once scrolled up from the newest entry, where browsers
 		# can (animation-timeline). Jumping builds this pane's anchor anew,
 		# so it is the one `Liton.effects` focuses.
 		latest =
-			if (jump)
+			if (!jump.is_empty())
 				[
-					Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model.update_by(key, Model.jump_to_latest))]),
+					Html.div("jump", [Html.button(jump, [Engine.class("jump-to-latest")], model.update_by(key, Model.jump_to_latest))]),
 					Engine.remount_on(key.map2(model.signal(), |jump_key, state| Model.jumps_of(state, jump_key)), || Engine.element("span", [Engine.ref_s(key.map(|jump_key| "latest-${jump_key}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor"), Engine.test_id("latest")], [])),
 				]
 			else
