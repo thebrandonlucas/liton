@@ -264,11 +264,17 @@ Liton := [].{
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
 	## and keys. The arrows, or Ctrl+N and Ctrl+P, pick one, and Enter or a
-	## click runs it.
+	## click runs it. Ctrl+K, heard here though a text box, closes it.
 	palette : State(Ctx, Model.State) -> Elem(Ctx)
 	palette = |model| {
-		moves = [Engine.Chord.plain("ArrowDown"), Engine.Chord.plain("ArrowUp"), Engine.Chord.plain("Enter"), Engine.Chord.plain("n").with_ctrl(), Engine.Chord.plain("p").with_ctrl()]
-		moved = |state, key| if (key.key == "Enter") Palette.run_picked(state) else Palette.move(state, if (key.key == "ArrowUp" or key.key == "p") Up else Down)
+		moves = [Engine.Chord.plain("ArrowDown"), Engine.Chord.plain("ArrowUp"), Engine.Chord.plain("Enter"), Engine.Chord.plain("n").with_ctrl(), Engine.Chord.plain("p").with_ctrl(), Engine.Chord.plain("k").with_ctrl()]
+		moved = |state, key|
+			match key.key {
+				"Enter" => Palette.run_picked(state)
+				"k" => Commands.close(state)
+				"ArrowUp" | "p" => Palette.move(state, Up)
+				_ => Palette.move(state, Down)
+			}
 		shown = model.signal().map(Palette.shown)
 		Engine.when(
 			model.signal().map(|state| state.palette.open),

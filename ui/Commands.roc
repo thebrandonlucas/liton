@@ -15,7 +15,7 @@ Commands := [].{
 		[
 			{ id: "drawer.left", title: "Show or hide the left drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Left) },
 			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
-			{ id: "palette", title: "Open the palette", group: "View", applies: |shown| !shown.palette.open, run: Commands.open_palette },
+			{ id: "palette", title: "Open or close the palette", group: "View", applies: always, run: |shown| if (shown.palette.open) Commands.close(shown) else Commands.open_palette(shown) },
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },

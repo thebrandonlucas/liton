@@ -6,7 +6,7 @@
     (run-effect 2)
     (press "Shift+?")
     (expect-visible (role dialog :name "Keys"))
-    (expect-visible (text "Open the palette"))
+    (expect-visible (text "Open or close the palette"))
     (expect-visible (text "Ctrl+K"))
     (expect-visible (text "1 or Alt+1"))
     (expect-visible (text "G then 3"))

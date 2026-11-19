@@ -1,4 +1,4 @@
-(test "Liton — Ctrl+K or Cmd+K opens the palette: typing filters its commands and places, the arrows pick one, Enter or a click runs it, and Escape closes it"
+(test "Liton — Ctrl+K or Cmd+K opens the palette: typing filters its commands and places, the arrows pick one, Enter or a click runs it, and Escape or Ctrl+K again closes it"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -41,6 +41,13 @@
     (press (label "Command or place") "Escape")
     (expect-absent (role dialog :name "Palette"))
     (expect-text (test-id "session-title") "Write docs")
+    ; Ctrl+K or Cmd+K again closes it.
+    (press "Control+k")
+    (press (label "Command or place") "Control+k")
+    (expect-absent (role dialog :name "Palette"))
+    (press "Meta+k")
+    (press (label "Command or place") "Meta+k")
+    (expect-absent (role dialog :name "Palette"))
     ; A click runs an entry too.
     (press "Control+k")
     (click (role option :name "Fix tests"))
