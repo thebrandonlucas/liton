@@ -168,7 +168,7 @@ with the same id (design.md, Instant). Additively, `Context.Id` gains
 ### Buzz agents as `chat.v1`
 
 One session per agent and thread it was mentioned or replied in, id
-`room:<room>/<root>/<agent>`; under buzz-acp's channel policy it is one view
+`buzz:<room>/<root>/<agent>` (not `room:`, which names a room context); under buzz-acp's channel policy it is one view
 of the shared ACP session, and right for both.
 
 | chat.v1 | from Buzz |
@@ -184,7 +184,7 @@ of the shared ACP session, and right for both.
 ### `attention.v1`
 
 The `attention` transformer also `uses` `rooms.v1`'s `inbox`: each entry
-is a NeedsYou item keyed `room:<id>/<root>`, its message the `summary`,
+is a NeedsYou item keyed `buzz:<id>/<root>`, its message the `summary`,
 settle and snooze keyed to its `signature`. `Item` gains an optional
 `context`. Agent sessions rank as chat sessions do.
 
