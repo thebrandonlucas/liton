@@ -1,4 +1,4 @@
-(test "Liton — the Board preset lists a scope's tickets grouped by what their status means, each group counted, and shows the properties of the ticket clicked"
+(test "Liton — the Board preset lists a scope's tickets grouped by what their status means, each group counted, and opens the ticket clicked, its properties beside it"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -44,7 +44,7 @@
     (fill (label "Search tickets") "")
     ; A ticket clicked shows its properties beside the list.
     (click (role button :name "LIT-12 Logging in sends you back to /login"))
-    (expect-attr (test-id "ticket-LIT-12") class "board-ticket focused")
+    (expect-text (test-id "ticket-place") "1 / 4")
     (expect-value (label "Set status") "in_progress")
     (expect-checked (label "Ada") true)
     (expect-visible (text "bug"))

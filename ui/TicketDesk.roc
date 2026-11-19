@@ -18,8 +18,9 @@ TicketDesk := [].{
 	## the user's, those assigned to nobody, or a source's.
 	Scope : [All, Mine, Unassigned, Source(Str)]
 
-	## A Board pane's own filter, over its scope's.
-	Board : { pane : Str, filter : Tickets.Filter }
+	## A Board pane's own filter, over its scope's, and whether it shows the
+	## ticket under the cursor `opened` in place of the list.
+	Board : { pane : Str, filter : Tickets.Filter, opened : Bool }
 
 	## A group of a Board's list, or a column of its board, by `key`: a kind
 	## of status (`kind:Started`), or a status of one source (`status:<id>`).
@@ -42,7 +43,7 @@ TicketDesk := [].{
 	everything = { ..Tickets.open, kinds: [] }
 
 	board : State, Str -> Board
-	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything }
+	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything, opened: Bool.False }
 
 	with_board : State, Str, (Board -> Board) -> State
 	with_board = |desk, pane, change| { ..desk, boards: desk.boards.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.board(desk, pane))) }

@@ -1451,7 +1451,7 @@ Model := [].{
 		# The tickets and their sessions' links, and the ticket each Ticket
 		# pane shows.
 		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
-		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket").map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
+		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
@@ -2483,9 +2483,63 @@ Model := [].{
 	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
 	filter_tickets = |state, pane_id, change| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, filter: change(view.filter) }) }
 
-	## Shows a scope's tickets in Board panes.
+	## Shows a scope's tickets in Board panes, as lists.
 	pick_scope : State, TicketDesk.Scope -> State
-	pick_scope = |state, scope| { ..state, tickets: { ..state.tickets, scope } }
+	pick_scope = |state, scope| { ..state, tickets: { ..state.tickets, scope, boards: state.tickets.boards.map(|board| { ..board, opened: Bool.False }) } }
+
+	## The Board pane keys act on: the one focused, else one on screen while
+	## no pane, or a Scopes or Properties pane, is focused; "" for none.
+	board_in_reach : State -> Str
+	board_in_reach = |state| {
+		focused_widget = Model.pane(state, state.focused_pane).widget
+		if (focused_widget == "board")
+			state.focused_pane
+		else if (["", "ticket-scopes", "ticket-properties"].contains(focused_widget))
+			Model.panes(state).find_first(|shown| shown.widget == "board" and Model.pane_visible(state, shown.id)).map_ok(|shown| shown.id) ?? ""
+		else
+			""
+	}
+
+	## The ticket under the cursor, "" for none.
+	ticket_under_cursor : State -> Str
+	ticket_under_cursor = |state|
+		match Model.focused(state, [Ticket]) {
+			Ticket(ticket_id) => ticket_id
+			_ => ""
+		}
+
+	## A Board pane's tickets, in the order it shows them.
+	board_order : State, Str -> List(Str)
+	board_order = |state, pane_id| TicketDesk.groups(state.tickets, pane_id, List).join_map(|group| group.tickets.map(|ticket| ticket.id))
+
+	## Where the ticket under the cursor is among a Board pane's, as "2 / 5".
+	ticket_place : State, Str -> Str
+	ticket_place = |state, pane_id| {
+		order = Model.board_order(state, pane_id)
+		order.find_first_index(|ticket_id| ticket_id == Model.ticket_under_cursor(state)).map_ok(|index| "${(index + 1).to_str()} / ${order.len().to_str()}") ?? ""
+	}
+
+	## Moves the cursor of the Board in reach to the ticket after or before
+	## it, or to the first if it is on none of them.
+	step_ticket : State, [Next, Previous] -> State
+	step_ticket = |state, way| {
+		order = Model.board_order(state, Model.board_in_reach(state))
+		target =
+			match (order.find_first_index(|ticket_id| ticket_id == Model.ticket_under_cursor(state)), way) {
+				(Ok(index), Next) => order.get(index + 1)
+				(Ok(index), Previous) => if (index == 0) Err(OutOfBounds) else order.get(index - 1)
+				(Err(_), _) => order.first()
+			}
+		target.map_ok(|ticket_id| Model.focus_on(state, Ticket(ticket_id))) ?? state
+	}
+
+	## Opens a ticket in a Board pane, in place of its list, the cursor on it.
+	open_in_board : State, { pane_id : Str, ticket_id : Str } -> State
+	open_in_board = |state, { pane_id, ticket_id }| { ..Model.focus_on(state, Ticket(ticket_id)), tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, opened: Bool.True }) }
+
+	## Shows a Board pane's list again in place of the ticket it opened.
+	back_to_list : State, Str -> State
+	back_to_list = |state, pane_id| { ..state, tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, opened: Bool.False }) }
 
 	## Changes the filter of a Board pane, over its scope's.
 	filter_board : State, Str, (Tickets.Filter -> Tickets.Filter) -> State

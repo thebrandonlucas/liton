@@ -1480,11 +1480,40 @@ Liton := [].{
 			],
 		)
 
-	## A Board pane: the tickets of the scope picked, those its search
+	## A Board pane: the ticket it opened, else its list.
+	board : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	board = |model, id| Engine.when(id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).opened), || Liton.board_ticket_opened(model, id), || Liton.board_list(model, id))
+
+	## A ticket a Board opened: the way back to the list, its key, where it
+	## is in the list, as "2 / 5", with the tickets before and after it a
+	## click away, its title, and its body and comments.
+	board_ticket_opened : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	board_ticket_opened = |model, id| {
+		ticket_id = model.signal().map(Model.ticket_under_cursor)
+		summary = ticket_id.map2(model.signal(), |shown_id, state| (TicketDesk.ticket_shown(state.tickets, shown_id) ?? TicketDesk.missing).summary)
+		Html.div(
+			"board ticket",
+			[
+				Html.div(
+					"board-bar",
+					[
+						Html.button("← List", [Html.aria_label("Back to the list")], model.update_by(id, Model.back_to_list)),
+						Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
+						Html.span_s(id.map2(model.signal(), |pane_id, state| Model.ticket_place(state, pane_id)), [Engine.class("ticket-place"), Engine.test_id("ticket-place")]),
+						Html.button("↑", [Html.aria_label("Previous ticket"), Engine.class("step")], model.update(|state| Model.step_ticket(state, Previous))),
+						Html.button("↓", [Html.aria_label("Next ticket"), Engine.class("step")], model.update(|state| Model.step_ticket(state, Next))),
+					],
+				),
+				Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
+			].concat(Liton.ticket_discussion(model, id, ticket_id)),
+		)
+	}
+
+	## A Board pane's list: the tickets of the scope picked, those its search
 	## matches, in groups by the kind of their status, each with how many it
 	## has (`TicketDesk.groups`).
-	board : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	board = |model, id| {
+	board_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	board_list = |model, id| {
 		groups = id.map2(model.signal(), |pane_id, state| TicketDesk.groups(state.tickets, pane_id, List))
 		Html.div(
 			"board",
@@ -1505,7 +1534,7 @@ Liton := [].{
 							[Engine.class("board-group"), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title))],
 							[
 								Html.div("board-group-header", [Html.span_s(group_row.field(|group| group.title), [Engine.class("group-title")]), Html.span_s(group_row.field(|group| group.tickets.len().to_str()), [Engine.class("count"), Engine.test_id_s(group_row.key().map(|key| "group-${key}"))])]),
-								Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), row))]),
+								Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), id.lift_row(), row))]),
 							],
 						),
 				),
@@ -1514,11 +1543,11 @@ Liton := [].{
 		)
 	}
 
-	## A ticket of a Board: its key and title, which put the cursor on it,
-	## its labels, the session working on it with its status, and its
-	## assignees, marked while under the cursor.
-	board_ticket : State(ctx, Model.State), RowRef(ctx, Tickets.Summary) -> Elem(Row(ctx, Tickets.Summary))
-	board_ticket = |model, row| {
+	## A ticket of a Board: its key and title, which open it, its labels,
+	## the session working on it with its status, and its assignees, marked
+	## while under the cursor.
+	board_ticket : State(ctx, Model.State), Signal(ctx, Str), RowRef(ctx, Tickets.Summary) -> Elem(Row(ctx, Tickets.Summary))
+	board_ticket = |model, id, row| {
 		state = model.signal().lift_row()
 		session = row.key().map2(state, |ticket_id, shown| Liton.ticket_session(shown, ticket_id))
 		Html.li(
@@ -1526,7 +1555,7 @@ Liton := [].{
 			[
 				Engine.element(
 					"button",
-					[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key(), |shown, ticket_id| Model.focus_on(shown, Ticket(ticket_id))))],
+					[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key().map2(id.lift_row(), |ticket_id, pane_id| { pane_id, ticket_id }), Model.open_in_board))],
 					[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
 				),
 				Html.span_s(row.field(|ticket| Str.join_with(ticket.labels, " · ")), [Engine.class("labels")]),

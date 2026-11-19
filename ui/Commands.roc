@@ -1,6 +1,7 @@
 ## Every action keys run, by name: what it is called, the group it is
 ## listed under, when it applies and what it does to the model.
 import Model
+import TicketDesk
 
 Commands := [].{
 
@@ -21,9 +22,25 @@ Commands := [].{
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
+			.concat(Commands.board)
 			.concat(Commands.layout)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
+	}
+
+	## The Board's commands, on the Board pane in reach
+	## (`Model.board_in_reach`): move the cursor, open the ticket under it
+	## and go back to the list.
+	board : List(Command)
+	board = {
+		reached = |shown| !Model.board_in_reach(shown).is_empty()
+		opened = |shown| reached(shown) and TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).opened
+		[
+			{ id: "board.next", title: "Move to the next ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Next) },
+			{ id: "board.previous", title: "Move to the previous ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Previous) },
+			{ id: "board.open", title: "Open the ticket under the cursor", group: "Board", applies: |shown| reached(shown) and !opened(shown) and !Model.ticket_under_cursor(shown).is_empty(), run: |shown| Model.open_in_board(shown, { pane_id: Model.board_in_reach(shown), ticket_id: Model.ticket_under_cursor(shown) }) },
+			{ id: "board.back", title: "Go back to the list", group: "Board", applies: opened, run: |shown| Model.back_to_list(shown, Model.board_in_reach(shown)) },
+		]
 	}
 
 	## The layout's commands, each for a side: focus, move the pane focused,

@@ -13,7 +13,8 @@ Keymap := [].{
 	## Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
 	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
-	## goes to a workspace. Escape closes what is open, else stops the agent.
+	## goes to a workspace. Escape closes what is open, else goes back
+	## to a Board's list, else stops the agent.
 	defaults : List(Binding)
 	defaults = {
 		digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -24,12 +25,25 @@ Keymap := [].{
 			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
+			{ keys: ["Escape"], command: "board.back" },
 			{ keys: ["Escape"], command: "agent.stop" },
 		]
+			.concat(Keymap.board)
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
 			.concat(digits.map(|digit| { keys: ["g", digit], command: "workspace.${digit}" }))
 			.concat(Keymap.layout)
 	}
+
+	## The Board's keys, Linear's: J or K, or the arrows, move the cursor
+	## down or up, and Enter opens the ticket under it.
+	board : List(Binding)
+	board = [
+		{ keys: ["j"], command: "board.next" },
+		{ keys: ["ArrowDown"], command: "board.next" },
+		{ keys: ["k"], command: "board.previous" },
+		{ keys: ["ArrowUp"], command: "board.previous" },
+		{ keys: ["Enter"], command: "board.open" },
+	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the
 	## tile that way, outside a text field, as does `w` then h, j, k or l,
