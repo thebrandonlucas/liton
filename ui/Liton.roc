@@ -29,6 +29,7 @@ import Dropdown
 import Drag
 import Wallpaper
 import Spinner
+import History
 
 Liton := [].{
 
@@ -335,6 +336,13 @@ Liton := [].{
 					Model.attention_answered(state, outbox.serial, decoded ?? Err({ code: Unavailable, message: "The daemon did not answer." }))
 				},
 			),
+		),
+		# The page of history a History pane on screen asks for, the latest
+		# asked superseding the others.
+		Engine.watch_latest(
+			model.signal().map(Model.history_wanted),
+			|wanted| wanted.map_ok(|asked| [Liton.call(Json.to_str({ capability: "chat.v1", request: ListHistory({ search: asked.search, cursor: asked.cursor, limit: History.page_size }) }))]) ?? [],
+			model.on_result(|state, wanted, res| wanted.map_ok(|asked| Model.history_listed(state, asked, res ?? "")) ?? state),
 		),
 		Engine.watch(model.signal().map(Model.needs_you), |count| [Engine.command(Title(if (count == 0) "liton" else "(${count.to_str()}) liton"))], Engine.ignore({})),
 		Engine.watch_changes(
@@ -1388,11 +1396,12 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents],
+					[Sessions, Workspaces, History, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
 							Workspaces => Html.div("workspaces-pane", [Liton.nav_rows(model, id, shown), Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
+							History => Liton.history(model)
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -2347,8 +2356,8 @@ Liton := [].{
 
 	## A Workspaces pane's rows over its list where it lists sessions as
 	## tabs, as Paseo's navigator has them: New workspace, and Search, which
-	## opens the palette. Paseo's History and Schedules wait on a history of
-	## the focus and an automations capability.
+	## opens the palette, and History, which opens the sessions' history.
+	## Paseo's Schedules wait on an automations capability.
 	nav_rows : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	nav_rows = |model, id, shown|
 		Engine.when(
@@ -2359,6 +2368,7 @@ Liton := [].{
 					[
 						Html.button("New workspace", [Engine.class("nav-row nav-new-workspace"), Engine.test_id("nav-new-workspace")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 						Html.button_s(model.signal().map(|state| "Search ${Keymap.text_of(state.operating_system, Keymap.defaults, "palette")}"), [Engine.class("nav-row nav-search"), Html.aria_label_s(Engine.const("Search"))], model.update(Commands.open_palette)),
+						Html.button("History", [Engine.class("nav-row nav-history"), Engine.test_id("nav-history")], model.update(|state| Model.open_part(state, "history"))),
 					],
 				),
 			|| Engine.text(""),
@@ -2546,38 +2556,103 @@ Liton := [].{
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
-				Conversation.composer(
-					model0,
-					id,
-					{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
-					[
-						Html.div(
-							"composer-chips",
+				# An archived session's chat reads only, with Unarchive.
+				Engine.when(
+					shown.map(|{ pane, state }| Model.archived_at(state, Model.session_of(state, pane)).is_ok()),
+					|| Liton.archived_bar(model0, shown.map(|{ pane, state }| Model.session_of(state, pane))),
+					||
+						Conversation.composer(
+							model0,
+							id,
+							{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 							[
-								Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
-								Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
-								Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+								Html.div(
+									"composer-chips",
+									[
+										Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+										Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
+										Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+									],
+								),
+								Liton.context_meter(model0, id),
+								Microphone.controls(model0, id),
+								# One round button: Send, or Stop while the agent works and
+								# nothing is typed, then a ring until it stops.
+								Engine.switch(
+									shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+									[Send, Stop, Stopping],
+									|action|
+										match action {
+											Send => Conversation.send_button("Send")
+											Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+											Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+										},
+								),
 							],
 						),
-						Liton.context_meter(model0, id),
-						Microphone.controls(model0, id),
-						# One round button: Send, or Stop while the agent works and
-						# nothing is typed, then a ring until it stops.
-						Engine.switch(
-							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
-							[Send, Stop, Stopping],
-							|action|
-								match action {
-									Send => Conversation.send_button("Send")
-									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
-									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
-								},
-						),
-					],
 				),
 			]),
 		)
 	}
+
+	## In place of an archived session's composer: when it was archived, and
+	## Unarchive, which lists it again, unarchiving until it is.
+	archived_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	archived_bar = |model, session_id|
+		Html.div_attrs(
+			[Engine.class("archived-bar"), Engine.attr("data-part", "composer")],
+			[
+				Html.span_s(session_id.map2(model.signal(), |id, state| "Archived ${Model.archived_at(state, id).map_ok(|at| Model.ago_said(state, at)) ?? ""}"), [Engine.class("archived-when"), Engine.test_id("archived-when")]),
+				Engine.when(
+					session_id.map2(model.signal(), |id, state| Model.unarchiving(state, id)),
+					|| Html.span_s(Engine.const("Unarchiving…"), [Engine.class("unarchive pending"), Engine.attr("role", "status"), Engine.test_id("unarchive-status")]),
+					|| Html.button("Unarchive", [Engine.class("unarchive")], model.update_by(session_id, Model.unarchive)),
+				),
+			],
+		)
+
+	## A History pane: a search over every session the providers keep,
+	## archived ones too, and a row for each found, the latest first, that
+	## opens its chat; then more, while there are.
+	history : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	history = |model|
+		Html.div(
+			"history",
+			[
+				Html.div_attrs(
+					[Engine.class("history-search"), Engine.attr("data-part", "search")],
+					[Html.text_input(Engine.const("Search history"), "search", model.signal().map(|state| state.history.search), [Engine.attr("placeholder", "Search history")], model.set_value(|state, text| { ..state, history: History.searched(state.history, text) }))],
+				),
+				Html.ul(
+					[Engine.class("history-list"), Engine.attr("data-part", "list")],
+					[
+						Engine.each(
+							model.signal().map(Model.history_rows),
+							|row| row.id,
+							|row| {
+								opens = model.lift_row().update_by(row.key(), |state, session_id| Model.open(state, Session(session_id)))
+								Html.li(
+									[Engine.class_s(row.field(|shown| if (shown.focused) "history-row focused" else "history-row")), Engine.attr("data-part", "session")].concat(Liton.row_activates(opens)),
+									[
+										Engine.element("button", [Engine.attr("type", "button"), Engine.class("history-title"), Engine.on_click(opens)], [Engine.text_s(row.field(|shown| shown.title))]),
+										Html.div(
+											"history-meta",
+											[
+												Html.span_s(row.field(|shown| shown.project), [Engine.class("project")]),
+												Html.span_s(row.field(|shown| shown.agent), [Engine.class("agent")]),
+												Html.span_s(row.field(|shown| if (shown.archived.is_empty()) "" else "Archived ${shown.archived}"), [Engine.class("archived"), Engine.test_id("history-archived")]),
+											],
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+				Spinner.or_text(model.signal().map(|state| if (History.loading(state.history)) Loading else Said(if (!state.history.failed.is_empty()) state.history.failed else if (state.history.sessions.is_empty()) "No sessions match." else "")), Pane, [Engine.class("history-empty")]),
+				Engine.when(model.signal().map(|state| state.history.next.is_ok() and !History.loading(state.history)), || Html.button("Show more", [Engine.class("history-more")], model.update(|state| { ..state, history: History.more(state.history) })), || Engine.text("")),
+			],
+		)
 
 	## What a composer's round button does: send, or stop its session's agent
 	## while it works and nothing is typed, or nothing while it stops.

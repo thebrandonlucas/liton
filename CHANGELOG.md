@@ -129,6 +129,7 @@ All notable changes to liton are documented in this file. The format is based on
 - New agent picks the model, mode and thinking level to start with from those its kind of agent offers, each its default unless you pick another; a kind that tells no models still takes one by name.
 - Shift+Tab in a chat's message box switches the agent to its next mode, as in Paseo; ⌘K offers Set mode…, Set model… and Set thinking… for the chat focused, and each choice by name, such as Set model to Opus 4.1.
 - While an agent works, what you send from its chat steers the turn it is working on instead of interrupting it, as the message box now says ("Steer: add to the turn it is working on"); Stop still interrupts it. chat.v1's `SendMessage` takes `while_running`, `Interrupt` or `Steer`.
+- History, a row over the Developer preset's Workspaces and a ⌘K command (Open the history), lists every session your providers keep, archived ones too, the latest first, each with its project, agent and how long ago it was archived; type to search, and Show more for the next page. Open an archived one to read its chat, and Unarchive it to list it again. chat.v1's `ListHistory` and `Unarchive` serve it, from the mock and from Paseo.
 
 ### Changed
 

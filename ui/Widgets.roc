@@ -63,6 +63,18 @@ Widgets := [].{
 			parts: ["header", "list", "group", "workspace", "session"],
 		},
 		{
+			id: "history",
+			title: "History",
+			role: Navigator,
+			needs: [Capability.chat_v1],
+			slots: [Left, Main],
+			minimum_width: 240,
+			sets: [Session],
+			follows: [],
+			options: [],
+			parts: ["header", "search", "list", "session"],
+		},
+		{
 			id: "chat",
 			title: "Chat",
 			role: View,

@@ -16,6 +16,7 @@ import setup.Default
 import setup.Grid
 import setup.Setup
 import Highlight
+import History
 import ReviewDesk
 import Speech
 import TicketDesk
@@ -315,6 +316,9 @@ Model := [].{
 		## What Tickets panes show (`TicketDesk`), and the tickets.v1
 		## requests on their way (sent as `call_outbox`).
 		tickets : TicketDesk.State,
+
+		## What History panes searched and the daemon listed (ui/History.roc).
+		history : History.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -514,6 +518,7 @@ Model := [].{
 				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
 				tickets: TicketDesk.initial,
+				history: History.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -2047,14 +2052,97 @@ Model := [].{
 	entries = |state, session_id|
 		state.timelines.find_first(|timeline| timeline.session_id == session_id).map_ok(|timeline| timeline.entries) ?? []
 
-	## A known session, one starting, or one named by its id until the daemon
-	## lists it.
+	## A known session, one starting, one History lists, or one named by its
+	## id until the daemon lists it.
 	session : State, Str -> Chat.Session
 	session = |state, session_id| {
 		known = state.sessions.find_first(|listed| listed.id == session_id)
 		placeholder = state.creating.find_first(|creating| Model.created_id(creating) == session_id).map_ok(|creating| Chat.session({ id: session_id, provider: "", agent: creating.form.agent, title: creating.title, status: Idle }))
-		known ?? (placeholder ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle }))
+		in_history = state.history.sessions.find_first(|listed| listed.id == session_id)
+		known ?? (placeholder ?? (in_history ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle })))
 	}
+
+	## The page of history History panes ask for, while one is on screen.
+	history_wanted : State -> Try(History.Asked, [NotShown])
+	history_wanted = |state|
+		if (state.capabilities.contains(Capability.chat_v1) and Model.panes(state).any(|shown| shown.widget == "history" and Model.pane_visible(state, shown.id))) Ok(History.asked(state.history)) else Err(NotShown)
+
+	## Takes the daemon's answer to the page of history `asked`.
+	history_listed : State, History.Asked, Str -> State
+	history_listed = |state, asked, text| {
+		answered : Try(Protocol.Answer(Chat.Response), _)
+		answered = Json.parse(text)
+		page = match answered {
+			Ok(Ok(History(listed))) => Ok(listed)
+			Ok(Err({ message, .. })) => Err(message)
+			_ => Err("The daemon did not answer.")
+		}
+		{ ..state, history: History.listed(state.history, asked, page) }
+	}
+
+	## History panes' rows: each session History lists, its title, project
+	## (its workspace's, else its directory's name), agent, and how long ago
+	## it was archived, "" if it isn't, and whether it is focused.
+	history_rows : State -> List({ id : Str, title : Str, project : Str, agent : Str, archived : Str, focused : Bool })
+	history_rows = |state|
+		state.history.sessions.map(
+			|listed_session| {
+				workspace_id = listed_session.workspace.map_ok(|placed| placed.id ?? "") ?? ""
+				project_id = state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.project_id) ?? ""
+				directory = listed_session.workspace.map_ok(|placed| placed.directory) ?? ""
+				project = state.workspaces.projects.find_first(|known| known.id == project_id).map_ok(|known| known.name) ?? (directory.split_on("/").last() ?? "")
+				{ id: listed_session.id, title: listed_session.title, project, agent: listed_session.agent, archived: Model.archived_at(state, listed_session.id).map_ok(|at| Model.ago_said(state, at)) ?? "", focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id) }
+			},
+		)
+
+	## When a session was archived, as History lists it, while it is: not
+	## once the sessions list it again.
+	archived_at : State, Str -> Try(Str, [NotArchived])
+	archived_at = |state, session_id|
+		if (state.sessions.any(|listed_session| listed_session.id == session_id))
+			Err(NotArchived)
+		else
+			state.history.sessions.find_first(|listed_session| listed_session.id == session_id).map_err(|_| NotArchived)?.archived.map_err(|_| NotArchived)
+
+	## How long ago a time was, as a sentence ends: "5m ago", or "just now".
+	ago_said : State, Str -> Str
+	ago_said = |state, time|
+		match Model.ago(state, time) {
+			"now" => "just now"
+			"" => ""
+			said => "${said} ago"
+		}
+
+	## Lists an archived session again, shown unarchiving until the sessions
+	## list it.
+	unarchive : State, Str -> State
+	unarchive = |state, session_id| Model.edit(state, Chat(Unarchive({ session_id: session_id })))
+
+	## Whether a session is being unarchived.
+	unarchiving : State, Str -> Bool
+	unarchiving = |state, session_id| state.editing.any(|asked| asked.edit == Chat(Unarchive({ session_id: session_id })))
+
+	## Shows the part `widget`, its tile's tab shown and its drawer open: its
+	## pane, if the layout has one, else a new one beside a Workbench's left
+	## drawer's panes, or where `add_pane` puts it.
+	open_part : State, Str -> State
+	open_part = |state, widget|
+		match Model.panes(state).find_first(|shown| shown.widget == widget) {
+			Ok(found) => {
+				opened = Model.show_pane(state, found.id)
+				Model.tile_of(opened, found.id).map_ok(|tile| Model.show_tile({ ..opened, collapsed: opened.collapsed.drop_if(|slot| slot == Model.slot_of(opened, tile.id)) }, tile.id)) ?? opened
+			}
+			Err(NotFound) => {
+				left = Model.slot_tile(state, Left)
+				if state.shell == Workbench and !left.is_empty() {
+					added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
+					placed = { ..state, grid: Model.change_tile(state.grid, left, |into| { ..into, panes: into.panes.append(added) }), next_id: state.next_id + 1 }
+					Model.open_part(placed, widget)
+				} else {
+					Model.add_pane(state, widget)
+				}
+			}
+		}
 
 	## A tool call and the result with its `call_id`, once one arrives. Output
 	## past its first 4 lines is `folded`.
@@ -4772,7 +4860,7 @@ Model := [].{
 	## a workspace's tabs says what to do while there is nothing to chat
 	## with, where workspaces are offered: `Welcome` while no workspace is picked, `NoAgents` while the one
 	## picked has none.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents]
+	Body : [Sessions, Workspaces, History, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -4796,6 +4884,7 @@ Model := [].{
 			match shown.widget {
 				"sessions" => Sessions
 				"workspaces" => Workspaces
+				"history" => History
 				"chat" => Chat
 				"inbox" => Inbox
 				"changes" => Changes
@@ -5293,7 +5382,7 @@ expect {
 expect {
 	state = { ..Model.initial(""), daemon: { id: "liton", name: "liton" }, capabilities: [Capability.chat_v1] }
 	swapped = Model.swap_part(state, "pane-8", "chat")
-	Model.swaps(state, "pane-8").map(|widget| widget.id) == ["chat", "capabilities"] and Model.swaps(state, "pane-1").map(|widget| widget.id) == ["sessions"] and Model.pane(swapped, "pane-8").widget == "chat" and !swapped.hidden.contains("pane-8") and Model.tile_of(swapped, "pane-8").map_ok(|tile| tile.active) == Ok("pane-8")
+	Model.swaps(state, "pane-8").map(|widget| widget.id) == ["chat", "capabilities"] and Model.swaps(state, "pane-1").map(|widget| widget.id) == ["sessions", "history"] and Model.pane(swapped, "pane-8").widget == "chat" and !swapped.hidden.contains("pane-8") and Model.tile_of(swapped, "pane-8").map_ok(|tile| tile.active) == Ok("pane-8")
 }
 
 # Where Workspaces lists sessions as tabs, as the Developer preset's does, a
