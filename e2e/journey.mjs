@@ -32,8 +32,8 @@ process.on("exit", () => fs.rmSync(scratch, { recursive: true, force: true }));
 check = "liton setup evaluates liton's Litonfile";
 await new Promise((resolve) => execFile(path.join(repo, "zig-out/bin/liton"), ["setup", path.join(repo, "Litonfile.roc")], { cwd: scratch }, (error, _, stderr) => (error ? fail(stderr) : resolve())));
 const setup = JSON.parse(fs.readFileSync(path.join(scratch, "liton.setup.json"), "utf8"));
-const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } } };
-fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, review] }));
+const changes_only = { name: "Changes only", snapshot: { version: 4, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } } };
+fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, changes_only] }));
 check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
   cwd: repo,
@@ -117,7 +117,7 @@ try {
   });
   await step("the preset picker offers the setup's own preset, which loads its layout", async () => {
     await page.click(".settings-toggle");
-    await click("Settings", "button", "Review preset");
+    await click("Settings", "button", "Changes only preset");
     await until("only Changes", () => page.evaluate(() => [...document.querySelectorAll("section.pane")].map((s) => s.getAttribute("aria-label")).join() === "Changes"));
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");

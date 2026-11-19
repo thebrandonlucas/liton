@@ -868,7 +868,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -877,6 +877,7 @@ Liton := [].{
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
+							Review => Liton.review_view(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
 							Ticket => Liton.ticket_view(model, id)
 							Rooms => Liton.rooms(model)
@@ -1851,6 +1852,73 @@ Liton := [].{
 		)
 	}
 
+	## The Review surface's view (docs/research/surfaces.md, Review): every
+	## file of the scope its parts show as a card, its diff with the review's
+	## threads at their lines and the composer under the lines picked. Polls
+	## follow them only while it is on screen (see `Model.subjects`).
+	review_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	review_view = |model, id, pane| {
+		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
+		cards = shown.map(|{ pane: pane_shown, state }| Model.review_cards(state, pane_shown))
+		Html.div(
+			"review",
+			[
+				Engine.switch(
+					shown.map(|{ pane: pane_shown, state }| Model.git_shown(state, pane_shown)),
+					[NoSession, Loading, Unreadable, NotGit, Shown],
+					|showing|
+						match showing {
+							NoSession => Html.p("Pick a session to review its changes.", "missing")
+							Loading => Html.p("Loading…", "missing")
+							Unreadable => Html.p("Can't read this workspace right now.", "missing")
+							NotGit => Html.p("Not a git workspace.", "missing")
+							Shown =>
+								Html.div(
+									"review-cards",
+									[
+										Html.p_s(cards.map(|listed| if (listed == Loading) "Loading…" else if (listed == Cards([])) "No changes to review." else ""), [Engine.class("missing")]),
+										Engine.each(
+											cards.map(
+												|listed|
+													match listed {
+														Cards(found) => found
+														Loading => []
+													},
+											),
+											|card| card.path,
+											|card| Liton.review_card(model, id, pane, card),
+										),
+									],
+								)
+						},
+				),
+			],
+		)
+	}
+
+	## A file of a Review pane as a card: its path, how it changed and by
+	## how many lines, over its diff. Top-level for the reason
+	## `scope_picker` is.
+	review_card : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Model.ReviewCard) -> Elem(Row(PaneCtx, Model.ReviewCard))
+	review_card = |model, id, pane, card| {
+		file = card.field(|shown| shown.file)
+		Html.div_attrs(
+			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key())],
+			[
+				Html.div(
+					"review-card-header",
+					[
+						Html.span_s(card.key(), [Engine.class("file-path")]),
+						Html.span_s(file.map(|shown| Liton.change_text(shown.change)), [Engine.class_s(file.map(|shown| "badge change ${Liton.change_text(shown.change)}"))]),
+						Html.span_s(file.map(Liton.file_lines), [Engine.class("lines")]),
+					],
+				),
+				Html.p_s(card.field(|shown| shown.note), [Engine.class("missing")]),
+				Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows)),
+			],
+		)
+	}
+
 	## A context's files: its folders, each opened to list it, and the file
 	## picked, its lines numbered and highlighted. Polls follow them only
 	## while it is on screen (see `Model.subjects`).
@@ -1880,7 +1948,7 @@ Liton := [].{
 	## diff, highlighted; and between them, the review's threads on the lines
 	## they end on, and the composer of a comment under the lines picked.
 	## Clicking a number picks its line (`Model.pick_line`).
-	code_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, List(Model.CodeRow)) -> Elem(PaneCtx)
+	code_view : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
 	code_view = |model0, id, class, rows|
 		Html.div_attrs(
 			[Engine.class_s(class)],
@@ -1890,7 +1958,7 @@ Liton := [].{
 					|row| row.key,
 					|row| {
 						model = model0.lift_row()
-						asked = |pick| row.field(pick).map2(id.lift_row(), |picked, pane_id| { pane_id, picked })
+						asked = |pick| row.field(|shown| (shown.path, pick(shown))).map2(id.lift_row(), |(path, picked), pane_id| { pane_id, path, picked })
 						# A row of an each is one element.
 						Html.div(
 							"code-item",

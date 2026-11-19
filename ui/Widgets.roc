@@ -102,6 +102,18 @@ Widgets := [].{
 			parts: ["header", "status", "files", "file", "hunk", "line", "commits"],
 		},
 		{
+			id: "review",
+			title: "Review",
+			role: View,
+			needs: [Capability.workspace_git_v1, Capability.review_v1],
+			slots: [Main],
+			minimum_width: 360,
+			sets: [],
+			follows: [Session, Workspace],
+			options: [{ key: "diff_layout", label: "Diff layout", help: "Show each file's diff in one column, or old beside new.", kind: Choice({ default: "Unified", choices: ["Unified", "Split"] }) }],
+			parts: ["header", "file", "hunk", "line", "comment", "composer"],
+		},
+		{
 			id: "files",
 			title: "Files",
 			role: Inspector,

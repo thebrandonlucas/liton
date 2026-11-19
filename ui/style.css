@@ -204,7 +204,7 @@ kbd:empty { display: none; }
 .tile:not(.tabbed) .tab, .pane.hidden { display: none; }
 /* A tab: its widget's icon and title, and a × that shows on hover. */
 .tile-header .tab { display: inline-flex; align-items: center; }
-.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
+.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-review, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .widget-sessions { --icon: var(--icon-list); }
 .widget-workspaces { --icon: var(--icon-folder); }
@@ -212,6 +212,7 @@ kbd:empty { display: none; }
 .widget-inbox { --icon: var(--icon-inbox); }
 .widget-changes { --icon: var(--icon-git-branch); }
 .widget-files { --icon: var(--icon-file); }
+.widget-review { --icon: var(--icon-message-square); }
 .widget-tickets { --icon: var(--icon-ticket); }
 .widget-ci { --icon: var(--icon-circle-play); }
 .widget-capabilities { --icon: var(--icon-plug); }
@@ -764,6 +765,18 @@ kbd:empty { display: none; }
 .tree-thread:has(.status-word.resolved) .branch { text-decoration: line-through; }
 .review-overall { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
 .review-overall textarea { flex: 1; min-width: 0; padding: 4px 8px; resize: vertical; field-sizing: content; max-height: 8em; font: 12.5px/1.4 var(--font-ui); }
+
+/* The Review surface's view: every file a card, one under another, its
+   header staying in sight while its diff scrolls under it. */
+.review { flex: 1; min-height: 0; overflow-y: auto; }
+.review > .missing { padding: 8px 12px; }
+.review-cards { display: flex; flex-direction: column; gap: 10px; padding: 8px 12px 40vh; }
+.review-cards > .missing:empty, .review-card > .missing:empty { display: none; }
+.review-card { container-type: inline-size; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); overflow-x: auto; }
+.review-card-header { position: sticky; top: 0; left: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 5px 10px; background: var(--sheet); border-bottom: 1px solid var(--edge); }
+.review-card-header .file-path { position: static; flex: 1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: none; }
+.review-card-header .lines { font: 11px var(--font-mono); color: var(--muted); }
+.review-card > .missing { margin: 0; padding: 6px 12px; }
 
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 @keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }
