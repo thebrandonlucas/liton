@@ -144,6 +144,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings is a page of its own, as Paseo's is: a rail of sections on the left (Appearance, Keys, Voice, About, the surface open and its snapshot) and the section picked beside it, opening at the surface's. ⌘, or Ctrl+, opens it, and Escape or ← Back returns to the surface. Keys lists every key bound. On a phone the rail is a list, and a section picked covers it until its ← goes back.
 - Settings' Host section, named after the daemon, lists what it offers: each provider with the capabilities it supplies, the remotes their providers come from, and each transformer with what it derives from what.
 - Settings' Surface section and the ⌘K palette (Open the … surface) offer only the surfaces your daemon can show: those whose navigators and views it offers the capabilities of. Without attention.v1, for one, there is no Inbox surface, and its number key does nothing.
+- **Breaking:** Settings no longer adds widgets: the "+ widget" list is gone. Open a surface, then swap any of its parts in Settings' Surface section for another of the same role that fits there and that your daemon supports, such as Workspaces for Sessions; once changed, Reset to the surface puts its layout back.
 
 ### Fixed
 

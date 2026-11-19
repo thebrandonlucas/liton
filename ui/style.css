@@ -170,8 +170,6 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .settings .palette-entries { margin: 0; padding: 4px 6px; max-height: none; }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .choices [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.choices .added { color: var(--muted); }
-.choices .added::after { content: " ✓" / ""; }
 .theme-choice { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--edge); }
 .settings textarea { font: 12px var(--font-mono); min-height: 90px; padding: 6px; }

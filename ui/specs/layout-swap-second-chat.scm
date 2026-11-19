@@ -1,4 +1,4 @@
-(test "Liton — settings add a second Chat beside the first, and each sends from its own composer, which stays focused"
+(test "Liton — a part swapped in Settings for a second Chat sits beside the first, and each sends from its own composer, which stays focused"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -7,7 +7,8 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Idle\"},\"sequence\":1}}]}]}")
     (run-effect 3)
     (click (role button :name "Settings"))
-    (click (role button :name "+ Chat (already in the layout)"))
+    (select-option (label "Swap Ticket for") "chat")
+    (click (role button :name "Close settings"))
     (expect-text (test-id "show-main") "Chat · Chat")
     (fill (label "Message") "Find the TODOs")
     (press (label "Message") "Enter")

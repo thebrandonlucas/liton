@@ -141,6 +141,10 @@ Model := [].{
 		presets : List(Setup.Preset),
 		kept_layout : Bool,
 
+		## The surface last opened, by its preset's name, which Settings resets
+		## the layout to, "" for none: this browser's, as the layout is.
+		surface : Str,
+
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
@@ -390,6 +394,7 @@ Model := [].{
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),
+				surface: if (restored.is_ok()) "" else Default.setup.default_preset,
 				git: [],
 				git_changes: [],
 				git_hunks: [],
@@ -558,7 +563,7 @@ Model := [].{
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme }
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
 			Err(NotFound) => state
 		}
 
@@ -800,6 +805,24 @@ Model := [].{
 			else
 				(Grid.appended(state.grid, tile), state.next_id + 2, tile.id)
 		Model.show_tile({ ..state, grid, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
+	}
+
+	## The widgets pane `id` can swap its own for: of its role, fitting its
+	## slot, and whose capabilities the daemon offers, or offers once its
+	## manifest is read.
+	swaps : State, Str -> List(Widgets.Widget)
+	swaps = |state, id| {
+		own = Widgets.find(Model.pane(state, id).widget)
+		slot = Model.tile_of(state, id).map_ok(|tile| Model.slot_of(state, tile.id)) ?? Free
+		Widgets.all.keep_if(|widget| widget.id != own.id and widget.role == own.role and Widgets.fits(widget, slot) and (state.daemon.id.is_empty() or Widgets.missing(widget, state.capabilities).is_empty()))
+	}
+
+	## Shows `widget` in pane `id` in place of its own, with its options'
+	## defaults, as its tile's tab shown, focused.
+	swap_part : State, Str, Str -> State
+	swap_part = |state, id, widget| {
+		swapped = Model.with_panes(state, |shown| if (shown.id == id) { ..shown, widget, pinned: "", options: [] } else shown)
+		{ ..swapped, focused_pane: id, hidden: state.hidden.drop_if(|hidden| hidden == id), grid: { ..swapped.grid, tiles: swapped.grid.tiles.map(|tile| if (tile.panes.any(|shown| shown.id == id)) { ..tile, active: id } else tile) } }
 	}
 
 	slot_of : State, Str -> Slot
@@ -3491,4 +3514,12 @@ expect {
 	advertised = |capabilities| { ..Model.initial(""), daemon: { id: "liton", name: "liton" }, capabilities }
 	names = |state| Model.surfaces(state).map(|preset| preset.name)
 	names(Model.initial("")) == ["Developer", "Inbox", "Tiling", "Chat"] and names(advertised([Capability.chat_v1])) == ["Tiling", "Chat"] and names(advertised([Capability.chat_v1, Capability.workspaces_v1])) == ["Developer", "Tiling", "Chat"]
+}
+
+# A part swaps for another of its role that fits its slot and whose
+# capabilities are offered: Developer's hidden Ticket for a Chat, shown.
+expect {
+	state = { ..Model.initial(""), daemon: { id: "liton", name: "liton" }, capabilities: [Capability.chat_v1] }
+	swapped = Model.swap_part(state, "pane-8", "chat")
+	Model.swaps(state, "pane-8").map(|widget| widget.id) == ["chat", "capabilities"] and Model.swaps(state, "pane-1").map(|widget| widget.id) == ["sessions"] and Model.pane(swapped, "pane-8").widget == "chat" and !swapped.hidden.contains("pane-8") and Model.tile_of(swapped, "pane-8").map_ok(|tile| tile.active) == Ok("pane-8")
 }

@@ -44,6 +44,10 @@ Liton := [].{
 	glass_key : Str
 	glass_key = "liton.glass"
 
+	## The surface last opened, `Model.State`'s `surface`.
+	surface_key : Str
+	surface_key = "liton.surface"
+
 	## "mac" on a Mac, whose keys are written ⌘B: ui/ports.mjs writes it as
 	## the page loads, as roc-signals's boot doesn't tell the platform.
 	platform_key : Str
@@ -54,9 +58,17 @@ Liton := [].{
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Liton.surface_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
+
+	## The surface the browser kept, else the one the model starts with.
+	restored_surface : Model.State, Try(Str, _) -> Model.State
+	restored_surface = |state, kept|
+		match kept {
+			Ok(surface) => { ..state, surface }
+			Err(_) => state
+		}
 
 	## The theme is custom properties on the root (`Themes.style`), which the
 	## stylesheet alone uses. Keys run commands as `Keymap.defaults` binds
@@ -309,6 +321,7 @@ Liton := [].{
 			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
+		Engine.watch(model.signal().map(|state| state.surface), |surface| [Engine.command(StorageSet(Liton.surface_key, surface))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
@@ -691,8 +704,8 @@ Liton := [].{
 		)
 
 	## The surface open: the surfaces to open instead, those the daemon
-	## offers what they need, and its tiles' panes
-	## to move, remove or set the options of.
+	## offers what they need; its tiles' panes to swap, move, remove or set
+	## the options of; and, once changed, a reset to the surface opened.
 	surface_section : State(Ctx, Model.State) -> Elem(Ctx)
 	surface_section = |model|
 		Html.div(
@@ -719,29 +732,10 @@ Liton := [].{
 					],
 				),
 				Liton.settings_card("Layout", [Engine.each(model.signal().map(Model.tiles_in_order), |tile| tile.id, |row| Liton.settings_tile(model, row))]),
-				Liton.settings_card(
-					"Add a widget",
-					[
-						Html.div(
-							"choices settings-row",
-							[
-								# A Workbench adds to its main area; Tiling takes any widget.
-								Engine.each(
-									model.signal().map(|state| Widgets.all.keep_if(|widget| Widgets.fits(widget, if (state.shell == Workbench) Main else Free))),
-									|widget| widget.id,
-									|row| {
-										offer = row.field(|widget| widget).map2(model.signal().lift_row(), Liton.widget_offer)
-										Html.button_s(
-											offer.map(|offered| offered.text),
-											[Html.aria_label_s(offer.map(|offered| offered.name)), Engine.class_s(offer.map(|offered| if (offered.present) "added" else ""))],
-											# Closed, Settings shows the pane added rather than covering it.
-											model.lift_row().update_by(row.key(), |state, widget| Model.with_snapshot_text({ ..Model.add_pane(state, widget), show_settings: Bool.False })),
-										)
-									},
-								),
-							],
-						),
-					],
+				Engine.when(
+					model.signal().map(|state| state.presets.any(|preset| preset.name == state.surface) and !Model.preset_shown(state, state.surface)),
+					|| Html.div("choices", [Html.button_s(model.signal().map(|state| "Reset to ${state.surface}"), [], model.update(|state| Model.with_snapshot_text(Model.use_preset(state, state.surface))))]),
+					|| Engine.text(""),
 				),
 			],
 		)
@@ -757,17 +751,6 @@ Liton := [].{
 				Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 			],
 		)
-
-	## How Settings offers a widget to add: unavailable while no provider
-	## supplies what it needs, and checked (by CSS) while the layout has it
-	## already, which a screen reader names. It can still be added again.
-	widget_offer : Widgets.Widget, Model.State -> { text : Str, name : Str, present : Bool }
-	widget_offer = |widget, state| {
-		unavailable = !Widgets.missing(widget, state.capabilities).is_empty()
-		present = Model.panes(state).any(|pane| pane.widget == widget.id)
-		text = if (unavailable) "+ ${widget.title} (unavailable)" else "+ ${widget.title}"
-		{ text, name: if (present) "+ ${widget.title} (${if (unavailable) "unavailable, " else ""}already in the layout)" else text, present }
-	}
 
 	## A tile's panes in settings, under the slot it is in.
 	settings_tile : State(Ctx, Model.State), RowRef(Ctx, Model.Tile) -> Elem(TileCtx)
@@ -809,6 +792,18 @@ Liton := [].{
 					[],
 					[
 						Html.span_s(title, [Engine.class("settings-pane-title")]),
+						Engine.when(
+							model.signal().map2(id, |state, pane_id| !Model.swaps(state, pane_id).is_empty()),
+							||
+								Dropdown.select(
+									title.map(|name| "Swap ${name} for"),
+									row.field(|shown| shown.widget),
+									[],
+									[Engine.each(model.signal().map2(pane, |state, shown| Model.swaps(state, shown.id).prepend(Widgets.find(shown.widget))), |widget| widget.id, |choice| Engine.element("option", [Engine.prop_s(Engine.Prop.value, choice.key())], [Engine.text_s(choice.field(|widget| widget.title))]))],
+									model.set_value_by(id, |state, pane_id, widget| Model.with_snapshot_text(Model.swap_part(state, pane_id, widget))),
+								),
+							|| Engine.text(""),
+						),
 						Engine.when(
 							model.signal().map(|state| state.shell == Workbench),
 							||
