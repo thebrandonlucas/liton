@@ -214,6 +214,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The browser keeps a deck of surfaces, each as you left it with its own theme and focus, as snapshot version 9. A layout saved before loads as a deck of it alone; a new browser starts with its setup's deck.
 - Every drop-down, from the composer's mode, model and thinking to the inbox's and tickets' filters and Settings, is one compact pill as wide as what it shows, with a small chevron and a ring when focused, in place of the system's look.
 - The tiles, the deck's strip and the window's edges keep the theme's gap between them, at least 8 pixels (6 on a phone, beside its safe areas), even in a theme without gaps, so nothing meets the window's edge.
+- Each item of a menu has an icon: new agent or workspace, move, hide and show, pin and unpin, stop, mark read and unread, rename, copy, archive, copy link, and join and leave.
 
 ### Fixed
 
@@ -238,6 +239,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Archiving the workspace shown, from its row's or its header's ⋯ menu, now named Archive workspace since it archives its agents too, shows the latest workspace left at once, or asks you to pick one when none is left. It no longer leaves the main area showing the workspace's id with no agents, where starting one failed with "no workspace".
 - A theme you picked stays when you open another surface or reset one to its preset, rather than turning to the surface's own, such as Developer's Neutral. A browser that has no theme of its own yet still shows each surface's.
 - Drag the workspace shown in the main area to another place by any of its tabs, a session's, the diff's or a ticket's, or by its name in its header, as you drag other panes. A ticket scrolls within its pane, so its comment box is always in reach, and its status, assignees and labels line up as rows of a name and a value.
+- Every menu, a pane's, a row's or the workspace's ⋮, the new tab menu, a room's and the context meter's, closes as you click its button again, click or tap anywhere outside it, press Escape, move focus out of it or choose an item, and no longer opens cut off by the pane it is in. On a phone it rises from the bottom of the screen.
 
 ### Removed
 
