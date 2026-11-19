@@ -13,6 +13,7 @@ import cap.WorkspaceGit
 
 ReviewDesk := [].{
 
+	## What the Review surface keeps, as this module's comment says.
 	State : { scope : WorkspaceGit.Scope, folded : List(Str), scroll : { serial : U64, refs : List(Str) }, scrolling_to : Str, seen : List(Str), viewed : List(Viewed), listing : [Open, Resolved, All], rounds : List(Round), since_round : Bool }
 
 	## The files of a context's scope as round `round` was sent, each by its
@@ -52,6 +53,8 @@ ReviewDesk := [].{
 	initial : State
 	initial = { scope: Uncommitted, folded: [], scroll: { serial: 0, refs: [] }, scrolling_to: "", seen: [], viewed: [], listing: Open, rounds: [], since_round: Bool.False }
 
+	## A round sent from here: its context, scope and number, and the
+	## fingerprint of each of its files' diffs then.
 	Round : { context : Str, scope : WorkspaceGit.Scope, round : U32, files : List({ path : Str, fingerprint : Str }) }
 
 	## Keeps a round's files, in place of any kept of the same round.

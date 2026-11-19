@@ -10,6 +10,7 @@ Dropdown := [].{
 	select : Signal(ctx, Str), Signal(ctx, Str), List(Attr(ctx)), List(Elem(ctx)), Handler(ctx) -> Elem(ctx)
 	select = |name, value, attrs, options, handler| Engine.element("select", [Engine.attr_s("aria-label", name), Engine.prop_s(Engine.Prop.value, value), Engine.on("change", handler)].concat(attrs), options)
 
+	## An option of a select, its `value` shown as `label`.
 	option : Str, Str -> Elem(ctx)
 	option = |value, label| Engine.element("option", [Engine.prop(Engine.Prop.value, value)], [Engine.text(label)])
 

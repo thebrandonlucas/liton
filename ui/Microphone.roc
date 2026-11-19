@@ -18,6 +18,7 @@ Microphone := [].{
 	## it, and the conversation toggle's state.
 	Look : { hidden : Bool, disabled : Bool, class : Str, label : Str, title : Str, status : Str, level : U8, talking : Bool, talk_disabled : Bool }
 
+	## How the mic of pane `pane_id` looks, from the voice's state.
 	look : Model.State, Str -> Look
 	look = |state, pane_id| {
 		voice = state.voice
@@ -115,6 +116,8 @@ Microphone := [].{
 			state
 	}
 
+	## A release of the mic: it stops a dictation held long enough, and
+	## leaves one only pressed recording until the mic is clicked.
 	release : Model.State -> Model.State
 	release = |state|
 		match state.voice.held {
@@ -210,6 +213,8 @@ Microphone := [].{
 			Unknown => { voice: "default", rate: "1" }
 		}
 
+	## The voices settings offer: the device's default, then the browser's,
+	## those online named so.
 	voice_choices : Model.State -> List({ value : Str, label : Str })
 	voice_choices = |state| state.voice.voices.map(|offered| { value: offered.name, label: if (offered.local) offered.name else "${offered.name} (online)" }).prepend({ value: "default", label: "Default on-device voice" })
 
