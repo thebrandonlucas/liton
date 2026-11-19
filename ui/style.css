@@ -114,6 +114,17 @@ button:active { transform: scale(.97); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pane:focus-visible, .panel-anchor:focus-visible { outline: none; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--edge); border-radius: var(--small-radius); }
+/* Every drop-down, one look: a compact ghost pill, its small chevron drawn
+   in its text's colour. It stays a native select, for keys and screen
+   readers, and its options the system's list. */
+select { appearance: none; -webkit-appearance: none; min-width: 0; min-height: 26px; padding: 2px 25px 2px 10px; border-color: transparent; border-radius: 999px;
+  background: var(--field) no-repeat; background-image: linear-gradient(45deg, transparent calc(50% - .8px), currentColor calc(50% - .5px), currentColor calc(50% + .5px), transparent calc(50% + .8px)), linear-gradient(135deg, transparent calc(50% - .8px), currentColor calc(50% - .5px), currentColor calc(50% + .5px), transparent calc(50% + .8px));
+  background-position: right 15px center, right 11px center; background-size: 5px 5px; color: inherit; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; field-sizing: content;
+  transition: background-color var(--fast) ease, border-color var(--fast) ease, box-shadow var(--fast) ease; }
+select:hover { background-color: var(--selected); }
+select:focus-visible { outline: none; border-color: var(--edge-active); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent); }
+select:disabled { opacity: .5; cursor: default; }
+select option { background: var(--glass-tint); color: var(--text); }
 
 /* Tiling's bar: liton, and status modules on the right. */
 .bar { display: flex; flex: 0 0 2.4rem; align-items: center; gap: .75rem; margin: var(--gap) var(--gap) 0; padding: 0 .4rem;
@@ -503,7 +514,7 @@ kbd:empty { display: none; }
 @media (hover: none) { .tree-row .new-agent, .tree-row .row-menu-toggle { opacity: 1; } }
 .create-form { display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius); background: var(--tool); animation: menu-in var(--fast) ease-out backwards; }
 .create-form .create-title { margin: 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
-.create-form input, .create-form select { padding: 4px 6px; min-width: 0; }
+.create-form input { padding: 4px 6px; min-width: 0; }
 .create-failed { margin: 0; color: var(--fail); font-size: 12px; }
 .create-failed:empty { display: none; }
 .create-form.for-agent .workspace-field, .create-form.for-workspace .agent-field { display: none; }
@@ -742,7 +753,7 @@ kbd:empty { display: none; }
 .tickets { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; container-type: inline-size; }
 .ticket-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 6px; }
 .ticket-filters input { flex: 1 1 100%; min-width: 0; padding: 4px 8px; }
-.ticket-filters select { flex: 1 1 0; min-width: 0; padding: 2px 4px; font-size: 12px; }
+.ticket-filters select { flex: 1 1 0; font-size: 12px; }
 @container (min-width: 520px) { .ticket-filters input { flex-basis: 14ch; } .ticket-filters select { flex: none; } }
 .ticket-list { list-style: none; margin: 0; padding: 0; }
 .ticket-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border-radius: var(--small-radius); transition: background-color var(--fast) ease; }
@@ -770,14 +781,13 @@ kbd:empty { display: none; }
 .ticket-fields { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
 .ticket-field { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; margin: 0; padding: 0; border: none; }
 .ticket-field .field-name { flex: none; width: 80px; padding: 0; }
-.ticket-fields select { padding: 2px 4px; }
 .ticket-saving { font: 11px var(--font-mono); color: var(--muted); }
 /* The Board preset: scopes, the tickets in dense single-line rows grouped
    by status, and the properties of the one under the cursor. */
 .scopes { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
-.scope { display: flex; width: 100%; gap: 8px; padding: 4px 8px; border: none; border-radius: var(--small-radius); background: none; font-size: 13px; text-align: left; }
-.scope:hover { background: var(--tool); }
-.scope[aria-pressed="true"] { background: var(--selected); }
+button.scope { display: flex; width: 100%; gap: 8px; padding: 4px 8px; border: none; border-radius: var(--small-radius); background: none; font-size: 13px; text-align: left; }
+button.scope:hover { background: var(--tool); }
+button.scope[aria-pressed="true"] { background: var(--selected); }
 .scope .count { margin-left: auto; font: 11px var(--font-mono); color: var(--muted); }
 .board { flex: 1; min-height: 0; overflow-y: auto; font-size: 13px; }
 .board-bar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--edge); background: var(--glass-deep); }
@@ -908,9 +918,8 @@ kbd:empty { display: none; }
 .model-chip:empty { display: none; }
 .composer-chips { display: flex; align-items: center; gap: 2px; margin-right: auto; min-width: 0; overflow: hidden; }
 .composer-chips .model-chip { margin-right: 0; }
-.composer .chip { min-width: 0; max-width: 16ch; padding: 2px 18px 2px 8px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); font-size: 12px; text-overflow: ellipsis; appearance: none; -webkit-appearance: none; cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: right 9px center, right 5px center; background-size: 4px 4px; background-repeat: no-repeat; }
-.composer .chip:hover, .composer .chip:focus-visible { border-color: var(--edge); color: inherit; }
+.composer .chip { max-width: 16ch; min-height: 24px; background-color: transparent; color: var(--muted); font-size: 12px; }
+.composer .chip:hover { background-color: var(--field); color: var(--text); }
 .context-meter { position: relative; flex: none; display: flex; }
 .composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
   background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--accent) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
@@ -1017,7 +1026,7 @@ kbd:empty { display: none; }
 .badge.added { border-color: var(--added); color: var(--added); }
 .badge.deleted { border-color: var(--removed); color: var(--removed); }
 .changes .choices { align-items: center; font: 11px var(--font-mono); }
-.changes .scope { padding: 2px 6px; font: 12px var(--font-ui); }
+.changes .scope { font: 12px var(--font-ui); }
 .changes .choices .added { margin-left: auto; color: var(--added); }
 .changes .choices .removed { color: var(--removed); }
 .changes .choices span:empty { display: none; }
@@ -1145,7 +1154,7 @@ kbd:empty { display: none; }
 .review-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: var(--review-bar); box-sizing: border-box; padding: 4px 0; background: var(--sheet); border-bottom: 1px solid var(--edge); font-size: 12.5px; }
 .review-bar .branch { font: 600 12.5px var(--font-mono); color: var(--accent); }
 .review-bar .branch:empty { display: none; }
-.review-bar .scope { max-width: 22em; padding: 2px 6px; font: 12px var(--font-ui); }
+.review-bar .scope { max-width: 22em; font: 12px var(--font-ui); }
 .review-card { border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); }
 .review-diff { container-type: inline-size; overflow-x: auto; }
 .review-card-header { position: sticky; top: var(--review-bar); z-index: 1; display: flex; gap: 8px; align-items: center; padding: 5px 10px; background: var(--sheet); border-bottom: 1px solid var(--edge); }
