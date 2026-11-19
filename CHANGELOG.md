@@ -95,6 +95,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a screen under 1000px wide, a room's thread or members open over the room's right side rather than squeezing it; on a phone they fill the screen as their own panel.
 - While unread rooms are scrolled out of view in Rooms, a pill at its foot counts them, as "2 unread"; click it to scroll to the first.
 - Agents at work show in a room: a thread an agent is answering, or one a message asks an agent in, shows the agent working on it with a pulsing badge, and over the composer a line names the agents working in the room, with their avatars. A thread's summary shows the avatars of those who replied.
+- Outside a text box, G then R goes to the rooms and focuses their search; Escape closes a room's thread when nothing else is open. Both are in the palette, as Go to the rooms and Close the thread.
 
 ### Changed
 

@@ -2177,7 +2177,7 @@ Liton := [].{
 		Html.div(
 			"rooms-nav",
 			[
-				Html.text_input(Engine.const("Search rooms"), "search", model0.signal().map(|state| state.room_search), [Engine.class("room-search"), Engine.attr("placeholder", "Search rooms"), Engine.attr("autocomplete", "off")], model0.set_value(|state, typed| { ..state, room_search: typed })),
+				Html.text_input(Engine.const("Search rooms"), "search", model0.signal().map(|state| state.room_search), [Engine.class("room-search"), Engine.ref("rooms-search"), Engine.attr("placeholder", "Search rooms"), Engine.attr("autocomplete", "off")], model0.set_value(|state, typed| { ..state, room_search: typed })),
 				Html.ul([Engine.class("room-list"), Engine.attr("data-part", "list")], [Engine.each(model0.signal().map(Model.room_rows), |row| row.key, |row| Liton.room_row(model0, row))]),
 				Engine.when(model0.signal().map(|state| Model.room_rows(state).is_empty() and !state.rooms.is_empty()), || Html.p("No rooms match.", "missing"), || Engine.text("")),
 				# The unread rooms scrolled out of view, which it scrolls to.

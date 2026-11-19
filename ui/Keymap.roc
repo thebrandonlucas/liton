@@ -13,7 +13,8 @@ Keymap := [].{
 	## Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
 	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
-	## goes to a workspace. Escape closes what is open, else stops the agent.
+	## goes to a workspace, and `g` then `r` to the rooms. Escape closes what
+	## is open, else a room's thread, else stops the agent.
 	defaults : List(Binding)
 	defaults = {
 		digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -24,7 +25,9 @@ Keymap := [].{
 			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
+			{ keys: ["Escape"], command: "thread.close" },
 			{ keys: ["Escape"], command: "agent.stop" },
+			{ keys: ["g", "r"], command: "rooms.focus" },
 		]
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
 			.concat(digits.map(|digit| { keys: ["g", digit], command: "workspace.${digit}" }))

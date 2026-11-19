@@ -19,6 +19,8 @@ Commands := [].{
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
+			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: |shown| shown.sub_focus != None, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
+			{ id: "rooms.focus", title: "Go to the rooms", group: "Rooms", applies: |shown| Model.panes(shown).any(|pane| pane.widget == "rooms"), run: Model.focus_rooms },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
 			.concat(Commands.layout)

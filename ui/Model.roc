@@ -2845,6 +2845,17 @@ Model := [].{
 	threads_apart : State -> Bool
 	threads_apart = |state| Model.panes(state).any(|shown| shown.widget == "thread")
 
+	## Shows the first Rooms pane and focuses its search.
+	focus_rooms : State -> State
+	focus_rooms = |state|
+		match Model.panes(state).find_first(|shown| shown.widget == "rooms") {
+			Ok(rooms) => {
+				revealed = Model.reveal(state, rooms.id)
+				{ ..revealed, jump: { ..revealed.jump, serial: revealed.jump.serial + 1, panel: "rooms-search" } }
+			}
+			Err(NotFound) => state
+		}
+
 	## Hides a pane until `reveal` shows it again, and its drawer while it
 	## shows no other.
 	put_away : State, Str -> State
