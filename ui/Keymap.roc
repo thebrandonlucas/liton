@@ -21,6 +21,7 @@ Keymap := [].{
 			{ keys: ["Mod+b"], command: "drawer.left" },
 			{ keys: ["Mod+e"], command: "drawer.right" },
 			{ keys: ["Mod+,"], command: "settings" },
+			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["Escape"], command: "close" },
 			{ keys: ["Escape"], command: "agent.stop" },
 		]

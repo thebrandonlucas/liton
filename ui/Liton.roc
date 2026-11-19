@@ -18,6 +18,8 @@ import Ports
 import Themes
 import Model
 import Keymap
+import Palette
+import Commands
 import TicketDesk
 import Widgets
 import Dropdown
@@ -109,6 +111,7 @@ Liton := [].{
 					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
+				Liton.palette(model),
 			].concat(Liton.effects(model)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 
@@ -136,6 +139,7 @@ Liton := [].{
 			),
 		),
 		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, at| Model.tick(state, at ?? state.now))),
+		Engine.watch_changes(model.signal().map(|state| state.palette.picked), |_| [Engine.command(Engine.scroll_into_view("palette-picked", {}))], Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
@@ -256,6 +260,68 @@ Liton := [].{
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
 	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+, or ⌘,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
 
+	## The palette over everything, which a click outside closes: a box to
+	## type in, and the entries what is typed matches, each with its group
+	## and keys. The arrows, or Ctrl+N and Ctrl+P, pick one, and Enter or a
+	## click runs it.
+	palette : State(Ctx, Model.State) -> Elem(Ctx)
+	palette = |model| {
+		moves = [Engine.Chord.plain("ArrowDown"), Engine.Chord.plain("ArrowUp"), Engine.Chord.plain("Enter"), Engine.Chord.plain("n").with_ctrl(), Engine.Chord.plain("p").with_ctrl()]
+		moved = |state, key| if (key.key == "Enter") Palette.run_picked(state) else Palette.move(state, if (key.key == "ArrowUp" or key.key == "p") Up else Down)
+		shown = model.signal().map(Palette.shown)
+		Engine.when(
+			model.signal().map(|state| state.palette.open),
+			||
+				Html.div(
+					"palette-layer",
+					[
+						Html.div_attrs([Engine.class("palette-backdrop"), Engine.on_click(model.update(Commands.close))], []),
+						Html.section_attrs(
+							"Palette",
+							[Engine.class("palette"), Engine.attr("role", "dialog")],
+							[
+								Html.text_input(Engine.const("Command or place"), "text", model.signal().map(|state| state.palette.query), [Engine.ref("palette"), Engine.attr("placeholder", "Type a command, session or workspace"), Engine.attr("autocomplete", "off"), Engine.on_key({ keymap: Engine.const(Engine.Keymap.prevent(moves)) }, model.set_value(moved))], model.set_value(Palette.typed)),
+								Engine.when(shown.map(List.is_empty), || Html.p("Nothing matches.", "palette-empty"), || Engine.text("")),
+								Html.ul(
+									[Engine.class("palette-entries"), Engine.attr("role", "listbox"), Html.aria_label("Commands and places")],
+									[
+										Engine.each(
+											shown,
+											|entry| entry.key,
+											|row|
+												Html.li(
+													[],
+													[
+														Engine.element(
+															"button",
+															[
+																Engine.attr("type", "button"),
+																Engine.attr("role", "option"),
+																Engine.class("palette-entry"),
+																Html.aria_label_s(row.field(|entry| entry.title)),
+																Html.flag("aria-selected", row.field(|entry| entry.picked)),
+																Engine.ref_s(row.field(|entry| if (entry.picked) "palette-picked" else "")),
+																Engine.on_click(model.lift_row().update_by(row.key(), Palette.run)),
+															],
+															[
+																Html.span_s(row.field(|entry| entry.title), [Engine.class("palette-title")]),
+																Html.span_s(row.field(|entry| entry.group), [Engine.class("palette-group")]),
+																Engine.element("kbd", [], [Engine.text_s(row.field(|entry| entry.keys))]),
+															],
+														),
+													],
+												),
+										),
+									],
+								),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
+
 	## What went wrong last, over the tiles until dismissed or replaced.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
 	toast = |model|
@@ -339,7 +405,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, Ctrl+K (or ⌘K) the palette of commands and places, and Escape closes the palette, a menu or Settings, or else stops the chat's agent.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

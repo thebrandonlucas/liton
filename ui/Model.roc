@@ -193,6 +193,12 @@ Model := [].{
 		## only the one it timed.
 		keys_typed : { keys : List(Str), serial : U64 },
 
+		## The palette (ui/Palette.roc): whether it is open, what is typed in
+		## it, and the entry picked by its place among those shown; and the
+		## keys of the entries run from it, the latest first.
+		palette : { open : Bool, query : Str, picked : U64 },
+		ran : List(Str),
+
 		## The time, in milliseconds since 1970, as of the last minute that
 		## began, or second while a chat on screen shows a turn running: what
 		## rows count the time since their last activity from, and the chat
@@ -336,6 +342,8 @@ Model := [].{
 				notice: "",
 				show_settings: Bool.False,
 				keys_typed: { keys: [], serial: 0 },
+				palette: { open: Bool.False, query: "", picked: 0 },
+				ran: [],
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),
