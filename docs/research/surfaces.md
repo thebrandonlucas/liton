@@ -256,6 +256,19 @@ Each step is its own small stack of PRs, with screenshots checked against the re
 7. **Settings page;** the "+ widget" list goes away.
 8. **Later:** an in-app list of surfaces, link groups inside a surface, terminals, a PR inspector and hosts.
 
+## Decisions (2026-11-18)
+
+The developer accepted these recommendations:
+
+1. **Names:** part, surface, navigator, view, inspector and overlay. When the later list of surfaces arrives, it's a **deck**.
+2. **Layout:** a grid, not a tree. Arbitrary nesting goes away.
+3. **Keys that ⌘ can't take in a browser tab:** use sequences outside text fields, in Linear's style. For example, `g` then `3` goes to workspace 3; `t` then `n` opens a new tab.
+   - ⌘K reaches everything, everywhere.
+   - An installed app window also gets the real ⌘ bindings.
+   - Ctrl+Alt is avoided, because Linux desktops use Ctrl+Alt with the arrows to switch workspaces.
+4. **Developer's tabs are per workspace,** as in Paseo.
+5. **"Ready to review"** (done, unread, with changes) becomes an attention rank, so the navigator groups by Needs input, Ready to review, Working and Done.
+
 ## Questions for review
 
 1. Are the names right: part, surface, navigator, view, inspector? And for the later list of surfaces: deck, screens, or something else?
