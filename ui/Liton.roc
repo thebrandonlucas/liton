@@ -483,12 +483,13 @@ Liton := [].{
 	## with the drawers' buttons at its ends, or the left drawer's, with
 	## Settings, which CSS moves to its bottom left on a wide screen. While
 	## the left drawer is hidden or empty, Settings is in the main area's.
+	## A workspace tile's header has them in its place.
 	header_place : Model.State, Model.Tile, Str -> [MainTab, MainTabWithSettings, LeftTab, Elsewhere]
 	header_place = |state, tile, pane_id| {
 		left_shown = !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty())
 		first = tile.id == Model.slot_tile(state, Model.slot_of(state, tile.id))
 		match Model.slot_of(state, tile.id) {
-			_ if state.shell != Workbench or tile.active != pane_id or !first => Elsewhere
+			_ if state.shell != Workbench or tile.active != pane_id or !first or Model.workspace_tile(state) == Ok(tile.id) => Elsewhere
 			Main => if (left_shown) MainTab else MainTabWithSettings
 			Left => LeftTab
 			_ => Elsewhere
@@ -735,7 +736,7 @@ Liton := [].{
 				),
 				Engine.when(
 					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
-					|| Liton.workspace_tabs(model, tile),
+					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, tile)]),
 					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
@@ -798,6 +799,34 @@ Liton := [].{
 				),
 			],
 		)
+
+	## The header of the workspace a Workbench shows as tabs: the left
+	## drawer's button, its name and project, its ⋯ menu (`Model.row_menu`),
+	## and the right drawer's button with its changes; Settings while the
+	## left drawer is hidden.
+	workspace_header : State(TileCtx, Model.State) -> Elem(TileCtx)
+	workspace_header = |model| {
+		header = model.signal().map(Model.workspace_header)
+		left_shown = model.signal().map(|state| !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty()))
+		Html.div(
+			"workspace-header",
+			[
+				Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)),
+				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")]),
+				Html.span_s(header.map(|shown| shown.project), [Engine.class("workspace-project")]),
+				Engine.when(header.map(|shown| !shown.key.is_empty()), || Liton.row_menu(model, header.map(|shown| { pane_id: Model.header_menu, key: shown.key }), Engine.const("Workspace")), || Engine.text("")),
+				# FIXME: Paseo's run ▷, open in editor and git split button
+				# (Commit, then View PR or Merge PR, or Archive) go here, once a
+				# capability offers them: workspace.git.v1 only reads, so it
+				# needs Commit and Push commands, and a forge capability (or
+				# workspace.git) CreatePullRequest, MergePullRequest and the PR's
+				# state.
+				Html.div("git-actions", []),
+				Liton.drawer_toggle(model, Right, header.map(|shown| shown.counts)),
+				Engine.when(left_shown, || Engine.text(""), || Liton.settings_toggle(model, "icon settings-toggle")),
+			],
+		)
+	}
 
 	## The workspace tile's tabs (`Model.tab_rows`): a chat of each of the
 	## focused workspace's sessions with its status, then the views it
@@ -976,8 +1005,8 @@ Liton := [].{
 	joined_classes = |first, second| Str.join_with([first, second].drop_if(Str.is_empty), " ")
 
 	## A tile's classes: its slot's, `tabbed` while it shows more than one
-	## pane, `shown` while a narrow screen shows it, and `collapsed` while its
-	## drawer is.
+	## pane, `shown` while a narrow screen shows it, `collapsed` while its
+	## drawer is, and `workspace-tile` while it shows a workspace's tabs.
 	tile_class : Model.State, Model.Tile -> Str
 	tile_class = |state, tile| {
 		slot = Model.slot_of(state, tile.id)
@@ -986,6 +1015,7 @@ Liton := [].{
 			if (Model.shown_panes(state, tile).len() > 1) "tabbed" else "",
 			if (tile.id == state.active_tile) "shown" else "",
 			if (state.collapsed.contains(slot)) "collapsed" else "",
+			if (Model.workspace_tile(state) == Ok(tile.id)) "workspace-tile" else "",
 		]
 		Str.join_with(classes.drop_if(|class| class.is_empty()).prepend("tile"), " ")
 	}

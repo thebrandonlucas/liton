@@ -221,6 +221,18 @@ kbd:empty { display: none; }
 .tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
 @media (hover: none) { .tile-header .tab-close { opacity: 1; } }
+/* The workspace a Workbench shows: its header, its name, project and
+   menu between the drawers' buttons, over its tabs, in place of its panes'
+   headers. */
+.workspace-view-header { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.workspace-header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 4px; }
+.workspace-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.workspace-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.workspace-header .row-menu-toggle { --icon: var(--icon-ellipsis); --icon-size: 14px; padding: 2px 4px; border-color: transparent; background: none; color: var(--muted); }
+.workspace-header .git-actions { margin-left: auto; }
+.workspace-header button.drawer-toggle, .workspace-header .settings-toggle { flex: none; padding: 3px 6px; border-color: transparent; background: none; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.workspace-header button:hover { color: var(--text); border-color: var(--edge); }
+.workspace-tile .pane-header { display: none; }
 /* The tabs of the workspace a Workbench shows: its sessions' chats, each
    with its status, its views and +. */
 .workspace-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }

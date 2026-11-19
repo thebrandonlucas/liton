@@ -608,8 +608,10 @@ Model := [].{
 
 	## Does what a row's ⋮ menu offers, and closes it.
 	row_act : State, { pane_id : Str, key : Str, action : RowAction } -> State
-	row_act = |state0, { pane_id, key, action }| {
+	row_act = |state0, { pane_id: asked_in, key, action }| {
 		state = { ..state0, menu: "" }
+		# The workspace header's menu acts as the first Workspaces pane's.
+		pane_id = if (asked_in == Model.header_menu) Model.panes(state).find_first(|shown| shown.widget == "workspaces").map_ok(|shown| shown.id) ?? asked_in else asked_in
 		match action {
 			NewWorkspace | NewAgent => Model.open_form(state, { pane_id, key })
 			Stop => Model.stop_session(state, key)
@@ -626,6 +628,28 @@ Model := [].{
 				}
 		}
 	}
+
+	## What names the workspace header's ⋯ menu in place of a pane.
+	header_menu : Str
+	header_menu = "workspace-header"
+
+	## The workspace a Workbench's main area shows as tabs: its key, its
+	## name and its project's, and its uncommitted lines added and removed.
+	workspace_header : State -> { key : Str, title : Str, project : Str, counts : Counts }
+	workspace_header = |state|
+		match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => {
+				found = state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id)
+				project_id = found.map_ok(|workspace| workspace.project_id) ?? ""
+				{
+					key: Context.to_str(Workspace(workspace_id)),
+					title: found.map_ok(|workspace| workspace.name) ?? workspace_id,
+					project: state.workspaces.projects.find_first(|project| project.id == project_id).map_ok(|project| project.name) ?? "",
+					counts: found.map_ok(|workspace| Model.change_counts(state, workspace)) ?? Model.no_counts,
+				}
+			}
+			_ => { key: "", title: "", project: "", counts: Model.no_counts }
+		}
 
 	not_renaming : { pane : Str, key : Str, text : Str }
 	not_renaming = { pane: "", key: "", text: "" }

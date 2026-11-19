@@ -1,4 +1,4 @@
-(test "Liton — where Workspaces lists sessions as tabs, the main area shows the workspace picked as tabs of its sessions, the one shown last remembered for each workspace, with the diff opened as a tab that closes, and + starts an agent there"
+(test "Liton — where Workspaces lists sessions as tabs, the main area shows the workspace picked as tabs of its sessions, the one shown last remembered for each workspace, with the diff opened as a tab that closes, under a header naming it, whose menu, as + does, starts an agent there"
   (setup
     (local-storage "liton.snapshot" "{\"collapsed\":[],\"grid\":{\"columns\":[1,1,1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"tile-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[{\"key\":\"sessions\",\"value\":\"Tabs\"}],\"pinned\":\"\",\"widget\":\"workspaces\"}],\"right\":1,\"top\":0},{\"active\":\"pane-2\",\"bottom\":1,\"id\":\"tile-2\",\"left\":1,\"panes\":[{\"id\":\"pane-2\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"},{\"id\":\"pane-8\",\"options\":[],\"pinned\":\"\",\"widget\":\"ticket\"}],\"right\":2,\"top\":0},{\"active\":\"pane-3\",\"bottom\":1,\"id\":\"tile-3\",\"left\":2,\"panes\":[{\"id\":\"pane-3\",\"options\":[],\"pinned\":\"\",\"widget\":\"changes\"}],\"right\":3,\"top\":0}]},\"hidden\":[\"pane-8\"],\"shell\":\"Workbench\",\"theme\":\"\",\"version\":8}"))
   (steps
@@ -10,6 +10,9 @@
     (expect-absent (role button :name "Fix tests") :never-drawn)
     (click (role button :name "main"))
     (expect-text (test-id "session-title") "Write docs")
+    ; Its header names it and its project.
+    (expect-text (test-id "workspace-title") "main")
+    (expect-visible (text "app"))
     (expect-attr (role tab :name "Write docs") aria-selected "true")
     (expect-attr (role tab :name "Fix tests") aria-selected "false")
     (click (role tab :name "Fix tests"))
@@ -18,6 +21,7 @@
     ; Another workspace shows its own tabs, and coming back shows the tab left.
     (click (role button :name "Draft notes"))
     (expect-text (test-id "session-title") "Draft notes")
+    (expect-text (test-id "workspace-title") "notes")
     (expect-absent (role tab :name "Fix tests"))
     (click (role button :name "main"))
     (expect-text (test-id "session-title") "Fix tests")
@@ -43,8 +47,13 @@
     (click (role button :name "Close Diff"))
     (expect-absent (role tab :name "Diff"))
     (expect-visible (label "Message"))
-    ; + opens the form to start an agent in the workspace.
+    ; + opens the form to start an agent in the workspace, as its header's menu does.
     (click (role button :name "New agent in this workspace"))
+    (expect-visible (text "New agent in main"))
+    (click (role button :name "Cancel"))
+    (expect-absent (text "New agent in main"))
+    (click (role button :name "Workspace menu"))
+    (click (role button :name "New agent"))
     (expect-visible (text "New agent in main"))
   )
 )

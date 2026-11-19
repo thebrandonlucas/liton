@@ -89,6 +89,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a Mac, the palette, the list of keys, Settings and the buttons' tooltips write keys as ⌘B and ⌥1; elsewhere as Ctrl+B and Alt+1.
 - A Neutral theme, flat and near-black like Paseo's, in the platform's font, with no glass, picture or bright edge and no dimming of the panes you aren't in. The Developer preset, and so a new browser, starts in it; pick Pastoral or another in Settings.
 - Workspaces' new Sessions option, Tabs, lists each workspace as one row; in a Workbench, picking it shows its sessions as tabs above the chat, each with its status, then the diff you opened in the main area and the ticket you opened, which × closes. Each workspace keeps its own tabs and shows the one you left it on, and + starts an agent in it.
+- Over a workspace's tabs, a header names it and its project, with its ⋯ menu (new agent, rename, pin, archive) between the drawers' buttons, the right one counting its changed lines.
 
 ### Changed
 
