@@ -22,7 +22,7 @@ Commands := [].{
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
-			.concat(Commands.board)
+			.concat(Commands.board(state))
 			.concat(Commands.layout)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
@@ -31,17 +31,30 @@ Commands := [].{
 	## The Board's commands, on the Board pane in reach
 	## (`Model.board_in_reach`): move the cursor, open the ticket under it,
 	## go back to the list, and switch between the list and the board.
-	board : List(Command)
-	board = {
+	board : Model.State -> List(Command)
+	board = |state| {
 		reached = |shown| !Model.board_in_reach(shown).is_empty()
+		acted_on = |shown| reached(shown) and !Model.tickets_acted_on(shown).is_empty()
+		# The statuses and people of the source of the first ticket acted on.
+		source = Model.tickets_acted_on(state).first().map_ok(|ticket| ticket.source).ok_or("")
+		known = state.tickets.listing.sources.find_first(|listed| listed.id == source)
+		statuses = known.map_ok(|listed| listed.statuses) ?? []
+		people = known.map_ok(|listed| listed.people) ?? []
+		assigned = |shown, person_id| Model.tickets_acted_on(shown).all(|ticket| ticket.assignees.any(|person| person.id == person_id))
 		opened = |shown| reached(shown) and TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).opened
 		[
 			{ id: "board.next", title: "Move to the next ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Next) },
 			{ id: "board.previous", title: "Move to the previous ticket", group: "Board", applies: reached, run: |shown| Model.step_ticket(shown, Previous) },
 			{ id: "board.open", title: "Open the ticket under the cursor", group: "Board", applies: |shown| reached(shown) and !opened(shown) and !Model.ticket_under_cursor(shown).is_empty(), run: |shown| Model.open_in_board(shown, { pane_id: Model.board_in_reach(shown), ticket_id: Model.ticket_under_cursor(shown) }) },
 			{ id: "board.back", title: "Go back to the list", group: "Board", applies: opened, run: |shown| Model.back_to_list(shown, Model.board_in_reach(shown)) },
+			{ id: "board.select", title: "Select the ticket under the cursor, or no longer", group: "Board", applies: |shown| reached(shown) and !Model.ticket_under_cursor(shown).is_empty(), run: |shown| Model.select_ticket(shown, Toggle) },
+			{ id: "board.clear", title: "Select no tickets", group: "Board", applies: |shown| reached(shown) and !TicketDesk.board(shown.tickets, Model.board_in_reach(shown)).selected.is_empty(), run: |shown| Model.select_ticket(shown, Clear) },
+			{ id: "ticket.status", title: "Change the status…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Set status to ") },
+			{ id: "ticket.assign", title: "Change the assignees…", group: "Ticket", applies: acted_on, run: |shown| Commands.open_palette_at(shown, "Assign ") },
 			{ id: "board.layout", title: "Switch between the list and the board", group: "Board", applies: reached, run: |shown| Model.set_option(shown, Model.board_in_reach(shown), "layout", if (Model.board_layout(shown, Model.board_in_reach(shown)) == Board) "List" else "Board") },
 		]
+			.concat(statuses.map(|status| { id: "ticket.status.${status.id}", title: "Set status to ${status.name}", group: "Ticket", applies: acted_on, run: |shown| Model.set_statuses(shown, status) }))
+			.concat(people.map(|person| { id: "ticket.assign.${person.id}", title: if (assigned(state, person.id)) "Unassign ${person.name}" else "Assign to ${person.name}", group: "Ticket", applies: acted_on, run: |shown| Model.assign_all(shown, person.id, !assigned(shown, person.id)) }))
 	}
 
 	## The layout's commands, each for a side: focus, move the pane focused,
@@ -93,7 +106,11 @@ Commands := [].{
 
 	## Opens the palette, empty, with what is typed in it focused.
 	open_palette : Model.State -> Model.State
-	open_palette = |state| { ..state, palette: { open: Bool.True, query: "", picked: 0 }, menu: "", jump: { serial: state.jump.serial + 1, panel: "palette", replace: "", push: "" } }
+	open_palette = |state| Commands.open_palette_at(state, "")
+
+	## Opens the palette with `query` typed in it, as S does for statuses.
+	open_palette_at : Model.State, Str -> Model.State
+	open_palette_at = |state, query| { ..state, palette: { open: Bool.True, query, picked: 0 }, menu: "", jump: { serial: state.jump.serial + 1, panel: "palette", replace: "", push: "" } }
 
 	## Whether something is open to close: the palette, the keys, a row's
 	## renaming, a menu, Settings or a Workspaces pane's form.

@@ -28,6 +28,7 @@ Keymap := [].{
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
 			{ keys: ["Escape"], command: "board.back" },
+			{ keys: ["Escape"], command: "board.clear" },
 			{ keys: ["Escape"], command: "agent.stop" },
 		]
 			.concat(Keymap.board)
@@ -37,7 +38,9 @@ Keymap := [].{
 	}
 
 	## The Board's keys, Linear's: J or K, or the arrows, move the cursor
-	## down or up, and Enter opens the ticket under it.
+	## down or up, Enter opens the ticket under it, and X selects it; S
+	## and A change the status or assignees of those selected, else of
+	## the one under the cursor, in the palette.
 	board : List(Binding)
 	board = [
 		{ keys: ["j"], command: "board.next" },
@@ -45,6 +48,9 @@ Keymap := [].{
 		{ keys: ["k"], command: "board.previous" },
 		{ keys: ["ArrowUp"], command: "board.previous" },
 		{ keys: ["Enter"], command: "board.open" },
+		{ keys: ["x"], command: "board.select" },
+		{ keys: ["s"], command: "ticket.status" },
+		{ keys: ["a"], command: "ticket.assign" },
 	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the

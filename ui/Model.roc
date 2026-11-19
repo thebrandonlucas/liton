@@ -2542,6 +2542,54 @@ Model := [].{
 	open_in_board : State, { pane_id : Str, ticket_id : Str } -> State
 	open_in_board = |state, { pane_id, ticket_id }| { ..Model.focus_on(state, Ticket(ticket_id)), tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, opened: Bool.True }) }
 
+	## The tickets a command acts on: those selected in the Board in reach,
+	## else the one under the cursor.
+	tickets_acted_on : State -> List(Tickets.Summary)
+	tickets_acted_on = |state| {
+		selected = TicketDesk.board(state.tickets, Model.board_in_reach(state)).selected
+		ids = if (selected.is_empty()) [Model.ticket_under_cursor(state)] else selected
+		listed = TicketDesk.listing_shown(state.tickets).tickets
+		ids.keep_oks(|ticket_id| listed.find_first(|ticket| ticket.id == ticket_id))
+	}
+
+	## Selects the ticket under the cursor in the Board in reach, or no
+	## longer; or, `Clear`, selects none.
+	select_ticket : State, [Toggle, Clear] -> State
+	select_ticket = |state, how| {
+		ticket_id = Model.ticket_under_cursor(state)
+		toggled = |selected| if (selected.contains(ticket_id)) selected.drop_if(|kept| kept == ticket_id) else selected.append(ticket_id)
+		{ ..state, tickets: TicketDesk.with_board(state.tickets, Model.board_in_reach(state), |board| { ..board, selected: if (how == Clear or ticket_id.is_empty()) (if (how == Clear) [] else board.selected) else toggled(board.selected) }) }
+	}
+
+	## Moves the tickets acted on to a status, each to its own source's of
+	## the same id or kind (`TicketDesk.status_for`), at once.
+	set_statuses : State, Tickets.Status -> State
+	set_statuses = |state, status| Model.ask_tickets_all(state, Model.tickets_acted_on(state).keep_oks(|ticket| TicketDesk.status_for(state.tickets, ticket, status).map_ok(|status_id| SetStatus({ ticket_id: ticket.id, status_id }))))
+
+	## Assigns the tickets acted on to a person too, or no longer, at once.
+	assign_all : State, Str, Bool -> State
+	assign_all = |state, person_id, assigned| {
+		assigned_ids = |ticket| ticket.assignees.map(|person| person.id).drop_if(|id| id == person_id).concat(if (assigned) [person_id] else [])
+		Model.ask_tickets_all(state, Model.tickets_acted_on(state).map(|ticket| SetAssignees({ ticket_id: ticket.id, person_ids: assigned_ids(ticket) })))
+	}
+
+	## Sends tickets.v1 requests, each shown at once: the first now, the
+	## rest each once the daemon answers the one before (`send_waiting`).
+	ask_tickets_all : State, List(Tickets.Request) -> State
+	ask_tickets_all = |state, requests|
+		match requests {
+			[] => state
+			[first, .. as rest] => { ..Model.ask_tickets(state, first), tickets: { ..Model.ask_tickets(state, first).tickets, waiting: state.tickets.waiting.concat(rest) } }
+		}
+
+	## Sends the first request waiting.
+	send_waiting : State -> State
+	send_waiting = |state|
+		match state.tickets.waiting {
+			[first, .. as rest] => Model.ask_tickets({ ..state, tickets: { ..state.tickets, waiting: rest } }, first)
+			[] => state
+		}
+
 	## Shows a Board pane's list again in place of the ticket it opened.
 	back_to_list : State, Str -> State
 	back_to_list = |state, pane_id| { ..state, tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, opened: Bool.False }) }
@@ -2581,16 +2629,19 @@ Model := [].{
 
 	## Takes the daemon's answer to a tickets.v1 request: accepted, it holds
 	## until the poll it asks for shows it; refused, it is undone, with why.
+	## Then the next request waiting goes.
 	tickets_answered : State, U64, Str -> State
 	tickets_answered = |state, serial, text| {
 		answered : Try(Protocol.Answer(Tickets.Response), _)
 		answered = Json.parse(text)
 		undone = |reason| { ..state, tickets: TicketDesk.answered(state.tickets, serial, Refused), notice: reason }
-		match answered {
-			Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
-			Ok(Err({ message, .. })) => undone(message)
-			Err(_) => undone("The daemon did not answer.")
-		}
+		Model.send_waiting(
+			match answered {
+				Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
+				Ok(Err({ message, .. })) => undone(message)
+				Err(_) => undone("The daemon did not answer.")
+			},
+		)
 	}
 
 	## Links the session the focus shows to a ticket by hand: the one

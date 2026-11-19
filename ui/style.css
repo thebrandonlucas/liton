@@ -497,6 +497,8 @@ kbd:empty { display: none; }
 .board-ticket .ticket-title:active { transform: none; }
 .board-ticket .session { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
 .board-ticket span:empty { display: none; }
+.board-ticket.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.selected-count { font: 11px var(--font-mono); color: var(--accent); }
 .board-bar .layout { padding: 2px 8px; font-size: 12px; }
 .board-bar .layout[aria-pressed="true"] { background: var(--selected); }
 /* As a board: a column for each status, its tickets as cards. */

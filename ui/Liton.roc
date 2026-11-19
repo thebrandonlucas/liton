@@ -1526,6 +1526,7 @@ Liton := [].{
 					[
 						Html.span_s(model.signal().map(|state| TicketDesk.scope_name(state.tickets, state.tickets.scope)), [Engine.class("board-scope")]),
 						Html.text_input(Engine.const("Search tickets"), "search", id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter.text), [Engine.attr("placeholder", "Search")], model.set_value_by(id, |state, pane_id, text| Model.filter_board(state, pane_id, |filter| { ..filter, text }))),
+						Html.span_s(id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).selected.len()).map(|count| if (count == 0) "" else "${count.to_str()} selected"), [Engine.class("selected-count"), Engine.test_id("selected-count")]),
 						laid_out("List", List),
 						laid_out("Board", Board),
 					],
@@ -1561,7 +1562,7 @@ Liton := [].{
 		state = model.signal().lift_row()
 		session = row.key().map2(state, |ticket_id, shown| Liton.ticket_session(shown, ticket_id))
 		Html.li(
-			[Engine.class_s(row.key().map2(state, |ticket_id, shown| if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "board-ticket focused" else "board-ticket")), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}"))],
+			[Engine.class_s(row.key().map2(id.lift_row(), |ticket_id, pane_id| { ticket_id, pane_id }).map2(state, |{ ticket_id, pane_id }, shown| Str.join_with(["board-ticket", if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "focused" else "", if (TicketDesk.board(shown.tickets, pane_id).selected.contains(ticket_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}"))],
 			[
 				Engine.element(
 					"button",

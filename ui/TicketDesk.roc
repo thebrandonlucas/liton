@@ -18,18 +18,21 @@ TicketDesk := [].{
 	## the user's, those assigned to nobody, or a source's.
 	Scope : [All, Mine, Unassigned, Source(Str)]
 
-	## A Board pane's own filter, over its scope's, and whether it shows the
-	## ticket under the cursor `opened` in place of the list.
-	Board : { pane : Str, filter : Tickets.Filter, opened : Bool }
+	## A Board pane's own filter, over its scope's, whether it shows the
+	## ticket under the cursor `opened` in place of the list, and the
+	## tickets selected.
+	Board : { pane : Str, filter : Tickets.Filter, opened : Bool, selected : List(Str) }
 
 	## A group of a Board's list, or a column of its board, by `key`: a kind
 	## of status (`kind:Started`), or a status of one source (`status:<id>`).
 	Group : { key : Str, title : Str, kind : Tickets.Kind, tickets : List(Tickets.Summary) }
 
-	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), views : List(View), scope : Scope, boards : List(Board) }
+	## `waiting` are requests to send once those before them are, as only
+	## one goes at a time; they show at once too.
+	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board) }
 
 	initial : State
-	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], views: [], scope: All, boards: [] }
+	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [] }
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View
@@ -43,7 +46,7 @@ TicketDesk := [].{
 	everything = { ..Tickets.open, kinds: [] }
 
 	board : State, Str -> Board
-	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything, opened: Bool.False }
+	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything, opened: Bool.False, selected: [] }
 
 	with_board : State, Str, (Board -> Board) -> State
 	with_board = |desk, pane, change| { ..desk, boards: desk.boards.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.board(desk, pane))) }
@@ -89,6 +92,14 @@ TicketDesk := [].{
 		}
 	}
 
+	## The status of its own source a ticket moved to `status` of another
+	## takes: the one of the same id, else the first of the same kind.
+	status_for : State, Tickets.Summary, Tickets.Status -> Try(Str, [NotFound])
+	status_for = |desk, ticket, status| {
+		statuses = desk.listing.sources.find_first(|source| source.id == ticket.source).map_ok(|source| source.statuses) ?? []
+		statuses.find_first(|known| known.id == status.id).on_err(|_| statuses.find_first(|known| known.kind == status.kind)).map_ok(|known| known.id)
+	}
+
 	kind_name : Tickets.Kind -> Str
 	kind_name = |kind|
 		match kind {
@@ -126,7 +137,7 @@ TicketDesk := [].{
 	## way applied.
 	listing_shown : State -> Tickets.Listing
 	listing_shown = |desk| {
-		changed = |ticket| desk.asked.fold(ticket, |shown, asked| if (Tickets.ticket_of(asked.request) == shown.id) Tickets.changed(desk.listing, shown, asked.request) ?? shown else shown)
+		changed = |ticket| desk.asked.map(|asked| asked.request).concat(desk.waiting).fold(ticket, |shown, request| if (Tickets.ticket_of(request) == shown.id) Tickets.changed(desk.listing, shown, request) ?? shown else shown)
 		{ ..desk.listing, tickets: desk.listing.tickets.map(changed) }
 	}
 
@@ -184,7 +195,7 @@ TicketDesk := [].{
 
 	## Whether a request about the ticket is on its way.
 	pending : State, Str -> Bool
-	pending = |desk, ticket_id| desk.asked.any(|asked| Tickets.ticket_of(asked.request) == ticket_id or TicketDesk.unlinks(desk, asked.request, ticket_id))
+	pending = |desk, ticket_id| desk.asked.any(|asked| Tickets.ticket_of(asked.request) == ticket_id or TicketDesk.unlinks(desk, asked.request, ticket_id)) or desk.waiting.any(|request| Tickets.ticket_of(request) == ticket_id)
 
 	unlinks : State, Tickets.Request, Str -> Bool
 	unlinks = |desk, request, ticket_id|
