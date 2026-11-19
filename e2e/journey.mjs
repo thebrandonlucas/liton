@@ -97,7 +97,8 @@ try {
     // fix-auth holds one session, which stands in its place with its branch.
     await see("Workspaces", ".tree-workspace button", "main");
     await see("Workspaces", ".tree-session .second-line", "fix-auth");
-    await see("Workspaces", ".tree-session button", "Fix the login redirect");
+    // titled by its summary's goal, from its first message.
+    await see("Workspaces", ".tree-session button", "Logging in sends me back to /login.");
     await click("Workspaces", ".tree-workspace button", "main");
     for (const title of ["Find the flaky CI test", "Scratch"]) await tab(title);
   });
@@ -136,8 +137,9 @@ try {
     await see("Changes", ".git-status", "main");
     await see("Changes", ".missing", "Working tree clean");
   });
-  await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
-    await click("Workspaces", ".tree-session button", "Fix the login redirect");
+  await step("focusing the login fix shows its summary, its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
+    await click("Workspaces", ".tree-session button", "Logging in sends me back to /login.");
+    await see("Chat", ".session-summary .summary-line.done", "The redirect target is hard-coded to /login.");
     await see("Changes", ".git-status", "fix-auth");
     await click("Changes", '.git-file button[aria-label="src/Auth.roc"]', "Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
@@ -210,7 +212,7 @@ try {
       const starting = () => [...document.querySelectorAll(".workspace-tab")].some((t) => t.textContent.includes("Write the docs") && !!t.querySelector(".status-dot.starting"));
       new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
-    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Fix the login redirect"]');
+    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Logging in sends me back to /login."]');
     await see("Workspaces", ".create-form", "New agent in fix-auth");
     await (await page.$('section[aria-label="Workspaces"] input[aria-label="First prompt"]')).type("Write the docs");
     await click("Workspaces", ".create-form button", "Start");
