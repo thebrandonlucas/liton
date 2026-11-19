@@ -358,6 +358,23 @@ pub fn build(b: *std.Build) void {
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
+    // The packages' and apps' API docs, from their `##` comments, into
+    // zig-out/docs, again only when a Roc file or a compiler changes. The
+    // test step checks that they build.
+    const docs_step = b.step("docs", "Build the API docs into zig-out/docs");
+    const build_docs = std.Build.Step.Run.create(b, "build the API docs");
+    build_docs.addFileArg(devtool);
+    build_docs.addArgs(&.{ "docs", roc, roc_ui });
+    const docs = build_docs.addOutputDirectoryArg("docs");
+    for (sources.roc_files) |path| build_docs.addFileInput(b.path(path));
+    for ([_][]const u8{ roc, roc_ui }) |compiler| {
+        const compiler_path = b.findProgram(&.{compiler}, &.{}) catch continue;
+        build_docs.addFileInput(.{ .cwd_relative = compiler_path });
+    }
+    const install_docs = b.addInstallDirectory(.{ .source_dir = docs, .install_dir = .prefix, .install_subdir = "docs" });
+    docs_step.dependOn(&install_docs.step);
+    test_step.dependOn(&build_docs.step);
+
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
     daemon_step.dependOn(&install_daemon.step);

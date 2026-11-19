@@ -9,6 +9,7 @@ import pf.OsStr
 import pf.Stderr
 import pf.Stdout
 import Cli
+import Docs
 import Exec
 import Paseo
 import Speech
@@ -25,6 +26,7 @@ main! = |arguments| {
 		}
 		Ui({ roc_ui, output, runtime_files, flags }) => Ui.build!(roc_ui, output, runtime_files, flags)
 		Specs(runner) => Ui.specs!(runner)
+		Docs({ roc, roc_ui, output }) => Docs.build!(roc, roc_ui, output)
 		Paseo(command) => {
 			Exec.needs!("node", "nodejs", given)?
 			settings = Paseo.settings!()?
