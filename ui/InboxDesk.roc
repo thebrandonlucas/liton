@@ -10,8 +10,9 @@ InboxDesk := [].{
 
 	## An item as a row shows it: the project its session works in, the
 	## provider, model and thinking level ("" when untold), and the group it
-	## is of, with how many rows the group has.
-	Row : { item : Attention.Item, project : Str, provider : Str, model : Str, thinking : Str, group : Str, group_count : U64 }
+	## is of, with how many rows the group has, and whether it is the
+	## group's first.
+	Row : { item : Attention.Item, project : Str, provider : Str, model : Str, thinking : Str, group : Str, group_count : U64, starts_group : Bool }
 
 	## The filters whose choices come from the rows, by their option's key.
 	filters : List({ key : Str, label : Str })
@@ -26,7 +27,7 @@ InboxDesk := [].{
 				workspace = state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(item.session_id))
 				named = workspace.map_ok(|listed| state.workspaces.projects.find_first(|project| project.id == listed.project_id).map_ok(|project| project.name) ?? "") ?? ""
 				directory = session.workspace.map_ok(|place| place.directory.drop_suffix("/").split_last("/").map_ok(|parts| parts.after) ?? place.directory) ?? ""
-				{ item, project: if (named.is_empty()) directory else named, provider: item.provider, model: session.model ?? "", thinking: session.thinking ?? "", group: "", group_count: 0 }
+				{ item, project: if (named.is_empty()) directory else named, provider: item.provider, model: session.model ?? "", thinking: session.thinking ?? "", group: "", group_count: 0, starts_group: Bool.False }
 			},
 		)
 
@@ -99,7 +100,7 @@ InboxDesk := [].{
 			if (descending) InboxDesk.reversed(ordered) else ordered
 		}
 		sorted = grouped.sort_with(|left, right| [InboxDesk.group_order(grouping, left, right), by_sort(left, right), Model.text_order(left.item.session_id, right.item.session_id)].find_first(|so_far| so_far != Same) ?? Same)
-		sorted.map(|row| { ..row, group_count: if (grouping == "None") 0 else sorted.count_if(|other| other.group == row.group) })
+		sorted.map_with_index(|row, index| { ..row, group_count: if (grouping == "None") 0 else sorted.count_if(|other| other.group == row.group), starts_group: grouping != "None" and (index == 0 or sorted.get(index - 1).map_ok(|before| before.group != row.group) ?? Bool.True) })
 	}
 
 	## The group a row is in, by the pane's `group` option, "" for none.

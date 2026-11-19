@@ -1491,42 +1491,72 @@ Liton := [].{
 						),
 					],
 				),
-				Liton.inbox_items(model, pane, rows.map(|listed| listed.map(|row| row.item))),
+				Html.div(
+					"inbox-filters",
+					InboxDesk.filters.map(|filter| Liton.inbox_filter(model, pane, filter.label, Liton.choices(pane.map2(model.signal(), |shown, state| InboxDesk.choices(state, shown, filter.key))), filter.key))
+						.concat([
+							Liton.inbox_filter(model, pane, "Group", ["Status", "Project", "Provider", "None"].map(|choice| Dropdown.option(choice, choice)), "group"),
+							Liton.inbox_filter(model, pane, "Sort", ["Updated", "Project", "Status", "Title"].map(|choice| Dropdown.option(choice, choice)), "sort"),
+							Html.button_s(
+								pane.map(|shown| if (Model.option(shown, "direction") == "Ascending") "↑" else "↓"),
+								[Engine.class("sort-direction"), Html.aria_label("Sort direction"), Engine.attr_s("title", pane.map(|shown| Model.option(shown, "direction")))],
+								model.update_by(pane, |state, shown| set_option(state, shown.id, "direction", if (Model.option(shown, "direction") == "Ascending") "Descending" else "Ascending")),
+							),
+						]),
+				),
+				Liton.inbox_items(model, pane, rows),
 				Html.p_s(rows.map2(pane, |listed, shown| if (!listed.is_empty()) "" else if (Model.option(shown, "list") == "Snoozed") "Nothing is snoozed." else "Nothing here: you are all caught up."), [Engine.class("inbox-empty")]),
 			],
 		)
 	}
 
+	## A drop-down of an Inbox pane's option `key`, named `name`, of
+	## `options`, which sets it at once.
+	inbox_filter : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, List(Elem(PaneCtx)), Str -> Elem(PaneCtx)
+	inbox_filter = |model, pane, name, options, key|
+		Engine.element(
+			"label",
+			[Engine.class("inbox-filter")],
+			[Engine.text(name), Dropdown.select(Engine.const(name), pane.map(|shown| Model.option(shown, key)), [], options, model.set_value_by(pane, |state, shown, value| Model.with_snapshot_text(Model.set_option(state, shown.id, key, value))))],
+		)
+
 	## Each item: its title, which opens it, its agent, state and summary, the
 	## permission it asks for, and Mark read or unread (not while working),
 	## Settle and Snooze, or Bring back once set aside. Unread, it is marked.
-	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
+	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
 			[Engine.class("inbox-items"), Engine.test_id("inbox-rows")],
 			[
 				Engine.each(
 					items,
-					|item| item.session_id,
+					|listed| listed.item.session_id,
 					|row| {
 						model = model0.lift_row()
+						shown_item = row.field(|listed| listed.item)
 						id = row.key()
-						title = row.field(|item| item.title)
+						title = shown_item.map(|item| item.title)
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						opens = model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))
 						Html.li(
-							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
+							[Engine.class_s(shown_item.map(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
 							[
+								# The first row of a group heads it, a click on which opens nothing.
+								Engine.when(
+									row.field(|listed| listed.starts_group),
+									|| Html.div_attrs([Engine.class("inbox-group"), Engine.attr("data-part", "group"), Engine.test_id_s(row.field(|listed| "group-${listed.group}")), Engine.on_click(model.update(|state| state))], [Html.span_s(row.field(|listed| listed.group), [Engine.class("group-title")]), Html.span_s(row.field(|listed| listed.group_count.to_str()), [Engine.class("count")])]),
+									|| Engine.text(""),
+								),
 								Html.button_s(title, [], opens),
 								Html.div(
 									"session-meta",
 									[
-										Engine.text_s(row.field(|item| item.agent)),
-										Html.span_s(row.field(|item| Liton.attention_text(item.state)), [Engine.class_s(row.field(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
+										Engine.text_s(shown_item.map(|item| item.agent)),
+										Html.span_s(shown_item.map(|item| Liton.attention_text(item.state)), [Engine.class_s(shown_item.map(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
 									],
 								),
-								Html.p_s(row.field(|item| item.summary), [Engine.class("summary")]),
+								Html.p_s(shown_item.map(|item| item.summary), [Engine.class("summary")]),
 								Engine.when(
 									permission.map(|asked| asked.is_ok()),
 									|| Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title),
@@ -1534,12 +1564,12 @@ Liton := [].{
 								),
 								Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
 								Engine.when(
-									row.field(|item| item.set_aside == No),
+									shown_item.map(|item| item.set_aside == No),
 									||
 										Html.div_attrs(
 											[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
 											[
-												Html.button_s(row.field(|item| if (item.unread) "Mark read" else "Mark unread"), [Engine.class("mark"), Html.aria_label_s(row.field(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"))], model.update_by(row.field(|item| item), |state, item| Model.mark_seen(state, [item.session_id], item.unread))),
+												Html.button_s(shown_item.map(|item| if (item.unread) "Mark read" else "Mark unread"), [Engine.class("mark"), Html.aria_label_s(shown_item.map(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"))], model.update_by(shown_item, |state, marked| Model.mark_seen(state, [marked.session_id], marked.unread))),
 												Html.button("Settle", [Html.aria_label_s(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
 												Html.button_s(
 													snooze_length.map(|length| "Snooze ${length}"),
