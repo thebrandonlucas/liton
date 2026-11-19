@@ -109,10 +109,12 @@ Liton := [].{
 									|tile| tile.id,
 									|row|
 										Html.button_s(
-											row.field(|tile| tile).map2(laid.lift_row(), |tile, state| Str.join_with(Model.shown_panes(state, tile).map(|pane| Liton.label(state, pane)), " · ")),
+											row.field(|tile| tile).map2(laid.lift_row(), Liton.tile_tab_label),
 											[
+												# Its icon is its active pane's widget's (style.css).
+												Engine.class_s(row.field(|tile| tile.panes.find_first(|pane| pane.id == tile.active).map_ok(|pane| "widget-${pane.widget}") ?? "")),
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_tile)),
-												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.slot_name(Model.slot_of(state, key))}")),
+												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.tile_test_name(state, key)}")),
 												Engine.attr_presence("data-badge", row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| if (Model.slot_of(state, tile.id) != Left or tile.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
 											],
 											model.lift_row().update_by(row.key(), Model.show_tile),
@@ -887,7 +889,6 @@ Liton := [].{
 		laid = laid0.lift_row()
 		id = row.key()
 		tile = row.field(|shown| shown)
-		slot = id.map2(laid, |tile_id, state| Model.slot_of(state, tile_id))
 		panel = id.map2(laid, |tile_id, state| if (Model.slot_tile(state, Model.slot_of(state, tile_id)) == tile_id) Model.slot_of(state, tile_id) else Free)
 		tiling = model.signal().map(|state| state.shell == Tiling)
 		classes = tile.map2(laid, |shown, state| Liton.tile_class(state, shown))
@@ -896,7 +897,7 @@ Liton := [].{
 			"div",
 			[
 				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
-				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
+				Engine.test_id_s(id.map2(laid, |tile_id, state| "slot-${Model.tile_test_name(state, tile_id)}")),
 				Engine.attr_s("data-tile", id),
 				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
@@ -1250,6 +1251,14 @@ Liton := [].{
 			if (Model.workspace_tile(state) == Ok(tile.id)) "workspace-tile" else "",
 		]
 		Str.join_with(classes.drop_if(|class| class.is_empty()).prepend("tile"), " ")
+	}
+
+	## A tile's tab on a narrow screen: its shown panes' titles, or while it
+	## shows none, its active pane's.
+	tile_tab_label : Model.Tile, Model.State -> Str
+	tile_tab_label = |tile, state| {
+		shown = Model.shown_panes(state, tile)
+		if (shown.is_empty()) tile.panes.find_first(|pane| pane.id == tile.active).map_ok(|pane| Liton.label(state, pane)) ?? "" else Str.join_with(shown.map(|pane| Liton.label(state, pane)), " · ")
 	}
 
 	## A pane's title, the inbox's with how many items need you.

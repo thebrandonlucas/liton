@@ -86,6 +86,9 @@ html, body { margin: 0; height: 100%; background: Canvas; }
   --icon-ticket: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z'/><path d='M13 5v2'/><path d='M13 17v2'/><path d='M13 11v2'/></svg>");
   --icon-hash: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><path d='M4 9h16M4 15h16M10 3 8 21M16 3l-2 18'/></svg>");
   --icon-bot: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 8V4H8'/><rect width='16' height='12' x='4' y='8' rx='2'/><path d='M2 14h2'/><path d='M20 14h2'/><path d='M15 13v2'/><path d='M9 13v2'/></svg>");
+  --icon-messages-square: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z'/><path d='M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1'/></svg>");
+  --icon-kanban: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='18' height='18' x='3' y='3' rx='2'/><path d='M8 7v7'/><path d='M12 7v4'/><path d='M16 7v9'/></svg>");
+  --icon-sliders: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4'/></svg>");
   --icon-users: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/></svg>");
   --shadow: 0 10px 40px light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 45%));
   --small-radius: max(4px, calc(var(--radius) - 4px));
@@ -226,7 +229,7 @@ kbd:empty { display: none; }
 .tile:not(.tabbed) .tab, .pane.hidden { display: none; }
 /* A tab: its widget's icon and title, and a × that shows on hover. */
 .tile-header .tab { display: inline-flex; align-items: center; }
-.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-review, .widget-review-files, .widget-review-threads, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
+.tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-review, .widget-review-files, .widget-review-threads, .widget-tickets, .widget-ticket, .widget-ticket-scopes, .widget-board, .widget-ticket-properties, .widget-rooms, .widget-room, .widget-thread, .widget-members, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .widget-sessions { --icon: var(--icon-list); }
 .widget-workspaces { --icon: var(--icon-folder); }
@@ -241,6 +244,13 @@ kbd:empty { display: none; }
 .widget-ci { --icon: var(--icon-circle-play); }
 .widget-capabilities { --icon: var(--icon-plug); }
 .widget-rooms { --icon: var(--icon-hash); }
+.widget-room { --icon: var(--icon-message-square); }
+.widget-thread { --icon: var(--icon-messages-square); }
+.widget-members { --icon: var(--icon-users); }
+.widget-ticket { --icon: var(--icon-ticket); }
+.widget-ticket-scopes { --icon: var(--icon-list); }
+.widget-board { --icon: var(--icon-kanban); }
+.widget-ticket-properties { --icon: var(--icon-sliders); }
 .tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
 @media (hover: none) { .tile-header .tab-close { opacity: 1; } }
@@ -1065,10 +1075,7 @@ kbd:empty { display: none; }
   .tile-tabs:has(+ .workbench) [aria-pressed="true"] { --tab-on: 1; color: var(--accent); }
   .tile-tabs:has(+ .workbench) button::before { content: ""; flex: none; width: 24px; height: 24px; background: currentColor;
     -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
-  .tile-tabs:has(+ .workbench) button:nth-child(1) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M9 6h11M9 12h11M9 18h11'/><circle cx='4.5' cy='6' r='1.3' fill='black'/><circle cx='4.5' cy='12' r='1.3' fill='black'/><circle cx='4.5' cy='18' r='1.3' fill='black'/></svg>"); }
-  .tile-tabs:has(+ .workbench) button:nth-child(2) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='M6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h.5A2.5 2.5 0 0 1 4 13.5v-7A2.5 2.5 0 0 1 6.5 4z'/></svg>"); }
-  .tile-tabs:has(+ .workbench) button:nth-child(3) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M6 3.5v11'/><circle cx='6' cy='18' r='2.5'/><circle cx='18' cy='6' r='2.5'/><path d='M18 8.5a9 9 0 0 1-9 9'/></svg>"); }
-  /* What needs you, on the left drawer's tab. */
+  /* Each tab's icon is its pane's widget's (`.widget-*`). What needs you, on the left drawer's tab. */
   .tile-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--warn); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }

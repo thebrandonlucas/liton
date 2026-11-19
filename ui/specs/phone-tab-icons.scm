@@ -1,0 +1,16 @@
+(test "Liton — each tab of a Workbench's tab bar shows the icon of the pane it shows, whatever the surface: the Developer's workspaces, chat and changes, and the Rooms' rooms, room and thread"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"rooms\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (expect-attr (test-id "show-left") class "widget-workspaces")
+    (expect-attr (test-id "show-main") class "widget-chat")
+    (expect-attr (test-id "show-right") class "widget-changes")
+    (click (role button :name "Settings"))
+    (click (role button :name "Rooms preset"))
+    (press "Escape")
+    (expect-attr (test-id "show-left") class "widget-rooms")
+    (expect-attr (test-id "show-main") class "widget-room")
+    (expect-attr (test-id "show-right") class "widget-thread")
+    (expect-text (test-id "show-right") "Thread")
+  )
+)

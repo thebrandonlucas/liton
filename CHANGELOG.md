@@ -205,6 +205,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
 - Settings' Add a widget marks the widgets already in your layout with a ✓, and screen readers say so. You can still add another, such as a second chat.
 - A daemon that connects no providers, such as one started with `LITON_MOCK=off` and nothing else, no longer leaves the page saying "Connecting to the daemon…": the main area says nothing is connected and how to connect something, with the host's settings a click away.
+- On a phone, each tab of the tab bar at the bottom shows the icon of the pane it shows, in every preset: the Rooms preset's Thread tab no longer shows a branch, and a drawer whose panes are all hidden is still named.
 
 ### Removed
 

@@ -907,6 +907,14 @@ Model := [].{
 		tiles.find_first(|tile| !tiles.any(|other| other.left < tile.left or (other.left == tile.left and other.top < tile.top))).map_ok(|tile| tile.id) ?? ""
 	}
 
+	## What names tile `tile_id` in tests: its slot's name, and after its
+	## slot's first tile, its id too.
+	tile_test_name : State, Str -> Str
+	tile_test_name = |state, tile_id| {
+		slot = Model.slot_of(state, tile_id)
+		if (Model.slot_tile(state, slot) == tile_id) Model.slot_name(slot) else "${Model.slot_name(slot)}-${tile_id}"
+	}
+
 	slot_name : Slot -> Str
 	slot_name = |slot|
 		match slot {
