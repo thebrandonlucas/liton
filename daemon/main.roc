@@ -81,6 +81,7 @@ import mock.MockTickets
 import paseo.Paseo
 import paseo.PaseoFiles
 import paseo.PaseoGit
+import paseo.PaseoSchedules
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
@@ -484,7 +485,9 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) | ScheduleList | ScheduleRuns(_) => Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
+		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -557,10 +560,15 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
 		TicketLinks => Ok(Protocol.snapshot(wanted, Links(ticket_links!(context)?)))
-		ScheduleList => Ok(Protocol.snapshot(wanted, Schedules(schedules!(context)?.map(|kept| kept.schedule))))
+		ScheduleList => Ok(Protocol.snapshot(wanted, Schedules(schedules!(context)?.map(|kept| kept.schedule).concat(paseo_schedules!(context)?))))
 		ScheduleRuns(schedule_id) =>
 			match schedules!(context)?.find_first(|kept| kept.schedule.id == schedule_id) {
 				Ok(kept) => Ok(Protocol.snapshot(wanted, Runs(kept.runs)))
+				Err(_) if context.paseo.is_ok() =>
+					match paseo_runs!(context, schedule_id)? {
+						Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
+						Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing) })
+					}
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
 	}
@@ -1090,6 +1098,59 @@ schedule_prompted! = |context, { prompt, target, .. }|
 			}
 	}
 
+## Paseo's schedules as the cycle last listed them, none before or with
+## Paseo off.
+paseo_schedules! : Context => Try(List(Schedules.Schedule), _)
+paseo_schedules! = |context| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'schedules';", params: {}, limits: Sqlite.default_query_limits })?
+	kept : Try(List(Schedules.Schedule), _)
+	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(if (context.paseo.is_ok()) kept ?? [] else [])
+}
+
+## The runs of a schedule of Paseo's as the cycle last inspected it.
+paseo_runs! : Context, Str => Try(Try(List(Schedules.Run), [NotCached]), _)
+paseo_runs! = |context, schedule_id| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = :what;", params: { what: "runs ${schedule_id}" }, limits: Sqlite.default_query_limits })?
+	kept : Try(List(Schedules.Run), _)
+	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(kept.map_err(|_| NotCached))
+}
+
+## Answers a schedules.v1 request of a schedule of Paseo's, over a
+## connection of its own, and lets the next poll ask again at once. A new
+## session's workspace is its directory, as Paseo starts it there.
+paseo_schedules_call! : Context, PaseoDaemon, Schedules.Request => Try(Protocol.Answer(Schedules.Response), _)
+paseo_schedules_call! = |context, daemon, asked| {
+	request_id = "liton-schedule-${now_ms!().to_str()}"
+	cwd! = |target|
+		match target {
+			NewSession({ place: Directory(directory), .. }) => Ok(directory)
+			NewSession({ place: Workspace(workspace_id), .. }) => Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "")
+			Session(_) => Ok("")
+		}
+	schedule_id = Schedules.schedule_of(asked)
+	answered =
+		match asked {
+			ListSchedules => written!(daemon, PaseoSchedules.request("list", "", request_id), request_id, PaseoSchedules.listed).map_ok(|listed| Schedules(listed))
+			Inspect(_) => written!(daemon, PaseoSchedules.request("inspect", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "inspect", id)).map_ok(|found| Inspected(found))
+			Create(draft) => written!(daemon, PaseoSchedules.create_request(draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "create", id)).map_ok(|made| Created({ schedule_id: made.schedule.id }))
+			Update({ draft, .. }) => written!(daemon, PaseoSchedules.update_request(schedule_id, draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "update", id)).map_ok(|_| Accepted)
+			Pause(_) => written!(daemon, PaseoSchedules.request("pause", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "pause", id)).map_ok(|_| Accepted)
+			Resume(_) => written!(daemon, PaseoSchedules.request("resume", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "resume", id)).map_ok(|_| Accepted)
+			RunOnce(_) => written!(daemon, PaseoSchedules.request("run-once", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "run-once", id)).map_ok(|_| Accepted)
+			Delete(_) => written!(daemon, PaseoSchedules.request("delete", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "delete", id)).map_ok(|_| Accepted)
+		}
+	forget_check!(context.db, "cycle")?
+	match answered {
+		Ok(response) => Ok(Ok(response))
+		Err(Refused(reason)) => Ok(Ok(Rejected(reason)))
+		Err(err) => Ok(Err(paseo_error(err)))
+	}
+}
+
 ## Answers a schedules.v1 request, of the mock's schedules (see
 ## `MockSchedules`).
 schedules_call! : Context, Try(Str, [Missing]), Schedules.Request => Try(Protocol.Answer(Schedules.Response), _)
@@ -1097,6 +1158,24 @@ schedules_call! = |context, provider, asked| {
 	db = context.db
 	kept = if (Protocol.serves(provider, Mock.provider.id)) schedules!(context)? else []
 	found = kept.find_first(|listed| listed.schedule.id == Schedules.schedule_of(asked))
+	# Paseo's: a schedule the mock doesn't have, or one made for Paseo's session or place.
+	paseo_owns =
+		match asked {
+			ListSchedules => Bool.False
+			Create({ target: Session(session_id), .. }) => provider == Ok(Paseo.provider.id) or provider!(context, session_id)? != MockSession
+			Create({ target: NewSession({ place: Workspace(workspace_id), .. }), .. }) => provider == Ok(Paseo.provider.id) or !(mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) and Protocol.serves(provider, Mock.provider.id))
+			Create(_) => provider == Ok(Paseo.provider.id)
+			_ => found.is_err()
+		}
+	match context.paseo {
+		Ok(daemon) if paseo_owns and Protocol.serves(provider, Paseo.provider.id) => return paseo_schedules_call!(context, daemon, asked)
+		Ok(daemon) if asked == ListSchedules and Protocol.serves(provider, Paseo.provider.id) =>
+			match paseo_schedules_call!(context, daemon, ListSchedules)? {
+				Ok(Schedules(listed)) => return Ok(Ok(Schedules(kept.map(|listed_kept| listed_kept.schedule).concat(listed))))
+				other => return Ok(other)
+			}
+		_ => {}
+	}
 	no_schedule = Err({ code: NotFound, message: "no schedule ${Schedules.schedule_of(asked)}" })
 	changed! = |change|
 		match found {
@@ -1923,7 +2002,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok({ connection, .. }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
@@ -2005,6 +2084,14 @@ asked! = |db, connection, { kind, subject }, request_id|
 		"workspace_list" => listed_workspaces!(db, connection, request_id)
 		"importable" => listed_importable!(db, connection, request_id)
 		"agent_kinds" => listed_agent_kinds!(db, connection, request_id)
+		"schedules" => {
+			listed = PaseoSchedules.listed(exchange!(connection, PaseoSchedules.request("list", "", request_id), request_id)?, request_id)?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('schedules', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+		}
+		"schedule_runs" => {
+			found = PaseoSchedules.inspected(exchange!(connection, PaseoSchedules.request("inspect", subject, request_id), request_id)?, "inspect", request_id)?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES (:what, :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { what: "runs ${subject}", value: Json.to_str(found.runs) } })
+		}
 		"timeline" => fetch!(db, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, connection, subject, request_id)
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)

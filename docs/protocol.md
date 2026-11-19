@@ -620,6 +620,18 @@ now, besides its cadence, and `Delete` forgets it with its runs. Each
 answers `Accepted` or `Rejected` with why, or an error, and the next poll of
 `schedules` shows it.
 
+From Paseo, each call is its `schedule/list`, `schedule/inspect`,
+`schedule/create`, `schedule/update`, `schedule/pause`, `schedule/resume`,
+`schedule/run-once` or `schedule/delete`, one write over a connection of
+its own; a heartbeat is its `agent` target, a new session its `new-agent`
+config in the directory of the place named, and a run's session its
+`agentId`. The `schedules` topic is its `schedule/list`, and
+`runs/<schedule_id>` its `schedule/inspect`, asked in the daemon's cycle
+while polls watch them. Paseo lists no feature for schedules: each Paseo
+liton speaks (0.9.2 to 0.15.3) has them, as Paseo has since well before
+0.9. Paseo's schedules of a new session start it in a directory, so one
+made in a workspace reads back as made in its directory.
+
 The mock's schedules run by the daemon's clock, each due one run when a
 poll or call finds it due, prompting its session or starting one in the
 mock's workspaces; their cron expressions are of the minute and hour alone
