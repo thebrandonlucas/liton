@@ -205,12 +205,15 @@ Model := [].{
 
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
-		## is the one picked, or "" for the default. `glass` is whether tiles
-		## blur what is behind them, which this browser keeps apart from the
+		## is the one shown, or "" for the default; `theme_chosen` whether this
+		## browser has one of its own, picked or kept with its layout, which
+		## a preset's theme then leaves alone. `glass` is whether tiles blur
+		## what is behind them, which this browser keeps apart from the
 		## snapshot.
 		themes : List(Setup.Theme),
 		default_theme : Str,
 		theme : Str,
+		theme_chosen : Bool,
 		glass : Bool,
 
 		## The background this browser shows over the theme's (`Wallpaper`):
@@ -446,6 +449,7 @@ Model := [].{
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? Default.developer.snapshot.theme,
+				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
@@ -562,7 +566,7 @@ Model := [].{
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -578,7 +582,7 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: "" }, preset.name), kept_layout: Bool.True }
+			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: if (state.theme_chosen) state.theme else "" }, preset.name), kept_layout: Bool.True }
 		}
 	}
 
@@ -597,11 +601,12 @@ Model := [].{
 	surfaces : State -> List(Setup.Preset)
 	surfaces = |state| state.presets.keep_if(|preset| Model.offers(state, preset))
 
-	## Shows a preset's layout, and its theme if it names one.
+	## Shows a preset's layout, and its theme if it names one while this
+	## browser has no theme of its own.
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
 			Err(NotFound) => state
 		}
 
@@ -618,7 +623,7 @@ Model := [].{
 	}
 
 	use_theme : State, Str -> State
-	use_theme = |state, name| { ..state, theme: name }
+	use_theme = |state, name| { ..state, theme: name, theme_chosen: Bool.True }
 
 	## Marks the pane clicked or focused in, and shows its tile on a narrow
 	## screen. Another pane's menu, or one of its rows', closes.
@@ -634,7 +639,7 @@ Model := [].{
 
 	## What a row's ⋮ menu offers: on a project, a new workspace of it and
 	## renaming it; on a workspace, a new agent there, and renaming, pinning
-	## or unpinning and archiving it; on a session, a new agent beside it,
+	## or unpinning and archiving it with its agents; on a session, a new agent beside it,
 	## stopping it while it works, marking it read or unread unless it works,
 	## renaming it, pinning or unpinning its workspace, copying its id and
 	## archiving it. Each edit is offered where its capability is.
@@ -647,7 +652,7 @@ Model := [].{
 		rename = |capability| offered(capability, [{ label: "Rename", action: Rename }])
 		match Context.from_str(key) {
 			_ if key.starts_with("group:") => if (state.workspaces.projects.any(|project| "group:${project.id}" == key)) [{ label: "New workspace", action: NewWorkspace }].concat(rename(Capability.workspaces_v1)) else []
-			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(rename(Capability.workspaces_v1)).concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive", action: Archive }]))
+			Ok(Workspace(_)) => [{ label: "New agent", action: NewAgent }].concat(rename(Capability.workspaces_v1)).concat(pin).concat(offered(Capability.workspaces_v1, [{ label: "Archive workspace", action: Archive }]))
 			Ok(Session(session_id)) if !Model.starting(state, session_id) => {
 				listed_session = Model.session(state, session_id)
 				read = state.attention.find_first(|item| item.session_id == session_id and item.state != Working).map_ok(|_| if (Model.unread(state, session_id)) [{ label: "Mark read", action: MarkRead }] else [{ label: "Mark unread", action: MarkUnread }]) ?? []
@@ -704,7 +709,7 @@ Model := [].{
 				project_id = found.map_ok(|workspace| workspace.project_id) ?? ""
 				{
 					key: Context.to_str(Workspace(workspace_id)),
-					title: found.map_ok(|workspace| workspace.name) ?? workspace_id,
+					title: found.map_ok(|workspace| workspace.name) ?? "",
 					project: state.workspaces.projects.find_first(|project| project.id == project_id).map_ok(|project| project.name) ?? "",
 					counts: found.map_ok(|workspace| Model.change_counts(state, workspace)) ?? Model.no_counts,
 				}
@@ -770,11 +775,28 @@ Model := [].{
 
 	## The sessions and workspaces as the daemon last listed them, with the
 	## edits on their way applied.
+	## Once workspaces are listed, a workspace focused that they no longer
+	## list, nor is starting, gives way to the latest session's
+	## (`Model.focus_latest`), shown as picking it would, as does its
+	## session; with none left, its ticket's view is hidden.
 	relisted : State -> State
-	relisted = |state| state.editing.fold({ ..state, sessions: state.listed.sessions, workspaces: state.listed.workspaces }, |shown, asked| Model.edited(shown, asked.edit))
+	relisted = |state| {
+		shown = state.editing.fold({ ..state, sessions: state.listed.sessions, workspaces: state.listed.workspaces }, |so_far, asked| Model.edited(so_far, asked.edit))
+		listing_read = shown.cursors.any(|known| known.capability == "workspaces.v1")
+		match Model.focused(shown, [Workspace]) {
+			Workspace(workspace_id) if listing_read and !shown.workspaces.workspaces.any(|workspace| workspace.id == workspace_id) and !shown.creating.any(|creating| Model.created_id(creating) == workspace_id) => {
+				moved = Model.focus_latest({ ..shown, focus: shown.focus.drop_if(|kept| [Workspace, Session].contains(Context.kind(kept))) })
+				match Model.focused(moved, [Workspace]) {
+					Workspace(next) => Model.show_workspace(moved, next)
+					_ => { ..moved, hidden: moved.hidden.concat(Model.panes(moved).keep_if(|view| view.pinned.is_empty() and Widgets.shows(Widgets.find(view.widget), View, Ticket) and !moved.hidden.contains(view.id)).map(|view| view.id)) }
+				}
+			}
+			_ => shown
+		}
+	}
 
 	## The listings as an edit leaves them: renamed, pinned, or without what
-	## it archived.
+	## it archived, a workspace with its sessions.
 	edited : State, Edit -> State
 	edited = |state, change| {
 		listed = state.workspaces
@@ -785,7 +807,10 @@ Model := [].{
 			Workspaces(RenameProject({ project_id, name })) => { ..state, workspaces: { ..listed, projects: listed.projects.map(|project| if (project.id == project_id) { ..project, name } else project) } }
 			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
 			Workspaces(Pin({ workspace_id, pinned })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, pinned } else workspace)
-			Workspaces(Archive({ workspace_id })) => { ..state, workspaces: { ..listed, workspaces: listed.workspaces.drop_if(|workspace| workspace.id == workspace_id) } }
+			Workspaces(Archive({ workspace_id })) => {
+				archived = listed.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.session_ids) ?? []
+				{ ..state, sessions: state.sessions.drop_if(|listed_session| archived.contains(listed_session.id)), workspaces: { ..listed, workspaces: listed.workspaces.drop_if(|workspace| workspace.id == workspace_id) } }
+			}
 			_ => state
 		}
 	}
@@ -1345,7 +1370,8 @@ Model := [].{
 	workspace_of : State, Str -> Try(Str, [NotFound])
 	workspace_of = |state, session_id| {
 		listed = state.workspaces.workspaces.find_first(|workspace| workspace.session_ids.contains(session_id)).map_ok(|workspace| workspace.id)
-		said = state.sessions.find_first(|listed_session| listed_session.id == session_id).map_ok(|listed_session| listed_session.workspace.map_ok(|placed| placed.id ?? "") ?? "")
+		# The workspace a session says it works in, while it is listed.
+		said = state.sessions.find_first(|listed_session| listed_session.id == session_id).map_ok(|listed_session| listed_session.workspace.map_ok(|placed| placed.id ?? "") ?? "").map_ok(|workspace_id| if (state.workspaces.workspaces.any(|workspace| workspace.id == workspace_id)) workspace_id else "")
 		to_start = state.creating.find_first(|creating| creating.form.kind == Agent and Model.created_id(creating) == session_id).map_ok(|creating| creating.form.place)
 		match listed.on_err(|_| said).on_err(|_| to_start) {
 			Ok(workspace_id) if !workspace_id.is_empty() => Ok(workspace_id)
@@ -1387,8 +1413,9 @@ Model := [].{
 	## A tab of the workspace tile, as its row shows it: its title, its
 	## widget's icon, a session's status, whether it is shown and whether ×
 	## closes it. It shows a tab of the workspace, or another pane of the
-	## tile.
-	TabRow : { key : Str, title : Str, widget : Str, dot : Str, shown : Bool, closes : Bool, tab : [Tab(Tab), Pane(Str)] }
+	## tile; `pane` is the pane that shows it, which dragging the tab moves:
+	## a ticket's view, else the tile's chat, with the workspace.
+	TabRow : { key : Str, title : Str, widget : Str, dot : Str, shown : Bool, closes : Bool, tab : [Tab(Tab), Pane(Str)], pane : Str }
 
 	## The workspace tile's tabs: the focused workspace's, then the other
 	## panes the tile shows; all of them while no workspace is focused.
@@ -1402,16 +1429,21 @@ Model := [].{
 		others = Model.shown_panes(state, tile).drop_if(|shown| !workspace_id.is_empty() and views.contains(shown.id))
 		in_view = !others.any(|shown| shown.id == tile.active)
 		picked_tab = Model.shown_tab(state, workspace_id)
+		view_of = |kind| tile.panes.find_first(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, kind)).map_ok(|shown| shown.id) ?? ""
 		row = |tab| {
 			(key, title, widget, dot) = match tab {
 				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_row(state, Model.session(state, session_id)).dot)
 				Diff => ("diff", "Diff", "changes", "")
 				Ticket(ticket_id) => (Context.to_str(Ticket(ticket_id)), TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| ticket.summary.key) ?? ticket_id, "tickets", "")
 			}
-			{ key, title, widget, dot: if (Model.starting(state, key)) "starting" else dot, shown: in_view and tab == picked_tab, closes: widget != "chat", tab: Tab(tab) }
+			shown_in = match tab {
+				Ticket(_) if !view_of(Ticket).is_empty() => view_of(Ticket)
+				_ => view_of(Workspace)
+			}
+			{ key, title, widget, dot: if (Model.starting(state, key)) "starting" else dot, shown: in_view and tab == picked_tab, closes: widget != "chat", tab: Tab(tab), pane: shown_in }
 		}
 		tabs = if (workspace_id.is_empty()) [] else Model.workspace_tabs(state, workspace_id).map(row)
-		tabs.concat(others.map(|shown| { key: "pane:${shown.id}", title: Widgets.find(shown.widget).title, widget: shown.widget, dot: "", shown: shown.id == tile.active, closes: Bool.True, tab: Pane(shown.id) }))
+		tabs.concat(others.map(|shown| { key: "pane:${shown.id}", title: Widgets.find(shown.widget).title, widget: shown.widget, dot: "", shown: shown.id == tile.active, closes: Bool.True, tab: Pane(shown.id), pane: shown.id }))
 	}
 
 	## Whether a pane is a view the workspace tile shows as a tab of the
@@ -1869,15 +1901,28 @@ Model := [].{
 		)
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
-		most_recent_session = Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "")
-		# Where workspaces are tabs, the most recent session's workspace, on its tab.
-		unfocused = Model.focused(applied, [Session, Workspace]) == Session("")
-		most_recent_workspace = Model.workspace_of(applied, Model.session_in(applied, most_recent_session)).map_ok(|workspace_id| if (Model.workspace_tabbed(applied)) [workspace_id] else []) ?? []
-		focus = if (unfocused) applied.focus.drop_if(|kept| Context.kind(kept) == Session).concat(most_recent_workspace.map(|workspace_id| Workspace(workspace_id))).append(most_recent_session) else applied.focus
-		on_tab = if (unfocused) most_recent_workspace.fold(applied, |so_far, workspace_id| Model.remember_tab(so_far, workspace_id, Session(Model.session_in(applied, most_recent_session)))) else applied
-		settled = { ..on_tab, focus, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
+		on_tab = Model.focus_latest(applied)
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
+	}
+
+	## While nothing is focused, focuses the most recent session, and where
+	## workspaces are tabs, the most recent of those in a workspace listed if
+	## any is, and its workspace on its tab.
+	focus_latest : State -> State
+	focus_latest = |state| {
+		tabbed = Model.workspace_tabbed(state)
+		placed = state.sessions.keep_if(|listed_session| Model.workspace_of(state, listed_session.id).is_ok())
+		candidates = if (tabbed and !placed.is_empty()) placed else state.sessions
+		most_recent_session = Session(Model.ordered(candidates, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "")
+		most_recent_workspace = Model.workspace_of(state, Model.session_in(state, most_recent_session)).map_ok(|workspace_id| if (tabbed) [workspace_id] else []) ?? []
+		if Model.focused(state, [Session, Workspace]) == Session("") {
+			focus = state.focus.drop_if(|kept| Context.kind(kept) == Session).concat(most_recent_workspace.map(|workspace_id| Workspace(workspace_id))).append(most_recent_session)
+			most_recent_workspace.fold({ ..state, focus }, |so_far, workspace_id| Model.remember_tab(so_far, workspace_id, Session(Model.session_in(state, most_recent_session))))
+		} else {
+			state
+		}
 	}
 
 	## A poll that failed asks again with the next.
@@ -4470,11 +4515,11 @@ expect {
 	Model.with_tool_cards([call]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Running, output: "", folded: "" })]
 }
 
-# A theme picked is saved with the layout; one never picked is the
-# Developer preset's, else the setup's default, and a preset naming none
-# keeps the one shown.
+# A theme picked is saved with the layout, and a preset keeps it; one
+# never picked is the Developer preset's, else the setup's default, and a
+# preset naming none keeps the one shown.
 expect {
-	picked = Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Tiling")
+	picked = Model.use_preset(Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Board"), "Developer")
 	offered = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), themes: [Default.plain, Default.hypr], default_theme: "Hypr" })
 	Model.theme_shown(Model.initial("")).name == "Neutral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
 }

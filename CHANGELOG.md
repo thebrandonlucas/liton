@@ -210,6 +210,9 @@ All notable changes to liton are documented in this file. The format is based on
 - A daemon that connects no providers, such as one started with `LITON_MOCK=off` and nothing else, no longer leaves the page saying "Connecting to the daemon…": the main area says nothing is connected and how to connect something, with the host's settings a click away.
 - On a phone, each tab of the tab bar at the bottom shows the icon of the pane it shows, in every preset: the Rooms preset's Thread tab no longer shows a branch, and a drawer whose panes are all hidden is still named.
 - A room's name shows once: its pane's header names it with its topic, members and ⋯ menu, beside the drawers' buttons, in place of a second header under it. The Thread pane's header has its × to close the thread, and the Review, Ticket and Board panes' headers no longer repeat what their views name.
+- Archiving the workspace shown, from its row's or its header's ⋯ menu, now named Archive workspace since it archives its agents too, shows the latest workspace left at once, or asks you to pick one when none is left. It no longer leaves the main area showing the workspace's id with no agents, where starting one failed with "no workspace".
+- A theme you picked stays when you open another surface or reset one to its preset, rather than turning to the surface's own, such as Developer's Neutral. A browser that has no theme of its own yet still shows each surface's.
+- Drag the workspace shown in the main area to another place by any of its tabs, a session's, the diff's or a ticket's, or by its name in its header, as you drag other panes. A ticket scrolls within its pane, so its comment box is always in reach, and its status, assignees and labels line up as rows of a name and a value.
 
 ### Removed
 
