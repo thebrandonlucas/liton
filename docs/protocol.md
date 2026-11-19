@@ -168,7 +168,9 @@ Paseo these are its `update_agent_request` (the agent's name),
 `project.rename.request`, and `Configure` its `agent.config.apply.request`,
 or with a Paseo that doesn't list `agentConfigApply` among its features,
 its `set_agent_model_request`, `set_agent_mode_request` and
-`set_agent_thinking_request` one after the other; Paseo can't unarchive an agent or a workspace
+`set_agent_thinking_request` one after the other; the mock's agents offer
+two models of three thinking levels each and a few modes, and refuse others;
+Paseo can't unarchive an agent or a workspace
 over its protocol, and neither can liton. The mock keeps its own changes.
 
 `attention.v1` is an inbox: one item per session, those that need you first,

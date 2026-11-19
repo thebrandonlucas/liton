@@ -659,10 +659,21 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 		Create(asked_create) => started!(context, provider, asked_create)
-		Configure({ session_id, .. }) =>
+		Configure({ session_id, model, mode, thinking }) =>
 			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					stored : { agent : Str, model : Str, mode : Str, thinking : Str }
+					stored = Sqlite.query!({ db, query: "SELECT agent, model, mode, thinking FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+					match Mock.configured(stored.agent, { model: stored.model, mode: stored.mode, thinking: stored.thinking }, { model, mode, thinking }) {
+						Ok(settings) => {
+							Sqlite.execute!({ db, query: "UPDATE sessions SET model = :model, mode = :mode, thinking = :thinking WHERE id = :session_id;", params: { session_id, model: settings.model, mode: settings.mode, thinking: settings.thinking } })?
+							Ok(Ok(Accepted))
+						}
+						Err(reason) => Ok(Ok(Rejected(reason)))
+					}
+				}
+				PaseoSession(_) => Ok(Ok(Rejected("Paseo's sessions can't switch their model, mode or thinking from liton yet")))
 				NoSession => Ok(no_session(session_id))
-				_ => Ok(Ok(Rejected("its provider can't switch a session's model, mode or thinking yet")))
 			}
 	}
 }
@@ -670,22 +681,24 @@ chat_call! = |context, provider, asked| {
 ## Starts an agent in a workspace of the provider that has it, or in a
 ## directory of Paseo's, when the call names it.
 started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat.Response), _)
-started! = |context, provider, { place, agent, model, prompt, .. }| {
+started! = |context, provider, { place, agent, model, mode, thinking, prompt }| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
 	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
 	match (place, context.paseo) {
 		(Workspace(workspace_id), _) if mock_listed.any(|shown| shown.id == workspace_id) =>
-			if Mock.agents.any(|kind| kind.agent == agent) {
-				session_id = "${agent}-${now_ms!().to_str()}"
-				title = if (prompt.is_empty()) "New ${agent} agent" else prompt.split_on("\n").first() ?? prompt
-				next : { position : I64 }
-				next = Sqlite.query!({ db, query: "SELECT coalesce(max(position), -1) + 1 AS position FROM sessions WHERE provider = 'mock';", params: {}, limits: Sqlite.default_query_limits })?
-				Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, workspace_id) VALUES (:id, 'mock', :agent, :title, :position, :workspace_id);", params: { id: session_id, agent, title, position: next.position, workspace_id } })?
-				insert_events!(db, session_id, 1, Mock.on_create(prompt), now_ms!())?
-				Ok(Ok(Started({ session_id: session_id })))
-			} else {
-				Ok(Ok(Rejected("the mock provider starts no ${agent} agent")))
+			match (Mock.agents.any(|kind| kind.agent == agent), Mock.configured(agent, { model: "", mode: "", thinking: "" }, { model, mode, thinking })) {
+				(Bool.False, _) => Ok(Ok(Rejected("the mock provider starts no ${agent} agent")))
+				(_, Err(reason)) => Ok(Ok(Rejected(reason)))
+				(_, Ok(settings)) => {
+					session_id = "${agent}-${now_ms!().to_str()}"
+					title = if (prompt.is_empty()) "New ${agent} agent" else prompt.split_on("\n").first() ?? prompt
+					next : { position : I64 }
+					next = Sqlite.query!({ db, query: "SELECT coalesce(max(position), -1) + 1 AS position FROM sessions WHERE provider = 'mock';", params: {}, limits: Sqlite.default_query_limits })?
+					Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, workspace_id, model, mode, thinking) VALUES (:id, 'mock', :agent, :title, :position, :workspace_id, :model, :mode, :thinking);", params: { id: session_id, agent, title, position: next.position, workspace_id, model: settings.model, mode: settings.mode, thinking: settings.thinking } })?
+					insert_events!(db, session_id, 1, Mock.on_create(prompt), now_ms!())?
+					Ok(Ok(Started({ session_id: session_id })))
+				}
 			}
 		(Workspace(workspace_id), Ok(daemon)) if paseo_listed.any(|shown| shown.id == workspace_id) => {
 			cwd = paseo_listed.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? ""
@@ -1271,7 +1284,7 @@ create_tables! = |db| {
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
 	# no directory, workspace or listing until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''"), ("archived", "INTEGER NOT NULL DEFAULT 0")] {
+	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''"), ("archived", "INTEGER NOT NULL DEFAULT 0"), ("model", "TEXT NOT NULL DEFAULT ''"), ("mode", "TEXT NOT NULL DEFAULT ''"), ("thinking", "TEXT NOT NULL DEFAULT ''")] {
 		existing : List({ name : Str })
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
@@ -1384,12 +1397,12 @@ visible! = |db, session_id, after| {
 sessions! : Context => Try(List(Chat.Session), _)
 sessions! = |context| {
 	{ db, mock, paseo, .. } = context
-	rows : List({ id : Str, agent : Str, title : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title FROM sessions WHERE provider = 'mock' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows : List({ id : Str, agent : Str, title : Str, model : Str, mode : Str, thinking : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, model, mode, thinking FROM sessions WHERE provider = 'mock' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	mock_listed = if (mock.agents) mock_workspaces!(db)? else []
 	var $sessions = []
 	for row in if (mock.agents) rows else [] {
-		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title }, mock_listed, timed!(db, row.id, now_ms!())?))
+		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title, settings: { model: row.model, mode: row.mode, thinking: row.thinking } }, mock_listed, timed!(db, row.id, now_ms!())?))
 	}
 	if paseo.is_ok() {
 		wanted!(db, "agent_list", "")?
