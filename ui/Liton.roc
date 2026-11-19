@@ -29,6 +29,7 @@ import Dropdown
 import Drag
 import Wallpaper
 import Spinner
+import Summary
 
 Liton := [].{
 
@@ -1697,7 +1698,7 @@ Liton := [].{
 					|row| {
 						model = model0.lift_row()
 						id = row.key()
-						title = row.field(|item| item.title)
+						title = row.field(|item| item).map2(model.signal(), |item, state| { item, state }).map2(pane.lift_row(), |{ item, state }, shown| Model.item_title(state, shown, item))
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						opens = model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))
@@ -2487,8 +2488,8 @@ Liton := [].{
 		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
 	}
 
-	## A chat pane: its session's timeline, a permission it asks for, and the
-	## composer.
+	## A chat pane: its session's summary, its timeline, a permission it
+	## asks for, and the composer.
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
 		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
@@ -2575,7 +2576,7 @@ Liton := [].{
 						),
 					],
 				),
-			]),
+			]).prepend(Summary.view(model0, id)),
 		)
 	}
 
