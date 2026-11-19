@@ -1157,7 +1157,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView, Welcome, NoAgents],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -1181,6 +1181,12 @@ Liton := [].{
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
+							Unconnected =>
+								Liton.empty_state(
+									Engine.const("Nothing is connected"),
+									"liton's daemon connects no providers yet. Start it with PASEO_PASSWORD set to connect Paseo, or LITON_PROVIDERS for other providers, and what they offer appears here.",
+									[Html.button("See the host's settings", [Engine.class("empty-action")], model.update(Model.show_host))],
+								)
 							NoView => Html.p("liton can't show this widget yet.", "missing")
 							Welcome => Liton.welcome(model)
 							NoAgents =>

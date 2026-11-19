@@ -493,6 +493,10 @@ Model := [].{
 	toggle_settings = |state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
 
 	## Shows a section of Settings, over its list on a phone.
+	## Opens Settings at what the daemon connects.
+	show_host : State -> State
+	show_host = |state| Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host")
+
 	show_section : State, Str -> State
 	show_section = |state, section| { ..state, settings_page: { section, pushed: Bool.True } }
 
@@ -1767,7 +1771,7 @@ Model := [].{
 	## shows. Until the manifest arrives, every capability counts as offered.
 	subjects : State -> List(Protocol.Subject)
 	subjects = |state| {
-		offered = |id| state.providers.is_empty() or state.capabilities.contains(id)
+		offered = |id| state.daemon.id.is_empty() or state.capabilities.contains(id)
 		laid_out = Model.panes(state)
 		timelines = laid_out.keep_if(|shown| shown.widget == "chat").map(|shown| Model.session_of(state, shown)).drop_if(|session_id| session_id.is_empty() or session_id.starts_with("starting:")).map(|session_id| Timeline(session_id))
 		items = if (offered(Capability.attention_v1)) [Items] else []
@@ -4203,13 +4207,14 @@ Model := [].{
 	}
 
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
-	## a placeholder naming what is missing, or in the main area, a diff
-	## opened there from Changes.
+	## in the main area or a Tiling pane that the daemon connects nothing
+	## (`Unconnected`), a placeholder naming what is missing, or in the main
+	## area, a diff opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet. A chat showing
 	## a workspace's tabs says what to do while there is nothing to chat
 	## with, where workspaces are offered: `Welcome` while no workspace is picked, `NoAgents` while the one
 	## picked has none.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Missing, MainDiff, NoView, Welcome, NoAgents]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -4218,8 +4223,10 @@ Model := [].{
 
 	body : State, Pane -> Body
 	body = |state, shown| {
-		if (state.providers.is_empty() and shown.widget != "capabilities")
+		if (state.daemon.id.is_empty() and shown.widget != "capabilities")
 			Connecting
+		else if (state.providers.is_empty() and shown.widget != "capabilities" and (Model.tile_of(state, shown.id).map_ok(|tile| [Main, Free].contains(Model.slot_of(state, tile.id))) ?? Bool.False))
+			Unconnected
 		else if (!Model.missing(state, shown).is_empty())
 			Missing
 		else if (shown.id == Model.main_area_pane(state) and !Model.main_diff(state).is_empty())

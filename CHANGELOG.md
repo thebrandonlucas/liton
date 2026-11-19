@@ -204,6 +204,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A widget added in Settings while a Changes diff fills the main area shows itself there, instead of the diff, which goes back to its pane.
 - A widget liton can't show yet, such as CI runs when a provider offers CI, now says so instead of showing the Capabilities widget.
 - Settings' Add a widget marks the widgets already in your layout with a ✓, and screen readers say so. You can still add another, such as a second chat.
+- A daemon that connects no providers, such as one started with `LITON_MOCK=off` and nothing else, no longer leaves the page saying "Connecting to the daemon…": the main area says nothing is connected and how to connect something, with the host's settings a click away.
 
 ### Removed
 
