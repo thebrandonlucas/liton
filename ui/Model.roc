@@ -144,6 +144,10 @@ Model := [].{
 		attending : List({ serial : U64, request : Attention.Request, accepted : U64 }),
 		attention_outbox : { serial : U64, request : Attention.Request },
 
+		## The sessions an Inbox pane's rows select, for what acts on them
+		## together.
+		inbox_selected : List(Str),
+
 		## The last poll sent, while `polling`, and whether another is to
 		## follow it at once; the cursor of each topic polled.
 		poll : Poll,
@@ -457,6 +461,7 @@ Model := [].{
 				attention: [],
 				attending: [],
 				attention_outbox: { serial: 0, request: ListItems },
+				inbox_selected: [],
 				poll: { serial: 0, subjects: [], topics: [] },
 				polling: Bool.False,
 				poll_again: Bool.False,
@@ -886,13 +891,16 @@ Model := [].{
 	}
 
 	## Whether the daemon offers what a preset's navigators and views need,
-	## those it shows as it opens (each tile's active pane), or its manifest
-	## is still to be read, as liton's own presets show until the setup's
-	## arrive. An inspector without its capability shows what it needs.
+	## those it shows as it opens (each tile's active pane, but for those of
+	## a collapsed drawer), or its manifest is still to be read, as liton's
+	## own presets show until the setup's arrive. An inspector without its
+	## capability shows what it needs, as a pane opened from a collapsed
+	## drawer does.
 	offers : State, Setup.Preset -> Bool
 	offers = |state, preset| {
 		needed = |shown| Widgets.find(shown.widget).role != Inspector
-		opened = preset.snapshot.grid.tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
+		shown_tiles = preset.snapshot.grid.tiles.drop_if(|tile| preset.snapshot.collapsed.contains(Model.slot_in(preset.snapshot.shell, preset.snapshot.grid, tile.id)))
+		opened = shown_tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
 		state.daemon.id.is_empty() or opened.all(|shown| Widgets.missing(Widgets.find(shown.widget), state.capabilities).is_empty())
 	}
 
@@ -1257,12 +1265,17 @@ Model := [].{
 	window_of : State, Pane -> U64
 	window_of = |state, shown| {
 		session_id = Model.session_of(state, shown)
-		state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
+		if (Model.option(shown, "show") == "Latest") Model.latest_window else state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
 	}
+
+	## How many of a timeline's latest entries a chat pane showing only the
+	## latest shows.
+	latest_window : U64
+	latest_window = 8
 
 	## Whether a chat pane leaves out earlier entries of its timeline.
 	has_earlier : State, Pane -> Bool
-	has_earlier = |state, shown| Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
+	has_earlier = |state, shown| Model.option(shown, "show") != "Latest" and Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
 
 	## Shows half of `Model.window` more of a chat pane's earlier entries.
 	show_earlier : State, Str -> State
@@ -2244,7 +2257,8 @@ Model := [].{
 	## a chat pane shows; the attention items, which the title counts; of
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows, and of each Review pane every file's; of each Files pane on screen, its root, the directories
-	## open and the file it shows; the workspaces, while a pane lists them;
+	## open and the file it shows; the workspaces, while a pane lists them
+	## or an inbox's filters, Pin and New agent use them;
 	## the review of the context of each, Files, Changes or Review, on screen; and
 	## of Tickets panes on screen, the tickets, the links and the ticket each
 	## shows. Until the manifest arrives, every capability counts as offered.
@@ -2276,7 +2290,7 @@ Model := [].{
 		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
-		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces" or shown.widget == "inbox")) [WorkspaceList, Agents] else []
 		# The kinds of agent, with their models and modes, for chat panes'
 		# composers, followed last.
 		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
@@ -2642,15 +2656,6 @@ Model := [].{
 	waiting : State, Attention.State -> List(Attention.Item)
 	waiting = |state, attention_state| Model.inbox_items(state).keep_if(|item| item.state == attention_state and item.set_aside == No)
 
-	## The items an inbox pane lists under what needs you, the latest first:
-	## those not set aside, idle ones if it shows them.
-	latest : State, Pane -> List(Attention.Item)
-	latest = |state, shown| Model.inbox_items(state).keep_if(|item| item.set_aside == No and item.state != NeedsYou and (item.state != Idle or Model.option(shown, "show_idle") == "true"))
-
-	## The inbox's items settled or snoozed.
-	later : State -> List(Attention.Item)
-	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
-
 	## How many items need you, as the document title and the inbox's tab
 	## show.
 	needs_you : State -> U64
@@ -2700,6 +2705,11 @@ Model := [].{
 	## Whether a session's item is unread, as the inbox shows it.
 	unread : State, Str -> Bool
 	unread = |state, session_id| state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| state.attending.fold(item, |shown, asked| Model.attended(shown, asked.request)).unread) ?? Bool.False
+
+	## How long Snooze sets an item aside where no inbox pane says: as the
+	## first inbox pane's does, else an hour.
+	inbox_snooze_minutes : State -> U32
+	inbox_snooze_minutes = |state| Model.panes(state).find_first(|shown| shown.widget == "inbox").map_ok(Model.snooze_minutes) ?? 60
 
 	## How long an inbox pane's Snooze sets an item aside, in minutes.
 	snooze_minutes : Pane -> U32
@@ -2761,6 +2771,19 @@ Model := [].{
 			Room(_) => Model.open_view(state, context)
 		}
 	}
+
+	## Opens a session as `Model.open` does, the chat showing it showing the
+	## whole of it rather than only the latest.
+	open_whole : State, Str -> State
+	open_whole = |state, session_id| {
+		opened = Model.open(state, Session(session_id))
+		showing = Model.panes(opened).find_first(|shown| shown.widget == "chat" and Model.pane_visible(opened, shown.id) and Model.session_of(opened, shown) == session_id)
+		showing.map_ok(|shown| Model.with_snapshot_text(Model.set_option(opened, shown.id, "show", "Whole chat"))) ?? opened
+	}
+
+	## Whether a chat pane shows only the latest of its session.
+	shows_latest : State -> Bool
+	shows_latest = |state| Model.panes(state).any(|shown| shown.widget == "chat" and Model.option(shown, "show") == "Latest")
 
 	## Focuses a context and shows a view of it, as `Model.open` does.
 	open_view : State, Context.Id -> State
@@ -3117,6 +3140,13 @@ Model := [].{
 			}
 			_ => ""
 		}
+
+	## Two texts in order, as a dictionary orders words, whatever their case.
+	text_order : Str, Str -> [Before, After, Same]
+	text_order = |left, right| {
+		lower = |text| text.to_utf8().map(|byte| if (byte >= 'A' and byte <= 'Z') byte + 32 else byte)
+		bytes_order(lower(left), lower(right))
+	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64

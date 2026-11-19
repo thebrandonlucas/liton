@@ -68,6 +68,10 @@ html, body { margin: 0; height: 100%; background: Canvas; overscroll-behavior-x:
   --icon-ellipsis-vertical: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='12' cy='19' r='1'/></svg>");
   --icon-x: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 6 6 18'/><path d='m6 6 12 12'/></svg>");
   --icon-pin: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 17v5'/><path d='M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'/></svg>");
+  --icon-clock: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='13' r='8'/><path d='M12 9v4l2 2'/><path d='M5 3 2 6'/><path d='m22 6-3-3'/></svg>");
+  --icon-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+  --icon-maximize: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 3h6v6'/><path d='m21 3-7 7'/><path d='m3 21 7-7'/><path d='M9 21H3v-6'/></svg>");
+  --icon-pencil: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z'/><path d='m15 5 4 4'/></svg>");
   --icon-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12h14'/><path d='M12 5v14'/></svg>");
   --icon-arrow-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
   --icon-chevron-right: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
@@ -438,8 +442,6 @@ kbd:empty { display: none; }
 .empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .empty-action { padding: 6px 14px; }
 
-.inbox-item:hover { background: var(--tool); }
-.inbox-item.focused { background: var(--selected); }
 .session-meta { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
 /* Workspaces and Sessions: projects (or states), their workspaces and sessions, a tree in one list. */
 .tree { list-style: none; margin: 0; padding: 4px 6px; overflow-y: auto; }
@@ -633,31 +635,101 @@ kbd:empty { display: none; }
 .room-preview { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 12px 6px; padding: 6px 10px; border-radius: var(--small-radius); background: var(--tool); color: var(--muted); font-size: 13px; }
 .mention-choices { display: flex; flex-wrap: wrap; gap: 4px; }
 .mention-choices:empty { display: none; }
-.inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .inbox-items { list-style: none; margin: 0; padding: 0; }
-.inbox-item { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--small-radius); }
-.inbox-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 8px 2px 10px; font: 11px var(--font-mono); color: var(--muted); }
-.inbox-toolbar button { font-size: 12px; padding: 1px 8px; }
-.inbox-item > button { border: none; padding: 0; text-align: left; background: none; font-weight: 400; }
-/* Unread: a dot before the title, which is bolder; in a tree, a bolder title. */
-.inbox-item > button::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%; vertical-align: middle; }
-.inbox-item.unread > button::before { background: var(--ok); }
-.inbox-item.unread > button, .tree-session:has(.status-dot.unread) .row-title { font-weight: 650; }
-.inbox-item .summary { margin: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-item .summary:empty { display: none; }
+/* The inbox's top: its tabs with their counts, Focus, Jump to and New agent;
+   then a counter for each state, each a filter, and Mark read. */
+.inbox-top, .inbox-counters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 6px 6px; }
+.inbox-top .spacer { flex: 1; }
+.inbox-tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
+.inbox-tab { display: inline-flex; gap: 6px; border: none; background: none; color: var(--muted); }
+.inbox-tab[aria-pressed="true"], .inbox-focus[aria-pressed="true"] { background: var(--selected); color: var(--text); }
+.inbox-tab .count, .jump-to kbd { color: var(--accent-count, #6aa6ff); }
+.inbox-tab .count:empty { display: none; }
+.jump-to { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.jump-to kbd { font: 11px var(--font-mono); color: var(--muted); }
+.new-agent-button { background: var(--text); color: var(--glass-tint); font-weight: 600; }
+.inbox-counters .inbox-counter { flex: 1 1 110px; display: flex; align-items: baseline; gap: 8px; padding: 6px 12px; background: none; color: var(--muted); text-align: left; }
+.inbox-counter .count { font-size: 20px; font-weight: 600; color: var(--text); }
+.inbox-counter.waiting .count { color: var(--warn); }
+.inbox-counter.running .count { color: var(--ok); }
+.inbox-counter.failed .count { color: var(--fail); }
+.inbox-counter[aria-pressed="true"] { background: var(--selected); border-color: var(--text); }
+/* Its filters, grouping and sort, in one row that wraps. */
+.inbox-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 0 8px 6px; }
+.inbox-filter { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.inbox-filter select { max-width: 180px; }
+.sort-direction { padding: 2px 8px; }
+.inbox-group { display: flex; gap: 8px; margin: 10px 10px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); cursor: default; }
+.inbox-empty { margin: 16px; color: var(--muted); font-size: 13px; }
+.inbox-empty:empty { display: none; }
+.tree-session:has(.status-dot.unread) .row-title { font-weight: 650; }
 .inbox-item .permission { border: none; border-radius: var(--small-radius); flex-wrap: wrap; }
-.inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.inbox-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 .inbox-actions button { font-size: 12px; white-space: nowrap; }
-/* With a pointer, an item's actions show only while it is hovered or focused, so the list stays one line or two an item: over its corner in a wide pane, and under it in a narrow one, where over its corner they would cover the title that opens it. */
+/* With a pointer, a row's actions show only while it is hovered or focused. */
 .inbox { container-type: inline-size; }
 @media (hover: hover) {
-  .inbox-item:not(:hover, :focus-within) > .inbox-actions { display: none; }
-  .inbox-actions button { padding: 1px 8px; }
-  @container (min-width: 480px) {
-    .inbox-item > .inbox-actions { position: absolute; top: 4px; right: 6px; padding: 2px; border-radius: var(--small-radius); background: var(--sheet); box-shadow: var(--shadow); }
-  }
+  .inbox-item:not(:hover, :focus-within) .inbox-actions { visibility: hidden; }
 }
+/* A row: its checkbox, then its title over a status line and a line of
+   details, then how long ago and, while hovered, its actions. */
+.inbox-item { position: relative; border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent); }
+.inbox-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 10px; }
+.inbox-item:hover .inbox-row { background: var(--tool); }
+.inbox-item.focused .inbox-row { background: var(--warn-tint); }
+.inbox-item.selected .inbox-row { background: var(--selected); }
+.row-check { padding-top: 2px; }
+.inbox-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.inbox-main .row-title { border: none; padding: 0; text-align: left; background: none; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-line, .details { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-size: 13px; color: var(--muted); }
+.status-line .status-word { font-weight: 600; }
+.status-line .status-word::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
+.inbox-item.unread .status-word::before, .status-word.running::before, .status-word.waiting::before { background: currentColor; }
+.status-word.waiting, .status-word.idle, .status-word.done, .status-line .reason { color: var(--warn); }
+.status-word.running { color: var(--ok); }
+.status-word.failed { color: var(--fail); }
+.inbox-item:not(.unread) .reason { color: var(--muted); }
+.short-id, .details { font-family: var(--font-mono); }
+.details { font-size: 12px; }
+.detail::before { content: attr(data-label) " "; font-family: var(--font-ui); color: color-mix(in srgb, var(--muted) 70%, transparent); }
+.detail:empty, .short-id:empty, .reason:empty { display: none; }
+.inbox-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 6px; }
+.inbox-side .age { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.inbox-actions .icon { padding: 3px 5px; border-color: transparent; background: none; color: var(--muted); }
+.inbox-actions .icon:hover { color: var(--text); }
+.inbox-actions .snooze { --icon: var(--icon-clock); }
+.inbox-actions .pin { --icon: var(--icon-pin); }
+.inbox-actions .open-chat { --icon: var(--icon-message-square); }
+.inbox-actions .mark { --icon: var(--icon-circle-dot); }
+.inbox-actions .settle { --icon: var(--icon-check); }
 .inbox-item.working .mark { display: none; }
+/* A Workbench with the inbox in its main area gives the session opened a
+   wider right drawer, as Paseo's agent inbox does. */
+.grid.workbench:has(> .slot-main .inbox) { --right-drawer: minmax(340px, 2fr); }
+/* A chat showing the latest: its session's status, where it works and how
+   long it has worked over its actions, then its latest activity. */
+.session-overview { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 10px; border-bottom: 1px solid var(--edge); }
+.overview-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+.overview-line .status-word { font-weight: 600; }
+.overview-line .status-word.running { color: var(--ok); }
+.overview-line .status-word.waiting { color: var(--warn); }
+.overview-line .status-word.failed { color: var(--fail); }
+.overview-actions { display: flex; gap: 4px; }
+.overview-actions .icon { padding: 4px 7px; border-color: transparent; background: none; color: var(--muted); }
+.overview-actions .icon:hover { color: var(--text); }
+.overview-actions .expand { --icon: var(--icon-maximize); }
+.overview-actions .snooze { --icon: var(--icon-clock); }
+.overview-actions .pin { --icon: var(--icon-pin); }
+.overview-actions .rename { --icon: var(--icon-pencil); }
+.overview-whole { display: flex; justify-content: flex-end; padding: 4px 10px 0; }
+.overview-whole .show-latest { font-size: 12px; padding: 1px 8px; }
+/* Selecting rows: Select, and those unread, idle or running; then what acts on those selected. */
+.inbox-select, .inbox-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.inbox-select { padding: 4px 10px 8px; border-bottom: 1px solid var(--edge); }
+.select-all { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; color: var(--muted); }
+.quick-select { border-radius: 999px; padding: 2px 12px; color: var(--muted); }
+.inbox-bulk { margin-left: auto; }
+.selected-count { font-size: 13px; color: var(--muted); }
 .badge { font: 11px/1.5 var(--font-mono); padding: 0 6px; border: 1px solid var(--edge); border-radius: 999px; color: var(--muted); white-space: nowrap; }
 .badge.waiting { background: var(--warn-tint); border-color: var(--warn); color: var(--warn); font-weight: 600; }
 .badge.failed { border-color: var(--fail); color: var(--fail); }
@@ -1217,7 +1289,16 @@ kbd:empty { display: none; }
   .tree-group .row-title { font-size: 13px; }
   .tree-session { padding-left: calc(12px + var(--depth, 0) * 18px); }
   .create-form input, .create-form select, .create-actions button { min-height: 44px; }
-  .inbox-item > button, .inbox-actions button, .permission button { min-height: 44px; }
+  .inbox-main .row-title, .inbox-actions button, .permission button { min-height: 44px; }
+  /* The inbox: its counters and filters each one row that scrolls, and a
+     row's time and actions under it, so its title and lines have the width. */
+  .inbox-counters, .inbox-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .inbox-counters .inbox-counter { flex: 0 0 auto; padding: 4px 10px; }
+  .inbox-counter .count { font-size: 16px; }
+  .inbox-filter, .inbox-counters .mark-read { flex: none; }
+  .inbox-row { grid-template-columns: auto minmax(0, 1fr); }
+  .inbox-side { grid-column: 2; flex-direction: row; align-items: center; }
+  .inbox-actions .icon { min-width: 40px; }
   .git-file { min-height: 44px; }
   .changes .scope { min-height: 40px; }
   .md-code-bar .copy { min-height: 36px; padding: 0 12px; }
