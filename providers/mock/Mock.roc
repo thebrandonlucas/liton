@@ -257,7 +257,8 @@ Mock := [].{
 	## is working on started, waiting for you or not, and when it last
 	## changed.
 	## Its model, mode and thinking level are those of `settings`, or else its
-	## agent's defaults, and what its last turn used grows with each message.
+	## agent's defaults, what its last turn used grows with each message, and
+	## its summary is `Mock.summary`'s.
 	session : { id : Str, agent : Str, title : Str, settings : Settings }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
 	session = |{ id, agent, title, settings }, listed_workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
@@ -283,6 +284,61 @@ Mock := [].{
 			thinking: told(Mock.or_default(settings.thinking, default_thinking)),
 			modes: kind.modes,
 			usage: Mock.usage(timed.count_if(|shown| Mock.asks(shown.event)), running.map_ok(|offered| offered.context_max ?? 0) ?? 0),
+			summary: Mock.summary(timed.map(|shown| shown.event), current),
+		}
+	}
+
+	## A summary as a model might write after each turn, from the turns that
+	## ended alone: the first message as the goal, the last reply as what was
+	## done, and what the session waits on now. None before a turn ended.
+	summary : List(Chat.Event), Chat.Status -> Try(Chat.Summary, [Missing])
+	summary = |events, current| {
+		last_end = events.keep_oks(
+			|event| match event {
+				TurnEnded({ ended: at, .. }) => Ok(at)
+				_ => Err(Other)
+			},
+		).last()
+		said = |pick| events.keep_oks(pick).last().map_ok(Mock.sentence) ?? ""
+		asked = events.keep_oks(
+			|event| match event {
+				UserMessage({ text }) => Ok(text)
+				_ => Err(Other)
+			},
+		)
+		now =
+			match current {
+				Running => "Working on: ${asked.last().map_ok(Mock.sentence) ?? ""}"
+				AwaitingPermission => "Waiting for you to answer a permission request."
+				Failed(why) => "Stopped: ${why}"
+				_ => "Waiting for your next message."
+			}
+		last_end.map_err(|_| Missing).map_ok(
+			|at| {
+				goal: asked.first().map_ok(Mock.sentence) ?? "",
+				done: said(
+					|event| match event {
+						AgentMessage({ text }) => Ok(text)
+						_ => Err(Other)
+					},
+				),
+				now,
+				at,
+			},
+		)
+	}
+
+	## A message's first sentence, as plain text: its first line that says
+	## something, without Markdown's emphasis and code marks, up to its
+	## first full stop.
+	sentence : Str -> Str
+	sentence = |text| {
+		line : Str
+		line = text.split_on("\n").map(|each| each.trim()).find_first(|each| !each.is_empty()) ?? ""
+		plain = line.replace_each("**", "").replace_each("`", "").drop_prefix("#").trim().drop_prefix("- ")
+		match plain.split_first(". ") {
+			Ok({ before, .. }) => "${before}."
+			Err(_) => plain
 		}
 	}
 
@@ -461,6 +517,12 @@ expect {
 }
 expect Mock.status([{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: AgentMessage({ text: "x" }) }]) == Running
 expect Mock.status([]) == Idle
+
+expect {
+	events = Mock.seeds.first().map_ok(|seed| Mock.ended(Err(Missing), 0, seed.events.map(|event| { delay_ms: 0, event })).map(|item| item.event)) ?? []
+	Mock.summary(events, Idle) == Ok({ goal: "Logging in sends me back to /login.", done: "The redirect target is hard-coded to /login.", now: "Waiting for your next message.", at: "1970-01-01T00:00:00.000Z" })
+		and Mock.summary([UserMessage({ text: "hi" })], Running) == Err(Missing)
+}
 
 expect {
 	asked = [{ sequence: 1, event: StatusChanged(Running) }, { sequence: 2, event: PermissionRequested(Chat.permission({ request_id: "p1", tool: "edit", description: "" })) }, { sequence: 3, event: StatusChanged(AwaitingPermission) }]

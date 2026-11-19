@@ -42,7 +42,7 @@ Widgets := [].{
 			minimum_width: 200,
 			sets: [Session],
 			follows: [],
-			options: [{ key: "show_agent", label: "Show agent", help: "Name the agent under each session.", kind: Bool(Bool.True) }, Widgets.order],
+			options: [{ key: "show_agent", label: "Show agent", help: "Name the agent under each session.", kind: Bool(Bool.True) }, Widgets.order, Widgets.title],
 			parts: ["header", "list", "session"],
 		},
 		{
@@ -59,6 +59,7 @@ Widgets := [].{
 				{ key: "show_idle", label: "Show idle workspaces", help: "List workspaces whose agents need nothing.", kind: Bool(Bool.True) },
 				{ key: "sessions", label: "Sessions", help: "List each workspace's sessions under it, or, in a Workbench, as tabs of the workspace the main area shows.", kind: Choice({ default: "Rows", choices: ["Rows", "Tabs"] }) },
 				Widgets.order,
+				Widgets.title,
 			],
 			parts: ["header", "list", "group", "workspace", "session"],
 		},
@@ -76,8 +77,9 @@ Widgets := [].{
 				{ key: "show_status", label: "Show status lines", help: "Show when the agent starts, stops or waits.", kind: Bool(Bool.True) },
 				{ key: "show", label: "Show", help: "Show the whole chat, or, as the Inbox does, its status, actions and latest activity over the composer.", kind: Choice({ default: "Whole chat", choices: ["Whole chat", "Latest"] }) },
 				{ key: "collapse", label: "Collapse", help: "Show every tool call open, fold tool calls in a row into one line, or also fold each finished turn's work into one.", kind: Choice({ default: "Tools", choices: ["Full", "Tools", "Turns"] }) },
+				{ key: "summary", label: "Summary", help: "Show the session's summary, its goal, what it has done and what happens now, above its timeline: open, folded to its heading, or not at all.", kind: Choice({ default: "Open", choices: ["Open", "Folded", "Hidden"] }) },
 			],
-			parts: ["header", "timeline", "bubble", "tool-card", "permission", "composer"],
+			parts: ["header", "summary", "timeline", "bubble", "tool-card", "permission", "composer"],
 		},
 		{
 			id: "inbox",
@@ -95,6 +97,7 @@ Widgets := [].{
 				{ key: "sort", label: "Sort", help: "Sort sessions in each group by when they last changed, project, status or title.", kind: Choice({ default: "Updated", choices: ["Updated", "Project", "Status", "Title"] }) },
 				{ key: "direction", label: "Direction", help: "Sort descending, the latest first, or ascending.", kind: Choice({ default: "Descending", choices: ["Descending", "Ascending"] }) },
 				{ key: "snooze_length", label: "Snooze length", help: "How long Snooze sets an item aside.", kind: Choice({ default: "1 hour", choices: ["1 hour", "1 day", "1 week"] }) },
+				Widgets.title,
 			],
 			parts: ["header", "section", "item", "actions"],
 		},
@@ -276,6 +279,11 @@ Widgets := [].{
 	## The order of a list of sessions or workspaces: the latest first, or by name.
 	order : Option
 	order = { key: "order", label: "Order", help: "List the latest first, or by name.", kind: Choice({ default: "Latest", choices: ["Latest", "Name"] }) }
+
+	## What titles a session in a list: the goal its summary names, once it
+	## has one, or its first message, as its provider titles it.
+	title : Option
+	title = { key: "title", label: "Title", help: "Title each session by the goal its summary names, once it has one, or by its first message.", kind: Choice({ default: "Goal", choices: ["Goal", "First message"] }) }
 
 	## The widget `id`, or a bare view of that id if there is none.
 	find : Str -> Widget

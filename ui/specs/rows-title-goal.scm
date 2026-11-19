@@ -1,0 +1,16 @@
+(test "Liton — Workspaces and Sessions title a session by its summary's goal once it has one, or by its first message as their Title option says, at once"
+  (setup
+    (initial-time "2026-01-01T10:05:00Z")
+    (local-storage "liton.snapshot" "{\"collapsed\":[],\"grid\":{\"columns\":[1,1,1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"tile-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"workspaces\"}],\"right\":1,\"top\":0},{\"active\":\"pane-2\",\"bottom\":1,\"id\":\"tile-2\",\"left\":1,\"panes\":[{\"id\":\"pane-2\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":2,\"top\":0},{\"active\":\"pane-3\",\"bottom\":1,\"id\":\"tile-3\",\"left\":2,\"panes\":[{\"id\":\"pane-3\",\"options\":[],\"pinned\":\"\",\"widget\":\"changes\"}],\"right\":3,\"top\":0}]},\"hidden\":[],\"shell\":\"Workbench\",\"theme\":\"\",\"version\":8}"))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"workspace.git\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"the login page loops, can you look\",\"updated\":\"2026-01-01T08:00:00.000Z\",\"workspace\":{\"directory\":\"/src\",\"id\":\"w1\"},\"summary\":{\"at\":\"2026-01-01T08:00:00.000Z\",\"done\":\"Found the redirect.\",\"goal\":\"Fix the login redirect loop.\",\"now\":\"Waiting for review.\"}},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write post\",\"updated\":\"2026-01-01T09:00:00.000Z\",\"workspace\":{\"directory\":\"/src\",\"id\":\"w2\"}}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\"],\"state\":\"Idle\"},{\"branch\":{\"Branch\":\"blog\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w2\",\"kind\":\"Worktree\",\"labels\":[],\"name\":\"blog\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s2\"],\"state\":\"Idle\"}]}}]}]}")
+    (run-effect 2)
+    (expect-text (test-id "slot-left") "WorkspacesWorkspacesApp2Write postblogidle1hFix the login redirect loop.mainidle2h")
+    (click (role button :name "Settings"))
+    (expect-value (label "Title") "Goal")
+    (select-option (label "Title") "First message")
+    (expect-text (test-id "slot-left") "WorkspacesWorkspacesApp2Write postblogidle1hthe login page loops, can you lookmainidle2h")
+  )
+)

@@ -1878,7 +1878,7 @@ Model := [].{
 		view_of = |kind| tile.panes.find_first(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, kind)).map_ok(|shown| shown.id) ?? ""
 		row = |tab| {
 			(key, title, widget, dot) = match tab {
-				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_row(state, Model.session(state, session_id)).dot)
+				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_dot(state, Model.session(state, session_id)))
 				Diff => ("diff", "Diff", "changes", "")
 				Ticket(ticket_id) => (Context.to_str(Ticket(ticket_id)), TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| ticket.summary.key) ?? ticket_id, "tickets", "")
 			}
@@ -3034,12 +3034,12 @@ Model := [].{
 			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: if (by_status) "" else branch, second_line: second_line_of(workspace, branch), counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: Model.focused(state, [Session, Workspace]) == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
 			match sessions.first() {
 				Ok(lone) if sessions.len() == 1 => {
-					lone_row = Model.session_row(state, lone)
+					lone_row = Model.session_row(state, shown, lone)
 					lone_branch = if (workspace.kind == Worktree) branch_name(workspace.branch) else ""
 					[mark({ ..lone_row, detail: if (by_status) "" else lone_branch, second_line: second_line_of(workspace, lone_branch), counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True, pinned: workspace.pinned })]
 				}
 				_ if Model.option(shown, "sessions") == "Tabs" => [row]
-				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
+				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, shown, listed_session), depth: 1 })).prepend(row)
 			}
 		}
 		groups.join_map(
@@ -3070,18 +3070,51 @@ Model := [].{
 		Attention.ranks.find_first(|rank| ranks.contains(rank)) ?? workspace.state
 	}
 
-	## A session's row, in a Workspaces or a Sessions pane.
-	session_row : State, Chat.Session -> Row
-	session_row = |state, listed_session| {
+	## A session's status dot: as urgent as its attention, and unread.
+	session_dot : State, Chat.Session -> Str
+	session_dot = |state, listed_session| {
+		dot = attention_dot(Attention.item(listed_session, []).state)
+		if (Model.unread(state, listed_session.id)) "${dot} unread" else dot
+	}
+
+	## A session's title in a list `shown`: the goal its summary names, as
+	## the list's Title option says by default, or else its own.
+	session_title : Pane, Chat.Session -> Str
+	session_title = |shown, listed_session|
+		match (Model.option(shown, "title"), listed_session.summary) {
+			("Goal", Ok({ goal, .. })) if !goal.is_empty() => goal
+			_ => listed_session.title
+		}
+
+	## The summary a chat pane shows above its timeline, and whether open,
+	## unless its session has none or its Summary option hides it.
+	summary_of : State, Str -> Try({ summary : Chat.Summary, open : Bool }, [Missing])
+	summary_of = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		shows = Model.option(shown, "summary")
+		if (shows == "Hidden") Err(Missing) else Model.session(state, Model.session_of(state, shown)).summary.map_ok(|summary| { summary, open: shows == "Open" })
+	}
+
+	## An inbox item's title in the Inbox `shown`: as its session's is in a
+	## list (`session_title`), or its own while it lists no such session.
+	item_title : State, Pane, Attention.Item -> Str
+	item_title = |state, shown, item| state.sessions.find_first(|listed_session| listed_session.id == item.session_id).map_ok(|listed_session| Model.session_title(shown, { ..listed_session, title: item.title })) ?? item.title
+
+	## Folds a chat pane's summary to its heading, or opens it.
+	toggle_summary : State, Str -> State
+	toggle_summary = |state, pane_id| Model.set_option(state, pane_id, "summary", if (Model.option(Model.pane(state, pane_id), "summary") == "Open") "Folded" else "Open")
+
+	## A session's row, in a Workspaces or a Sessions pane `shown`.
+	session_row : State, Pane, Chat.Session -> Row
+	session_row = |state, shown, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", second_line: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: Model.session_title(shown, listed_session), detail: "", second_line: "", counts: Model.no_counts, dot: Model.session_dot(state, listed_session), status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
 	## it shows that.
 	session_rows : State, Pane -> List(Row)
-	session_rows = |state, shown| Model.ordered(state.sessions, Model.option(shown, "order"), |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).map(|listed_session| { ..Model.session_row(state, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
+	session_rows = |state, shown| Model.ordered(state.sessions, Model.option(shown, "order"), |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).map(|listed_session| { ..Model.session_row(state, shown, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
 
 	## When a session last changed, as `Attention.recency` orders times: as
 	## its inbox item says, else as it does. One starting is the newest.

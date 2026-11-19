@@ -30,6 +30,7 @@ import Drag
 import Wallpaper
 import Spinner
 import InboxDesk
+import Summary
 
 Liton := [].{
 
@@ -1796,7 +1797,7 @@ Liton := [].{
 						model = model0.lift_row()
 						id = row.key()
 						shown_item = row.field(|listed| listed.item)
-						title = shown_item.map(|item| item.title)
+						title = shown_item.map2(model.signal(), |item, state| { item, state }).map2(pane.lift_row(), |{ item, state }, shown| Model.item_title(state, shown, item))
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						workspace = id.map2(model.signal(), |session_id, state| if (state.capabilities.contains(Capability.workspaces_v1)) Model.row_workspace(state, session_id) else Err(NotFound))
@@ -2639,8 +2640,8 @@ Liton := [].{
 		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
 	}
 
-	## A chat pane: its session's timeline, a permission it asks for, and the
-	## composer.
+	## A chat pane: its session's summary, its timeline, a permission it
+	## asks for, and the composer.
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
 		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
@@ -2727,15 +2728,15 @@ Liton := [].{
 						),
 					],
 				),
-			]).prepend(Liton.session_overview(model0, id, shown)),
+			]).prepend(Summary.view(model0, id)).prepend(Liton.session_overview(model0, id, shown)),
 		)
 	}
 
 	## Over a chat pane showing only the latest (its option `show`), the
 	## session's status, where it works and how long it has worked or since
 	## it was active; Show the whole chat, Snooze, Pin its workspace and
-	## Rename; and its summary's place. A pane that shows the whole chat
-	## after showing the latest has Show the latest only.
+	## Rename, over its summary (`Summary.view`). A pane that shows the
+	## whole chat after showing the latest has Show the latest only.
 	session_overview : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	session_overview = |model, id, shown| {
 		session = shown.map(|{ pane, state }| Model.session(state, Model.session_of(state, pane)))
@@ -2786,10 +2787,6 @@ Liton := [].{
 									|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
 									|| Engine.text(""),
 								),
-								# The session's summary goes here once a capability offers
-								# one (a Goal, what is Done and what it does Now); until
-								# then it shows nothing.
-								Html.div_attrs([Engine.class("session-summary"), Engine.attr("data-part", "summary"), Engine.attr("hidden", "")], []),
 							],
 						)
 					Whole => Html.div("overview-whole", [Html.button("Show the latest only", [Engine.class("show-latest")], show("Latest"))])

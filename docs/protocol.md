@@ -296,6 +296,19 @@ agent's `currentModeId`, `effectiveThinkingOptionId` (or its
 `thinkingOptionId`), `availableModes` and `lastUsage`, and a provider's
 models and modes in its `get_providers_snapshot_request`.
 
+A session tells its `summary` too, once one is written: `{"goal", "done",
+"now", "at"}`, a sentence each of what the session is for, what it has done
+and what happens now, and when the turn it covers ended. It is a field of
+the session rather than a topic of its own: the lists that title a session
+by its goal already poll `sessions`, and a summary is three sentences.
+The mock writes one after each turn from the turn itself. For Paseo's, the
+daemon asks Paseo (0.15 or later, whose `server_info` lists the
+`backgroundAgents` feature) for a background agent on the session's
+smallest model, held to a JSON schema, 30 s after a turn ended, given what
+happened since and the summary so far: one agent per summary, at most two
+at a time, for the sessions whose timelines it fetches. Paseo archives the
+agent once it answered, and neither Paseo's lists nor liton's show it.
+
 Where a turn ends, a timeline has a `{"TurnEnded": {"started", "ended"}}`
 after the turn's last event: once its agent finished, failed or was stopped,
 and before a message that interrupts it, with when the turn started, left
