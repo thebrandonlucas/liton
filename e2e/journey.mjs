@@ -102,7 +102,7 @@ try {
     await see("Inbox", ".inbox-section .inbox-item", "Find the flaky CI test");
     await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
     // Unread until opened, then read at once.
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
     await see("Inbox", ".inbox-item.unread > button");
     const title = await page.evaluate(() => document.querySelector(".inbox-item.unread > button").textContent);
     await click("Inbox", ".inbox-item.unread > button", title);
@@ -113,14 +113,14 @@ try {
     assert.ok(await read(), `${title} read after polls`);
     await page.click(".settings-toggle");
     await click("Settings", "button", "Developer preset");
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
   });
   await step("the preset picker offers the setup's own preset, which loads its layout", async () => {
     await page.click(".settings-toggle");
     await click("Settings", "button", "Review preset");
     await until("only Changes", () => page.evaluate(() => [...document.querySelectorAll("section.pane")].map((s) => s.getAttribute("aria-label")).join() === "Changes"));
     await click("Settings", "button", "Developer preset");
-    await page.click(".settings-toggle");
+    await click("Settings", ".settings-close", "Back");
   });
   await step("clicking a workspace shows its session that needs you in Chat, and its git in Changes", async () => {
     await click("Workspaces", ".tree-workspace button", "main");
