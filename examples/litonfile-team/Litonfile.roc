@@ -18,11 +18,15 @@ review = {
 	snapshot: {
 		version: Setup.snapshot_version,
 		shell: Tiling,
-		columns: [
-			{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
-			{ id: "column-2", size: 2, tabbed: Bool.False, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-			{ id: "column-3", size: 2, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [{ key: "diff_layout", value: "Split" }] }] },
-		],
+		grid: {
+			columns: [1, 2, 2],
+			rows: [1],
+			tiles: [
+				{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
+				{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
+				{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [{ key: "diff_layout", value: "Split" }] }] },
+			],
+		},
 		collapsed: [],
 		hidden: [],
 		theme: "",

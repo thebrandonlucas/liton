@@ -13,6 +13,7 @@ import cap.Tickets
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
+import setup.Grid
 import setup.Setup
 import Highlight
 import Speech
@@ -24,6 +25,8 @@ Model := [].{
 	## The layout's parts, as setups' presets hold them (setup/Setup.roc).
 	Pane : Setup.Pane
 
+	Tile : Grid.Tile
+
 	Column : Setup.Column
 
 	## A pane and column as snapshots before version 4 saved them, without options.
@@ -34,7 +37,7 @@ Model := [].{
 	Shell : Setup.Shell
 
 	## `collapsed` are the Workbench drawers hidden, `hidden` its panes hidden.
-	Layout : { shell : Shell, columns : List(Column), collapsed : List(Slot), hidden : List(Str) }
+	Layout : { shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str) }
 
 	Slot : Setup.Slot
 
@@ -75,12 +78,12 @@ Model := [].{
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
-		columns : List(Column),
+		grid : Grid.Layout,
 		collapsed : List(Slot),
 		hidden : List(Str),
 
-		## The column a narrow screen shows.
-		active_column : Str,
+		## The tile a narrow screen shows.
+		active_tile : Str,
 
 		## The panel a narrow Workbench last scrolled to, by the reference
 		## focusing it, and the URL hashes it replaced and pushed for the
@@ -89,7 +92,7 @@ Model := [].{
 		jump : { serial : U64, panel : Str, replace : Str, push : Str },
 		url_hash : Str,
 
-		## Counts on the numbers ending pane and column ids, so each is new.
+		## Counts on the numbers ending pane and tile ids, so each is new.
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
 
@@ -287,21 +290,21 @@ Model := [].{
 	## The layout of a preset or snapshot, its parts split as `split_parts`
 	## does.
 	layout_of : Snapshot -> Layout
-	layout_of = |{ version, shell, columns, collapsed, hidden, .. }| { shell, columns: Model.split_parts(version, columns), collapsed, hidden }
+	layout_of = |{ version, shell, grid, collapsed, hidden, .. }| { shell, grid: Model.split_parts(version, grid), collapsed, hidden }
 
-	## The columns of a snapshot of `version`, with a part split since then
+	## The grid of a snapshot of `version`, with a part split since then
 	## followed by the part split from it: before version 7, a Rooms pane
 	## showed a room too, which a Room pane beside it now does, and a Tickets
 	## pane a ticket, as a Ticket pane now does.
-	split_parts : U32, List(Column) -> List(Column)
-	split_parts = |version, columns| {
+	split_parts : U32, Grid.Layout -> Grid.Layout
+	split_parts = |version, grid| {
 		split = |listed_pane|
 			match listed_pane.widget {
 				"rooms" if version < 7 => [listed_pane, { id: "${listed_pane.id}-room", widget: "room", pinned: "", options: [] }]
 				"tickets" if version < 7 => [listed_pane, { id: "${listed_pane.id}-ticket", widget: "ticket", pinned: "", options: [] }]
 				_ => [listed_pane]
 			}
-		columns.map(|column| { ..column, panes: column.panes.join_map(split) })
+		{ ..grid, tiles: grid.tiles.map(|tile| { ..tile, panes: tile.panes.join_map(split) }) }
 	}
 
 	## liton's own presets (setup/Default.roc): Developer, the default,
@@ -331,10 +334,10 @@ Model := [].{
 				sub_focus: None,
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
-				columns: [],
+				grid: Grid.empty,
 				collapsed: [],
 				hidden: [],
-				active_column: "",
+				active_tile: "",
 				jump: { serial: 0, panel: "", replace: "", push: "" },
 				url_hash: "",
 				next_id: 1,
@@ -397,35 +400,40 @@ Model := [].{
 	## Shows a layout, counting ids on from the numbers ending theirs. A
 	## Workbench shows the panel the URL names first, or its main area.
 	layout : State, Layout -> State
-	layout = |state, { shell, columns, collapsed, hidden }| {
-		ids = columns.join_map(|column| column.panes.map(|listed_pane| listed_pane.id).append(column.id))
+	layout = |state, { shell, grid, collapsed, hidden }| {
+		ids = grid.tiles.join_map(|tile| tile.panes.map(|listed_pane| listed_pane.id).append(tile.id))
 		next_id = ids.fold(1, |next, id| U64.max(next, (U64.from_str(id.split_last("-").map_ok(|parts| parts.after) ?? "") ?? 0) + 1))
 		slot = if (shell == Workbench) Model.slot_hashed(state.url_hash) else Free
-		shown = columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 0)
+		laid = { ..state, shell, grid, next_id, collapsed, hidden }
+		shown = if (shell == Workbench) Model.slot_tile(laid, slot) else grid.tiles.first().map_ok(|tile| tile.id) ?? ""
 		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(slot), replace: "", push: "" }
-		{ ..state, shell, columns, next_id, collapsed, hidden, jump, active_column: shown.map_ok(|column| column.id) ?? "" }
+		{ ..laid, jump, active_tile: shown }
 	}
 
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
-	snapshot_of = |{ shell, columns, collapsed, hidden }| { version: Setup.snapshot_version, shell, columns, collapsed, hidden, theme: "" }
+	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 7, its parts split as `split_parts`
-	## does; before version 6, it hides no panes; before version
+	## Reads a snapshot, a Workbench's only if its grid keeps a Workbench's
+	## rules (`workbench_holds`). Before version 8, its columns are laid out
+	## as a grid (`Setup.grid_of`); before version 7, its parts split as
+	## `split_parts` does; before version 6, it hides no panes; before version
 	## 5, it shows the setup's default theme; before version 4, panes have
 	## their options' defaults and the drawers show. A version 1 or 2 one loads in Tiling, a version 1 one with a
 	## column for each pane, unless it holds just the old default's widgets:
 	## then it loads the Developer preset.
 	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		# Since version 4 a snapshot is laid out alike; version 5 names its
+		gridded : Try(Snapshot, _)
+		gridded = Json.parse(text)
+		# From version 4 to 7 a snapshot is laid out alike; version 5 names its
 		# theme, and version 6 the panes it hides.
 		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
 		laid = Json.parse(text)
@@ -440,11 +448,12 @@ Model := [].{
 		first : Try({ version : U32, panes : List(OldPane) }, _)
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
-		match (laid, third, second, first) {
-			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns: Model.split_parts(version, columns), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
-			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [], hidden: [] }))
-			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
-			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
+		match (gridded, laid, third, second, first) {
+			(Ok(saved), _, _, _, _) if saved.version == 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
+			(_, Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, grid: Model.split_parts(version, Setup.grid_of(columns)), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(_, _, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, grid: Setup.grid_of(Model.with_options(columns)), collapsed: [], hidden: [] }))
+			(_, _, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
+			(_, _, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
 			_ => Err(Invalid)
 		}
 	}
@@ -454,12 +463,23 @@ Model := [].{
 
 	migrated : List(Column) -> Layout
 	migrated = |columns|
-		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, columns, collapsed: [], hidden: [] }
+		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, grid: Setup.grid_of(columns), collapsed: [], hidden: [] }
+
+	## Whether `grid` keeps a Workbench's rules: its left and right drawers
+	## are a column each at its edges, with the main area between, each holds
+	## a tile, and no tile spans two of them.
+	workbench_holds : Grid.Layout -> Bool
+	workbench_holds = |grid| {
+		last = grid.columns.len()
+		within = grid.tiles.all(|tile| if (tile.left == 0) tile.right == 1 else if (tile.right == last) tile.left + 1 == last else Bool.True)
+		holds = |slot| grid.tiles.any(|tile| Model.slot_in(Workbench, grid, tile.id) == slot)
+		last >= 3 and within and holds(Left) and holds(Main) and holds(Right)
+	}
 
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, notice: "Loaded a layout of ${loaded.columns.len().to_str()} columns." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -529,10 +549,10 @@ Model := [].{
 		}
 	}
 
-	## Marks the pane clicked or focused in, and shows its column on a narrow
+	## Marks the pane clicked or focused in, and shows its tile on a narrow
 	## screen. Another pane's menu, or one of its rows', closes.
-	focus_pane : State, { pane : Str, column : Str } -> State
-	focus_pane = |state, { pane: pane_id, column }| { ..state, focused_pane: pane_id, active_column: column, menu: if (state.menu == pane_id or state.menu.starts_with("${pane_id} ")) state.menu else "" }
+	focus_pane : State, { pane : Str, tile : Str } -> State
+	focus_pane = |state, { pane: pane_id, tile }| { ..state, focused_pane: pane_id, active_tile: tile, menu: if (state.menu == pane_id or state.menu.starts_with("${pane_id} ")) state.menu else "" }
 
 	toggle_menu : State, Str -> State
 	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
@@ -722,36 +742,57 @@ Model := [].{
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
-	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden })
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden })
 
-	## Every pane, column by column.
+	## Every pane, tile by tile.
 	panes : State -> List(Pane)
-	panes = |state| state.columns.join_map(|column| column.panes)
+	panes = |state| state.grid.tiles.join_map(|tile| tile.panes)
 
-	## A new pane of `widget`, focused, its column shown on a narrow screen: a
-	## tab in a Workbench's main area, or a column of its own at the end in
-	## Tiling. A Changes diff the main area showed goes back to its pane, so
-	## the new tab shows its widget.
+	## The tiles, the leftmost first, then the topmost: the order a narrow
+	## screen shows them in.
+	tiles_in_order : State -> List(Tile)
+	tiles_in_order = |state| state.grid.tiles.sort_with(|one, other| if (one.left != other.left) (if (one.left < other.left) Before else After) else if (one.top < other.top) Before else if (one.top > other.top) After else Same)
+
+	## The tile holding pane `id`.
+	tile_of : State, Str -> Try(Tile, [NotFound])
+	tile_of = |state, id| state.grid.tiles.find_first(|tile| tile.panes.any(|listed_pane| listed_pane.id == id))
+
+	## A new pane of `widget`, focused, its tile shown on a narrow screen: a
+	## tab in a Workbench's main area, or a tile of its own in a new column at
+	## the right in Tiling. A Changes diff the main area showed goes back to
+	## its pane, so the new tab shows its widget.
 	add_pane : State, Str -> State
 	add_pane = |state, widget| {
 		added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
-		column = { id: "column-${(state.next_id + 1).to_str()}", size: 1, tabbed: Bool.False, active: added.id, panes: [added] }
-		(columns, next_id, shown) =
+		tile = { id: "tile-${(state.next_id + 1).to_str()}", left: 0, top: 0, right: 1, bottom: 1, active: added.id, panes: [added] }
+		main = Model.slot_tile(state, Main)
+		(grid, next_id, shown) =
 			if (state.shell == Workbench)
-				(state.columns.map_with_index(|main, index| if (index == 1) { ..main, active: added.id, panes: main.panes.append(added) } else main), state.next_id + 1, state.columns.get(1).map_ok(|main| main.id) ?? "")
+				(Model.change_tile(state.grid, main, |into| { ..into, active: added.id, panes: into.panes.append(added) }), state.next_id + 1, main)
 			else
-				(state.columns.append(column), state.next_id + 2, column.id)
-		Model.show_column({ ..state, columns, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
+				(Grid.appended(state.grid, tile), state.next_id + 2, tile.id)
+		Model.show_tile({ ..state, grid, next_id, focused_pane: added.id, git_panes: state.git_panes.map(|followed| { ..followed, in_main: Bool.False }) }, shown)
 	}
 
 	slot_of : State, Str -> Slot
-	slot_of = |state, column_id|
-		match (state.shell, state.columns.find_first_index(|column| column.id == column_id)) {
-			(Workbench, Ok(0)) => Left
-			(Workbench, Ok(1)) => Main
-			(Workbench, Ok(2)) => Right
+	slot_of = |state, tile_id| Model.slot_in(state.shell, state.grid, tile_id)
+
+	## Where tile `tile_id` sits in a grid of `shell`: in a Workbench, its
+	## first column is the left drawer, its last the right drawer, and those
+	## between the main area.
+	slot_in : Shell, Grid.Layout, Str -> Slot
+	slot_in = |shell, grid, tile_id|
+		match (shell, grid.tiles.find_first(|tile| tile.id == tile_id)) {
+			(Workbench, Ok(tile)) => if (tile.left == 0) Left else if (tile.right == grid.columns.len()) Right else Main
 			_ => Free
 		}
+
+	## The first tile of `slot`, the leftmost and then topmost, "" for none.
+	slot_tile : State, Slot -> Str
+	slot_tile = |state, slot| {
+		tiles = state.grid.tiles.keep_if(|tile| Model.slot_of(state, tile.id) == slot)
+		tiles.find_first(|tile| !tiles.any(|other| other.left < tile.left or (other.left == tile.left and other.top < tile.top))).map_ok(|tile| tile.id) ?? ""
+	}
 
 	slot_name : Slot -> Str
 	slot_name = |slot|
@@ -765,65 +806,80 @@ Model := [].{
 	slot_named : Str -> Slot
 	slot_named = |name| [Left, Main, Right].find_first(|slot| Model.slot_name(slot) == name) ?? Free
 
-	## Moves a pane to the end of a Workbench slot, as its active tab, and
-	## shows it and the slot's drawer.
+	## Moves a pane to the end of a Workbench slot's first tile, as its active
+	## tab, and shows it and the slot's drawer.
 	move_to_slot : State, Str, Slot -> State
-	move_to_slot = |state, id, slot| Model.place(state, id, { column: state.columns.get([Left, Main, Right].find_first_index(|candidate| candidate == slot) ?? 3).map_ok(|column| column.id) ?? "", at: End })
+	move_to_slot = |state, id, slot| Model.place(state, id, Into({ tile: Model.slot_tile(state, slot), at: End }))
 
-	## Where a pane goes: into column `column` at its end or beside one of its
-	## panes, or into a new column on either side of it. "" is nowhere.
-	Place : { column : Str, at : [End, Before(Str), After(Str), NewLeft, NewRight] }
+	## Where a pane goes: into tile `tile`'s tabs, at their end or beside one
+	## of them, or into a new tile on `side` of tile `tile`, which it splits.
+	Drop : [Nowhere, Into({ tile : Str, at : [End, Before(Str), After(Str)] }), Beside({ tile : Str, side : Grid.Side })]
 
-	nowhere : Place
-	nowhere = { column: "", at: End }
+	nowhere : Drop
+	nowhere = Nowhere
 
-	## Moves a pane to `place` as its column's active tab, showing it and its
-	## slot's drawer. In Tiling, the narrow screen shows its column.
-	place : State, Str, Place -> State
-	place = |state, id, { column: to, at }| {
+	## The tile a drop goes into or beside, "" for none.
+	drop_tile : Drop -> Str
+	drop_tile = |drop|
+		match drop {
+			Into({ tile, .. }) | Beside({ tile, .. }) => tile
+			Nowhere => ""
+		}
+
+	## Moves a pane where `drop` puts it, as its tile's active tab, showing it
+	## and its slot's drawer, and closes the tile it leaves if that is now
+	## empty (`closed_if_empty`). In Tiling, the narrow screen shows its tile.
+	## A Workbench's grid must still keep its rules (`workbench_holds`).
+	place : State, Str, Drop -> State
+	place = |state, id, drop| {
 		moved = Model.pane(state, id)
-		left_behind = state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) })
-		added = { id: "column-${state.next_id.to_str()}", size: 1, tabbed: Bool.False, active: id, panes: [moved] }
+		from = Model.tile_of(state, id).map_ok(|tile| tile.id) ?? ""
+		left_behind = { ..state.grid, tiles: state.grid.tiles.map(|tile| { ..tile, panes: tile.panes.drop_if(|listed_pane| listed_pane.id == id) }) }
 		inserted = |listed_panes, beside, after| {
 			index = (listed_panes.find_first_index(|listed_pane| listed_pane.id == beside) ?? listed_panes.len()) + (if (after) 1 else 0)
 			listed_panes.take_first(index).append(moved).concat(listed_panes.drop_first(index))
 		}
-		columns = left_behind.join_map(
-			|column|
-				match at {
-					_ if column.id != to => [column]
-					NewLeft => [added, column]
-					NewRight => [column, added]
-					Before(beside) => [{ ..column, active: id, panes: inserted(column.panes, beside, Bool.False) }]
-					After(beside) => [{ ..column, active: id, panes: inserted(column.panes, beside, Bool.True) }]
-					End => [{ ..column, active: id, panes: column.panes.append(moved) }]
-				},
-		)
-		new_column = at == NewLeft or at == NewRight
-		shown = if (new_column) added.id else to
-		slot = Model.slot_of(state, to)
-		if (!state.columns.any(|column| column.id == to))
-			state
-		else
-			Model.drop_empty_columns({ ..state, columns, next_id: if (new_column) state.next_id + 1 else state.next_id, active_column: if (state.shell == Tiling) shown else state.active_column, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+		(grid, shown, next_id) =
+			match drop {
+				Into({ tile: into, at }) => {
+					joined = |tile|
+						match at {
+							End => tile.panes.append(moved)
+							Before(beside) => inserted(tile.panes, beside, Bool.False)
+							After(beside) => inserted(tile.panes, beside, Bool.True)
+						}
+					(Model.change_tile(left_behind, into, |tile| { ..tile, active: id, panes: joined(tile) }), into, state.next_id)
+				}
+				Beside({ tile: beside, side }) => {
+					added = "tile-${state.next_id.to_str()}"
+					(Grid.split(left_behind, beside, side, { id: added, left: 0, top: 0, right: 1, bottom: 1, active: id, panes: [moved] }), added, state.next_id + 1)
+				}
+				Nowhere => (state.grid, "", state.next_id)
+			}
+		slot = Model.slot_of(state, Model.drop_tile(drop))
+		placed = Model.tidied(Model.closed_if_empty({ ..state, grid, next_id, active_tile: if (state.shell == Tiling) shown else state.active_tile, collapsed: state.collapsed.drop_if(|hidden| hidden == slot), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) }, from))
+		if (from.is_empty() or !state.grid.tiles.any(|tile| tile.id == Model.drop_tile(drop)) or (state.shell == Workbench and !Model.workbench_holds(placed.grid))) state else placed
 	}
 
-	## Where dropping pane `id` places it, nowhere unless it moves it: a
-	## Workbench's slot must fit its widget, and Tiling's new column must not
-	## hold it alone already.
-	drop_place : State, Str, Place -> Place
+	## `wanted` if dropping pane `id` there moves it, else nowhere: a
+	## Workbench's slot must fit its widget, and only its main area splits
+	## side by side; a pane alone in its tile doesn't split that tile.
+	drop_place : State, Str, Drop -> Drop
 	drop_place = |state, id, wanted| {
-		from = state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)).map_ok(|column| column.id) ?? ""
-		alone = state.columns.any(|column| column.id == from and column.panes.len() == 1)
-		fits = Widgets.fits(Widgets.find(Model.pane(state, id).widget), Model.slot_of(state, wanted.column))
+		from = Model.tile_of(state, id)
+		from_id = from.map_ok(|tile| tile.id) ?? ""
+		alone = from.map_ok(|tile| tile.panes.len() == 1) ?? Bool.False
+		target = Model.drop_tile(wanted)
+		fits = state.grid.tiles.any(|tile| tile.id == target) and Widgets.fits(Widgets.find(Model.pane(state, id).widget), Model.slot_of(state, target))
 		allowed =
-			match wanted.at {
-				_ if from.is_empty() or !fits or !state.columns.any(|column| column.id == wanted.column) => Bool.False
-				Before(beside) | After(beside) => beside != id
-				End => wanted.column != from
-				NewLeft | NewRight => state.shell == Tiling and !(alone and wanted.column == from)
+			match wanted {
+				_ if from_id.is_empty() or !fits => Bool.False
+				Into({ at: Before(beside), .. }) | Into({ at: After(beside), .. }) => beside != id
+				Into({ tile, at: End }) => tile != from_id
+				Beside({ tile, side }) => !(alone and tile == from_id) and (state.shell == Tiling or side == Up or side == Down or Model.slot_of(state, tile) == Main)
+				Nowhere => Bool.False
 			}
-		if (allowed) wanted else Model.nowhere
+		if (allowed) wanted else Nowhere
 	}
 
 	## The value of a pane's option `key`, or its widget's default.
@@ -833,32 +889,36 @@ Model := [].{
 	set_option : State, Str, Str, Str -> State
 	set_option = |state, id, key, value| {
 		set = |listed_pane| if (listed_pane.id == id) { ..listed_pane, options: listed_pane.options.drop_if(|old| old.key == key).append({ key, value }) } else listed_pane
-		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(set) }) }
+		Model.with_panes(state, set)
 	}
+
+	## Every pane changed by `change`.
+	with_panes : State, (Pane -> Pane) -> State
+	with_panes = |state, change| { ..state, grid: { ..state.grid, tiles: state.grid.tiles.map(|tile| { ..tile, panes: tile.panes.map(change) }) } }
 
 	## The focus reference of a Workbench slot's panel, which focusing scrolls
 	## into view.
 	panel_ref : Slot -> Str
 	panel_ref = |slot| if (slot == Free) "" else "panel-${Model.slot_name(slot)}"
 
-	## Shows a column on a narrow screen, scrolling a Workbench to its panel,
+	## Shows a tile on a narrow screen, scrolling a Workbench to its panel,
 	## whose hash then replaces the URL's.
-	show_column : State, Str -> State
-	show_column = |state, column_id| Model.jump_to(state, column_id, Replace)
+	show_tile : State, Str -> State
+	show_tile = |state, tile_id| Model.jump_to(state, tile_id, Replace)
 
-	## Shows a column as `show_column` does. `Push` leaves the panel the user
+	## Shows a tile as `show_tile` does. `Push` leaves the panel the user
 	## is in as an entry of the browser's history, so back returns to it,
 	## unless the URL names the panel shown already.
 	jump_to : State, Str, [Replace, Push] -> State
-	jump_to = |state, column_id, how| {
-		(from, to) = (Model.slot_hash(Model.slot_of(state, state.active_column)), Model.slot_hash(Model.slot_of(state, column_id)))
+	jump_to = |state, tile_id, how| {
+		(from, to) = (Model.slot_hash(Model.slot_of(state, state.active_tile)), Model.slot_hash(Model.slot_of(state, tile_id)))
 		(replace, push) = match how {
 			Replace if to != state.url_hash => (to, "")
 			Push if to != state.url_hash and from != to => (from, to)
 			_ => ("", "")
 		}
-		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(Model.slot_of(state, column_id)), replace, push }
-		if (to.is_empty()) { ..state, active_column: column_id } else { ..state, active_column: column_id, jump, url_hash: to }
+		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(Model.slot_of(state, tile_id)), replace, push }
+		if (to.is_empty()) { ..state, active_tile: tile_id } else { ..state, active_tile: tile_id, jump, url_hash: to }
 	}
 
 	## The URL hash naming a Workbench slot's panel, and the slot a hash
@@ -874,49 +934,53 @@ Model := [].{
 	went : State, Str -> State
 	went = |state0, url| {
 		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
-		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, columns: state.columns, collapsed: state.collapsed, hidden: state.hidden }) else state
+		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 
 	toggle_drawer : State, Slot -> State
 	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
 	close_pane : State, Str -> State
-	close_pane = |state, id| Model.drop_empty_columns({ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.drop_if(|listed_pane| listed_pane.id == id) }), hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) })
+	close_pane = |state, id| {
+		from = Model.tile_of(state, id).map_ok(|tile| tile.id) ?? ""
+		removed = { ..state, grid: { ..state.grid, tiles: state.grid.tiles.map(|tile| { ..tile, panes: tile.panes.drop_if(|listed_pane| listed_pane.id == id) }) }, hidden: state.hidden.drop_if(|hidden_id| hidden_id == id) }
+		Model.tidied(Model.closed_if_empty(removed, from))
+	}
 
 	## A tab's ×: in a Workbench it hides the pane, in Tiling it closes it.
 	close_tab : State, Str -> State
 	close_tab = |state, id| if (state.shell == Workbench) Model.hide_pane(state, id) else Model.close_pane(state, id)
 
-	## A column's panes a Workbench doesn't hide.
-	shown_panes : State, Column -> List(Pane)
-	shown_panes = |state, column| column.panes.drop_if(|listed_pane| state.hidden.contains(listed_pane.id))
+	## A tile's panes a Workbench doesn't hide.
+	shown_panes : State, Tile -> List(Pane)
+	shown_panes = |state, tile| tile.panes.drop_if(|listed_pane| state.hidden.contains(listed_pane.id))
 
-	## The panes hidden in the column of pane `id`, which its ⋯ menu shows again.
+	## The panes hidden in the tile of pane `id`, which its ⋯ menu shows again.
 	hidden_beside : State, Str -> List(Pane)
-	hidden_beside = |state, id| state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)).map_ok(|column| column.panes.keep_if(|listed_pane| state.hidden.contains(listed_pane.id))) ?? []
+	hidden_beside = |state, id| Model.tile_of(state, id).map_ok(|tile| tile.panes.keep_if(|listed_pane| state.hidden.contains(listed_pane.id))) ?? []
 
 	## What hiding a Workbench pane hides, as its ⋯ menu names it: the pane,
-	## while its column shows another, else its drawer. The main area's last
+	## while its tile shows another, else its drawer. The main area's last
 	## pane, and Tiling's, don't hide: "".
 	hide_label : State, Str -> Str
 	hide_label = |state, id|
-		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
-			Ok(column) if state.shell == Workbench => {
-				slot = Model.slot_of(state, column.id)
-				if (Model.shown_panes(state, column).len() > 1) "Hide ${Widgets.find(Model.pane(state, id).widget).title}" else if (slot == Left or slot == Right) "Hide ${Model.slot_name(slot)} drawer" else ""
+		match Model.tile_of(state, id) {
+			Ok(tile) if state.shell == Workbench => {
+				slot = Model.slot_of(state, tile.id)
+				if (Model.shown_panes(state, tile).len() > 1) "Hide ${Widgets.find(Model.pane(state, id).widget).title}" else if (slot == Left or slot == Right) "Hide ${Model.slot_name(slot)} drawer" else ""
 			}
 			_ => ""
 		}
 
-	## Hides a Workbench pane as `hide_label` names it, its column showing,
+	## Hides a Workbench pane as `hide_label` names it, its tile showing,
 	## and focusing in its place, the next it shows.
 	hide_pane : State, Str -> State
 	hide_pane = |state, id|
-		match state.columns.find_first(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
-			Ok(column) if state.shell == Workbench => {
-				slot = Model.slot_of(state, column.id)
-				match Model.shown_panes(state, column).find_first(|listed_pane| listed_pane.id != id) {
-					Ok(next) => Model.change_column({ ..state, hidden: state.hidden.append(id), focused_pane: if (state.focused_pane == id) next.id else state.focused_pane }, column.id, |holding| if (holding.active == id) { ..holding, active: next.id } else holding)
+		match Model.tile_of(state, id) {
+			Ok(tile) if state.shell == Workbench => {
+				slot = Model.slot_of(state, tile.id)
+				match Model.shown_panes(state, tile).find_first(|listed_pane| listed_pane.id != id) {
+					Ok(next) => { ..state, hidden: state.hidden.append(id), focused_pane: if (state.focused_pane == id) next.id else state.focused_pane, grid: Model.change_tile(state.grid, tile.id, |holding| if (holding.active == id) { ..holding, active: next.id } else holding) }
 					Err(NotFound) if slot == Left or slot == Right => { ..state, collapsed: state.collapsed.append(slot) }
 					Err(NotFound) => state
 				}
@@ -924,53 +988,57 @@ Model := [].{
 			_ => state
 		}
 
-	## Shows a hidden pane again, as its column's active tab, focused.
+	## Shows a hidden pane again, as its tile's active tab, focused.
 	show_pane : State, Str -> State
 	show_pane = |state, id| Model.activate_tab({ ..state, hidden: state.hidden.drop_if(|hidden_id| hidden_id == id), focused_pane: id }, id)
 
-	## Drops columns left without panes, apart from a Workbench's slots, and
-	## points a tab group or the narrow screen that showed what is gone at what
-	## is left and shown.
-	drop_empty_columns : State -> State
-	drop_empty_columns = |state| {
-		columns =
-			state.columns
-				.drop_if(|column| column.panes.is_empty() and state.shell == Tiling)
-				.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == column.active)) column else { ..column, active: Model.shown_panes(state, column).first().map_ok(|listed_pane| listed_pane.id) ?? "" })
-		active_column = if (columns.any(|column| column.id == state.active_column)) state.active_column else columns.first().map_ok(|column| column.id) ?? ""
-		{ ..state, columns, active_column }
+	## Closes tile `tile_id` if it holds no panes, the tiles beside it growing
+	## over it (`Grid.close`), unless it is the last of its Workbench slot,
+	## which stays, empty. A Workbench's tiles grow only within their slot.
+	closed_if_empty : State, Str -> State
+	closed_if_empty = |state, tile_id| {
+		slot = Model.slot_of(state, tile_id)
+		empty = state.grid.tiles.any(|tile| tile.id == tile_id and tile.panes.is_empty())
+		kept = state.shell == Workbench and state.grid.tiles.keep_if(|tile| Model.slot_of(state, tile.id) == slot).len() == 1
+		if (empty and !kept) { ..state, grid: Grid.close(state.grid, tile_id, |grows, closed| Model.slot_of(state, grows) == Model.slot_of(state, closed)) } else state
 	}
 
-	## Moves a pane into the next column over. Past the edge it gets a column of
-	## its own, unless it is already alone there.
-	move_pane : State, Str, [Left, Right] -> State
-	move_pane = |state, id, direction|
-		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+	## Points a tile whose active pane is gone at the first it shows, and the
+	## narrow screen, if its tile is gone, at the first tile.
+	tidied : State -> State
+	tidied = |state| {
+		tiles = state.grid.tiles.map(|tile| if (tile.panes.any(|listed_pane| listed_pane.id == tile.active)) tile else { ..tile, active: Model.shown_panes(state, tile).first().map_ok(|listed_pane| listed_pane.id) ?? "" })
+		active_tile = if (tiles.any(|tile| tile.id == state.active_tile)) state.active_tile else tiles.first().map_ok(|tile| tile.id) ?? ""
+		{ ..state, grid: { ..state.grid, tiles }, active_tile }
+	}
+
+	## Moves a pane into the tile beside its own on `side`, or past the grid's
+	## edge into a new tile on that side of its own, unless it is alone there.
+	move_pane : State, Str, Grid.Side -> State
+	move_pane = |state, id, side|
+		match Model.tile_of(state, id) {
 			Err(NotFound) => state
-			Ok(from) => {
-				at_edge = if (direction == Left) from == 0 else from + 1 == state.columns.len()
-				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
-				beside = state.columns.get(if (at_edge) from else if (direction == Left) from - 1 else from + 1).map_ok(|column| column.id) ?? ""
-				if (at_edge and alone) state else Model.place(state, id, { column: beside, at: if (!at_edge) End else if (direction == Left) NewLeft else NewRight })
-			}
+			Ok(from) =>
+				match Grid.beside(state.grid, from.id, side) {
+					Ok(next) => Model.place(state, id, Model.drop_place(state, id, Into({ tile: next.id, at: End })))
+					Err(NotFound) => Model.place(state, id, Model.drop_place(state, id, Beside({ tile: from.id, side })))
+				}
 		}
 
 	## Where a pane's ⋯ menu moves it, each named: in a Workbench, the other
-	## slots its widget fits; in Tiling, into the column beside it each way,
-	## or past the edge into a new one unless it is alone there.
-	moves : State, Str -> List({ label : Str, move : [ToSlot(Slot), Beside([Left, Right])] })
+	## slots its widget fits; in Tiling, into the tile beside it each way, or
+	## into a new tile on that side unless it is alone in its own.
+	moves : State, Str -> List({ label : Str, move : [ToSlot(Slot), Beside(Grid.Side)] })
 	moves = |state, id|
-		match state.columns.find_first_index(|column| column.panes.any(|listed_pane| listed_pane.id == id)) {
+		match Model.tile_of(state, id) {
 			Ok(from) if state.shell == Workbench => {
-				at = state.columns.get(from).map_ok(|column| Model.slot_of(state, column.id)) ?? Free
+				at = Model.slot_of(state, from.id)
 				[Left, Main, Right].keep_if(|to| to != at and Widgets.fits(Widgets.find(Model.pane(state, id).widget), to)).map(|to| { label: "Move to ${if (to == Main) "main area" else "${Model.slot_name(to)} drawer"}", move: ToSlot(to) })
 			}
-			Ok(from) => {
-				alone = (state.columns.get(from).map_ok(|column| column.panes.len()) ?? 0) == 1
-				[(Left, "left", from == 0), (Right, "right", from + 1 == state.columns.len())]
-					.drop_if(|(_, _, at_edge)| at_edge and alone)
-					.map(|(side, name, at_edge)| { label: if (at_edge) "Move to a new column on the ${name}" else "Move to the column on the ${name}", move: Beside(side) })
-			}
+			Ok(from) =>
+				[(Left, "on the left"), (Right, "on the right"), (Up, "above"), (Down, "below")]
+					.keep_if(|(side, _)| Grid.beside(state.grid, from.id, side).is_ok() or from.panes.len() > 1)
+					.map(|(side, name)| { label: if (Grid.beside(state.grid, from.id, side).is_ok()) "Move to the tile ${name}" else "Move to a new tile ${name}", move: Beside(side) })
 			Err(NotFound) => []
 		}
 
@@ -983,26 +1051,28 @@ Model := [].{
 			Err(NotFound) => state
 		}
 
-	change_column : State, Str, (Column -> Column) -> State
-	change_column = |state, column_id, change| { ..state, columns: state.columns.map(|column| if (column.id == column_id) change(column) else column) }
+	change_tile : Grid.Layout, Str, (Tile -> Tile) -> Grid.Layout
+	change_tile = |grid, tile_id, change| { ..grid, tiles: grid.tiles.map(|tile| if (tile.id == tile_id) change(tile) else tile) }
 
-	## Switches the column of pane `id` between a stack and tabs.
-	toggle_tabs : State, Str -> State
-	toggle_tabs = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, tabbed: !column.tabbed } else column) }
-
+	## Moves an edge of tile `tile_id` a tenth of the tracks beside it,
+	## widening or narrowing it: its right edge, or at the grid's right, its
+	## left.
 	resize : State, Str, [Narrower, Wider] -> State
-	resize = |state, column_id, change| Model.change_column(state, column_id, |column| { ..column, size: if (change == Wider) column.size + 1 else if (column.size > 1) column.size - 1 else 1 })
+	resize = |state, tile_id, change| {
+		at_right = state.grid.tiles.any(|tile| tile.id == tile_id and tile.right == state.grid.columns.len())
+		{ ..state, grid: Grid.nudged(state.grid, tile_id, if ((change == Wider) == at_right) Left else Right) }
+	}
 
-	## Shows a pane in its tab group.
+	## Shows a pane in its tile's tabs.
 	activate_tab : State, Str -> State
-	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, active: id } else column) }
+	activate_tab = |state, id| { ..state, grid: { ..state.grid, tiles: state.grid.tiles.map(|tile| if (tile.panes.any(|listed_pane| listed_pane.id == id)) { ..tile, active: id } else tile) } }
 
 	## Pins a following pane to the context it shows, or lets a pinned one
 	## follow.
 	toggle_pin : State, Str -> State
 	toggle_pin = |state, id| {
 		pin = |listed_pane| if (listed_pane.id != id) listed_pane else if (listed_pane.pinned.is_empty()) { ..listed_pane, pinned: Context.to_str(Model.context_of(state, listed_pane)) } else { ..listed_pane, pinned: "" }
-		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(pin) }) }
+		Model.with_panes(state, pin)
 	}
 
 	pane : State, Str -> Pane
@@ -1740,7 +1810,7 @@ Model := [].{
 		seen = Model.mark_seen(Model.focus_on(state, context), [Context.to_str(context)], Bool.True)
 		views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Context.kind(context)))
 		match views.find_first(|shown| Model.pane_visible(state, shown.id)).on_err(|_| views.find_first(|shown| !state.hidden.contains(shown.id))).on_err(|_| views.first()).map_ok(|view| view.id) {
-			Ok(view_id) => state.columns.find_first(|column| column.panes.any(|shown| shown.id == view_id)).map_ok(|column| Model.jump_to(Model.activate_tab({ ..seen, hidden: seen.hidden.drop_if(|hidden_id| hidden_id == view_id) }, view_id), column.id, Push)) ?? seen
+			Ok(view_id) => Model.tile_of(state, view_id).map_ok(|tile| Model.jump_to(Model.activate_tab({ ..seen, hidden: seen.hidden.drop_if(|hidden_id| hidden_id == view_id) }, view_id), tile.id, Push)) ?? seen
 			Err(_) => seen
 		}
 	}
@@ -1749,8 +1819,8 @@ Model := [].{
 	## collapsed drawer.
 	pane_visible : State, Str -> Bool
 	pane_visible = |state, pane_id|
-		match state.columns.find_first(|column| column.panes.any(|shown| shown.id == pane_id)) {
-			Ok(column) => (!column.tabbed or column.active == pane_id) and !state.collapsed.contains(Model.slot_of(state, column.id)) and !state.hidden.contains(pane_id)
+		match Model.tile_of(state, pane_id) {
+			Ok(tile) => tile.active == pane_id and !state.collapsed.contains(Model.slot_of(state, tile.id)) and !state.hidden.contains(pane_id)
 			Err(NotFound) => Bool.False
 		}
 
@@ -1775,14 +1845,13 @@ Model := [].{
 		if (folder) Model.set_git_pane(state, { ..shown, folded: if (shown.folded.contains(path)) shown.folded.drop_if(|folded| folded == path) else shown.folded.append(path) }) else Model.show_git(state, pane_id, shown.scope, Selected(path))
 	}
 
-	## The pane a Workbench's main area shows, which a diff opened there
-	## takes the place of; "" in another shell.
+	## The pane a Workbench's main area shows in its first tile, which a diff
+	## opened there takes the place of; "" in another shell.
 	main_area_pane : State -> Str
-	main_area_pane = |state|
-		match (state.shell, state.columns.get(1)) {
-			(Workbench, Ok(column)) => if (column.tabbed) column.active else column.panes.first().map_ok(|shown| shown.id) ?? ""
-			_ => ""
-		}
+	main_area_pane = |state| {
+		main = Model.slot_tile(state, Main)
+		if (state.shell == Workbench) state.grid.tiles.find_first(|tile| tile.id == main).map_ok(|tile| tile.active) ?? "" else ""
+	}
 
 	## The Changes pane whose file's diff the main area shows, "" for none.
 	main_diff : State -> Str
@@ -1796,7 +1865,7 @@ Model := [].{
 	show_in_main : State, Str, Bool -> State
 	show_in_main = |state, pane_id, in_main| {
 		shown = Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main })
-		if (in_main) Model.show_column(shown, state.columns.get(1).map_ok(|column| column.id) ?? "") else shown
+		if (in_main) Model.show_tile(shown, Model.slot_tile(state, Main)) else shown
 	}
 
 	## The files of the scope a Changes pane shows, as its tree's rows.
@@ -2922,7 +2991,8 @@ expect {
 }
 
 expect {
-	saved = Json.to_str(Model.snapshot(Model.toggle_tabs(Model.initial(""), "pane-2")))
+	state = Model.initial("")
+	saved = Json.to_str(Model.snapshot(Model.place(state, "pane-4", Beside({ tile: "tile-2", side: Down }))))
 	Json.to_str(Model.snapshot(Model.initial(saved))) == saved
 }
 
@@ -2934,7 +3004,7 @@ expect {
 # A setup's presets replace liton's own, and its starting one shows unless
 # the browser kept a layout; a preset is shown until the layout changes.
 expect {
-	review = { name: "Review", snapshot: { ..Default.tiling.snapshot, columns: Default.tiling.snapshot.columns.drop_first(1) } }
+	review = { name: "Review", snapshot: { ..Default.tiling.snapshot, grid: Grid.close(Default.tiling.snapshot.grid, "tile-1", |_, _| Bool.True) } }
 	fresh = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), presets: [Default.developer, review], default_preset: "Review" })
 	kept = Model.set_up(Model.initial(Json.to_str(Model.snapshot(Model.initial("")))), { ..Setup.offered(Setup.empty), presets: [review], default_preset: "Review" })
 	fresh.presets.map(|preset| preset.name) == ["Developer", "Review"] and Model.preset_shown(fresh, "Review") and !Model.preset_shown(Model.use_preset(fresh, "Developer"), "Review") and kept.shell == Workbench and kept.presets == [review] and !Model.preset_shown(Model.close_pane(fresh, "pane-2"), "Review")
@@ -2945,7 +3015,7 @@ expect Model.set_up(Model.initial(""), Setup.offered(Setup.empty)).presets == De
 expect {
 	saved = "{\"version\":1,\"panes\":[{\"id\":\"pane-7\",\"widget\":\"chat\",\"pinned\":\"\"}]}"
 	chat = { id: "pane-7", widget: "chat", pinned: "", options: [] }
-	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-7", panes: [chat] }], collapsed: [], hidden: [] }) and Model.initial(saved).next_id == 8
+	Model.restore(saved).map_ok(Model.layout_of) == Ok({ shell: Tiling, grid: Grid.single({ id: "column-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-7", panes: [chat] }), collapsed: [], hidden: [] }) and Model.initial(saved).next_id == 8
 }
 
 expect {
@@ -2955,16 +3025,20 @@ expect {
 		old = { version: 2, columns }
 		Json.to_str(old)
 	}
-	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
-	old_columns = old_columns_of(Model.tiling)
+	old_columns = old_columns_of(Model.tiling, Bool.False)
 	Model.restore(version_2(old_columns.map(|column| { ..column, size: 3 }))).map_ok(Model.layout_of) == Ok(Model.developer) and Model.restore(version_2(old_columns.drop_first(1))).map_ok(|layout| layout.shell) == Ok(Tiling)
 }
 
 expect {
-	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
 	version_3 : { version : U32, shell : Model.Shell, columns : List(Model.OldColumn) }
-	version_3 = { version: 3, shell: Workbench, columns: old_columns_of(Model.developer) }
+	version_3 = { version: 3, shell: Workbench, columns: old_columns_of(Model.developer, Bool.True) }
 	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of({ ..Model.developer, hidden: [] }))
+}
+
+# A Workbench's snapshot loads only if its grid keeps a Workbench's rules.
+expect {
+	snapshot = Model.snapshot(Model.initial(""))
+	Model.restore(Json.to_str(snapshot)) == Ok(snapshot) and Model.restore(Json.to_str({ ..snapshot, grid: Grid.close(snapshot.grid, "tile-3", |_, _| Bool.True) })) == Err(Invalid)
 }
 
 expect {
@@ -2976,55 +3050,74 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2", "pane-8"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
+	laid(moved) == [["pane-1", "pane-3"], ["pane-2", "pane-8"], ["pane-4", "pane-5"]] and moved.grid.tiles.map(|tile| tile.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
+# A pane moved past the grid's edge splits its tile, unless it is alone.
 expect {
 	state = Model.layout(Model.initial(""), Model.tiling)
 	split = Model.move_pane(Model.move_pane(state, "pane-2", Left), "pane-2", Left)
-	Model.move_pane(state, "pane-1", Left).columns == state.columns and split.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-2"], ["pane-1"], ["pane-3"]]
+	Model.move_pane(state, "pane-1", Left).grid == state.grid and laid(split) == [["pane-2"], ["pane-1"], ["pane-3"]]
 }
 
 # A drop reorders a slot's tabs or moves a pane to another slot it fits, and
-# in Tiling into a column or a new one beside it.
+# in Tiling into a tile or a new one beside it.
 expect {
 	state = Model.initial("")
-	ids = |placed| placed.columns.map(|column| column.panes.map(|pane| pane.id))
-	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
+	reordered = Model.place(state, "pane-4", Into({ tile: "tile-3", at: Before("pane-3") }))
 	tiling = Model.layout(state, Model.tiling)
-	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
-	ids(reordered) == [["pane-1"], ["pane-2", "pane-8"], ["pane-4", "pane-3", "pane-5"]]
-		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
-		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4", "pane-8"], ["pane-3", "pane-5"]]
-		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
-		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
-		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
+	beside = Model.place(tiling, "pane-3", Beside({ tile: "tile-1", side: Left }))
+	laid(reordered) == [["pane-1"], ["pane-2", "pane-8"], ["pane-4", "pane-3", "pane-5"]]
+		and reordered.grid.tiles.map(|tile| tile.active) == ["pane-1", "pane-2", "pane-4"]
+		and laid(Model.place(state, "pane-4", Into({ tile: "tile-2", at: After("pane-2") }))) == [["pane-1"], ["pane-2", "pane-4", "pane-8"], ["pane-3", "pane-5"]]
+		and laid(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
+		and beside.active_tile == Model.tile_of(beside, "pane-3").map_ok(|tile| tile.id) ?? ""
+		and laid(Model.place(tiling, "pane-1", Into({ tile: "tile-2", at: End }))) == [["pane-2", "pane-1"], ["pane-3"]]
 }
 
-# Only a drop that moves a pane where it fits places it.
+# Only a drop that moves a pane where it fits places it: a Workbench's
+# drawers split only up or down.
 expect {
 	state = Model.initial("")
 	tiling = Model.layout(state, Model.tiling)
 	allowed = |placed, id, wanted| Model.drop_place(placed, id, wanted) == wanted
-	allowed(state, "pane-4", { column: "column-3", at: Before("pane-3") })
-		and allowed(state, "pane-4", { column: "column-2", at: End })
-		and !allowed(state, "pane-2", { column: "column-1", at: End })
-		and !allowed(state, "pane-4", { column: "column-3", at: End })
-		and !allowed(state, "pane-4", { column: "column-3", at: After("pane-4") })
-		and !allowed(state, "pane-4", { column: "column-3", at: NewLeft })
-		and allowed(tiling, "pane-1", { column: "column-3", at: NewRight })
-		and !allowed(tiling, "pane-1", { column: "column-1", at: NewRight })
-		and !allowed(tiling, "pane-1", { column: "column-9", at: End })
+	allowed(state, "pane-4", Into({ tile: "tile-3", at: Before("pane-3") }))
+		and allowed(state, "pane-4", Into({ tile: "tile-2", at: End }))
+		and !allowed(state, "pane-2", Into({ tile: "tile-1", at: End }))
+		and !allowed(state, "pane-4", Into({ tile: "tile-3", at: End }))
+		and !allowed(state, "pane-4", Into({ tile: "tile-3", at: After("pane-4") }))
+		and !allowed(state, "pane-4", Beside({ tile: "tile-3", side: Left }))
+		and allowed(state, "pane-4", Beside({ tile: "tile-3", side: Down }))
+		and allowed(state, "pane-4", Beside({ tile: "tile-2", side: Right }))
+		and allowed(tiling, "pane-1", Beside({ tile: "tile-3", side: Right }))
+		and !allowed(tiling, "pane-1", Beside({ tile: "tile-1", side: Right }))
+		and !allowed(tiling, "pane-1", Into({ tile: "tile-9", at: End }))
+}
+
+# In a Workbench, splitting the main area adds rows the drawers span, or
+# columns within it, and closing the split grows the main area back, never
+# a drawer.
+expect {
+	state = Model.initial("")
+	down = Model.place(state, "pane-4", Beside({ tile: "tile-2", side: Down }))
+	across = Model.place(state, "pane-8", Beside({ tile: "tile-2", side: Left }))
+	slot_of_pane = |placed, id| Model.slot_of(placed, Model.tile_of(placed, id).map_ok(|tile| tile.id) ?? "")
+	down.grid.rows == [1, 1]
+		and slot_of_pane(down, "pane-4") == Main
+		and down.grid.tiles.keep_if(|tile| tile.bottom == 2 and tile.top == 0).len() == 2
+		and Model.close_pane(down, "pane-4").grid.rows == [1]
+		and slot_of_pane(across, "pane-8") == Main
+		and Model.close_pane(across, "pane-8").grid == Model.change_tile(state.grid, "tile-2", |tile| { ..tile, panes: tile.panes.drop_if(|pane| pane.id == "pane-8") })
 }
 
 expect {
-	closed = Model.close_pane({ ..Model.layout(Model.initial(""), Model.tiling), active_column: "column-2" }, "pane-2")
-	closed.columns.map(|column| column.id) == ["column-1", "column-3"] and closed.active_column == "column-1"
+	closed = Model.close_pane({ ..Model.layout(Model.initial(""), Model.tiling), active_tile: "tile-2" }, "pane-2")
+	closed.grid.tiles.map(|tile| tile.id) == ["tile-1", "tile-3"] and closed.active_tile == "tile-1"
 }
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ticket", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
+	state.grid.tiles.map(|tile| tile.panes.map(|pane| pane.widget)) == [[], ["chat", "ticket", "ci"], ["changes", "files", "tickets"]] and state.active_tile == "tile-2"
 }
 
 expect {
@@ -3049,7 +3142,7 @@ expect {
 # 1 to 9 show the presets in order, however the one shown was changed.
 expect {
 	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.close_pane(state, "pane-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session
@@ -3177,12 +3270,24 @@ mention_typed = |text| {
 # "@sc" offers Scout, who replaces it, and the message sent mentions Scout.
 expect {
 	scout = { id: "scout", provider: "mock", name: "Scout", picture: Err(Missing), kind: Agent({ owner: Err(Missing) }), role: Member, presence: Online }
-	state = { ..Model.initial(""), columns: [{ id: "c", size: 1, tabbed: Bool.False, active: "p", panes: [{ id: "p", widget: "room", pinned: "", options: [] }] }], focus: [Room("general")], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
+	state = { ..Model.initial(""), grid: Grid.single({ id: "c", left: 0, top: 0, right: 1, bottom: 1, active: "p", panes: [{ id: "p", widget: "room", pinned: "", options: [] }] }), focus: [Room("general")], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
 	chosen = Model.mention(state, { key: "p", name: "Scout" })
 	Model.mention_choices(state, "p") == ["Scout"] and Model.draft(chosen, "p") == "thanks\n@Scout " and Model.send_to_room(chosen, "p").room_asks.map(|asked| asked.request) == [Send({ room_id: "general", text: "thanks\n@Scout", place: TopLevel, mentions: ["scout"] })]
 }
 
 ## Messages in the order of their times, those alike as posted.
+## The panes of each column of tiles, left to right, top to bottom.
+laid : Model.State -> List(List(Str))
+laid = |state| {
+	starting = |at| state.grid.tiles.keep_if(|tile| tile.left == at)
+	in_order = |tiles| tiles.sort_with(|one, other| if (one.top < other.top) Before else if (one.top > other.top) After else Same)
+	List.repeat(0, state.grid.columns.len()).map_with_index(|_, at| in_order(starting(at)).join_map(|tile| tile.panes.map(|pane| pane.id))).drop_if(List.is_empty)
+}
+
+## A layout's tiles as columns before version 8 saved them, as tabs or not.
+old_columns_of : Model.Layout, Bool -> List(Model.OldColumn)
+old_columns_of = |layout, tabbed| layout.grid.tiles.map(|tile| { id: tile.id, size: 1, tabbed, active: tile.active, panes: tile.panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
+
 by_time : List(Rooms.Message) -> List(Rooms.Message)
 by_time = |posted| {
 	keyed = posted.map_with_index(|message, index| { message, index, at: epoch_ms(message.time) ?? 0 })

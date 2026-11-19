@@ -12,7 +12,7 @@
     (expect-attr (role button :name "Chat preset") aria-pressed "true")
     (click (role button :name "Settings"))
     (expect-absent (role region :name "Workspaces"))
-    (expect-attr (test-id "slot-right") class "column slot slot-right tabbed collapsed")
+    (expect-attr (test-id "slot-right") class "tile slot slot-right tabbed collapsed")
     (expect-text (test-id "slot-left") "SessionsSessionsWrite postdoneFix loginidle")
     ; The chat opens on the latest session.
     (expect-text (test-id "session-title") "Write post")

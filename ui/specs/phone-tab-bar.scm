@@ -10,7 +10,7 @@
     (expect-no-attr (test-id "show-main") data-badge)
     (click (test-id "show-right"))
     (expect-attr (test-id "show-right") aria-pressed "true")
-    (expect-attr (test-id "slot-right") class "column slot slot-right tabbed shown")
+    (expect-attr (test-id "slot-right") class "tile slot slot-right tabbed shown")
     (expect-current-location "/#right")
     ; A tab replaces the URL's hash: back doesn't step through the tabs.
     (click (test-id "show-left"))

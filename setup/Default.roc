@@ -3,6 +3,7 @@
 ## and Chat presets, Developer first, and the Pastoral, Hypr and Plain themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
+import Grid
 import Setup
 
 Default := [].{
@@ -17,11 +18,15 @@ Default := [].{
 		snapshot: {
 			version: Setup.snapshot_version,
 			shell: Workbench,
-			columns: [
-				{ id: "column-1", size: 1, tabbed: Bool.True, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
-				{ id: "column-2", size: 1, tabbed: Bool.True, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }, { id: "pane-8", widget: "ticket", pinned: "", options: [] }] },
-				{ id: "column-3", size: 1, tabbed: Bool.True, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }, { id: "pane-5", widget: "tickets", pinned: "", options: [] }] },
-			],
+			grid: {
+				columns: [1, 1, 1],
+				rows: [1],
+				tiles: [
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
+					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }, { id: "pane-8", widget: "ticket", pinned: "", options: [] }] },
+					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }, { id: "pane-5", widget: "tickets", pinned: "", options: [] }] },
+				],
+			},
 			collapsed: [],
 			hidden: ["pane-8"],
 			theme: "",
@@ -36,14 +41,15 @@ Default := [].{
 		name: "Inbox",
 		snapshot: {
 			..Default.developer.snapshot,
-			columns: Default.developer.snapshot.columns.map(
-				|column|
-					if (column.id == "column-1")
-						{ ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }, { id: "pane-6", widget: "rooms", pinned: "", options: [] }] }
-					else if (column.id == "column-2")
-						{ ..column, panes: column.panes.append({ id: "pane-7", widget: "room", pinned: "", options: [] }) }
+			grid: Default.with_tiles(
+				Default.developer.snapshot.grid,
+				|tile|
+					if (tile.id == "tile-1")
+						{ ..tile, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }, { id: "pane-6", widget: "rooms", pinned: "", options: [] }] }
+					else if (tile.id == "tile-2")
+						{ ..tile, panes: tile.panes.append({ id: "pane-7", widget: "room", pinned: "", options: [] }) }
 					else
-						column,
+						tile,
 			),
 			collapsed: [Right],
 		},
@@ -54,21 +60,28 @@ Default := [].{
 	chat : Setup.Preset
 	chat = {
 		name: "Chat",
-		snapshot: { ..Default.developer.snapshot, columns: Default.developer.snapshot.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else column), collapsed: [Right] },
+		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right] },
 	}
 
-	## Sessions, a wider chat and what the daemon advertises, each in a column.
+	with_tiles : Grid.Layout, (Grid.Tile -> Grid.Tile) -> Grid.Layout
+	with_tiles = |grid, change| { ..grid, tiles: grid.tiles.map(change) }
+
+	## Sessions, a wider chat and what the daemon advertises, side by side.
 	tiling : Setup.Preset
 	tiling = {
 		name: "Tiling",
 		snapshot: {
 			version: Setup.snapshot_version,
 			shell: Tiling,
-			columns: [
-				{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
-				{ id: "column-2", size: 2, tabbed: Bool.False, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
-				{ id: "column-3", size: 1, tabbed: Bool.False, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "", options: [] }] },
-			],
+			grid: {
+				columns: [1, 2, 1],
+				rows: [1],
+				tiles: [
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [] }] },
+					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }] },
+					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "capabilities", pinned: "", options: [] }] },
+				],
+			},
 			collapsed: [],
 			hidden: [],
 			theme: "",

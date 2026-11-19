@@ -12,7 +12,7 @@
     (expect-current-location "/#main")
     (history-back)
     (expect-attr (test-id "show-left") aria-pressed "true")
-    (expect-attr (test-id "slot-left") class "column slot slot-left tabbed shown")
+    (expect-attr (test-id "slot-left") class "tile slot slot-left shown")
     (expect-current-location "/#left")
     (history-forward)
     (expect-attr (test-id "show-main") aria-pressed "true")

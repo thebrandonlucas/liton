@@ -222,7 +222,7 @@ try {
       await mouse("mouseMoved", start);
       await mouse("mousePressed", start);
       for (let step = 1; step <= 8; step++) await mouse("mouseMoved", { x: start.x + (end.x - start.x) * step / 8, y: start.y + (end.y - start.y) * step / 8 });
-      await until(`a drop target over ${to}`, () => page.evaluate(() => !!document.querySelector(".column.drop-into")));
+      await until(`a drop target over ${to}`, () => page.evaluate(() => !!document.querySelector(".tile.drop-into")));
       await mouse("mouseReleased", end);
     };
     const tabs = (slot) => page.evaluate((slot) => [...document.querySelectorAll(`[data-testid="slot-${slot}"] .tab-select`)].map((b) => b.textContent).join(), slot);

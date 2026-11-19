@@ -1,4 +1,4 @@
-(test "Liton — a pane's menu moves it at once to the drawer, area or column it names"
+(test "Liton — a pane's menu moves it at once to the drawer, area or tile it names"
   (steps
     (click (role button :name "Files"))
     (click (role button :name "Files menu"))
@@ -11,16 +11,16 @@
     (click (role button :name "Move to right drawer"))
     (expect-text (test-id "show-main") "Chat")
     (expect-text (test-id "show-right") "Changes · Tickets · Files")
-    ; In Tiling, it names the column, or a new one past the edge.
+    ; In Tiling, it names the tile beside it, or a new one past the edge.
     (click (role button :name "Settings"))
     (click (role button :name "Tiling preset"))
     (click (role button :name "Settings"))
     (click (role button :name "Sessions menu"))
-    (expect-absent (role button :name "Move to a new column on the left"))
-    (click (role button :name "Move to the column on the right"))
+    (expect-absent (role button :name "Move to a new tile on the left"))
+    (click (role button :name "Move to the tile on the right"))
     (expect-visible (role button :name "Chat · Sessions"))
     (click (role button :name "Sessions menu"))
-    (click (role button :name "Move to a new column on the left"))
+    (click (role button :name "Move to a new tile on the left"))
     (expect-absent (role button :name "Chat · Sessions"))
     (expect-visible (role button :name "Chat"))
   )

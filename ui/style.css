@@ -145,7 +145,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .settings-header { display: flex; align-items: center; justify-content: space-between; }
 .settings h2 { margin: 0; font: italic 500 20px/1.2 var(--font-display); color: var(--accent); }
 .settings-header .close { border-color: transparent; background: none; font-size: 18px; padding: 0 6px; }
-.settings-column { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
+.settings-tile { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
 .settings-slot { font: 11px var(--font-mono); color: var(--muted); }
 .settings-pane summary { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 2px 0; }
 .settings-pane-title { flex: 1; }
@@ -167,23 +167,23 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .wallpaper { display: grid; gap: 6px; }
 
 /* The tiles: glass with even gaps, the focused one's edge bright. */
-.column-tabs { display: none; }
-.columns { flex: 1; min-height: 0; display: flex; gap: var(--gap); padding: var(--gap); overflow-x: auto; }
-.column { position: relative; flex: 1 1 0; min-width: var(--minimum-width, 260px); min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+/* The grid's tracks are set on it (Liton.grid_style) and each tile's area on
+   the tile; half a gap around each tile makes the gaps even, and none
+   around a collapsed drawer's. */
+.tile-tabs { display: none; }
+.grid { flex: 1; min-height: 0; display: grid; padding: calc(var(--gap) / 2); overflow: auto; }
+.tile { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(var(--gap) / 2); }
 .panel-anchor { position: absolute; inset: 0; pointer-events: none; outline: none; }
-.workbench .slot-left { flex: 0 1 280px; min-width: 200px; }
-.workbench .slot-right { flex: 0 1 380px; min-width: 240px; }
-.workbench .slot-main { min-width: 300px; }
 .workbench .collapsed { display: none; }
-.workbench .column-header:has(> .tab:only-of-type) { display: none; }
-.column-header { display: flex; gap: 4px; align-items: center; }
-.column-controls { display: flex; gap: 4px; margin-left: auto; }
+.workbench .tile:not(.tabbed) > .tile-header { display: none; }
+.tile-header { display: flex; gap: 4px; align-items: center; }
+.tile-controls { display: flex; gap: 4px; margin-left: auto; }
 .moves { display: flex; }
-.column-header button, .column-tabs button { padding: 1px 9px; font: 12px var(--font-mono); color: var(--muted); background: var(--glass); }
-.column-header [aria-pressed="true"], .column-tabs [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); }
-.column:not(.tabbed) .tab, .pane.hidden { display: none; }
+.tile-header button, .tile-tabs button { padding: 1px 9px; font: 12px var(--font-mono); color: var(--muted); background: var(--glass); }
+.tile-header [aria-pressed="true"], .tile-tabs [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); }
+.tile:not(.tabbed) .tab, .pane.hidden { display: none; }
 /* A tab: its widget's icon and title, and a × that shows on hover. */
-.column-header .tab { display: inline-flex; align-items: center; }
+.tile-header .tab { display: inline-flex; align-items: center; }
 .tab-select:is(.widget-sessions, .widget-workspaces, .widget-chat, .widget-inbox, .widget-changes, .widget-files, .widget-tickets, .widget-rooms, .widget-ci, .widget-capabilities)::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; background: currentColor;
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .widget-sessions { --icon: var(--icon-list); }
@@ -196,20 +196,21 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .widget-ci { --icon: var(--icon-circle-play); }
 .widget-capabilities { --icon: var(--icon-plug); }
 .widget-rooms { --icon: var(--icon-hash); }
-.column-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
+.tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
-@media (hover: none) { .column-header .tab-close { opacity: 1; } }
-/* Dragging a pane by its tab or header: the column it drops into, the bar
-   where it lands, and the pane dragged, faded. */
+@media (hover: none) { .tile-header .tab-close { opacity: 1; } }
+/* Dragging a pane by its tab or header: the tile it drops into or the side
+   of it a new tile opens on, the bar where it lands, and the pane dragged,
+   faded. */
 .tab-select, .pane-grip { cursor: grab; user-select: none; -webkit-user-select: none; }
 .pane-grip { flex: 1; min-width: 0; display: flex; }
-.column.drop-into { outline: 2px dashed var(--edge-active); outline-offset: 2px; border-radius: var(--radius); }
-.column.drop-left { box-shadow: -4px 0 0 var(--accent); }
-.column.drop-right { box-shadow: 4px 0 0 var(--accent); }
+.tile.drop-into { outline: 2px dashed var(--edge-active); outline-offset: -2px; border-radius: var(--radius); }
+.tile.drop-left { box-shadow: inset 4px 0 0 var(--accent); }
+.tile.drop-right { box-shadow: inset -4px 0 0 var(--accent); }
+.tile.drop-up { box-shadow: inset 0 4px 0 var(--accent); }
+.tile.drop-down { box-shadow: inset 0 -4px 0 var(--accent); }
 .tab.drop-before { box-shadow: -3px 0 0 var(--accent); }
 .tab.drop-after { box-shadow: 3px 0 0 var(--accent); }
-.column:not(.tabbed) .pane.drop-before { box-shadow: 0 -4px 0 var(--accent); }
-.column:not(.tabbed) .pane.drop-after { box-shadow: 0 4px 0 var(--accent); }
 .tab.dragged, .pane.dragged { opacity: .5; }
 .pane { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; outline: none;
   background: var(--glass); backdrop-filter: var(--backdrop); -webkit-backdrop-filter: var(--backdrop);
@@ -224,7 +225,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   opacity: 0; transition: opacity var(--slow) ease; }
 .pane.focused { border-color: transparent; }
 .pane.focused::after { opacity: var(--edge-active-alpha); }
-.columns.focusing .pane:not(.focused) { opacity: .86; }
+.grid.focusing .pane:not(.focused) { opacity: .86; }
 .pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--edge); font: 12px/1.2 var(--font-mono); }
 .pane-heading { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; }
 .pane-title { font-weight: 600; color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -761,32 +762,33 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .bar button { min-width: 44px; min-height: 44px; }
   .bar .icon { --icon-size: 20px; }
-  .column-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
-  .column { min-width: 0; overflow-y: auto; }
-  .tiling .column { display: none; }
-  .tiling .column.shown { display: flex; }
-  .column-header .resize { display: none; }
+  .tile-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
+  .tile { overflow-y: auto; }
+  .grid.tiling { display: flex; flex-direction: column; }
+  .tiling .tile { display: none; }
+  .tiling .tile.shown { display: flex; flex: 1; }
+  .tile-header .resize { display: none; }
   .tiling .pane { min-height: 60vh; }
   /* A Workbench's slots are full-width panels, swiped between or picked
      from a tab bar at the bottom. */
-  .workbench { gap: 0; padding: 0; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
-  .workbench .column, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: var(--gap); scroll-snap-align: start; scroll-snap-stop: always; }
-  .column-tabs:has(+ .workbench) { order: 1; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; overflow: visible;
+  .workbench { display: flex; padding: 0; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .workbench .tile, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: var(--gap); scroll-snap-align: start; scroll-snap-stop: always; }
+  .tile-tabs:has(+ .workbench) { order: 1; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; overflow: visible;
     margin: 0 var(--gap) max(var(--gap), env(safe-area-inset-bottom)); padding: 4px;
     border: 1px solid var(--edge); border-radius: calc(var(--radius) + 10px); background: var(--glass-deep);
     backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar); box-shadow: var(--shadow); }
-  .column-tabs:has(+ .workbench) button { --tab-on: 0; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  .tile-tabs:has(+ .workbench) button { --tab-on: 0; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
     min-width: 0; min-height: 52px; padding: 5px 4px; border: none; border-radius: calc(var(--radius) + 6px);
     background: color-mix(in srgb, var(--accent) calc(var(--tab-on) * 15%), transparent); color: var(--muted);
     font: 600 11px/1.1 var(--font-ui); letter-spacing: .01em; white-space: nowrap; overflow: hidden; }
-  .column-tabs:has(+ .workbench) [aria-pressed="true"] { --tab-on: 1; color: var(--accent); }
-  .column-tabs:has(+ .workbench) button::before { content: ""; flex: none; width: 24px; height: 24px; background: currentColor;
+  .tile-tabs:has(+ .workbench) [aria-pressed="true"] { --tab-on: 1; color: var(--accent); }
+  .tile-tabs:has(+ .workbench) button::before { content: ""; flex: none; width: 24px; height: 24px; background: currentColor;
     -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
-  .column-tabs:has(+ .workbench) button:nth-child(1) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M9 6h11M9 12h11M9 18h11'/><circle cx='4.5' cy='6' r='1.3' fill='black'/><circle cx='4.5' cy='12' r='1.3' fill='black'/><circle cx='4.5' cy='18' r='1.3' fill='black'/></svg>"); }
-  .column-tabs:has(+ .workbench) button:nth-child(2) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='M6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h.5A2.5 2.5 0 0 1 4 13.5v-7A2.5 2.5 0 0 1 6.5 4z'/></svg>"); }
-  .column-tabs:has(+ .workbench) button:nth-child(3) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M6 3.5v11'/><circle cx='6' cy='18' r='2.5'/><circle cx='18' cy='6' r='2.5'/><path d='M18 8.5a9 9 0 0 1-9 9'/></svg>"); }
+  .tile-tabs:has(+ .workbench) button:nth-child(1) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M9 6h11M9 12h11M9 18h11'/><circle cx='4.5' cy='6' r='1.3' fill='black'/><circle cx='4.5' cy='12' r='1.3' fill='black'/><circle cx='4.5' cy='18' r='1.3' fill='black'/></svg>"); }
+  .tile-tabs:has(+ .workbench) button:nth-child(2) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'><path d='M6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h.5A2.5 2.5 0 0 1 4 13.5v-7A2.5 2.5 0 0 1 6.5 4z'/></svg>"); }
+  .tile-tabs:has(+ .workbench) button:nth-child(3) { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><path d='M6 3.5v11'/><circle cx='6' cy='18' r='2.5'/><circle cx='18' cy='6' r='2.5'/><path d='M18 8.5a9 9 0 0 1-9 9'/></svg>"); }
   /* What needs you, on the left drawer's tab. */
-  .column-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
+  .tile-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--warn); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
   /* Settings: a sheet from the bottom, over a dimmed screen that closes it. */
@@ -830,7 +832,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 }
 /* A phone's keyboard takes the tab bar's place while you type. */
 @media (max-width: 640px) and (pointer: coarse) {
-  .liton:has(.composer textarea:focus) .column-tabs { display: none; }
+  .liton:has(.composer textarea:focus) .tile-tabs { display: none; }
 }
 /* Where the browser can, the tab bar follows the swipe: it marks the panel
    scrolled to, not just the one last tapped. */
@@ -838,10 +840,10 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   @media (max-width: 640px) {
     .liton { timeline-scope: --panels; }
     .workbench { scroll-timeline: --panels x; }
-    .column-tabs:has(+ .workbench) button { animation: linear both; animation-timeline: --panels; }
-    .column-tabs:has(+ .workbench) button:nth-child(1) { animation-name: panel-left; }
-    .column-tabs:has(+ .workbench) button:nth-child(2) { animation-name: panel-main; }
-    .column-tabs:has(+ .workbench) button:nth-child(3) { animation-name: panel-right; }
+    .tile-tabs:has(+ .workbench) button { animation: linear both; animation-timeline: --panels; }
+    .tile-tabs:has(+ .workbench) button:nth-child(1) { animation-name: panel-left; }
+    .tile-tabs:has(+ .workbench) button:nth-child(2) { animation-name: panel-main; }
+    .tile-tabs:has(+ .workbench) button:nth-child(3) { animation-name: panel-right; }
   }
 }
 @keyframes panel-left { 0%, 25% { --tab-on: 1; color: var(--accent); } 26%, 100% { --tab-on: 0; color: var(--muted); } }
