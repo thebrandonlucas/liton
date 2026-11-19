@@ -1,7 +1,8 @@
 ## A pane dragged by its tab or header to where `Model.place` puts it, as
 ## plain data apart from the view. While it is dragged, the page reports the
-## pointer (`pointer`, ui/ports.mjs): where it is, for the ghost following
-## it, and the tile and tab under it as the layout was when the drag began,
+## pointer (`pointer`, ui/ports.mjs) as it moves to another part of a tile:
+## where it is, for the ghost, which the page moves with it between reports,
+## and the tile and tab under it as the layout was when the drag began,
 ## so the layout shown as if dropped there (`previewed`) doesn't move what
 ## the pointer is over. A line between tiles is dragged alike, the tracks
 ## beside it resized as it moves.
@@ -24,9 +25,11 @@ Drag := [].{
 	## cancelled, where it is on the screen, in pixels, and the tile and tab
 	## under it (their `data-tile` and `data-tab`) as the layout was when the
 	## press began, with how far across and down that tab or tile it is, in
-	## ten thousandths; "" outside them. While a line is held, `across` or
-	## `down` is instead how far across the two tracks beside it the pointer
-	## is. It reports a release only after a move.
+	## ten thousandths; "" outside them. It reports a move only to another
+	## part (`drop_at`) of a tab or tile. While a line is held, it reports
+	## every move, and `across` or `down` is instead how far across the two
+	## tracks beside it the pointer is. It reports a release only after a
+	## move.
 	Pointer : { phase : [Moved, Released, Cancelled], x : I32, y : I32, tile : Str, tab : Str, across : U16, down : U16 }
 
 	## The pointer pressed on a pane's tab or header, or on the column line

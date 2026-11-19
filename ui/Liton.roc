@@ -723,8 +723,7 @@ Liton := [].{
 				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
 				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
 				Engine.attr_s("data-tile", id),
-				# Named, a view transition moves each tile to its new place.
-				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}; view-transition-name: tile-${shown.id}")),
+				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.update_by(id, |state, tile_id| { ..state, active_tile: tile_id })),
 			],

@@ -24,38 +24,53 @@ try {
 //   hit-testing against the layout as it was when the drag began (or zone
 //   boxes taken then), so a layout previewed under the pointer doesn't
 //   change what it is over.
-// - View transitions: a way for an update to ask that the DOM change it
-//   makes be animated with `document.startViewTransition`, applying it
-//   within the transition's update rather than at a frame the update holds
-//   back (here the app's report drain falls back to its 100 ms timer).
+// - Moving an element with the pointer at the frame, and animating where
+//   elements were to where an update puts them, on the compositor and
+//   without holding back the page's frames as a view transition does while
+//   it captures the page before and after an update (roc-signals's
+//   `ViewTransition`), the next change skipping the one running.
 // While a pane's tab or header is held (`Drag.pointer`), this reports the
-// pointer: once it has moved 4 pixels, each move, with the tile
-// (`data-tile`) and tab (`data-tab`) under it as they were at the press,
-// and how far across and down that tab or tile it is in ten thousandths;
-// then the release, or a cancel for Escape, a cancelled pointer or a press
-// that never moved. A move to another part of a tile, and a cancel or a
-// release outside the tiles, are reported inside a view transition, so the
-// tiles move to the layout previewed rather than jump, unless motion is
-// reduced (the system's setting or the theme's). While a line between
-// tiles is held (`column` or `row` names it), each move instead reports how
-// far across the two tracks beside it the pointer is, the tracks measured
-// from the grid's computed `grid-template-columns` or `-rows` at the press.
+// pointer: once it has moved 4 pixels, its first move and each move to
+// another part of a tile, as ui/Drag.roc's `drop_at` tells them apart, with
+// the tile (`data-tile`) and tab (`data-tab`) under it as they were at the
+// press, and how far across and down that tab or tile it is in ten
+// thousandths; then the release, or a cancel for Escape, a cancelled
+// pointer or a press that never moved. The ghost (`.drag-ghost`) follows
+// each move between reports. The tiles slide from where they were to the
+// layout a report previews, unless motion is reduced (the system's setting
+// or the theme's). While a line between tiles is held (`column` or `row`
+// names it), each move instead reports how far across the two tracks beside
+// it the pointer is, the tracks measured from the grid's computed
+// `grid-template-columns` or `-rows` at the press.
 const boxes = (attribute) => [...document.querySelectorAll(`[${attribute}]`)].map((element) => ({ id: element.getAttribute(attribute), box: element.getBoundingClientRect() }));
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches || getComputedStyle(document.querySelector(".liton") ?? document.body).getPropertyValue("--motion").trim() === "0";
-// The page doesn't render while a transition's update runs, so the update
-// ends when the grid changes, as the app draws the message `change` emits
-// (its report drain then waits on a timer rather than a frame), or after a
-// while if nothing changes. A transition skipped by the next is no error.
-const transition = (change) => {
-  if (!document.startViewTransition || reduced()) return change();
-  const running = document.startViewTransition(() => new Promise((done) => {
-    const grid = document.querySelector(".grid");
-    const ended = () => { watch.disconnect(); clearTimeout(timer); done(); };
-    const watch = new MutationObserver(ended), timer = setTimeout(ended, 300);
-    if (grid) watch.observe(grid, { subtree: true, childList: true, attributes: true });
-    change();
-  }));
-  for (const settled of [running.ready, running.finished, running.updateCallbackDone]) settled.catch(() => {});
+// After `change`, at the frame the app draws it in, each tile moved slides
+// from where it showed, mid-slide included, to its new place, and a new one
+// fades in. Its frame is asked after `change`'s report, so it runs after the
+// app's.
+const slide = (change) => {
+  if (reduced()) return change();
+  const shown = new Map(boxes("data-tile").map(({ id, box }) => [id, box]));
+  change();
+  requestAnimationFrame(() => {
+    for (const tile of document.querySelectorAll("[data-tile]")) {
+      for (const running of tile.getAnimations()) running.cancel();
+      const from = shown.get(tile.getAttribute("data-tile")), to = tile.getBoundingClientRect();
+      const timing = { duration: 180, easing: "ease-out" };
+      if (!from) tile.animate({ opacity: [0, 1] }, timing);
+      else if (to.width > 0 && to.height > 0 && [from.left - to.left, from.top - to.top, from.width - to.width, from.height - to.height].some((moved) => Math.abs(moved) >= 1))
+        tile.animate({ transformOrigin: ["0 0", "0 0"], transform: [`translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`, "none"] }, timing);
+    }
+  });
+};
+// The ghost at the pointer, at the frame after the app's.
+let ghost_frame = 0;
+const follow = (x, y) => {
+  cancelAnimationFrame(ghost_frame);
+  ghost_frame = requestAnimationFrame(() => {
+    const ghost = document.querySelector(".drag-ghost");
+    if (ghost) ghost.style.transform = `translate(${x}px, ${y}px)`;
+  });
 };
 // How far across the tracks beside `line` the point `at` is, in ten
 // thousandths, by the grid's tracks as the browser laid them out.
@@ -84,33 +99,41 @@ const drag = ({ pointer, column, row }, { emit }) => {
     const share = (at, from, size) => Math.max(0, Math.min(10000, Math.round((at - from) * 10000 / size)));
     return { phase, x: Math.round(x), y: Math.round(y), tile: (tab ? under(tiles, x, y)?.id : tile?.id) ?? "", tab: tab?.id ?? "", across: hit ? share(x, hit.box.left, hit.box.width) : 0, down: hit ? share(y, hit.box.top, hit.box.height) : 0 };
   };
-  // The tab, or the fifth by an edge or the middle of the tile, that the
-  // pointer is over, as ui/Drag.roc's `drop_at` tells them apart.
-  const part_of = ({ tile, tab, across, down }) => tab ? `${tab}:${across < 5000}` : `${tile}:${across < 2000 ? "left" : across > 8000 ? "right" : down < 2000 ? "up" : down > 8000 ? "down" : "middle"}`;
+  // The tab's half, or the fifth by the nearest edge or the middle of the
+  // tile, that the pointer is over, as ui/Drag.roc's `drop_at` tells them
+  // apart.
+  const part_of = ({ tile, tab, across, down }) => {
+    if (tab) return `${tab}:${across < 5000}`;
+    const [edge, away] = [["right", 10000 - across], ["up", down], ["down", 10000 - down]].reduce((closest, side) => (side[1] < closest[1] ? side : closest), ["left", across]);
+    return `${tile}:${away < 2000 ? edge : "middle"}`;
+  };
   const move = (event) => {
     if (event.pointerId !== pointer) return;
     start ??= { x: event.clientX, y: event.clientY };
     if (!moved && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
     moved = true;
     const at = report("Moved", event), now = part_of(at);
-    if (resizing || now === part) return emit(at);
-    part = now;
-    transition(() => emit(at));
+    if (resizing) return emit(at);
+    if (now !== part) {
+      part = now;
+      slide(() => emit(at));
+    }
+    follow(at.x, at.y);
   };
   // A release over a tile drops the pane where the layout shows it already;
-  // one outside the tiles puts the layout back, which a transition shows.
+  // one outside the tiles puts the layout back, the tiles sliding there.
   const up = (event) => {
     if (event.pointerId !== pointer) return;
     const at = report(moved ? "Released" : "Cancelled", event);
-    if (moved && !resizing && !at.tile) transition(() => emit(at));
+    if (moved && !resizing && !at.tile) slide(() => emit(at));
     else emit(at);
   };
-  const cancel = (event) => event.pointerId === pointer && transition(() => emit(report("Cancelled", event)));
+  const cancel = (event) => event.pointerId === pointer && slide(() => emit(report("Cancelled", event)));
   const key = (event) => {
     if (event.key !== "Escape" || !moved) return;
     event.stopImmediatePropagation();
     event.preventDefault();
-    transition(() => emit({ phase: "Cancelled", x: 0, y: 0, tile: "", tab: "", across: 0, down: 0 }));
+    slide(() => emit({ phase: "Cancelled", x: 0, y: 0, tile: "", tab: "", across: 0, down: 0 }));
   };
   const seen = pointers.get(pointer);
   if (seen) {
