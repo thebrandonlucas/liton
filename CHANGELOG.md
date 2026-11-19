@@ -149,6 +149,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Keys for the layout, also in the ⌘K palette and the `?` list: outside a text box, Ctrl+Shift or ⌘⇧ with an arrow focuses the tile that way, as does W then H, J, K or L; W then M, X, T or R and one of those letters moves the pane, swaps the tiles, joins the tile into the other's tabs or moves the tile's edge that way; W then V or B splits the pane off into a new tile to the right or below.
 - Drag the line between two tiles to resize the columns or rows beside it; in the Developer, Inbox and Chat presets the drawers keep their width, and the main area's tiles and rows resize.
 - Rooms lists its rooms under headings of their kind (channels, forums, announcements, then direct messages), with a search over them that narrows the list as you type. A room with unread messages shows bold with a dot, and counts the messages that mention you, as "@1" (a direct conversation counts every unread message); Leave shows as the pointer is over a room.
+- A room's messages show their author's avatar, round for a person and square with a robot's badge for an agent, and messages an author posts within 5 minutes of their last show under it without repeating their name.
 
 ### Fixed
 

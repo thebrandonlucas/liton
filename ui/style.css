@@ -409,7 +409,11 @@ kbd:empty { display: none; }
 .room-header { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
 .room-title { font-weight: 650; }
 .room-topic { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
-.room-message { display: flex; flex-direction: column; gap: 2px; }
+.room-message { display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; }
+.room-message > :not(.avatar) { grid-column: 2; }
+.room-message > .avatar { grid-row: 1 / span 6; width: 32px; height: 32px; margin-top: 2px; font-size: 13px; }
+.room-message.continued { margin-top: -6px; }
+.room-message.continued > .avatar, .room-message.continued > .room-meta { display: none; }
 .forum .room-main .room-message { padding: 8px 12px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
 .room-meta { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted); }
 .room-author { font-weight: 650; color: var(--text); }

@@ -2362,15 +2362,17 @@ Liton := [].{
 		)
 	}
 
-	## A message: who wrote it, a person or an agent, how long ago, and
-	## whether edited; its text as Markdown, unless deleted; its reactions;
+	## A message: its author's avatar, who wrote it, a person or an agent,
+	## how long ago, and whether edited, all but under a message they wrote
+	## just before (`Model.RoomLine`'s `continued`); its text as Markdown, unless deleted; its reactions;
 	## and its thread's replies.
 	room_message : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.RoomLine) -> Elem(Row(PaneCtx, Model.RoomLine))
 	room_message = |model0, id, row| {
 		model = model0.lift_row()
 		Html.li(
-			[Engine.class_s(row.field(|line| Str.join_with(["room-message", if (line.agent) "agent" else "", if (line.deleted) "deleted" else "", if (line.failed) "failed" else if (line.status.is_empty()) "" else "pending"].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "message")],
+			[Engine.class_s(row.field(|line| Str.join_with(["room-message", if (line.agent) "agent" else "", if (line.continued) "continued" else "", if (line.deleted) "deleted" else "", if (line.failed) "failed" else if (line.status.is_empty()) "" else "pending"].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "message")],
 			[
+				Liton.avatar(row.field(|line| { initial: line.initial, agent: line.agent })),
 				Html.div(
 					"room-meta",
 					[

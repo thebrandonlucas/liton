@@ -296,14 +296,15 @@ Model := [].{
 	## in it by its root, "" for none.
 	RoomPane : { pane : Str, room_id : Str, root : Str }
 
-	## A message as a Rooms pane shows it: its author's name, and whether an
-	## agent; how long ago it was posted (`Model.ago`), and when; its text,
+	## A message as a Rooms pane shows it: its author's name and initial,
+	## whether an agent, and whether it `continued` the message before it,
+	## by the same author within 5 minutes, so it shows under it; how long ago it was posted (`Model.ago`), and when; its text,
 	## unless deleted; its reactions, each with how many reacted, whether
 	## you did and whether your reaction is on its way; and, in the room, its thread's replies, who replied, and how
 	## long ago last (`threaded`). A message sent and not yet posted says
 	## so (`status`), or why the daemon refused it (`failed`), by the
 	## `serial` of its request.
-	RoomLine : { id : Str, author : Str, agent : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
+	RoomLine : { id : Str, author : Str, initial : Str, agent : Bool, continued : Bool, ago : Str, time : Str, text : Str, edited : Bool, deleted : Bool, reactions : List({ emoji : Str, count : U64, mine : Bool, pending : Bool }), threaded : Bool, replies : U32, repliers : Str, last_reply : Str, status : Str, failed : Bool, serial : U64 }
 
 	## A row of a Rooms pane: a room, or with `heading`, the title of a kind
 	## of rooms.
@@ -2972,7 +2973,7 @@ Model := [].{
 		room_id = Model.room_pane(state, pane_id).room_id
 		log = Model.room_log(state, room_id, "")
 		threads = Rooms.threads(log)
-		by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True }).concat(Model.sending_lines(state, room_id, ""))
+		grouped(by_time(Rooms.messages(log).keep_if(|posted| posted.place == TopLevel)).map(|posted| { ..Model.room_line(state, posted, threads), threaded: Bool.True }).concat(Model.sending_lines(state, room_id, "")))
 	}
 
 	## The thread a Rooms pane opened: its top-level message, then its
@@ -2981,7 +2982,7 @@ Model := [].{
 	thread_lines = |state, pane_id| {
 		{ room_id, root, .. } = Model.room_pane(state, pane_id)
 		posted = Rooms.messages(Model.room_log(state, room_id, "")).keep_if(|message| message.id == root).concat(by_time(Rooms.messages(Model.room_log(state, room_id, root)).keep_if(|message| message.place != TopLevel)))
-		posted.map(|message| Model.room_line(state, message, [])).concat(Model.sending_lines(state, room_id, root))
+		grouped(posted.map(|message| Model.room_line(state, message, [])).concat(Model.sending_lines(state, room_id, root)))
 	}
 
 	## The messages sent to a room's top level, or to a thread by its root,
@@ -3009,7 +3010,9 @@ Model := [].{
 		{
 			id: posted.id,
 			author: author.name,
+			initial: Model.initial_of(author.name),
 			agent: author.kind != Person,
+			continued: Bool.False,
 			ago: Model.ago(state, posted.time),
 			time: posted.time,
 			text: posted.text,
@@ -3529,6 +3532,23 @@ laid = |state| {
 ## A layout's tiles as columns before version 8 saved them, as tabs or not.
 old_columns_of : Model.Layout, Bool -> List(Model.OldColumn)
 old_columns_of = |layout, tabbed| layout.grid.tiles.map(|tile| { id: tile.id, size: 1, tabbed, active: tile.active, panes: tile.panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
+
+## Messages, each marked as continuing the one before it when the same
+## author posted both within 5 minutes; one being sent continues the one
+## before it by its author.
+grouped : List(Model.RoomLine) -> List(Model.RoomLine)
+grouped = |lines|
+	lines.fold(
+		{ shown: [], before: Err(First) },
+		|so_far, line| {
+			continued =
+				match so_far.before {
+					Ok(before) => before.author == line.author and (line.time.is_empty() or (epoch_ms(line.time) ?? 0) - (epoch_ms(before.time) ?? 0) < 300_000)
+					Err(First) => Bool.False
+				}
+			{ shown: so_far.shown.append({ ..line, continued }), before: Ok(line) }
+		},
+	).shown
 
 by_time : List(Rooms.Message) -> List(Rooms.Message)
 by_time = |posted| {
