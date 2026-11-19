@@ -234,10 +234,8 @@ Liton := [].{
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
 					# The setup's presets and themes, which a daemon may leave out.
-					set_up : Try({ setup : Setup.Offered }, _)
-					set_up = Json.parse(text)
 					match decoded {
-						Ok(offered) => Model.set_up(Model.advertise(state, offered), set_up.map_ok(|manifest| manifest.setup) ?? Setup.offered(Setup.empty))
+						Ok(offered) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
 						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
