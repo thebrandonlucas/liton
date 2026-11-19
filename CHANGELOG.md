@@ -120,6 +120,14 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings' Deck lists the deck's surfaces in order: move one up or down, remove one, or add a surface the daemon offers what it needs for.
 - Each surface in Settings' Deck lists its parts under the provider offering what they need, with each part's role and needs, greyed with what is missing where no provider offers it. Uncheck a part to hide it from that surface, or check one to show it again or add it where it fits, without leaving the surface you are on.
 - Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -Dfast -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
+- chat.v1 sessions tell the mode their agent works in, its thinking level, the modes it can switch to and what its last turn used (`mode`, `thinking`, `modes`, `usage`), and the `agents` topic each kind's models with their thinking levels, and its modes. `Configure` switches a session's model, mode or thinking level, and `Create` starts an agent in a mode and at a thinking level.
+- The mock's agents offer two models each, with low, medium and high thinking, and modes such as Plan; their sessions switch them with `Configure` and tell what their last turn used, more with each message.
+- Paseo's agents tell, as chat.v1 sessions, the mode they work in and the modes they can switch to, their thinking level, and what their last turn used: the context window filled, tokens and cost.
+- A chat's composer has a chip each for its session's mode, model and thinking level, in place of the model's name alone. Pick another in one to switch the agent to it: it shows at once, marked as switching, until the daemon has switched it, or goes back with why.
+- A ring in a chat's composer shows how much of the context window the agent's last turn filled; click it for the tokens it read (of them, cached) and wrote, and what it cost.
+- New agent picks the model, mode and thinking level to start with from those its kind of agent offers, each its default unless you pick another; a kind that tells no models still takes one by name.
+- Shift+Tab in a chat's message box switches the agent to its next mode, as in Paseo; ⌘K offers Set mode…, Set model… and Set thinking… for the chat focused, and each choice by name, such as Set model to Opus 4.1.
+- While an agent works, what you send from its chat steers the turn it is working on instead of interrupting it, as the message box now says ("Steer: add to the turn it is working on"); Stop still interrupts it. chat.v1's `SendMessage` takes `while_running`, `Interrupt` or `Steer`.
 
 ### Changed
 
@@ -218,6 +226,9 @@ All notable changes to liton are documented in this file. The format is based on
 - A daemon that connects no providers, such as one started with `LITON_MOCK=off` and nothing else, no longer leaves the page saying "Connecting to the daemon…": the main area says nothing is connected and how to connect something, with the host's settings a click away.
 - On a phone, each tab of the tab bar at the bottom shows the icon of the pane it shows, in every preset: the Rooms preset's Thread tab no longer shows a branch, and a drawer whose panes are all hidden is still named.
 - A room's name shows once: its pane's header names it with its topic, members and ⋯ menu, beside the drawers' buttons, in place of a second header under it. The Thread pane's header has its × to close the thread, and the Review, Ticket and Board panes' headers no longer repeat what their views name.
+- Archiving the workspace shown, from its row's or its header's ⋯ menu, now named Archive workspace since it archives its agents too, shows the latest workspace left at once, or asks you to pick one when none is left. It no longer leaves the main area showing the workspace's id with no agents, where starting one failed with "no workspace".
+- A theme you picked stays when you open another surface or reset one to its preset, rather than turning to the surface's own, such as Developer's Neutral. A browser that has no theme of its own yet still shows each surface's.
+- Drag the workspace shown in the main area to another place by any of its tabs, a session's, the diff's or a ticket's, or by its name in its header, as you drag other panes. A ticket scrolls within its pane, so its comment box is always in reach, and its status, assignees and labels line up as rows of a name and a value.
 
 ### Removed
 

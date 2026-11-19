@@ -30,12 +30,30 @@ Commands := [].{
 			{ id: "tab.new", title: "Open the new tab menu", group: "Tabs", applies: |shown| !Model.tab_menu_items(shown).is_empty(), run: |shown| { ..shown, menu: if (shown.menu == Model.tab_menu) "" else Model.tab_menu } },
 			{ id: "tab.close", title: "Close the tab", group: "Tabs", applies: |shown| Model.shown_closing_tab(shown).is_ok(), run: Model.close_shown_tab },
 		]
+			.concat(Commands.settings(state))
 			.concat(Commands.board(state))
 			.concat(Commands.layout)
 			.concat(Commands.review)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Open the ${preset.name} surface", group: "Surfaces", applies: |shown| Model.offers(shown, preset), run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.deck(state))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
+	}
+
+	## The chat's commands that switch its session's mode, model or thinking
+	## level: one that opens the palette at the choices, and one for each
+	## choice but the one it has, while it offers any.
+	settings : Model.State -> List(Command)
+	settings = |state| {
+		session_id = Model.session_of(state, Commands.chat(state))
+		each = |which, word| {
+			shown = Model.setting(state, session_id, which)
+			offers = |now| !Model.setting(now, Model.session_of(now, Commands.chat(now)), which).choices.is_empty()
+			shown.choices
+				.drop_if(|choice| choice.value == shown.value)
+				.map(|choice| { id: "chat.${word}.${choice.value}", title: "Set ${word} to ${choice.label}", group: "Chat", applies: offers, run: |now| Model.configure(now, Model.session_of(now, Commands.chat(now)), which, choice.value) })
+				.prepend({ id: "chat.${word}", title: "Set ${word}…", group: "Chat", applies: offers, run: |now| Commands.open_palette_at(now, "Set ${word} to ") })
+		}
+		each(Mode, "mode").concat(each(Model, "model")).concat(each(Thinking, "thinking"))
 	}
 
 	## The Board's commands, on the Board pane in reach

@@ -23,7 +23,7 @@
     ; A workspace archived is gone at once, and stays gone once listed so.
     (expect-visible (role button :name "scratch"))
     (click (role button :name "scratch menu"))
-    (click (role button :name "Archive"))
+    (click (role button :name "Archive workspace"))
     (expect-absent (role button :name "scratch"))
     (stub-http "archive" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
     (run-effect 5)

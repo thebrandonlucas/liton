@@ -105,7 +105,7 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission`, `Cancel`, `Create`, `Rename` and `Archive`;
+`AnswerPermission`, `Cancel`, `Create`, `Rename`, `Archive` and `Configure`;
 `attention.v1`'s `ListItems`, `Settle`, `Snooze`, `Unsettle` and `Seen`;
 `workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
 `RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
@@ -114,6 +114,12 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
 and `Unlink` (Tickets, below).
+
+`{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
+it works on a turn, the message interrupts it, or with `"while_running":
+"Steer"` joins the turn, as Paseo's `activeTurnBehavior` `steer`; Paseo
+sends `"Interrupt"` as `interrupt`, and the mock takes a steer as a word that
+it goes on.
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from
@@ -147,6 +153,15 @@ their provider keeps them:
 { "Ok": "Accepted" }
 ```
 
+A session's model, mode and thinking level switch with `Configure`, each
+left out to leave it as it is, the ids its agent's `models`, the session's
+`modes` and the model's `thinking` levels name:
+
+```json
+{ "capability": "chat.v1", "request": { "Configure": { "session_id": "fix-auth", "model": "claude-opus-4", "mode": "plan", "thinking": "high" } } }
+{ "Ok": "Accepted" }
+```
+
 Each answers `Accepted` once the provider took it, and the next listing
 shows it: a new title or name, a workspace's `pinned`, and an archived
 session or workspace left out. A name `""` gives back the one the provider
@@ -156,7 +171,12 @@ one can't be pinned, and projects can be neither pinned nor archived. From
 Paseo these are its `update_agent_request` (the agent's name),
 `archive_agent_request`, `workspace.title.set.request`,
 `workspace.pin.set.request`, `archive_workspace_request` and
-`project.rename.request`; Paseo can't unarchive an agent or a workspace
+`project.rename.request`, and `Configure` its `agent.config.apply.request`,
+or with a Paseo that doesn't list `agentConfigApply` among its features,
+its `set_agent_model_request`, `set_agent_mode_request` and
+`set_agent_thinking_request` one after the other; the mock's agents offer
+two models of three thinking levels each and a few modes, and refuse others;
+Paseo can't unarchive an agent or a workspace
 over its protocol, and neither can liton. The mock keeps its own changes.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
@@ -175,7 +195,7 @@ its item was `updated` (a client sends it when the user opens one); through
 `Create` starts an agent, and creates a workspace:
 
 ```json
-{ "capability": "chat.v1", "request": { "Create": { "place": { "Workspace": "main" }, "agent": "claude", "model": "claude-opus-4", "prompt": "Find the TODOs" } } }
+{ "capability": "chat.v1", "request": { "Create": { "place": { "Workspace": "main" }, "agent": "claude", "model": "claude-opus-4", "mode": "plan", "thinking": "high", "prompt": "Find the TODOs" } } }
 { "Ok": { "Started": { "session_id": "claude-1767258000000" } } }
 { "capability": "workspaces.v1", "request": { "Create": { "project_id": "liton", "kind": "Worktree", "branch": "docs" } } }
 { "Ok": { "Created": { "workspace_id": "workspace-1" } } }
@@ -183,8 +203,9 @@ its item was `updated` (a client sends it when the user opens one); through
 
 An agent starts in a workspace, `{"Workspace": id}`, of the provider that
 lists it, or in a directory, `{"Directory": path}`, of the provider the call
-names. Its `agent` is a kind its provider offers (the `agents` topic); `model`
-is left out for the provider's default, and `prompt` is `""` for none. A
+names. Its `agent` is a kind its provider offers (the `agents` topic);
+`model`, `mode` and `thinking` are left out for the provider's defaults, and
+`prompt` is `""` for none. A
 workspace is a `Checkout` of its project's directory, or a `Worktree` on a
 new branch, `branch` or one the provider names when it is left out. Both
 answer once the provider made it, before it lists it; a client shows it as
@@ -230,7 +251,7 @@ events when nothing changed:
 | `chat.v1` | `sessions` | snapshot | `{"Sessions": [Session]}` |
 | `chat.v1` | `timeline/<session_id>` | append-only | `{"Entry": {"sequence", "event"}}`, one per entry |
 | `chat.v1` | `importable` | snapshot | `{"Importable": [{"session", "directory"}]}` |
-| `chat.v1` | `agents` | snapshot | `{"Agents": [{"provider", "agent"}]}`, the kinds of agent each provider starts |
+| `chat.v1` | `agents` | snapshot | `{"Agents": [{"provider", "agent", "models", "modes", "default_mode"}]}`, the kinds of agent each provider starts |
 | `attention.v1` | `items` | snapshot | `{"Items": [Item]}`, what needs you first, then the latest |
 | `workspaces.v1` | `list` | snapshot | `{"Listed": {"projects", "workspaces"}}` |
 | `workspace.git.v1` | `changes/<context>/<scope>` | snapshot | `{"Changes": {"workspace", "status", "changes", "commits"}}` |
@@ -260,6 +281,20 @@ times such as `2026-01-01T09:00:00.000Z`. Paseo's come from its agent list
 agent on), so they cost no request of their own. `running_since` holds
 while its agent works on a turn, waiting for you too, for a client to show
 how long it has been working.
+
+A session tells too, as far as its provider does, the `mode` it works in and
+its `thinking` level, by their ids, the `modes` it can switch to, each
+`{"id", "label"}`, and the `usage` of its last turn: `{"context_used",
+"context_max", "input_tokens", "cached_input_tokens", "output_tokens",
+"cost_usd"}`, each left out when not told, the tokens of its context window
+used and at most, those read (of them cached) and written, and its cost in
+US dollars. An `agents` kind tells the `models` it runs, each `{"id",
+"label", "default", "context_max", "thinking"}` with its thinking levels
+`{"id", "label", "default"}`, the `modes` it offers and its `default_mode`,
+each left out when its provider doesn't tell. From Paseo, these are an
+agent's `currentModeId`, `effectiveThinkingOptionId` (or its
+`thinkingOptionId`), `availableModes` and `lastUsage`, and a provider's
+models and modes in its `get_providers_snapshot_request`.
 
 Where a turn ends, a timeline has a `{"TurnEnded": {"started", "ended"}}`
 after the turn's last event: once its agent finished, failed or was stopped,

@@ -1,0 +1,38 @@
+(test "Liton — a chat's composer switches its session's mode, model and thinking level from its chips: each shows at once as pending, holds once the daemon takes it until a listing shows it, and goes back with why when refused"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"model\":\"claude-sonnet-4-5\",\"mode\":\"default\",\"thinking\":\"medium\",\"modes\":[{\"id\":\"default\",\"label\":\"Always ask\"},{\"id\":\"plan\",\"label\":\"Plan\"}]}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"agents\",\"cursor\":\"a1\",\"events\":[{\"Agents\":[{\"agent\":\"claude\",\"provider\":\"mock\",\"models\":[{\"id\":\"claude-sonnet-4-5\",\"label\":\"Sonnet 4.5\",\"default\":true,\"context_max\":200000,\"thinking\":[{\"id\":\"low\",\"label\":\"Low\",\"default\":false},{\"id\":\"medium\",\"label\":\"Medium\",\"default\":true},{\"id\":\"high\",\"label\":\"High\",\"default\":false}]},{\"id\":\"claude-opus-4-1\",\"label\":\"Opus 4.1\",\"default\":false,\"context_max\":200000,\"thinking\":[{\"id\":\"low\",\"label\":\"Low\",\"default\":false},{\"id\":\"medium\",\"label\":\"Medium\",\"default\":false},{\"id\":\"high\",\"label\":\"High\",\"default\":true}]}],\"modes\":[{\"id\":\"default\",\"label\":\"Always ask\"},{\"id\":\"plan\",\"label\":\"Plan\"}],\"default_mode\":\"default\"}]}]}]}")
+    (run-effect 2)
+    (expect-value (label "Mode") "default")
+    (expect-value (label "Model") "claude-sonnet-4-5")
+    (expect-value (label "Thinking") "medium")
+    ; Plan mode shows at once, pending, before the daemon answers.
+    (select-option (label "Mode") "plan")
+    (expect-value (label "Mode") "plan")
+    (expect-attr (label "Mode") class "chip pending")
+    (stub-http "configure" :url "/liton/v1/call" :status 200 :body "{\"Ok\":\"Accepted\"}")
+    (run-effect 4)
+    (expect-value (label "Mode") "plan")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"model\":\"claude-sonnet-4-5\",\"mode\":\"default\",\"thinking\":\"medium\",\"modes\":[{\"id\":\"default\",\"label\":\"Always ask\"},{\"id\":\"plan\",\"label\":\"Plan\"}]}]}]}]}")
+    (run-effect 3)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"model\":\"claude-sonnet-4-5\",\"mode\":\"plan\",\"thinking\":\"medium\",\"modes\":[{\"id\":\"default\",\"label\":\"Always ask\"},{\"id\":\"plan\",\"label\":\"Plan\"}]}]}]}]}")
+    (run-effect 5)
+    (expect-value (label "Mode") "plan")
+    (expect-attr (label "Mode") class "chip")
+    ; The model's thinking levels follow it.
+    (select-option (label "Model") "claude-opus-4-1")
+    (expect-value (label "Model") "claude-opus-4-1")
+    (expect-attr (label "Model") class "chip pending")
+    ; Refused, it goes back, with why.
+    (stub-http "configure" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Rejected\":\"the agent is busy\"}}")
+    (run-effect 6)
+    (expect-value (label "Model") "claude-sonnet-4-5")
+    (expect-attr (label "Model") class "chip")
+    (expect-visible (text "the agent is busy"))
+    ; A thinking level of the model it runs.
+    (select-option (label "Thinking") "high")
+    (expect-value (label "Thinking") "high")
+    (expect-attr (label "Thinking") class "chip pending")
+  )
+)

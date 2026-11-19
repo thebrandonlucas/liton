@@ -255,6 +255,29 @@ try {
     const [agents] = (await post("poll", { topics: [{ capability: "chat.v1", topic: "agents", after: "" }] })).topics;
     assert.deepEqual(agents.events[0].Agents.map((a) => a.agent), ["claude", "codex"]);
   });
+  await step("Configure switches a mock session's model, mode and thinking level of those its agent offers, Create starts one in them, and its usage grows with each message", async () => {
+    const session = async (id) => (await call("chat.v1", "ListSessions")).Ok.Sessions.find((s) => s.id === id);
+    const [agents] = (await post("poll", { topics: [{ capability: "chat.v1", topic: "agents", after: "" }] })).topics;
+    const claude = agents.events[0].Agents.find((a) => a.agent === "claude");
+    assert.deepEqual([claude.models.map((m) => m.id), claude.modes.map((m) => m.id), claude.default_mode], [["claude-sonnet-4-5", "claude-opus-4-1"], ["default", "acceptEdits", "plan", "bypassPermissions"], "default"]);
+    const fresh = await session("fix-auth");
+    assert.deepEqual([fresh.model, fresh.mode, fresh.thinking, fresh.modes.length], ["claude-sonnet-4-5", "default", "medium", 4]);
+    assert.deepEqual(await call("chat.v1", { Configure: { session_id: "fix-auth", model: "claude-opus-4-1", mode: "plan" } }), { Ok: "Accepted" });
+    const switched = await session("fix-auth");
+    assert.deepEqual([switched.model, switched.mode, switched.thinking], ["claude-opus-4-1", "plan", "high"]);
+    assert.deepEqual(await call("chat.v1", { Configure: { session_id: "fix-auth", thinking: "low" } }), { Ok: "Accepted" });
+    assert.equal((await session("fix-auth")).thinking, "low");
+    assert.equal((await call("chat.v1", { Configure: { session_id: "fix-auth", model: "gpt-5" } })).Ok.Rejected, "the mock's claude runs no model gpt-5");
+    assert.equal((await call("chat.v1", { Configure: { session_id: "nope", mode: "plan" } })).Err.code, "NotFound");
+    const used = (await session("fix-auth")).usage;
+    assert.deepEqual([used.context_max, used.context_used > 0, used.cost_usd > 0], [200000, true, true]);
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "And the tests", while_running: "Steer" } }), { Ok: "Accepted" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok((await session("fix-auth")).usage.context_used > used.context_used);
+    const started = (await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "codex", mode: "read-only", thinking: "high", prompt: "" } })).Ok.Started.session_id;
+    const made = await session(started);
+    assert.deepEqual([made.model, made.mode, made.thinking], ["gpt-5-codex", "read-only", "high"]);
+  });
   await step("sessions, workspaces and projects are renamed, pinned and archived, and the listings show it", async () => {
     const workspaces = async () => (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed;
     const sessions = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions;
