@@ -9,6 +9,7 @@ import pf.OsStr
 import pf.Stderr
 import pf.Stdout
 import Cli
+import Docs
 import Exec
 import Paseo
 import Speech
@@ -29,6 +30,7 @@ main! = |arguments| {
 			Exec.needs!("node", "nodejs", given)?
 			Exec.call!(".", "node", ["e2e/previews.mjs", cdp])
 		}
+		Docs({ roc, roc_ui, output }) => Docs.build!(roc, roc_ui, output)
 		Paseo(command) => {
 			Exec.needs!("node", "nodejs", given)?
 			settings = Paseo.settings!()?

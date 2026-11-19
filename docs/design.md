@@ -150,7 +150,7 @@ A snapshot is a deterministic JSON file. It contains:
 | hosting | local only for now: a personal daemon on the developer's machine |
 | shared types | `capabilities/`: a platform-agnostic Roc package of types and JSON codecs, imported by the daemon and the UI |
 | repo | monorepo |
-| tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md |
+| tooling | kai conventions: Kaifile dev env, `zig build <step>` tasks, pinned `.roc-version` (new compiler), AGENTS.md → docs/{rules,design,vision}.md, CHANGELOG.md; API docs from `##` comments by `roc docs` (`zig build docs`, served at /docs) |
 | roc-signals | an SSE subscription effect, as an upstream PR to lukewilliamboswell/roc-signals. Until then the UI polls once a second |
 | layout | a grid of tiles, not a tree: nested `Engine.each` contexts can't recurse, and a grid's rows and columns give the splits a tree would (docs/research/surfaces.md) |
 

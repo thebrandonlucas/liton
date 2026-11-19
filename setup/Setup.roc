@@ -13,6 +13,8 @@ Setup := [].{
 	## slots, the left drawer, the main area and the right drawer.
 	Shell : [Workbench, Tiling]
 
+	## A pane of a tile: its widget, the context it is pinned to, and its
+	## options.
 	Pane : Grid.Pane
 
 	## A column of panes, as snapshots before version 8 laid them out side by
@@ -27,6 +29,7 @@ Setup := [].{
 	## "" keeps the theme shown.
 	Snapshot : { version : U32, shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str), theme : Str }
 
+	## A layout to start from, named: a snapshot of the UI's layout.
 	Preset : { name : Str, snapshot : Snapshot }
 
 	## The surfaces a browser switches between, in order, each a preset as
@@ -95,6 +98,7 @@ Setup := [].{
 		Grid.normalized({ columns: columns.map(|column| column.size.to_u64()), rows: lines.drop_first(1).map_with_index(|line, at| line - (lines.get(at) ?? 0)), tiles })
 	}
 
+	## A setup that declares nothing.
 	empty : Declared
 	empty = { remotes: [], transformers: [], presets: [], default_preset: "", themes: [], default_theme: "", deck: [] }
 
@@ -102,12 +106,15 @@ Setup := [].{
 	with_remote : Declared, Remote -> Declared
 	with_remote = |setup, remote| { ..setup, remotes: replaced(setup.remotes, remote, |old| old.name == remote.name) }
 
+	## Takes away the remote called `name`.
 	without_remote : Declared, Str -> Declared
 	without_remote = |setup, name| { ..setup, remotes: setup.remotes.drop_if(|remote| remote.name == name) }
 
+	## Hosts the transformer `id`, once.
 	with_transformer : Declared, Str -> Declared
 	with_transformer = |setup, id| { ..setup, transformers: replaced(setup.transformers, id, |old| old == id) }
 
+	## No longer hosts the transformer `id`.
 	without_transformer : Declared, Str -> Declared
 	without_transformer = |setup, id| { ..setup, transformers: setup.transformers.drop_if(|old| old == id) }
 
@@ -115,9 +122,11 @@ Setup := [].{
 	with_preset : Declared, Preset -> Declared
 	with_preset = |setup, preset| { ..setup, presets: replaced(setup.presets, preset, |old| old.name == preset.name) }
 
+	## Takes away the preset called `name`.
 	without_preset : Declared, Str -> Declared
 	without_preset = |setup, name| { ..setup, presets: setup.presets.drop_if(|preset| preset.name == name) }
 
+	## Makes the preset called `name` the one clients start with.
 	with_default_preset : Declared, Str -> Declared
 	with_default_preset = |setup, name| { ..setup, default_preset: name }
 
@@ -125,9 +134,11 @@ Setup := [].{
 	with_theme : Declared, Theme -> Declared
 	with_theme = |setup, theme| { ..setup, themes: replaced(setup.themes, theme, |old| old.name == theme.name) }
 
+	## Takes away the theme called `name`.
 	without_theme : Declared, Str -> Declared
 	without_theme = |setup, name| { ..setup, themes: setup.themes.drop_if(|theme| theme.name == name) }
 
+	## Makes the theme called `name` the one clients start with.
 	with_default_theme : Declared, Str -> Declared
 	with_default_theme = |setup, name| { ..setup, default_theme: name }
 
@@ -147,6 +158,7 @@ Setup := [].{
 		if (changes.deck.is_empty()) theme_set else Setup.with_deck(theme_set, changes.deck)
 	}
 
+	## What a daemon's manifest offers of `setup`: its presets and themes.
 	offered : Declared -> Offered
 	offered = |{ presets, default_preset, themes, default_theme, deck, .. }| { presets, default_preset, themes, default_theme, deck }
 

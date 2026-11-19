@@ -26,20 +26,26 @@ Model := [].{
 	## The layout's parts, as setups' presets hold them (setup/Setup.roc).
 	Pane : Setup.Pane
 
+	## A tile of the grid, holding panes.
 	Tile : Grid.Tile
 
+	## A column of panes, as snapshots before version 8 laid them out.
 	Column : Setup.Column
 
 	## A pane and column as snapshots before version 4 saved them, without options.
 	OldPane : { id : Str, widget : Str, pinned : Str }
 
+	## A column as snapshots before version 4 saved it, its panes without
+	## options.
 	OldColumn : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(OldPane) }
 
+	## How tiles are laid out: a Workbench's slots, or Tiling.
 	Shell : Setup.Shell
 
 	## `collapsed` are the Workbench drawers hidden, `hidden` its panes hidden.
 	Layout : { shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str) }
 
+	## Where a tile sits in a Workbench, or `Free` in Tiling.
 	Slot : Setup.Slot
 
 	## The part of the model a snapshot saves: deterministic JSON others can load.
@@ -50,6 +56,7 @@ Model := [].{
 	## another.
 	Surface : { name : Str, snapshot : Snapshot, focus : List(Context.Id) }
 
+	## The entries of a session's timeline the UI has.
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
 	## A message or permission answer sent, until its session's timeline shows
@@ -57,6 +64,8 @@ Model := [].{
 	## take it, or is "" while it waits.
 	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
 
+	## The UI's model: what the daemon offers and answered, the layout, and
+	## what each part shows and is doing, as its fields say.
 	State : {
 		## The daemon, "" before its manifest is read, and what it offers.
 		daemon : { id : Str, name : Str },
@@ -308,12 +317,15 @@ Model := [].{
 		tickets : TicketDesk.State,
 	}
 
+	## The platform the page runs on, which decides how keys are written.
 	Platform : [Mac, Other]
 
 	## A tab of a workspace's view: a session's chat, the diff Changes shows
 	## in the main area, or a ticket.
 	Tab : [Session(Str), Diff, Ticket(Str)]
 
+	## What a workspace's view has open: its tabs, the one shown, and its
+	## session's chat.
 	Views : { workspace_id : Str, opened : List(Tab), shown : Tab, session : Str }
 
 	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
@@ -329,6 +341,7 @@ Model := [].{
 	## has it; `id` is "" until the daemon answers with it.
 	Creating : { serial : U64, form : Form, title : Str, id : Str }
 
+	## A Workspaces pane's form while it is closed.
 	closed_form : Form
 	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", mode: "", thinking: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
 
@@ -336,8 +349,12 @@ Model := [].{
 	## cursors the UI had.
 	Poll : { serial : U64, subjects : List(Protocol.Subject), topics : List(Protocol.Wanted) }
 
+	## What polls answered of a context's git: its workspace, status and
+	## commits.
 	Git : { context : Context.Id, workspace : [Known(WorkspaceGit.Workspace), Unknown], status : [Status(WorkspaceGit.Status), NoStatus], commits : List(WorkspaceGit.Commit) }
 
+	## What a Changes pane shows: its scope, the file picked, the folders
+	## folded, and whether it shows in the main area.
 	GitPane : { pane : Str, scope : WorkspaceGit.Scope, file : [Selected(Str), NoFile], folded : List(Str), in_main : Bool }
 
 	## A row of a Changes pane's tree: a changed file, or a folder of them
@@ -395,12 +412,16 @@ Model := [].{
 	developer : Layout
 	developer = Model.layout_of(Default.developer.snapshot)
 
+	## The Inbox preset's layout.
 	inbox : Layout
 	inbox = Model.layout_of(Default.inbox.snapshot)
 
+	## The Tiling preset's layout.
 	tiling : Layout
 	tiling = Model.layout_of(Default.tiling.snapshot)
 
+	## The model at start, laid out as the snapshot `saved` says, or as the
+	## default preset if it can't be read.
 	initial : Str -> State
 	initial = |saved| {
 		kept = Model.restore_deck(saved)
@@ -511,6 +532,7 @@ Model := [].{
 		{ ..laid, jump, active_tile: shown }
 	}
 
+	## The snapshot of the layout as it is now.
 	snapshot : State -> Snapshot
 	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
@@ -768,6 +790,7 @@ Model := [].{
 	show_host : State -> State
 	show_host = |state| Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host")
 
+	## Shows Settings' section `section`.
 	show_section : State, Str -> State
 	show_section = |state, section| { ..state, settings_page: { section, pushed: Bool.True } }
 
@@ -812,9 +835,12 @@ Model := [].{
 		}
 	}
 
+	## Columns of panes without options, given none.
 	with_options : List(OldColumn) -> List(Column)
 	with_options = |columns| columns.map(|{ id, size, tabbed, active, panes: column_panes }| { id, size, tabbed, active, panes: column_panes.map(|listed_pane| { id: listed_pane.id, widget: listed_pane.widget, pinned: listed_pane.pinned, options: [] }) })
 
+	## A snapshot's columns before version 3 as a layout: the Developer preset
+	## if it is the old default, else Tiling.
 	migrated : List(Column) -> Layout
 	migrated = |columns|
 		if (columns.map(|column| column.panes.map(|listed_pane| listed_pane.widget)) == [["sessions"], ["chat"], ["capabilities"]]) Model.developer else { shell: Tiling, grid: Setup.grid_of(columns), collapsed: [], hidden: [] }
@@ -830,6 +856,7 @@ Model := [].{
 		last >= 3 and within and holds(Left) and holds(Main) and holds(Right)
 	}
 
+	## Lays out the snapshot pasted into Settings, or says it isn't one.
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
@@ -837,6 +864,8 @@ Model := [].{
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
+	## Keeps what the daemon's manifest offers: itself, its providers,
+	## transformers and capabilities.
 	advertise : State, Manifest.Offered -> State
 	advertise = |state, offered| { ..state, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
@@ -892,6 +921,7 @@ Model := [].{
 		}
 	}
 
+	## Shows the theme `name`, picked in this browser.
 	use_theme : State, Str -> State
 	use_theme = |state, name| { ..state, theme: name, theme_chosen: Bool.True }
 
@@ -900,6 +930,7 @@ Model := [].{
 	focus_pane : State, { pane : Str, tile : Str } -> State
 	focus_pane = |state, { pane: pane_id, tile }| { ..state, focused_pane: pane_id, active_tile: tile, menu: if (state.menu == pane_id or state.menu.starts_with("${pane_id} ")) state.menu else "" }
 
+	## Opens a pane's menu, or closes it when open.
 	toggle_menu : State, Str -> State
 	toggle_menu = |state, pane_id| { ..state, menu: if (state.menu == pane_id) "" else pane_id }
 
@@ -915,6 +946,7 @@ Model := [].{
 	## archiving it. Each edit is offered where its capability is.
 	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Rename, Pin, CopyId, Archive]
 
+	## The ⋮ menu of the row `key` (see `RowAction`).
 	row_menu : State, Str -> List({ label : Str, action : RowAction })
 	row_menu = |state, key| {
 		offered = |capability, items| if (state.capabilities.contains(capability)) items else []
@@ -987,6 +1019,7 @@ Model := [].{
 			_ => { key: "", title: "", project: "", counts: Model.no_counts }
 		}
 
+	## A rename while no row is being renamed.
 	not_renaming : { pane : Str, key : Str, text : Str }
 	not_renaming = { pane: "", key: "", text: "" }
 
@@ -1204,6 +1237,7 @@ Model := [].{
 	copy_answered : State, U64, Bool -> State
 	copy_answered = |state, serial, copied| if (copied or serial != state.clipboard.serial) state else { ..state, copied: "", notice: "The browser didn't let liton copy that." }
 
+	## How many times a chat pane was jumped to its latest entry.
 	jumps_of : State, Str -> U64
 	jumps_of = |state, pane_id| state.jumps.find_first(|jumped| jumped.pane == pane_id).map_ok(|jumped| jumped.count) ?? 0
 
@@ -1293,6 +1327,7 @@ Model := [].{
 		{ ..swapped, focused_pane: id, hidden: state.hidden.drop_if(|hidden| hidden == id), grid: { ..swapped.grid, tiles: swapped.grid.tiles.map(|tile| if (tile.panes.any(|shown| shown.id == id)) { ..tile, active: id } else tile) } }
 	}
 
+	## Where tile `tile_id` sits in the layout (see `slot_in`).
 	slot_of : State, Str -> Slot
 	slot_of = |state, tile_id| Model.slot_in(state.shell, state.grid, tile_id)
 
@@ -1321,6 +1356,7 @@ Model := [].{
 		if (Model.slot_tile(state, slot) == tile_id) Model.slot_name(slot) else "${Model.slot_name(slot)}-${tile_id}"
 	}
 
+	## A slot's name, as `left` names the left drawer.
 	slot_name : Slot -> Str
 	slot_name = |slot|
 		match slot {
@@ -1330,6 +1366,7 @@ Model := [].{
 			Free => "free"
 		}
 
+	## The slot of `name`, `Free` for another.
 	slot_named : Str -> Slot
 	slot_named = |name| [Left, Main, Right].find_first(|slot| Model.slot_name(slot) == name) ?? Free
 
@@ -1342,6 +1379,7 @@ Model := [].{
 	## of them, or into a new tile on `side` of tile `tile`, which it splits.
 	Drop : [Nowhere, Into({ tile : Str, at : [End, Before(Str), After(Str)] }), Beside({ tile : Str, side : Grid.Side })]
 
+	## A drop over nothing.
 	nowhere : Drop
 	nowhere = Nowhere
 
@@ -1413,6 +1451,7 @@ Model := [].{
 	option : Pane, Str -> Str
 	option = |shown, key| Widgets.value(Widgets.find(shown.widget), shown.options, key)
 
+	## Sets pane `id`'s option `key` to `value`.
 	set_option : State, Str, Str, Str -> State
 	set_option = |state, id, key, value| {
 		set = |listed_pane| if (listed_pane.id == id) { ..listed_pane, options: listed_pane.options.drop_if(|old| old.key == key).append({ key, value }) } else listed_pane
@@ -1454,6 +1493,7 @@ Model := [].{
 	slot_hash : Slot -> Str
 	slot_hash = |slot| if (slot == Free) "" else "#${Model.slot_name(slot)}"
 
+	## The slot the URL hash `hash` names (see `slot_hash`).
 	slot_hashed : Str -> Slot
 	slot_hashed = |hash| [Left, Right].find_first(|slot| Str.split_on(hash.drop_prefix("#"), "&").contains(Model.slot_name(slot))) ?? Main
 
@@ -1470,9 +1510,12 @@ Model := [].{
 		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 
+	## Hides a Workbench drawer, or shows it when hidden.
 	toggle_drawer : State, Slot -> State
 	toggle_drawer = |state, drawer| { ..state, collapsed: if (state.collapsed.contains(drawer)) state.collapsed.drop_if(|slot| slot == drawer) else state.collapsed.append(drawer) }
 
+	## Takes pane `id` out of the layout, and its tile with it when it was the
+	## last.
 	close_pane : State, Str -> State
 	close_pane = |state, id| {
 		from = Model.tile_of(state, id).map_ok(|tile| tile.id) ?? ""
@@ -1654,6 +1697,7 @@ Model := [].{
 			Err(NotFound) => state
 		}
 
+	## `grid` with `change` made to tile `tile_id`.
 	change_tile : Grid.Layout, Str, (Tile -> Tile) -> Grid.Layout
 	change_tile = |grid, tile_id, change| { ..grid, tiles: grid.tiles.map(|tile| if (tile.id == tile_id) change(tile) else tile) }
 
@@ -1697,6 +1741,7 @@ Model := [].{
 		Model.with_panes(state, pin)
 	}
 
+	## Pane `id`, or a bare pane of that id if there is none.
 	pane : State, Str -> Pane
 	pane = |state, id| Model.panes(state).find_first(|candidate| candidate.id == id) ?? { id, widget: "", pinned: "", options: [] }
 
@@ -1775,6 +1820,7 @@ Model := [].{
 		listed.concat(started).map(|session_id| Session(session_id)).concat(Model.views_of(state, workspace_id).opened)
 	}
 
+	## What workspace `workspace_id`'s view has open, nothing at first.
 	views_of : State, Str -> Views
 	views_of = |state, workspace_id| state.workspace_views.find_first(|views| views.workspace_id == workspace_id) ?? { workspace_id, opened: [], shown: Session(""), session: "" }
 
@@ -1977,6 +2023,8 @@ Model := [].{
 		}
 	}
 
+	## The sessions of workspace `workspace_id`, those it lists and those that
+	## say they work in it.
 	workspace_sessions : State, Str -> List(Chat.Session)
 	workspace_sessions = |state, workspace_id| {
 		listed = state.workspaces.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.session_ids) ?? []
@@ -1994,6 +2042,7 @@ Model := [].{
 			Ticket(ticket_id) => TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| "${ticket.summary.key} ${ticket.summary.title}") ?? ticket_id
 		}
 
+	## The entries the UI has of session `session_id`'s timeline.
 	entries : State, Str -> List(Chat.Entry)
 	entries = |state, session_id|
 		state.timelines.find_first(|timeline| timeline.session_id == session_id).map_ok(|timeline| timeline.entries) ?? []
@@ -2011,6 +2060,8 @@ Model := [].{
 	## past its first 4 lines is `folded`.
 	ToolCard : { tool : Str, input : Str, state : [Running, Done, Failed], output : Str, folded : Str }
 
+	## A timeline entry as a chat shows it: its event, and the tool card or the
+	## fold it is part of.
 	Shown : { sequence : U64, event : Chat.Event, card : Try(ToolCard, [NotTool]), fold : Try(Fold, [NotFold]) }
 
 	## One line standing for entries folded under it, which opening it shows
@@ -2185,6 +2236,7 @@ Model := [].{
 		{ ..state, opened_folds: if (state.opened_folds.contains(opened)) state.opened_folds.drop_if(|fold| fold == opened) else state.opened_folds.append(opened) }
 	}
 
+	## The sequence of the last entry the UI has of a session, 0 for none.
 	last_sequence : State, Str -> U64
 	last_sequence = |state, session_id| Model.entries(state, session_id).last().map_ok(|entry| entry.sequence) ?? 0
 
@@ -2459,6 +2511,7 @@ Model := [].{
 	stop : State, Str -> State
 	stop = |state, pane_id| Model.stop_session(state, Model.session_of(state, Model.pane(state, pane_id)))
 
+	## Stops session `session_id` at once, until the daemon answers.
 	stop_session : State, Str -> State
 	stop_session = |state, session_id| { ..Model.send({ ..state, sent: state.sent.drop_if(|sent| Model.stops(sent.request, session_id)) }, Cancel({ session_id: session_id })), menu: "" }
 
@@ -2511,9 +2564,11 @@ Model := [].{
 	loading : State, Str -> Bool
 	loading = |state, session_id| !session_id.is_empty() and !state.timelines.any(|timeline| timeline.session_id == session_id)
 
+	## What a chat pane's composer holds.
 	draft : State, Str -> Str
 	draft = |state, pane_id| state.drafts.find_first(|candidate| candidate.pane == pane_id).map_ok(|found| found.text) ?? ""
 
+	## Sets what a chat pane's composer holds.
 	set_draft : State, Str, Str -> State
 	set_draft = |state, pane_id, text| { ..state, drafts: state.drafts.drop_if(|found| found.pane == pane_id).append({ pane: pane_id, text }) }
 
@@ -2592,6 +2647,7 @@ Model := [].{
 	latest : State, Pane -> List(Attention.Item)
 	latest = |state, shown| Model.inbox_items(state).keep_if(|item| item.set_aside == No and item.state != NeedsYou and (item.state != Idle or Model.option(shown, "show_idle") == "true"))
 
+	## The inbox's items settled or snoozed.
 	later : State -> List(Attention.Item)
 	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
 
@@ -2731,6 +2787,7 @@ Model := [].{
 	git_pane : State, Str -> GitPane
 	git_pane = |state, pane_id| state.git_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, scope: Uncommitted, file: NoFile, folded: [], in_main: Bool.False }
 
+	## Keeps what a Changes pane shows.
 	set_git_pane : State, GitPane -> State
 	set_git_pane = |state, shown| { ..state, git_panes: state.git_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
 
@@ -2787,6 +2844,7 @@ Model := [].{
 			Loading => []
 		}
 
+	## What polls answered of `context`'s changes in `scope`.
 	git_changes_of : State, Context.Id, WorkspaceGit.Scope -> Try(WorkspaceGit.Changes, [NotFound])
 	git_changes_of = |state, context, scope| state.git_changes.find_first(|known| known.context == context and known.changes.scope == scope).map_ok(|known| known.changes)
 
@@ -2894,8 +2952,10 @@ Model := [].{
 	## workspace `pinned`, or its one session, lists first.
 	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, second_line : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, pinned : Bool, depth : U64 }
 
+	## A row's counts, each "" when it has none (see `Row`).
 	Counts : { members : Str, added : Str, removed : Str }
 
+	## A row without counts.
 	no_counts : Counts
 	no_counts = { members: "", added: "", removed: "" }
 
@@ -3095,6 +3155,7 @@ Model := [].{
 	file_pane : State, Str -> FilePane
 	file_pane = |state, pane_id| state.file_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, folders: [], file: "" }
 
+	## Keeps what a Files pane shows.
 	set_file_pane : State, FilePane -> State
 	set_file_pane = |state, shown| { ..state, file_panes: state.file_panes.drop_if(|old| old.pane == shown.pane).append(shown) }
 
@@ -3183,6 +3244,7 @@ Model := [].{
 	## thread folded into one is, and whether its thread is focused.
 	Note : { thread : Str, comment : Str, author : Str, state : Str, text : Str, last : Bool, resolved : Bool, draft : Bool, focused : Bool }
 
+	## A blank row of the code view, which a row is made from.
 	code_row : CodeRow
 	code_row = { key: "", kind: Code, path: "", old: "", new: "", old_pick: { side: New, line: 0 }, new_pick: { side: New, line: 0 }, left: [], right: [], left_class: "", right_class: "", class: "", note: { thread: "", comment: "", author: "", state: "", text: "", last: Bool.False, resolved: Bool.False, draft: Bool.False, focused: Bool.False } }
 
@@ -3296,6 +3358,7 @@ Model := [].{
 			}
 		}
 
+	## The review composer while it is closed.
 	closed_composer : Composer
 	closed_composer = { pane: "", path: "", scope: File, side: New, start: 0, end: 0, thread: "", editing: "", text: "" }
 
@@ -3727,6 +3790,8 @@ Model := [].{
 			(listed, _) => listed
 		}
 
+	## The files of the review's scope, in its navigator's order, or Loading
+	## until a poll answers.
 	all_review_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
 	all_review_files = |state, shown| {
 		in_tree = |files| changed_rows(files, [], "", 0).keep_if(|row| !row.folder).keep_oks(|row| files.find_first(|file| file.path == row.path))
@@ -3982,6 +4047,7 @@ Model := [].{
 		}
 	}
 
+	## Whether `request` sends the drafts as a round.
 	sends_round : Review.Request -> Bool
 	sends_round = |request|
 		match request {
@@ -3997,6 +4063,8 @@ Model := [].{
 	## threads are open on its lines and whether the view has it in view.
 	ReviewRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File, threads : U64, focused : Bool, viewed : Bool }
 
+	## The Review navigator's rows: the files of its scope in folders, each
+	## with its open threads.
 	review_tree : State, Pane -> List(ReviewRow)
 	review_tree = |state, shown| {
 		threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| !thread.resolved)
@@ -4203,6 +4271,8 @@ Model := [].{
 	starting_key : U64 -> Str
 	starting_key = |serial| "starting:${serial.to_str()}"
 
+	## What names a creation: its id, or until the daemon answers, its
+	## `starting_key`.
 	created_id : Creating -> Str
 	created_id = |creating| if (creating.id.is_empty()) Model.starting_key(creating.serial) else creating.id
 
@@ -4305,6 +4375,8 @@ Model := [].{
 			_ => state
 		}
 
+	## What Room pane `pane_id` shows: the room in its context and the thread
+	## open in it.
 	room_pane : State, Str -> RoomPane
 	room_pane = |state, pane_id| {
 		room_id =
@@ -4390,6 +4462,7 @@ Model := [].{
 		{ ..state, room_logs: state.room_logs.drop_if(|log| log.room_id == room_id and log.root == root).append({ room_id, root, entries: known.concat(arrived.keep_if(|entry| entry.sequence > last)) }) }
 	}
 
+	## The members the UI has of room `room_id`.
 	room_members_of : State, Str -> List(Rooms.Member)
 	room_members_of = |state, room_id| state.room_members.find_first(|known| known.room_id == room_id).map_ok(|known| known.members) ?? []
 
@@ -4512,6 +4585,7 @@ Model := [].{
 		)
 	}
 
+	## A message of a room as a line of its timeline (see `RoomLine`).
 	room_line : State, Rooms.Message, List(Rooms.Thread) -> RoomLine
 	room_line = |state, posted, threads| {
 		author = Model.room_member(state, posted.room_id, posted.author)
@@ -4705,6 +4779,7 @@ Model := [].{
 	missing : State, Pane -> Str
 	missing = |state, shown| Str.join_with(Widgets.missing(Widgets.find(shown.widget), state.capabilities).map(Capability.to_str), ", ")
 
+	## What a pane shows (see `Body`).
 	body : State, Pane -> Body
 	body = |state, shown| {
 		if (state.daemon.id.is_empty() and shown.widget != "capabilities")

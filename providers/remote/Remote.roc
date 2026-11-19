@@ -12,6 +12,8 @@ import cap.Workspaces
 ## with the daemon's own, and a call or topic of one of them reaches the
 ## remote as it names it.
 Remote := [].{
+
+	## A remote: its name, which prefixes what it offers, and its URL.
 	Endpoint : { name : Str, url : Str }
 
 	## The remotes LITON_PROVIDERS lists, comma-separated, each `name=url`. A

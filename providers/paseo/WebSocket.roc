@@ -4,6 +4,9 @@
 ## which `unmask` decodes. A message split over frames arrives as a first frame
 ## without `fin` and `Continuation` frames up to one with `fin`.
 WebSocket := [].{
+
+	## What a frame holds: a message's text or bytes, more of them, or a close,
+	## ping or pong.
 	Opcode : [Continuation, Text, Binary, Close, Ping, Pong, Other(U8)]
 
 	## `mask` is empty for an unmasked frame, as servers send.
@@ -66,6 +69,7 @@ WebSocket := [].{
 		[0x80 + code_of(opcode)].concat(size).concat(mask).concat(unmask(payload, mask))
 	}
 
+	## A text frame of `message`, masked with `mask`.
 	text : Str, List(U8) -> List(U8)
 	text = |message, mask| WebSocket.frame(Text, message.to_utf8(), mask)
 

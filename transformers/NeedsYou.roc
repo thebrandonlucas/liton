@@ -8,6 +8,8 @@ import AttentionTransformer
 import Transformer
 
 NeedsYou := [].{
+
+	## The `needs-you` transformer, offered when LITON_TRANSFORMERS names it.
 	part : Transformer.Part
 	part = {
 		id: "needs-you",

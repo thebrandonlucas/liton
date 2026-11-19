@@ -17,14 +17,20 @@ Widgets := [].{
 	## CapabilityRef, ContextRef and ThemeToken are next.
 	Kind : [Bool(Bool), Choice({ default : Str, choices : List(Str) })]
 
+	## A widget's option: its key in a pane's options, how Settings labels and
+	## explains it, and its kind and default.
 	Option : { key : Str, label : Str, help : Str, kind : Kind }
 
 	## A navigator chooses what is in focus, a view shows it large, and an
 	## inspector shows details of it beside the view.
 	Role : [Navigator, View, Inspector]
 
+	## A widget: what it is called and its role, the capabilities it needs,
+	## where it fits and how narrow, the contexts it sets and follows, its
+	## options, and the parts it holds.
 	Widget : { id : Str, title : Str, role : Role, needs : List(Capability.Id), slots : List(Slot), minimum_width : U32, sets : List(Context.Kind), follows : List(Context.Kind), options : List(Option), parts : List(Str) }
 
+	## Every widget, in the order Settings offers them.
 	all : List(Widget)
 	all = [
 		{
@@ -266,6 +272,7 @@ Widgets := [].{
 	order : Option
 	order = { key: "order", label: "Order", help: "List the latest first, or by name.", kind: Choice({ default: "Latest", choices: ["Latest", "Name"] }) }
 
+	## The widget `id`, or a bare view of that id if there is none.
 	find : Str -> Widget
 	find = |id| Widgets.all.find_first(|widget| widget.id == id) ?? { id, title: id, role: View, needs: [], slots: [Left, Main, Right], minimum_width: 200, sets: [], follows: [], options: [], parts: [] }
 

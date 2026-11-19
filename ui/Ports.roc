@@ -20,6 +20,7 @@ Ports := [].{
 	swipe : Port.Subscription({}, Str)
 	swipe = Port.subscription({ name: "liton/deck/swipe", delivery: Every(8) })
 
+	## The ports the page's JavaScript answers.
 	registrations : List(Engine.PortRegistration)
 	registrations = Port.registrations({ copy: Ports.copy, capture: Speech.capture, drag: Drag.pointer, order: Speech.order, voices: Speech.voices, swipe: Ports.swipe })
 }

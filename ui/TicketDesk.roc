@@ -37,6 +37,7 @@ TicketDesk := [].{
 	## moved since, and the group under the pointer, by its key, "" for none.
 	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), saved : List(SavedView), dragged : { ticket : Str, moved : Bool, over : Str } }
 
+	## No tickets, links, views or boards yet, scoped to All.
 	initial : State
 	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], saved: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
 
@@ -44,6 +45,7 @@ TicketDesk := [].{
 	view : State, Str -> View
 	view = |desk, pane| desk.views.find_first(|shown| shown.pane == pane) ?? { pane, filter: Tickets.open }
 
+	## `desk` with `change` made to pane `pane`'s view.
 	with_view : State, Str, (View -> View) -> State
 	with_view = |desk, pane, change| { ..desk, views: desk.views.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.view(desk, pane))) }
 
@@ -51,12 +53,16 @@ TicketDesk := [].{
 	everything : Tickets.Filter
 	everything = { ..Tickets.open, kinds: [] }
 
+	## A Board pane's board: every ticket, as a list, until it changes it.
 	board : State, Str -> Board
 	board = |desk, pane| desk.boards.find_first(|shown| shown.pane == pane) ?? { pane, filter: TicketDesk.everything, opened: Bool.False, selected: [] }
 
+	## `desk` with `change` made to pane `pane`'s board.
 	with_board : State, Str, (Board -> Board) -> State
 	with_board = |desk, pane, change| { ..desk, boards: desk.boards.drop_if(|shown| shown.pane == pane).append(change(TicketDesk.board(desk, pane))) }
 
+	## The filter of a scope: a saved view's, the user's or nobody's tickets,
+	## a source's, or all of them.
 	scope_filter : State, Scope -> Tickets.Filter
 	scope_filter = |desk, scope|
 		match scope {
@@ -107,6 +113,7 @@ TicketDesk := [].{
 		statuses.find_first(|known| known.id == status.id).on_err(|_| statuses.find_first(|known| known.kind == status.kind)).map_ok(|known| known.id)
 	}
 
+	## What a kind of status is called.
 	kind_name : Tickets.Kind -> Str
 	kind_name = |kind|
 		match kind {
@@ -203,6 +210,7 @@ TicketDesk := [].{
 	source_name : State, Str -> Str
 	source_name = |desk, source_id| desk.listing.sources.find_first(|source| source.id == source_id).map_ok(|source| source.name) ?? source_id
 
+	## Whether `request` comments on a ticket.
 	comments : Tickets.Request -> Bool
 	comments = |request|
 		match request {
@@ -227,6 +235,7 @@ TicketDesk := [].{
 	pending : State, Str -> Bool
 	pending = |desk, ticket_id| desk.asked.any(|asked| Tickets.ticket_of(asked.request) == ticket_id or TicketDesk.unlinks(desk, asked.request, ticket_id)) or desk.waiting.any(|request| Tickets.ticket_of(request) == ticket_id)
 
+	## Whether `request` unlinks the ticket `ticket_id` from its session.
 	unlinks : State, Tickets.Request, Str -> Bool
 	unlinks = |desk, request, ticket_id|
 		match request {
@@ -247,6 +256,7 @@ TicketDesk := [].{
 	settled : State, U64 -> State
 	settled = |desk, serial| { ..desk, asked: desk.asked.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial) }
 
+	## `desk` with what a topic sent: a listing, a ticket opened, or the links.
 	received : State, [Listing(Tickets.Listing), Opened(Tickets.Ticket), Links(List(Tickets.Link))] -> State
 	received = |desk, event|
 		match event {
@@ -266,12 +276,15 @@ TicketDesk := [].{
 		{ name: "Any status", kinds: [] },
 	]
 
+	## The name of the status filter of `picked`, "Any status" for another.
 	kinds_name : List(Tickets.Kind) -> Str
 	kinds_name = |picked| TicketDesk.kinds.find_first(|named| named.kinds == picked).map_ok(|named| named.name) ?? "Any status"
 
+	## The kinds of the status filter called `name`, none (any) for another.
 	kinds_named : Str -> List(Tickets.Kind)
 	kinds_named = |name| TicketDesk.kinds.find_first(|named| named.name == name).map_ok(|named| named.kinds) ?? []
 
+	## What an assignee filter is called.
 	assignee_name : [Anyone, Me, Nobody, Person(Str)] -> Str
 	assignee_name = |assignee|
 		match assignee {
@@ -280,6 +293,7 @@ TicketDesk := [].{
 			_ => "Anyone"
 		}
 
+	## The assignee filter called `name`, Anyone for another.
 	assignee_named : Str -> [Anyone, Me, Nobody, Person(Str)]
 	assignee_named = |name| if (name == "Me") Me else if (name == "Nobody") Nobody else Anyone
 }

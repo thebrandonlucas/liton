@@ -1,32 +1,43 @@
 ## A capability is a named, versioned interface, such as `chat` version 1.
 ## A widget requires capabilities; a provider supplies them.
 Capability := [].{
+
+	## A capability's name and version, as `chat.v1` names `chat` version 1.
 	Id : { name : Str, version : U32 }
 
+	## Agents' sessions: their timelines, what they ask, and starting one.
 	chat_v1 : Id
 	chat_v1 = { name: "chat", version: 1 }
 
+	## The inbox of sessions by what needs you, derived from chat.v1.
 	attention_v1 : Id
 	attention_v1 = { name: "attention", version: 1 }
 
+	## A workspace's git: its status, changes, hunks and commits.
 	workspace_git_v1 : Id
 	workspace_git_v1 = { name: "workspace.git", version: 1 }
 
+	## The projects and their workspaces that agents work in.
 	workspaces_v1 : Id
 	workspaces_v1 = { name: "workspaces", version: 1 }
 
+	## The files of a session's or a workspace's directory.
 	files_v1 : Id
 	files_v1 = { name: "files", version: 1 }
 
+	## Comments on a workspace's lines, sent to an agent as a review.
 	review_v1 : Id
 	review_v1 = { name: "review", version: 1 }
 
+	## Issues and tickets, and changing their status, assignees and labels.
 	tickets_v1 : Id
 	tickets_v1 = { name: "tickets", version: 1 }
 
+	## Speech to text, from audio the client sends in chunks.
 	voice_v1 : Id
 	voice_v1 = { name: "voice", version: 1 }
 
+	## Rooms of people and agents, and their messages.
 	rooms_v1 : Id
 	rooms_v1 = { name: "rooms", version: 1 }
 

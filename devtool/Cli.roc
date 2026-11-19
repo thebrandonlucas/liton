@@ -1,7 +1,7 @@
 ## The development tool's pure part: what its arguments ask for.
 Cli := [].{
 
-	Command : [Help, Usage(Str), Ui({ roc_ui : Str, output : Str, runtime_files : List(Str), flags : List(Str) }), Specs(Str), Previews(Str), Paseo([Daemon, Relay, Bridge, Cli(List(Str))]), Speech([Model([Parakeet, Whisper]), Sherpa, Whisper])]
+	Command : [Help, Usage(Str), Ui({ roc_ui : Str, output : Str, runtime_files : List(Str), flags : List(Str) }), Specs(Str), Previews(Str), Docs({ roc : Str, roc_ui : Str, output : Str }), Paseo([Daemon, Relay, Bridge, Cli(List(Str))]), Speech([Model([Parakeet, Whisper]), Sherpa, Whisper])]
 
 	usage : Str
 	usage =
@@ -22,6 +22,8 @@ Cli := [].{
 		\\  previews <cdp.mjs>    render each surface and part into ui/previews/*.webp in headless
 		\\                        Chrome (CHROME), against the mock daemon (zig build devtool -Dfast
 		\\                        -- previews, which builds the UI and the daemon first)
+		\\  docs <roc> <roc-ui> <output>
+		\\                        the packages' and apps' API docs into the directory output (zig build docs)
 		\\  help
 		\\
 		\\liton's development tasks, in Roc, run from the repository's root.
@@ -35,6 +37,7 @@ Cli := [].{
 			["ui", roc_ui, output, runtime, environment, startup, worker, .. as flags] => Ui({ roc_ui, output, runtime_files: [runtime, environment, startup, worker], flags })
 			["spec", runner] => Specs(runner)
 			["previews", cdp] => Previews(cdp)
+			["docs", roc, roc_ui, output] => Docs({ roc, roc_ui, output })
 			["paseo", "daemon"] => Paseo(Daemon)
 			["paseo", "relay"] => Paseo(Relay)
 			["paseo", "bridge"] => Paseo(Bridge)
@@ -53,3 +56,4 @@ expect Cli.parse(["deploy"]) == Usage("unknown command or arguments for deploy")
 expect Cli.parse(["paseo", "cli", "daemon", "pair", "--json"]) == Paseo(Cli(["daemon", "pair", "--json"])) and Cli.parse(["paseo", "relay"]) == Paseo(Relay)
 expect Cli.parse(["speech", "model", "parakeet"]) == Speech(Model(Parakeet)) and Cli.parse(["speech", "model"]) == Usage("unknown command or arguments for speech")
 expect Cli.parse(["ui", "roc-ui", "www", "r.mjs", "e.mjs", "s.mjs", "w.mjs", "--specialize=no"]) == Ui({ roc_ui: "roc-ui", output: "www", runtime_files: ["r.mjs", "e.mjs", "s.mjs", "w.mjs"], flags: ["--specialize=no"] })
+expect Cli.parse(["docs", "roc", "roc-ui", "docs"]) == Docs({ roc: "roc", roc_ui: "roc-ui", output: "docs" })

@@ -2,6 +2,8 @@
 ## is: a directory's entries and a file's contents, each a snapshot topic a
 ## client follows while it shows them (docs/protocol.md). Only reads.
 Files := [].{
+
+	## What an entry of a directory is.
 	Kind : [File, Directory, Symlink]
 
 	## `size` in bytes, `modified` a time such as 2026-01-01T09:00:00.000Z.
@@ -21,6 +23,7 @@ Files := [].{
 		read : [Text({ text : Str, truncated : Bool, size : U64, modified : Str }), Binary({ size : U64, modified : Str }), TooLarge, Unknown, Unreadable(Str)],
 	}
 
+	## The most bytes of a file's text a `file/` topic holds: 256 KiB.
 	text_limit : U64
 	text_limit = 262_144
 

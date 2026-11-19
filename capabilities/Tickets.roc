@@ -9,8 +9,10 @@ Tickets := [].{
 	## What a status means, whatever its source calls it.
 	Kind : [Open, Started, Done, Canceled]
 
+	## A status tickets move between, by its id and name, and what it means.
 	Status : { id : Str, name : Str, kind : Kind }
 
+	## Someone tickets can be assigned to, by their id and name.
 	Person : { id : Str, name : Str }
 
 	## A repository's issues or a team's tickets: whom it knows the user as
@@ -63,6 +65,8 @@ Tickets := [].{
 		Unlink({ session_id : Str }),
 	]
 
+	## What a request answers: a listing, one ticket, or that the provider
+	## took it.
 	Response : [Listed(Listing), Ticket(Ticket), Accepted]
 
 	## Open and started tickets, of every source and assignee.

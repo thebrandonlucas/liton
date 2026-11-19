@@ -2,11 +2,14 @@
 ## workspace, a room or a ticket. A pane following the focus derives what it
 ## shows from it, such as a session's workspace.
 Context := [].{
+
+	## A context: a session, a workspace, a room or a ticket, by its id.
 	Id : [Session(Str), Workspace(Str), Room(Str), Ticket(Str)]
 
 	## What kind of context one is, which parts declare they set or follow.
 	Kind : [Session, Workspace, Room, Ticket]
 
+	## What kind of context `context` is.
 	kind : Id -> Kind
 	kind = |context|
 		match context {
