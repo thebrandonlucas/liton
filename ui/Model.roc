@@ -205,12 +205,15 @@ Model := [].{
 
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
-		## is the one picked, or "" for the default. `glass` is whether tiles
-		## blur what is behind them, which this browser keeps apart from the
+		## is the one shown, or "" for the default; `theme_chosen` whether this
+		## browser has one of its own, picked or kept with its layout, which
+		## a preset's theme then leaves alone. `glass` is whether tiles blur
+		## what is behind them, which this browser keeps apart from the
 		## snapshot.
 		themes : List(Setup.Theme),
 		default_theme : Str,
 		theme : Str,
+		theme_chosen : Bool,
 		glass : Bool,
 
 		## The background this browser shows over the theme's (`Wallpaper`):
@@ -446,6 +449,7 @@ Model := [].{
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? Default.developer.snapshot.theme,
+				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
@@ -562,7 +566,7 @@ Model := [].{
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -578,7 +582,7 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: "" }, preset.name), kept_layout: Bool.True }
+			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: if (state.theme_chosen) state.theme else "" }, preset.name), kept_layout: Bool.True }
 		}
 	}
 
@@ -597,11 +601,12 @@ Model := [].{
 	surfaces : State -> List(Setup.Preset)
 	surfaces = |state| state.presets.keep_if(|preset| Model.offers(state, preset))
 
-	## Shows a preset's layout, and its theme if it names one.
+	## Shows a preset's layout, and its theme if it names one while this
+	## browser has no theme of its own.
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
 			Err(NotFound) => state
 		}
 
@@ -618,7 +623,7 @@ Model := [].{
 	}
 
 	use_theme : State, Str -> State
-	use_theme = |state, name| { ..state, theme: name }
+	use_theme = |state, name| { ..state, theme: name, theme_chosen: Bool.True }
 
 	## Marks the pane clicked or focused in, and shows its tile on a narrow
 	## screen. Another pane's menu, or one of its rows', closes.
@@ -4504,11 +4509,11 @@ expect {
 	Model.with_tool_cards([call]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Running, output: "", folded: "" })]
 }
 
-# A theme picked is saved with the layout; one never picked is the
-# Developer preset's, else the setup's default, and a preset naming none
-# keeps the one shown.
+# A theme picked is saved with the layout, and a preset keeps it; one
+# never picked is the Developer preset's, else the setup's default, and a
+# preset naming none keeps the one shown.
 expect {
-	picked = Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Tiling")
+	picked = Model.use_preset(Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Board"), "Developer")
 	offered = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), themes: [Default.plain, Default.hypr], default_theme: "Hypr" })
 	Model.theme_shown(Model.initial("")).name == "Neutral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
 }
