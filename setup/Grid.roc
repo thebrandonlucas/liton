@@ -19,12 +19,14 @@ Grid := [].{
 	## The sizes of the column and row tracks, and the tiles over them.
 	Layout : { columns : List(U64), rows : List(U64), tiles : List(Tile) }
 
+	## A side of a tile, or the way something moves.
 	Side : [Left, Right, Up, Down]
 
 	## One tile over one cell.
 	single : Tile -> Layout
 	single = |tile| { columns: [1], rows: [1], tiles: [{ ..tile, left: 0, top: 0, right: 1, bottom: 1 }] }
 
+	## A grid of no tiles.
 	empty : Layout
 	empty = { columns: [], rows: [], tiles: [] }
 
@@ -47,6 +49,8 @@ Grid := [].{
 			Down => Grid.transposed(Grid.split_across(Grid.transposed(grid), id, Bool.False, added))
 		}
 
+	## Tile `id` cut in two across its columns, `added` taking the left half
+	## when `before`, else the right.
 	split_across : Layout, Str, Bool, Tile -> Layout
 	split_across = |grid, id, before, added|
 		match grid.tiles.find_first(|tile| tile.id == id) {
@@ -102,6 +106,8 @@ Grid := [].{
 			}
 		}
 
+	## The grid with the tiles on `side` of the tile `closed` grown over its
+	## cells, if they cover that side and `joins` lets each take its place.
 	grown : Layout, Tile, Side, (Str, Str -> Bool) -> Try(Layout, [NoFit])
 	grown = |grid, closed, side, joins|
 		match side {
@@ -111,6 +117,7 @@ Grid := [].{
 			Down => Grid.grown(Grid.transposed(grid), Grid.transposed_tile(closed), Right, joins).map_ok(Grid.transposed)
 		}
 
+	## `grown` for the tiles on the left of `closed`.
 	grown_left : Layout, Tile, (Str, Str -> Bool) -> Try(Layout, [NoFit])
 	grown_left = |grid, closed, joins| {
 		touching = grid.tiles.keep_if(|tile| tile.right == closed.left and tile.top < closed.bottom and tile.bottom > closed.top)
@@ -134,6 +141,7 @@ Grid := [].{
 			(Ok(_), Down) => Grid.beside(Grid.transposed(grid), id, Right).map_ok(Grid.transposed_tile)
 		}
 
+	## The tile on the left of `from` that shares the most of its height.
 	beside_left : Layout, Tile -> Try(Tile, [NotFound])
 	beside_left = |grid, from| {
 		shared = |tile| U64.min(tile.bottom, from.bottom) - U64.max(tile.top, from.top)
@@ -188,6 +196,7 @@ Grid := [].{
 			_ => grid
 		}
 
+	## `resized_columns` for the rows on either side of row line `line`.
 	resized_rows : Layout, U64, U64 -> Layout
 	resized_rows = |grid, line, share| Grid.transposed(Grid.resized_columns(Grid.transposed(grid), line, share))
 
@@ -200,6 +209,7 @@ Grid := [].{
 			_ => 5000
 		}
 
+	## `column_share` for the rows on either side of row line `line`.
 	row_share : Layout, U64 -> U64
 	row_share = |grid, line| Grid.column_share(Grid.transposed(grid), line)
 
@@ -222,6 +232,7 @@ Grid := [].{
 	compacted : Layout -> Layout
 	compacted = |grid| Grid.normalized(Grid.transposed(Grid.compacted_columns(Grid.transposed(Grid.compacted_columns(grid)))))
 
+	## `compacted` for the grid's columns alone.
 	compacted_columns : Layout -> Layout
 	compacted_columns = |grid| {
 		tracks = grid.columns.map_with_index(|_, track| track)
@@ -249,6 +260,7 @@ Grid := [].{
 	transposed : Layout -> Layout
 	transposed = |grid| { columns: grid.rows, rows: grid.columns, tiles: grid.tiles.map(Grid.transposed_tile) }
 
+	## A tile with its columns as rows and its rows as columns.
 	transposed_tile : Tile -> Tile
 	transposed_tile = |tile| { ..tile, left: tile.top, top: tile.left, right: tile.bottom, bottom: tile.right }
 
@@ -256,6 +268,7 @@ Grid := [].{
 	mirrored : Layout -> Layout
 	mirrored = |grid| { ..grid, columns: grid.columns.fold([], |reversed, size| reversed.prepend(size)), tiles: grid.tiles.map(|tile| Grid.mirrored_tile(tile, grid.columns.len())) }
 
+	## A tile of a grid `columns` wide as a mirror shows it.
 	mirrored_tile : Tile, U64 -> Tile
 	mirrored_tile = |tile, columns| { ..tile, left: columns - tile.right, right: columns - tile.left }
 }

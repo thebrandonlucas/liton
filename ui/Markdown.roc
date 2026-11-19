@@ -37,6 +37,7 @@ Markdown := [].{
 		code : { language : Str, text : Str, lines : List(List(Highlight.Token)) },
 	}
 
+	## The blocks of the Markdown `source`, each keyed by its place.
 	blocks : Str -> List(Markdown.Block)
 	blocks = |source| parse(source.replace_each("\r\n", "\n").replace_each("\t", "    ").split_on("\n"), 0, 0).map_with_index(|block, index| { ..block, key: index.to_str() })
 

@@ -10,6 +10,8 @@ MockTickets := [].{
 	me : Tickets.Person
 	me = { id: "ada", name: "Ada" }
 
+	## The two sources: `mock/liton`, shaped as a GitHub repository's issues,
+	## and `LIT`, as a Linear team's tickets.
 	sources : List(Tickets.Source)
 	sources = [
 		{
@@ -69,6 +71,7 @@ MockTickets := [].{
 	with_changes : List(Tickets.Ticket) -> List(Tickets.Ticket)
 	with_changes = |stored| MockTickets.seeds.map(|seeded| stored.find_first(|stored_ticket| stored_ticket.summary.id == seeded.summary.id) ?? seeded)
 
+	## The sources and the summaries of `tickets`.
 	listing : List(Tickets.Ticket) -> Tickets.Listing
 	listing = |tickets| { sources: MockTickets.sources, tickets: tickets.map(|shown| shown.summary) }
 

@@ -202,7 +202,8 @@ try {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
     assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
-    assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme });
+    assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme, deck: setup.deck });
+    assert.deepEqual(setup.deck, ["Developer", "Rooms", "Review", "Board"]);
     assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain", "Neutral", "Sky", "Graphite"], "Pastoral"]);
   });
   await step("a Litonfile that imports liton's changes parts of it", async () => {

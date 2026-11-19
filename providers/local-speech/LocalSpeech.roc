@@ -8,11 +8,16 @@ import cap.Capability
 import cap.Manifest
 
 LocalSpeech := [].{
+
+	## A speech engine: sherpa-onnx's WebSocket server at `host`, `port` and
+	## `path`, or whisper-server at a URL.
 	Engine : [Sherpa({ host : Str, port : U16, path : Str }), Whisper(Str)]
 
+	## The local speech provider, which offers voice.v1.
 	provider : Manifest.Provider
 	provider = { id: "local-speech", name: "Local speech", capabilities: [Capability.voice_v1] }
 
+	## An utterance's samples per second: 16 kHz.
 	sample_rate : U32
 	sample_rate = 16_000
 

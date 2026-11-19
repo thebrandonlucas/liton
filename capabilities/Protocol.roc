@@ -22,6 +22,7 @@ Protocol := [].{
 	## try again later.
 	Code : [BadRequest, NotFound, Unavailable, Refused, Unsupported, Overloaded]
 
+	## Why a call or a topic failed: its code and a message for people.
 	Error : { code : Code, message : Str }
 
 	## `POST /liton/v1/call`. Without `provider`, every provider of the
@@ -31,6 +32,7 @@ Protocol := [].{
 	## A call as read before its request, whose type its capability decides.
 	Addressed : { capability : Str, provider : Try(Str, [Missing]) }
 
+	## A call's answer: the capability's response, or why it failed.
 	Answer(response) : [Ok(response), Err(Error)]
 
 	## A topic followed after the cursor `after` ("" for from the start).
@@ -46,6 +48,7 @@ Protocol := [].{
 	## can't be followed has no events, its cursor unchanged and an `error`.
 	Update : { capability : Str, topic : Str, cursor : Str, events : List(Event), error : Try(Error, [Missing]) }
 
+	## What `POST /liton/v1/poll` answers: an update of each topic asked.
 	Polled : { topics : List(Update) }
 
 	## What a topic follows. A `Changes` or `File` scope is named
@@ -107,6 +110,8 @@ Protocol := [].{
 	serves : Try(Str, [Missing]), Str -> Bool
 	serves = |provider, id| provider == Err(Missing) or provider == Ok(id)
 
+	## What the topic `topic` of `capability` follows, or why no provider
+	## `offered` serves it.
 	subject : Manifest.Offered, Wanted -> Try(Subject, Error)
 	subject = |offered, { capability, topic, .. }| {
 		id = Protocol.routed(offered, { capability, provider: Err(Missing) })?
@@ -177,6 +182,8 @@ Protocol := [].{
 	room_appended = |{ capability, topic, after }, entries|
 		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| RoomEntry(entry)), error: Err(Missing) }
 
+	## The update of a topic that failed with `error`: no events, and its
+	## cursor where it was.
 	failed : Wanted, Error -> Update
 	failed = |{ capability, topic, after }, error| { capability, topic, cursor: after, events: [], error: Ok(error) }
 

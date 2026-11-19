@@ -91,6 +91,8 @@ PaseoWorkspaces := [].{
 	archive_request : Str, Str -> Str
 	archive_request = |workspace_id, request_id| Json.to_str({ type: "session", message: { type: "archive_workspace_request", workspaceId: workspace_id, requestId: request_id } })
 
+	## Whether the `archive_workspace_response` to `request_id` says the
+	## workspace was archived, or why not.
 	archived : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	archived = |text, request_id| {
 		answered : Try({ message : { payload : { error : Try(Str, [Null]) } } }, _)

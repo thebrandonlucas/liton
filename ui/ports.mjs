@@ -137,6 +137,34 @@ const drag = ({ pointer, column, row }, { emit }) => {
   return () => { for (const [type, listener] of listeners) window.removeEventListener(type, listener, true); };
 };
 
+// FIXME: a JavaScript stopgap, as roc-signals reports no wheel events, and
+// so not a trackpad's swipe. Once it reports a wheel's deltaX and whether
+// what is under the pointer scrolls across, this becomes Roc in
+// ui/Liton.roc. A two-finger swipe across (`Ports.swipe`), more across than
+// down, not over something that scrolls across, reports "next" or
+// "previous" once 160 pixels have gone by, then nothing until the fingers
+// rest for a quarter second. A three-finger swipe is the system's, and no
+// page hears it.
+const swipe = (_, { emit }) => {
+  let travelled = 0, rest = 0, spent = false;
+  const scrolls_across = (element) => {
+    for (let at = element; at instanceof Element && at !== document.body; at = at.parentElement)
+      if (/(auto|scroll)/.test(getComputedStyle(at).overflowX) && at.scrollWidth > at.clientWidth) return true;
+    return false;
+  };
+  const wheel = (event) => {
+    if (event.ctrlKey || Math.abs(event.deltaX) <= Math.abs(event.deltaY) || scrolls_across(event.target)) return;
+    clearTimeout(rest);
+    rest = setTimeout(() => { travelled = 0; spent = false; }, 250);
+    travelled += event.deltaX;
+    if (spent || Math.abs(travelled) < 160) return;
+    spent = true;
+    emit(travelled > 0 ? "next" : "previous");
+  };
+  window.addEventListener("wheel", wheel, { passive: true });
+  return () => { clearTimeout(rest); window.removeEventListener("wheel", wheel); };
+};
+
 // Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
 const voice = () => import("./voice.mjs");
 
@@ -162,6 +190,7 @@ export default {
     },
   },
   "liton/drag/pointer": { subscribe: drag },
+  "liton/deck/swipe": { subscribe: swipe },
   "liton/voice/capture": {
     subscribe(asked, port) {
       let stop, gone;

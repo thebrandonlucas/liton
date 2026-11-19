@@ -38,6 +38,7 @@ Drag := [].{
 	pointer : Port.Subscription({ pointer : U32, column : U64, row : U64 }, Pointer)
 	pointer = Port.subscription({ name: "liton/drag/pointer", delivery: Latest })
 
+	## No gesture: nothing pressed.
 	idle : Gesture
 	idle = Idle
 
@@ -111,6 +112,7 @@ Drag := [].{
 	key_pressed : Gesture, Str -> Gesture
 	key_pressed = |gesture, key| if (key == "Escape") Idle else gesture
 
+	## Whether `gesture` drags something, past its press.
 	dragging : Gesture -> Bool
 	dragging = |gesture|
 		match gesture {

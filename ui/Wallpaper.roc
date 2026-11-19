@@ -8,6 +8,7 @@ import Model
 
 Wallpaper := [].{
 
+	## Where the browser keeps the image's URL, "" for the theme's background.
 	url_key : Str
 	url_key = "liton.wallpaper"
 

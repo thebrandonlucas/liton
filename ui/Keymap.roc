@@ -8,6 +8,7 @@ import Model
 
 Keymap := [].{
 
+	## A command and the keys that run it.
 	Binding : { keys : List(Str), command : Str }
 
 	## Cmd or Ctrl with B switches a Board on screen between its list and its
@@ -15,6 +16,8 @@ Keymap := [].{
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
 	## Mac. 1 to 9, with or without Alt, show a preset, and Cmd or Ctrl or
 	## `g` then 1 to 9 goes to a workspace, and `g` then `r` to the rooms.
+	## `d` then ] or [ goes to the deck's next or previous surface, and `d`
+	## then 1 to 9 to that one: Ctrl+Alt with an arrow is a Linux desktop's.
 	## Escape closes what is open, else a room's thread, else cancels a
 	## comment, else goes back to a Board's list, else stops the agent.
 	defaults : List(Binding)
@@ -38,6 +41,8 @@ Keymap := [].{
 			.concat(Keymap.board)
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
 			.concat(digits.join_map(|digit| [{ keys: ["Mod+${digit}"], command: "workspace.${digit}" }, { keys: ["g", digit], command: "workspace.${digit}" }]))
+			.concat(digits.map(|digit| { keys: ["d", digit], command: "deck.${digit}" }))
+			.concat([{ keys: ["d", "]"], command: "deck.next" }, { keys: ["d", "["], command: "deck.previous" }])
 			.concat(Keymap.workspaces)
 			.concat(Keymap.layout)
 			.concat(Keymap.review)

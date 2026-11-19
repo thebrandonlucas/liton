@@ -324,7 +324,12 @@ pub fn build(b: *std.Build) void {
     }
     const devtool = build_devtool.addPrefixedOutputFileArg("--output=", "liton-devtool");
     const devtool_step = b.step("devtool", "Run liton's development tool: zig build devtool -- help");
-    devtool_step.dependOn(&addDevtoolCommand(b, devtool, "devtool", b.args orelse &.{}).step);
+    const run_devtool = addDevtoolCommand(b, devtool, "devtool", b.args orelse &.{});
+    devtool_step.dependOn(&run_devtool.step);
+    // `previews` renders the UI against the daemon, both built first, in
+    // headless Chrome through roc-signals's DevTools client.
+    const previews = if (b.args) |args| args.len == 1 and std.mem.eql(u8, args[0], "previews") else false;
+    if (previews) run_devtool.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
 
     // The UI's .scm specs, in the native runner roc-signals's release builds
     // the UI into for the machine running the build. Without lambda-set
@@ -358,9 +363,30 @@ pub fn build(b: *std.Build) void {
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
+    // The packages' and apps' API docs, from their `##` comments, into
+    // zig-out/docs, again only when a Roc file or a compiler changes. The
+    // test step checks that they build.
+    const docs_step = b.step("docs", "Build the API docs into zig-out/docs");
+    const build_docs = std.Build.Step.Run.create(b, "build the API docs");
+    build_docs.addFileArg(devtool);
+    build_docs.addArgs(&.{ "docs", roc, roc_ui });
+    const docs = build_docs.addOutputDirectoryArg("docs");
+    for (sources.roc_files) |path| build_docs.addFileInput(b.path(path));
+    for ([_][]const u8{ roc, roc_ui }) |compiler| {
+        const compiler_path = b.findProgram(&.{compiler}, &.{}) catch continue;
+        build_docs.addFileInput(.{ .cwd_relative = compiler_path });
+    }
+    const install_docs = b.addInstallDirectory(.{ .source_dir = docs, .install_dir = .prefix, .install_subdir = "docs" });
+    docs_step.dependOn(&install_docs.step);
+    test_step.dependOn(&build_docs.step);
+
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
     daemon_step.dependOn(&install_daemon.step);
+    if (previews) {
+        run_devtool.step.dependOn(&install_ui.step);
+        run_devtool.step.dependOn(&install_daemon.step);
+    }
 
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.
@@ -374,13 +400,14 @@ pub fn build(b: *std.Build) void {
     const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
     example_step.dependOn(&install_example.step);
 
-    // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
-    // LITON_PORT to change it).
+    // Serves the UI, its API docs and the API at http://127.0.0.1:8095
+    // (LITON_HOST and LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
     const run_daemon = b.addSystemCommand(&.{"zig-out/bin/liton-daemon"});
     run_daemon.has_side_effects = true;
     run_daemon.step.dependOn(&install_ui.step);
     run_daemon.step.dependOn(&install_daemon.step);
+    run_daemon.step.dependOn(&install_docs.step);
     run_step.dependOn(&run_daemon.step);
 
     // Drives the UI in headless Chrome (CHROME, or chromium on PATH) against

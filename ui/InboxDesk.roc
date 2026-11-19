@@ -135,12 +135,15 @@ InboxDesk := [].{
 		}
 	}
 
+	## A row's state's place in what attention ranks first.
 	rank : Row -> U64
 	rank = |row| Attention.ranks.find_first_index(|ranked| ranked == row.item.state) ?? 0
 
+	## Two numbers in order, the smaller first.
 	numbers : U64, U64 -> [Before, After, Same]
 	numbers = |left, right| if (left < right) Before else if (left > right) After else Same
 
+	## An order the other way round.
 	reversed : [Before, After, Same] -> [Before, After, Same]
 	reversed = |ordered|
 		match ordered {

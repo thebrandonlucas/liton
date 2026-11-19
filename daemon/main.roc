@@ -5,7 +5,9 @@
 ## and serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
-## (default liton.db) and LITON_UI (default zig-out/www) configure it.
+## (default liton.db), LITON_UI (default zig-out/www) and LITON_DOCS
+## (default zig-out/docs, `zig build docs`, served at /docs/index.html when
+## it is there) configure it.
 ## It answers only requests to LITON_HOST, localhost or a name
 ## LITON_ALLOWED_HOSTS lists, comma-separated, such as a proxy's domain.
 ## LITON_MOCK=off leaves out the mock provider, and a comma-separated list
@@ -87,15 +89,22 @@ import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 
+## What each request is answered from: the database, the hosts it answers,
+## the providers and transformers configured, and the setup it offers.
 Context : { db : Sqlite.Db, allowed_hosts : List(Str), mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
+## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
 
+## The server: set up by `init!`, answering with `respond!`.
 program = { init!, respond!, shutdown! }
 
+## The environment variable `name`, or `default` when it isn't set.
 env_or! : Str, Str => Str
 env_or! = |name, default| Env.var_str!(OsStr.from_str(name)) ?? default
 
+## Reads the configuration, opens the database and seeds the mock, and
+## asks each remote for its manifest, before serving.
 init! : () => Try({ config : Server.Config, context : Context }, [Exit(I64)])
 init! = || {
 	port = U16.from_str(env_or!("LITON_PORT", "8095")) ?? 8095
@@ -119,11 +128,15 @@ init! = || {
 	remotes = checked!(Remote.declared(setup.remotes, env_or!("LITON_PROVIDERS", "")))?
 	remote_interval_ms = I64.from_str(env_or!("LITON_PROVIDERS_INTERVAL_MS", "1000")) ?? 1_000
 	ui = Server.file_root({ id: "ui", path: Path.utf8(env_or!("LITON_UI", "zig-out/www")) })
+	docs_path = env_or!("LITON_DOCS", "zig-out/docs")
+	docs = Server.file_root({ id: "docs", path: Path.utf8(docs_path) })
+	# Without the docs built, no /docs, as the platform refuses a missing root.
+	docs_built = Path.is_dir!(Path.utf8(docs_path)) ?? Bool.False
 	config =
 		Server.default_config
 			.with_listen({ host, port })
-			.with_file_roots([ui])
-			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
+			.with_file_roots(if (docs_built) [ui, docs] else [ui])
+			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })].concat(if (docs_built) [Server.static_mount({ at: "/docs", files: docs })] else []), liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	context = { db, allowed_hosts, mock, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
@@ -191,9 +204,12 @@ checked! = |given|
 		}
 	}
 
+## Nothing to do at shutdown.
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
 shutdown! = |_reason, _context| Ok({})
 
+## Answers a request: the UI's redirect, the protocol's manifest, calls
+## and polls, and voice's audio, refusing other sites.
 respond! : Server.Request, Context => Try(Server.Outcome, [ServerErr(Str)])
 respond! = |request, context| {
 	asked = {
@@ -256,18 +272,21 @@ cross_site_refusal = |allowed_hosts, { authority, posted, headers }| {
 	}
 }
 
+## A 200 response of the JSON `body`.
 json : Str -> Response
 json = |body|
 	Response.from_status(200)
 		.with_headers([{ name: "Content-Type", value: "application/json; charset=utf-8" }])
 		.with_body(body.to_utf8())
 
+## A plain-text response of `body` with `status`.
 text : U16, Str -> Response
 text = |status, body|
 	Response.from_status(status)
 		.with_headers([{ name: "Content-Type", value: "text/plain; charset=utf-8" }])
 		.with_body(body.to_utf8())
 
+## A request's body, up to 64 KiB.
 read_json! : Server.Request => Try(Str, _)
 read_json! = |request| {
 	body = request.body().with_limit(64 * 1024).read_all!()?
@@ -392,6 +411,7 @@ call! = |context, request| {
 	Ok(json(answered))
 }
 
+## A call's answer that it failed with `error`.
 call_failed : Protocol.Error -> Protocol.Answer({})
 call_failed = |error| Err(error)
 
@@ -978,6 +998,7 @@ review_changed! = |db, key, change| {
 	}
 }
 
+## The answer for a session no provider has.
 no_session : Str -> Protocol.Answer(a)
 no_session = |session_id| Err({ code: NotFound, message: "no session ${session_id}" })
 
@@ -1253,9 +1274,11 @@ paseo_listed! = |db| {
 	Ok(listed ?? { projects: [], workspaces: [] })
 }
 
+## The time, in ms since the epoch.
 now_ms! : () => I64
 now_ms! = || (UnixTime.now!().nanos_since_epoch() // 1_000_000).to_i64_wrap()
 
+## Creates the tables the daemon keeps, where they aren't yet.
 create_tables! : Sqlite.Db => Try({}, _)
 create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL);", params: {} })?
@@ -1313,6 +1336,8 @@ seed! = |db| {
 	Ok({})
 }
 
+## Stores the mock's `scheduled` events of a session from sequence `first`,
+## each shown its delay after `start`.
 insert_events! : Sqlite.Db, Str, U64, List(Mock.Scheduled), I64 => Try({}, _)
 insert_events! = |db, session_id, first, scheduled, start| {
 	for ({ delay_ms, event }, index) in scheduled.map_with_index(|item, index| (item, index)) {
@@ -1380,6 +1405,7 @@ timelines! = |context, watches| {
 	Ok($timelines)
 }
 
+## A mock session's entries after `after` that are due by now.
 visible! : Sqlite.Db, Str, U64 => Try(List(Chat.Entry), _)
 visible! = |db, session_id, after| {
 	rows : List({ sequence : I64, event : Str })
@@ -1507,6 +1533,7 @@ recently_checked! = |db, what, interval_ms| {
 forget_check! : Sqlite.Db, Str => Try({}, _)
 forget_check! = |db, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE what = :what;", params: { what } })
 
+## Writes `line` to stderr.
 logged! : Str => {}
 logged! = |line| {
 	_ = Stderr.line!(line)
@@ -1556,6 +1583,7 @@ paseo_answer = |outcome|
 		Err(err) => Err(paseo_error(err))
 	}
 
+## A workspaces.v1 call's answer from whether Paseo took it.
 paseo_workspaces_answer : Try({}, _) -> Protocol.Answer(Workspaces.Response)
 paseo_workspaces_answer = |outcome|
 	match outcome {
@@ -1563,6 +1591,7 @@ paseo_workspaces_answer = |outcome|
 		Err(err) => Err(paseo_error(err))
 	}
 
+## Why talking to Paseo failed, as the protocol says it.
 paseo_error : _ -> Protocol.Error
 paseo_error = |err|
 	match err {
@@ -1807,6 +1836,7 @@ exchange! = |connection, request, request_id| {
 	reply!(connection, request_id)
 }
 
+## The message of Paseo's that answers `request_id`, skipping others.
 reply! : Tcp.Connection, Str => Try(Str, _)
 reply! = |connection, request_id| {
 	answer = message!(connection, []).map_err(|err| ConnectionLost(Str.inspect(err)))?
@@ -1818,6 +1848,7 @@ reply! = |connection, request_id| {
 ## "commit <sha> <path>" (a file's hunks), with the status it was fetched at.
 Cached : { status : Str, fingerprint : Str, fetched_at : I64, value : Str }
 
+## What the git cache holds of `directory` (see `Cached`).
 cached! : Sqlite.Db, Str, Str => Try(Try(Cached, [NothingCached]), _)
 cached! = |db, directory, what| {
 	rows : List(Cached)
@@ -1825,6 +1856,7 @@ cached! = |db, directory, what| {
 	Ok(rows.first().map_err(|_| NothingCached))
 }
 
+## Keeps what was fetched of `directory`'s git, at its status.
 cache! : Sqlite.Db, Str, Str, { status : Str, fingerprint : Str, value : Str } => Try({}, _)
 cache! = |db, directory, what, { status, fingerprint, value }|
 	Sqlite.execute!({ db, query: "INSERT INTO git_cache (directory, what, status, fingerprint, fetched_at, value) VALUES (:directory, :what, :status, :fingerprint, :now, :value) ON CONFLICT (directory, what) DO UPDATE SET status = excluded.status, fingerprint = excluded.fingerprint, fetched_at = excluded.fetched_at, value = excluded.value;", params: { directory, what, status, fingerprint, now: now_ms!(), value } })
@@ -1926,6 +1958,8 @@ file_cached! = |db, directory, what| {
 	Ok(rows.first().map_err(|_| NothingCached))
 }
 
+## The mask of the frames the daemon sends Paseo: a client masks its
+## frames, and any fixed mask does.
 websocket_mask : List(U8)
 websocket_mask = [0x6C, 0x69, 0x74, 0x6E]
 
@@ -2379,6 +2413,8 @@ mock_rooms_seeded! = |db| {
 	Ok({})
 }
 
+## Stores the mock's `scheduled` events of a room from sequence `first`,
+## each shown its delay after `start`.
 room_events_inserted! : Sqlite.Db, Str, U64, List(MockRooms.Scheduled), I64 => Try({}, _)
 room_events_inserted! = |db, room_id, first, scheduled, start| {
 	for ({ delay_ms, event }, index) in scheduled.map_with_index(|item, index| (item, index)) {

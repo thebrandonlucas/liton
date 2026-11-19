@@ -1,7 +1,8 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
 ## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling,
 ## Chat, Rooms, Review and Board presets, Developer first, and the Pastoral, Hypr, Plain,
-## Neutral, Sky and Graphite themes, Pastoral first. The UI offers these presets and themes when its daemon
+## Neutral, Sky and Graphite themes, Pastoral first; a new browser's deck
+## holds Developer, Rooms, Review and Board. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
 import Setup
@@ -134,6 +135,7 @@ Default := [].{
 		},
 	}
 
+	## `grid` with `change` made to each of its tiles.
 	with_tiles : Grid.Layout, (Grid.Tile -> Grid.Tile) -> Grid.Layout
 	with_tiles = |grid, change| { ..grid, tiles: grid.tiles.map(change) }
 
@@ -285,9 +287,13 @@ Default := [].{
 	system_font : Str
 	system_font = "system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif"
 
+	## The monospace faces, for code: JetBrains Mono where it is installed,
+	## else the platform's.
 	mono_font : Str
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
+	## liton's own setup: no remotes, the attention transformer, and its
+	## presets and themes, starting with Developer in Pastoral.
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms, Default.review, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral, Default.sky, Default.graphite], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms, Default.review, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral, Default.sky, Default.graphite], default_theme: "Pastoral", deck: [Default.developer.name, Default.rooms.name, Default.review.name, Default.board.name] }
 }

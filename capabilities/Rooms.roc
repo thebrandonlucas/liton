@@ -6,6 +6,9 @@
 import "tests/rooms.json" as golden_json : Str
 
 Rooms := [].{
+
+	## What a room is: a channel, a forum of threads, a direct conversation or
+	## announcements.
 	Kind : [Channel, Forum, Direct, Announce]
 
 	## `joined` is whether you are a member; `me` your member id there, when
@@ -41,6 +44,7 @@ Rooms := [].{
 	## top-level message `root`, to `parent` (the root or another reply).
 	Place : [TopLevel, Reply({ root : Str, parent : Str })]
 
+	## An emoji on a message, and the members who reacted with it.
 	Reaction : { emoji : Str, by : List(Str) }
 
 	## `author` and `mentions` are members' ids; `time` such as
@@ -61,6 +65,8 @@ Rooms := [].{
 	## A thread's summary, as a room's messages topic shows it beside its root.
 	Thread : { root : Str, replies : U32, last_reply : Try(Str, [Missing]), participants : List(Str) }
 
+	## What happens in a room's timeline: a message posted, edited, deleted
+	## or reacted to, a thread's summary changing, or a member typing.
 	Event : [
 		Posted(Message),
 		Edited({ id : Str, text : Str }),
@@ -86,6 +92,8 @@ Rooms := [].{
 		Leave({ room_id : Str }),
 	]
 
+	## What a request answers: the rooms, the id of a message sent, or whether
+	## the provider took it.
 	Response : [Rooms(List(Room)), Sent({ message_id : Str }), Accepted, Rejected(Str)]
 
 	## A room its provider tells nothing more of.

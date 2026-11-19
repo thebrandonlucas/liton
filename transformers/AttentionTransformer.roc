@@ -9,6 +9,8 @@ import cap.Protocol
 import Transformer
 
 AttentionTransformer := [].{
+
+	## The `attention` transformer, which the daemon hosts by default.
 	part : Transformer.Part
 	part = {
 		id: "attention",

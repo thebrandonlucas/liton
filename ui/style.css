@@ -5,7 +5,8 @@
    --motion. All else derives from them here. */
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: Canvas; }
+/* A two-finger swipe across goes to the deck's next surface, not back. */
+html, body { margin: 0; height: 100%; background: Canvas; overscroll-behavior-x: none; }
 #app { height: 100%; }
 .liton {
   --edge: color-mix(in srgb, var(--accent) var(--edge-alpha), transparent);
@@ -147,6 +148,53 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
   border: 1px solid var(--fail); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
 .toast .dismiss { flex: none; padding: 3px; border-color: transparent; background: none; color: var(--muted); }
+
+/* The deck: a slim strip of its surfaces under the tiles, the one shown
+   lit. A surface switched to slides in from the side it lies on, a new
+   animation (-0, -1) for each switch; not where motion is reduced. */
+.deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--gap) calc(var(--gap) / 2); }
+.deck-surface { padding: 1px 10px; border: 1px solid transparent; border-radius: 999px; background: none;
+  color: var(--muted); font: 11px var(--font-mono); letter-spacing: .02em; opacity: .7; }
+.deck-surface:hover { opacity: 1; color: var(--text); border-color: var(--edge); }
+.deck-surface[aria-pressed="true"] { opacity: 1; color: var(--accent); border-color: var(--edge-active); background: var(--glass); }
+.grid.deck-in-next-0 { animation: deck-in-next-0 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-next-1 { animation: deck-in-next-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-previous-0 { animation: deck-in-previous-0 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-previous-1 { animation: deck-in-previous-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+@keyframes deck-in-next-0 { from { transform: translateX(12%); opacity: 0; } }
+@keyframes deck-in-next-1 { from { transform: translateX(12%); opacity: 0; } }
+@keyframes deck-in-previous-0 { from { transform: translateX(-12%); opacity: 0; } }
+@keyframes deck-in-previous-1 { from { transform: translateX(-12%); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .grid[class*="deck-in-"] { animation: none; } }
+
+/* Settings' Deck: a row for each surface, its name, then its moves. */
+.settings-row.deck-row { display: flex; align-items: center; gap: 10px; }
+.deck-entry + .deck-entry { border-top: 1px solid var(--edge); }
+.deck-row .settings-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .settings-row.deck-row { flex-wrap: wrap; } }
+.deck-row .deck-shown { flex: none; }
+.deck-move { flex: none; padding: 3px 9px; }
+.deck-move:disabled { opacity: .35; }
+.deck-parts { padding: 0 12px 8px; }
+.deck-parts summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.deck-provider { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.deck-part { display: grid; grid-template-columns: auto minmax(0, 12em) minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 3px 0; }
+.deck-part.unavailable { opacity: .6; }
+.deck-part { grid-template-columns: auto 64px minmax(0, 12em) minmax(0, 1fr); align-items: center; }
+/* Thumbnails of surfaces and parts (ui/previews), greyed where the daemon
+   doesn't offer what they need. */
+.preview { flex: none; width: 96px; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--tool); }
+.deck-part .preview { width: 64px; }
+.preview.unavailable { filter: grayscale(1) opacity(.45); }
+.deck-add { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; }
+.deck-add .preview { width: 128px; }
+@media (max-width: 640px) {
+  .deck-row .preview { width: 64px; }
+  .deck-part { grid-template-columns: auto 56px minmax(0, 1fr); }
+  .deck-part .preview { width: 56px; }
+  .deck-part .help { grid-column: 3; }
+  .deck-add .preview { width: 96px; }
+}
 
 /* Settings: a page over the surface, Paseo's: a rail of sections on the
    left, and the section picked in a column beside it, of cards of rows. */
@@ -1195,6 +1243,10 @@ kbd:empty { display: none; }
   .tile-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--warn); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
+  /* The deck sits over a Workbench's tab bar, where a swipe across it
+     goes to the next or previous surface. */
+  .deck { order: 1; padding: 2px var(--gap) 4px; overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
+  .tile-tabs:has(+ .workbench) { order: 2; }
   /* Settings: its rail is a list, and a section picked covers it. */
   .settings { grid-template-columns: minmax(0, 1fr); }
   .settings .settings-detail, .settings.pushed .settings-rail { display: none; }
