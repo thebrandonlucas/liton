@@ -20,7 +20,7 @@ Commands := [].{
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
-			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: |shown| shown.sub_focus != None, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
+			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: Commands.thread_open, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
 			{ id: "rooms.focus", title: "Go to the rooms", group: "Rooms", applies: |shown| Model.panes(shown).any(|pane| pane.widget == "rooms"), run: Model.focus_rooms },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 			{ id: "workspace.previous", title: "Go to the workspace before", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, -1) },
@@ -73,6 +73,15 @@ Commands := [].{
 			{ id: "review.finish", title: "Finish the review", group: "Review", applies: |state| Model.review_shown(state).map_ok(|view| Review.drafts(Model.review_of(state, Model.context_of(state, view))) > 0) ?? Bool.False, run: on_view(Model.finish_review) },
 		]
 	}
+
+	## Whether a room's thread is open, rather than the Review surface's
+	## focus.
+	thread_open : Model.State -> Bool
+	thread_open = |state|
+		match state.sub_focus {
+			Thread(_) => Bool.True
+			_ => Bool.False
+		}
 
 	## Whether the Review surface has lines or a thread focused.
 	review_focused : Model.State -> Bool
