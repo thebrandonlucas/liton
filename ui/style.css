@@ -166,6 +166,25 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .settings textarea { font: 12px var(--font-mono); min-height: 90px; padding: 6px; }
 .wallpaper { display: grid; gap: 6px; }
 
+/* The palette: a glass sheet over everything, near the top, the entry
+   picked marked as a row is. */
+.palette-backdrop { position: fixed; inset: 0; z-index: 20; background: rgb(0 0 0 / 22%); animation: fade-in var(--fast) ease-out backwards; }
+.palette { position: fixed; top: 12vh; left: 0; right: 0; z-index: 21; margin: 0 auto; width: min(560px, calc(100% - 4 * var(--gap))); max-height: 70vh;
+  padding: 8px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
+  border: 1px solid var(--edge-active); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
+.palette input { padding: 8px 10px; font-size: 15px; }
+.palette-entries { list-style: none; margin: 0; padding: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.palette-entry { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; text-align: left; border-color: transparent; background: none; }
+.palette-entry[aria-selected="true"] { background: var(--selected); border-color: var(--edge); }
+.palette-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-group { font-size: 12px; color: var(--muted); }
+.palette-empty { margin: 4px 10px; color: var(--muted); }
+kbd { font: 11px var(--font-mono); color: var(--muted); padding: 1px 5px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
+kbd:empty { display: none; }
+.shortcuts h2 { margin: 2px 10px 0; font: italic 500 20px/1.2 var(--font-display); color: var(--accent); }
+.shortcut { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; }
+
 /* The tiles: glass with even gaps, the focused one's edge bright. */
 .column-tabs { display: none; }
 .columns { flex: 1; min-height: 0; display: flex; gap: var(--gap); padding: var(--gap); overflow-x: auto; }
