@@ -2236,53 +2236,41 @@ Liton := [].{
 
 	## A room's header, messages and who is typing.
 	room_main : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> List(Elem(PaneCtx))
-	room_main = |model, id, room_id, shown|
-		[
-			Html.div(
-				"room-header",
-				[
-					Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
-					Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
-					Liton.join_controls(model, shown),
-				],
-			),
-			Html.div(
-				"timeline-scroll",
-				[
-					Html.ul(
-						[Engine.class("timeline room-timeline"), Engine.attr("data-part", "room")],
-						[Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
-					),
-				],
-			),
-			Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
-			Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
-			Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
-		]
+	room_main = |model, id, room_id, shown| {
+		header = Html.div(
+			"room-header",
+			[
+				Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
+				Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
+				Liton.join_controls(model, shown),
+			],
+		)
+		messages = Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
+		[header]
+			.concat(Conversation.timeline(model, id, { class: "timeline room-timeline", part: "room", jump: Bool.False, earlier: Engine.const(Bool.False), loading: room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")) }, [messages]))
+			.concat([
+				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
+			])
+	}
 
 	## The thread a Rooms pane opened: its top-level message, its replies and
 	## who is typing in it, and × to close it.
 	room_thread : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.RoomPane) -> Elem(PaneCtx)
-	room_thread = |model, id, opened|
+	room_thread = |model, id, opened| {
+		header = Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))])
+		replies = Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
 		Html.section(
 			"Thread",
 			"room-thread-pane",
-			[
-				Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))]),
-				Html.div(
-					"timeline-scroll",
-					[
-						Html.ul(
-							[Engine.class("timeline room-timeline"), Engine.attr("data-part", "thread")],
-							[Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
-						),
-					],
-				),
-				Engine.when(opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)), || Html.p("Loading…", "missing"), || Engine.text("")),
-				Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
-				Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),
-			],
+			[header]
+				.concat(Conversation.timeline(model, id.map(|pane_id| "${pane_id}/thread"), { class: "timeline room-timeline", part: "thread", jump: Bool.False, earlier: Engine.const(Bool.False), loading: opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)) }, [replies]))
+				.concat([
+					Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
+					Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),
+				]),
 		)
+	}
 
 	## The composer of a Rooms pane's room, or of the thread it opened, as
 	## the chat's: Send shows the message at once as sending. A mention being
