@@ -1413,8 +1413,9 @@ Model := [].{
 	## A tab of the workspace tile, as its row shows it: its title, its
 	## widget's icon, a session's status, whether it is shown and whether ×
 	## closes it. It shows a tab of the workspace, or another pane of the
-	## tile.
-	TabRow : { key : Str, title : Str, widget : Str, dot : Str, shown : Bool, closes : Bool, tab : [Tab(Tab), Pane(Str)] }
+	## tile; `pane` is the pane that shows it, which dragging the tab moves:
+	## a ticket's view, else the tile's chat, with the workspace.
+	TabRow : { key : Str, title : Str, widget : Str, dot : Str, shown : Bool, closes : Bool, tab : [Tab(Tab), Pane(Str)], pane : Str }
 
 	## The workspace tile's tabs: the focused workspace's, then the other
 	## panes the tile shows; all of them while no workspace is focused.
@@ -1428,16 +1429,21 @@ Model := [].{
 		others = Model.shown_panes(state, tile).drop_if(|shown| !workspace_id.is_empty() and views.contains(shown.id))
 		in_view = !others.any(|shown| shown.id == tile.active)
 		picked_tab = Model.shown_tab(state, workspace_id)
+		view_of = |kind| tile.panes.find_first(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, kind)).map_ok(|shown| shown.id) ?? ""
 		row = |tab| {
 			(key, title, widget, dot) = match tab {
 				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_row(state, Model.session(state, session_id)).dot)
 				Diff => ("diff", "Diff", "changes", "")
 				Ticket(ticket_id) => (Context.to_str(Ticket(ticket_id)), TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| ticket.summary.key) ?? ticket_id, "tickets", "")
 			}
-			{ key, title, widget, dot: if (Model.starting(state, key)) "starting" else dot, shown: in_view and tab == picked_tab, closes: widget != "chat", tab: Tab(tab) }
+			shown_in = match tab {
+				Ticket(_) if !view_of(Ticket).is_empty() => view_of(Ticket)
+				_ => view_of(Workspace)
+			}
+			{ key, title, widget, dot: if (Model.starting(state, key)) "starting" else dot, shown: in_view and tab == picked_tab, closes: widget != "chat", tab: Tab(tab), pane: shown_in }
 		}
 		tabs = if (workspace_id.is_empty()) [] else Model.workspace_tabs(state, workspace_id).map(row)
-		tabs.concat(others.map(|shown| { key: "pane:${shown.id}", title: Widgets.find(shown.widget).title, widget: shown.widget, dot: "", shown: shown.id == tile.active, closes: Bool.True, tab: Pane(shown.id) }))
+		tabs.concat(others.map(|shown| { key: "pane:${shown.id}", title: Widgets.find(shown.widget).title, widget: shown.widget, dot: "", shown: shown.id == tile.active, closes: Bool.True, tab: Pane(shown.id), pane: shown.id }))
 	}
 
 	## Whether a pane is a view the workspace tile shows as a tab of the

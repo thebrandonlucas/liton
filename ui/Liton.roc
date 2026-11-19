@@ -912,7 +912,7 @@ Liton := [].{
 				),
 				Engine.when(
 					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
-					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, drag, tile)]),
+					|| Html.div("workspace-view-header", [Liton.workspace_header(model, drag, tile), Liton.workspace_tabs(model, drag, tile)]),
 					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
@@ -979,16 +979,18 @@ Liton := [].{
 	## The header of the workspace a Workbench shows as tabs: the left
 	## drawer's button, its name and project, its ⋯ menu (`Model.row_menu`),
 	## and the right drawer's button with its changes; Settings while the
-	## left drawer is hidden.
-	workspace_header : State(TileCtx, Model.State) -> Elem(TileCtx)
-	workspace_header = |model| {
+	## left drawer is hidden. Dragging its name moves the workspace's view,
+	## as its chat's tab does.
+	workspace_header : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
+	workspace_header = |model, drag, tile| {
+		chat_pane = tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown).find_first(|row| row.widget == "chat").map_ok(|row| row.pane) ?? "")
 		header = model.signal().map(Model.workspace_header)
 		left_shown = model.signal().map(|state| !state.collapsed.contains(Left) and state.grid.tiles.any(|listed| Model.slot_of(state, listed.id) == Left and !listed.panes.is_empty()))
 		Html.div(
 			"workspace-header",
 			[
 				Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)),
-				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")]),
+				Html.span_s(header.map(|shown| shown.title), [Engine.class("workspace-title"), Engine.test_id("workspace-title")].concat(Liton.grip(drag, chat_pane))),
 				Html.span_s(header.map(|shown| shown.project), [Engine.class("workspace-project")]),
 				Engine.when(header.map(|shown| !shown.key.is_empty()), || Liton.row_menu(model, header.map(|shown| { pane_id: Model.header_menu, key: shown.key }), Engine.const("Workspace")), || Engine.text("")),
 				# FIXME: Paseo's run ▷, open in editor and git split button
@@ -1018,14 +1020,8 @@ Liton := [].{
 					tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown)),
 					|tab| tab.key,
 					|tab| {
-						# Another pane's tab drags it, as a tile's tab does.
-						pane_id = tab.field(
-							|shown|
-								match shown.tab {
-									Pane(id) => id
-									Tab(_) => ""
-								},
-						)
+						# A tab drags the pane that shows it, as a tile's tab does.
+						pane_id = tab.field(|shown| shown.pane)
 						button = |dragging|
 							Engine.element(
 								"button",
@@ -1714,19 +1710,26 @@ Liton := [].{
 		)
 
 	## A ticket's status and its assignees, of its source's people, each
-	## changed at once, saving until the daemon has it.
+	## changed at once, saving until the daemon has it, each a row of its
+	## name and its value.
 	ticket_fields : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
 	ticket_fields = |model, summary|
 		Html.div_attrs(
 			[Engine.class("ticket-fields"), Engine.attr("data-part", "fields")],
 			[
-				Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
-				Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+				Html.div(
+					"ticket-field",
+					[
+						Html.span_s(Engine.const("Status"), [Engine.class("field-name"), Engine.attr("aria-hidden", "true")]),
+						Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
+						Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+					],
+				),
 				Engine.element(
 					"fieldset",
-					[Engine.class("ticket-people")],
+					[Engine.class("ticket-field ticket-people")],
 					[
-						Engine.element("legend", [], [Engine.text("Assignees")]),
+						Engine.element("legend", [Engine.class("field-name")], [Engine.text("Assignees")]),
 						Engine.each(
 							summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.people) ?? []).map(|person| { ticket_id: listed.id, person, assigned: listed.assignees.contains(person) })),
 							|choice| choice.person.id,
@@ -2003,7 +2006,7 @@ Liton := [].{
 						Liton.ticket_bar(model, summary),
 						Html.p_s(summary.map(|listed| listed.title), [Engine.class("properties-title")]),
 						Liton.ticket_fields(model, summary),
-						Html.div("ticket-labels", [Html.span_s(Engine.const("Labels"), [Engine.class("field-name")]), Html.span_s(summary.map(|listed| if (listed.labels.is_empty()) "None" else Str.join_with(listed.labels, " · ")), [Engine.class("labels")])]),
+						Html.div("ticket-field ticket-labels", [Html.span_s(Engine.const("Labels"), [Engine.class("field-name")]), Html.span_s(summary.map(|listed| if (listed.labels.is_empty()) "None" else Str.join_with(listed.labels, " · ")), [Engine.class("labels")])]),
 						Liton.ticket_sessions(model, summary),
 					],
 				),
