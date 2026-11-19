@@ -819,6 +819,10 @@ Liton := [].{
 				},
 		)
 
+	## Who supplies what a surface shows, as Settings' Deck says it.
+	supplied_by : List(Str) -> Str
+	supplied_by = |names| if (names.is_empty()) "" else "from ${Str.join_with(names, ", ")}"
+
 	## The deck: its surfaces in order, each to move toward its start or
 	## end or to remove, and the surfaces the daemon offers to add.
 	deck_section : State(Ctx, Model.State) -> Elem(Ctx)
@@ -846,6 +850,7 @@ Liton := [].{
 											[
 												Liton.thumbnail(row.field(|surface| surface.preview), row.field(|surface| surface.offered)),
 												Html.span_s(title, [Engine.class("settings-row-title")]),
+												Html.span_s(index.map2(rows.signal(), |at, state| Liton.supplied_by(Model.surface_providers(state, at))), [Engine.class("help deck-from")]),
 												Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
 												button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
 												button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),

@@ -203,6 +203,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .deck-row .settings-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .settings-row.deck-row { flex-wrap: wrap; } }
 .deck-row .deck-shown { flex: none; }
+.deck-row .deck-from { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .deck-move { flex: none; padding: 3px 9px; }
 .deck-move:disabled { opacity: .35; }
 .deck-parts { padding: 0 12px 8px; }
