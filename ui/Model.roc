@@ -539,6 +539,21 @@ Model := [].{
 		}
 	}
 
+	## Whether the daemon offers what a preset's navigators and views need,
+	## those it shows as it opens (each tile's active pane), or its manifest
+	## is still to be read, as liton's own presets show until the setup's
+	## arrive. An inspector without its capability shows what it needs.
+	offers : State, Setup.Preset -> Bool
+	offers = |state, preset| {
+		needed = |shown| Widgets.find(shown.widget).role != Inspector
+		opened = preset.snapshot.grid.tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
+		state.daemon.id.is_empty() or opened.all(|shown| Widgets.missing(Widgets.find(shown.widget), state.capabilities).is_empty())
+	}
+
+	## The surfaces to open: the presets the daemon offers what they need.
+	surfaces : State -> List(Setup.Preset)
+	surfaces = |state| state.presets.keep_if(|preset| Model.offers(state, preset))
+
 	## Shows a preset's layout, and its theme if it names one.
 	use_preset : State, Str -> State
 	use_preset = |state, name|
@@ -3469,3 +3484,11 @@ bytes_order = |left, right|
 		(Ok(_), Err(_)) => After
 		_ => Same
 	}
+
+# A surface is offered once the daemon offers what the parts it opens with
+# need: Developer's Workspaces and Chat, but not its Changes or Tickets.
+expect {
+	advertised = |capabilities| { ..Model.initial(""), daemon: { id: "liton", name: "liton" }, capabilities }
+	names = |state| Model.surfaces(state).map(|preset| preset.name)
+	names(Model.initial("")) == ["Developer", "Inbox", "Tiling", "Chat"] and names(advertised([Capability.chat_v1])) == ["Tiling", "Chat"] and names(advertised([Capability.chat_v1, Capability.workspaces_v1])) == ["Developer", "Tiling", "Chat"]
+}

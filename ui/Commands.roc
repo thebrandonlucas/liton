@@ -7,7 +7,8 @@ Commands := [].{
 	## `applies` says whether the command can run now, and `run` runs it.
 	Command : { id : Str, title : Str, group : Str, applies : Model.State -> Bool, run : Model.State -> Model.State }
 
-	## The commands, each preset's numbered by its place, the first's `preset.1`.
+	## The commands, each preset's numbered by its place, the first's
+	## `preset.1`, which applies while the daemon offers what it needs.
 	all : Model.State -> List(Command)
 	all = |state| {
 		workbench = |shown| shown.shell == Workbench
@@ -22,7 +23,7 @@ Commands := [].{
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
 			.concat(Commands.layout)
-			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Open the ${preset.name} surface", group: "Surfaces", applies: |shown| Model.offers(shown, preset), run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
 	}
 

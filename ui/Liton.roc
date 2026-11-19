@@ -690,7 +690,8 @@ Liton := [].{
 				},
 		)
 
-	## The surface open: the presets to show instead, and its tiles' panes
+	## The surface open: the surfaces to open instead, those the daemon
+	## offers what they need, and its tiles' panes
 	## to move, remove or set the options of.
 	surface_section : State(Ctx, Model.State) -> Elem(Ctx)
 	surface_section = |model|
@@ -698,13 +699,13 @@ Liton := [].{
 			"settings-section",
 			[
 				Liton.settings_card(
-					"Preset",
+					"Open a surface",
 					[
 						Html.div(
 							"choices settings-row",
 							[
 								Engine.each(
-									model.signal().map(|state| state.presets),
+									model.signal().map(Model.surfaces),
 									|preset| preset.name,
 									|row|
 										Html.button_s(
