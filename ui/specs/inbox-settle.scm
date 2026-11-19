@@ -34,7 +34,7 @@
     (expect-absent (role button :name "Settle Write docs"))
     (click (role button :name "Bring back Write docs"))
     (expect-text (test-id "tab-count-Snoozed") "")
-    (click (role button :name "Snooze Write docs"))
+    (click (role button :name "Snooze Write docs for 1 hour"))
     (expect-text (test-id "tab-count-Snoozed") "1")
   )
 )

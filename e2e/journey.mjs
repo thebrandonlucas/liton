@@ -110,10 +110,10 @@ try {
     await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
     // Unread until opened, then read at once.
     await click("Settings", ".settings-close", "Back");
-    await see("Inbox", ".inbox-item.unread > button");
-    const title = await page.evaluate(() => document.querySelector(".inbox-item.unread > button").textContent);
-    await click("Inbox", ".inbox-item.unread > button", title);
-    const read = () => page.evaluate((title) => [...document.querySelectorAll(".inbox-item > button")].some((b) => b.textContent === title && !b.parentElement.classList.contains("unread")), title);
+    await see("Inbox", ".inbox-item.unread .row-title");
+    const title = await page.evaluate(() => document.querySelector(".inbox-item.unread .row-title").textContent);
+    await click("Inbox", ".inbox-item.unread .row-title", title);
+    const read = () => page.evaluate((title) => [...document.querySelectorAll(".inbox-item .row-title")].some((b) => b.textContent === title && !b.closest(".inbox-item").classList.contains("unread")), title);
     await until(`${title} read`, read);
     // And still, once the daemon took it and a poll or two followed.
     await new Promise((r) => setTimeout(r, 2500));

@@ -178,4 +178,51 @@ InboxDesk := [].{
 		picked = listed.find_first(|workspace| workspace.session_ids.contains(focused)).on_err(|_| listed.first())
 		picked.map_ok(|workspace| Context.to_str(Workspace(workspace.id))).map_err(|_| NoWorkspace)
 	}
+
+	## A state as a row's status word says it.
+	state_word : Attention.State -> Str
+	state_word = |attention|
+		match attention {
+			NeedsYou => "Waiting"
+			Failed => "Error"
+			Working => "Running"
+			Done => "Done"
+			Idle => "Idle"
+		}
+
+	## Why a row is listed: what its agent asks, why it failed, that it
+	## works, or that what it finished isn't seen yet; or that it is set
+	## aside.
+	reason : Attention.Item -> Str
+	reason = |item|
+		match (item.set_aside, item.state) {
+			(Snoozed, _) => "Snoozed until something new happens"
+			(Settled, _) => "Settled until something new happens"
+			(No, NeedsYou) => item.permissions.last().map_ok(|asked| "Asks: ${asked.tool} ${asked.description}") ?? "Waiting on you"
+			(No, Failed) => if (item.summary.is_empty()) "Failed" else "Failed: ${item.summary}"
+			(No, Working) => "Working"
+			(No, _) if item.unread => "Finished: result not seen yet"
+			(No, Done) => "Finished"
+			(No, Idle) => ""
+		}
+
+	## A session's id, short: the first 4 characters of its last part.
+	short_id : Str -> Str
+	short_id = |session_id| {
+		last = session_id.split_last("/").map_ok(|parts| parts.after) ?? session_id
+		Str.from_utf8(last.to_utf8().take_first(4)) ?? last
+	}
+
+	## The sessions of `rows` selected.
+	selected : Model.State, List(Row) -> List(Str)
+	selected = |state, listed| listed.map(|row| row.item.session_id).keep_if(|session_id| state.inbox_selected.contains(session_id))
+
+	## Selects a session, or no longer.
+	select : Model.State, Str, Bool -> Model.State
+	select = |state, session_id, picked| { ..state, inbox_selected: state.inbox_selected.drop_if(|kept| kept == session_id).concat(if (picked) [session_id] else []) }
+
+	## Does to each session selected what `act` does to one, then selects
+	## none.
+	act_on_selected : Model.State, List(Str), (Model.State, Str -> Model.State) -> Model.State
+	act_on_selected = |state, session_ids, act| { ..session_ids.fold(state, act), inbox_selected: [] }
 }

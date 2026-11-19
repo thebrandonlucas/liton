@@ -1504,8 +1504,49 @@ Liton := [].{
 							),
 						]),
 				),
+				Liton.inbox_select(model, pane, rows),
 				Liton.inbox_items(model, pane, rows),
 				Html.p_s(rows.map2(pane, |listed, shown| if (!listed.is_empty()) "" else if (Model.option(shown, "list") == "Snoozed") "Nothing is snoozed." else "Nothing here: you are all caught up."), [Engine.class("inbox-empty")]),
+			],
+		)
+	}
+
+	## What selects an Inbox pane's rows: Select, for all of them or none,
+	## and those unread, idle or running; while some are, how many, and Mark
+	## read, Settle and Snooze for them all, each at once.
+	inbox_select : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
+	inbox_select = |model, pane, rows| {
+		selected = rows.map2(model.signal(), |listed, state| InboxDesk.selected(state, listed))
+		all_selected = rows.map2(selected, |listed, picked| !listed.is_empty() and picked.len() == listed.len())
+		quick = |name, keeps|
+			Html.button_s(
+				rows.map(|listed| "${name} ${listed.count_if(|row| keeps(row.item)).to_str()}"),
+				[Engine.class("quick-select"), Html.aria_label("Select ${name.with_ascii_lowercased()}")],
+				model.update_by(rows, |state, listed| { ..state, inbox_selected: listed.keep_if(|row| keeps(row.item)).map(|row| row.item.session_id) }),
+			)
+		bulk = |name, act| Html.button(name, [Html.aria_label("${name} the selected")], model.update_by(selected.map2(pane, |picked, shown| { picked, shown }), |state, { picked, shown }| InboxDesk.act_on_selected(state, picked, |acted, session_id| act(acted, shown, session_id))))
+		Html.div(
+			"inbox-select",
+			[
+				Engine.element("label", [Engine.class("select-all")], [Html.checkbox(Engine.const("Select all"), all_selected, [], model.set_value_by(rows, |state, listed, checked| { ..state, inbox_selected: if (checked) listed.map(|row| row.item.session_id) else [] })), Engine.text("Select")]),
+				quick("Unread", |item| item.unread),
+				quick("Idle", |item| item.state == Idle),
+				quick("Running", |item| item.state == Working),
+				Engine.when(
+					selected.map(|picked| !picked.is_empty()),
+					||
+						Html.div(
+							"inbox-bulk",
+							[
+								Html.span_s(selected.map(|picked| "${picked.len().to_str()} selected"), [Engine.class("selected-count"), Engine.test_id("selected-count")]),
+								Html.button("Mark read", [Html.aria_label("Mark the selected read")], model.update_by(selected, |state, picked| { ..Model.mark_seen(state, picked, Bool.True), inbox_selected: [] })),
+								bulk("Settle", |state, _, session_id| Model.set_aside(state, session_id, Settled)),
+								bulk("Snooze", |state, shown, session_id| Model.set_aside(state, session_id, Snoozed(Model.snooze_minutes(shown)))),
+								Html.button("Clear", [Html.aria_label("Select none")], model.update(|state| { ..state, inbox_selected: [] })),
+							],
+						),
+					|| Engine.text(""),
+				),
 			],
 		)
 	}
@@ -1520,9 +1561,13 @@ Liton := [].{
 			[Engine.text(name), Dropdown.select(Engine.const(name), pane.map(|shown| Model.option(shown, key)), [], options, model.set_value_by(pane, |state, shown, value| Model.with_snapshot_text(Model.set_option(state, shown.id, key, value))))],
 		)
 
-	## Each item: its title, which opens it, its agent, state and summary, the
-	## permission it asks for, and Mark read or unread (not while working),
-	## Settle and Snooze, or Bring back once set aside. Unread, it is marked.
+	## Each row, under its group's heading if it starts one: a checkbox that
+	## selects it; its title, which opens it, as a click anywhere in it does;
+	## its status word, short id, agent and why it is listed; its provider,
+	## model and thinking level; the permission it asks for; how long ago it
+	## changed; and its actions as icons, shown while hovered: Snooze, Pin its
+	## workspace (where workspaces.v1 lists it), Mark read or unread (not
+	## while working) and Settle, or Bring back once set aside.
 	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
@@ -1533,52 +1578,83 @@ Liton := [].{
 					|listed| listed.item.session_id,
 					|row| {
 						model = model0.lift_row()
-						shown_item = row.field(|listed| listed.item)
 						id = row.key()
+						shown_item = row.field(|listed| listed.item)
 						title = shown_item.map(|item| item.title)
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
+						workspace = id.map2(model.signal(), |session_id, state| if (state.capabilities.contains(Capability.workspaces_v1)) Model.row_workspace(state, session_id) else Err(NotFound))
 						opens = model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))
+						# What a click on it alone does, not the row's.
+						apart = Engine.on_click(model.update(|state| state))
+						icon = |name, class, handler| Liton.icon_button(name, "icon ${class}", handler)
 						Html.li(
-							[Engine.class_s(shown_item.map(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
+							[Engine.class_s(shown_item.map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else "", if (state.inbox_selected.contains(item.session_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
 							[
 								# The first row of a group heads it, a click on which opens nothing.
 								Engine.when(
 									row.field(|listed| listed.starts_group),
-									|| Html.div_attrs([Engine.class("inbox-group"), Engine.attr("data-part", "group"), Engine.test_id_s(row.field(|listed| "group-${listed.group}")), Engine.on_click(model.update(|state| state))], [Html.span_s(row.field(|listed| listed.group), [Engine.class("group-title")]), Html.span_s(row.field(|listed| listed.group_count.to_str()), [Engine.class("count")])]),
+									|| Html.div_attrs([Engine.class("inbox-group"), Engine.attr("data-part", "group"), Engine.test_id_s(row.field(|listed| "group-${listed.group}")), apart], [Html.span_s(row.field(|listed| listed.group), [Engine.class("group-title")]), Html.span_s(row.field(|listed| listed.group_count.to_str()), [Engine.class("count")])]),
 									|| Engine.text(""),
 								),
-								Html.button_s(title, [], opens),
 								Html.div(
-									"session-meta",
+									"inbox-row",
 									[
-										Engine.text_s(shown_item.map(|item| item.agent)),
-										Html.span_s(shown_item.map(|item| Liton.attention_text(item.state)), [Engine.class_s(shown_item.map(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
-									],
-								),
-								Html.p_s(shown_item.map(|item| item.summary), [Engine.class("summary")]),
-								Engine.when(
-									permission.map(|asked| asked.is_ok()),
-									|| Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title),
-									|| Engine.text(""),
-								),
-								Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
-								Engine.when(
-									shown_item.map(|item| item.set_aside == No),
-									||
-										Html.div_attrs(
-											[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
+										Engine.element("span", [Engine.class("row-check"), apart], [Html.checkbox(title.map(|name| "Select ${name}"), id.map2(model.signal(), |session_id, state| state.inbox_selected.contains(session_id)), [], model.set_value_by(id, InboxDesk.select))]),
+										Html.div(
+											"inbox-main",
 											[
-												Html.button_s(shown_item.map(|item| if (item.unread) "Mark read" else "Mark unread"), [Engine.class("mark"), Html.aria_label_s(shown_item.map(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"))], model.update_by(shown_item, |state, marked| Model.mark_seen(state, [marked.session_id], marked.unread))),
-												Html.button("Settle", [Html.aria_label_s(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
-												Html.button_s(
-													snooze_length.map(|length| "Snooze ${length}"),
-													[Html.aria_label_s(title.map(|name| "Snooze ${name}"))],
-													model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes))),
+												Html.button_s(title, [Engine.class("row-title")], opens),
+												Html.div(
+													"status-line",
+													[
+														Html.span_s(shown_item.map(|item| InboxDesk.state_word(item.state)), [Engine.class_s(shown_item.map(|item| "status-word ${Liton.attention_word_class(item.state)}")), Engine.test_id("attention-state")]),
+														Html.span_s(id.map(InboxDesk.short_id), [Engine.class("short-id")]),
+														Html.span_s(shown_item.map(|item| item.agent), [Engine.class("agent")]),
+														Html.span_s(shown_item.map(InboxDesk.reason), [Engine.class("reason")]),
+													],
+												),
+												Html.div(
+													"details",
+													[
+														Html.span_s(row.field(|listed| listed.provider), [Engine.class("detail"), Engine.attr("data-label", "Provider")]),
+														Html.span_s(row.field(|listed| listed.model), [Engine.class("detail"), Engine.attr("data-label", "Model")]),
+														Html.span_s(row.field(|listed| listed.thinking), [Engine.class("detail"), Engine.attr("data-label", "Thinking")]),
+													],
+												),
+												Engine.when(
+													permission.map(|asked| asked.is_ok()),
+													|| Html.div_attrs([apart], [Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title)]),
+													|| Engine.text(""),
+												),
+												Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
+											],
+										),
+										Html.div(
+											"inbox-side",
+											[
+												Html.span_s(shown_item.map2(model.signal(), |item, state| Liton.ago_text(Model.ago(state, item.updated))), [Engine.class("age")]),
+												Engine.when(
+													shown_item.map(|item| item.set_aside == No),
+													||
+														Html.div_attrs(
+															[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
+															[
+																icon(title.map2(snooze_length, |name, length| "Snooze ${name} for ${length}"), "snooze", model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes)))),
+																Engine.when(
+																	workspace.map(|found| found.is_ok()),
+																	|| icon(title.map2(workspace, |name, found| if (found.map_ok(|listed| listed.pinned) ?? Bool.False) "Unpin the workspace of ${name}" else "Pin the workspace of ${name}"), "pin", model.update_by(workspace, |state, found| found.map_ok(|listed| Model.edit(state, Workspaces(Pin({ workspace_id: listed.id, pinned: !listed.pinned })))) ?? state)),
+																	|| Engine.text(""),
+																),
+																icon(shown_item.map(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"), "mark", model.update_by(shown_item, |state, marked| Model.mark_seen(state, [marked.session_id], marked.unread))),
+																icon(title.map(|name| "Settle ${name}"), "settle", model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
+															],
+														),
+													|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_s(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
 												),
 											],
 										),
-									|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_s(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
+									],
 								),
 							],
 						)
@@ -1586,6 +1662,10 @@ Liton := [].{
 				),
 			],
 		)
+
+	## How long ago, as `Model.ago` says it, as a row's right side does.
+	ago_text : Str -> Str
+	ago_text = |ago| if (ago.is_empty() or ago == "now") ago else "${ago} ago"
 
 	## A permission request waiting for an answer, as a card: what its tool
 	## would do, its body as Markdown, if any, and a button for each of its

@@ -130,6 +130,10 @@ Model := [].{
 		attending : List({ serial : U64, request : Attention.Request, accepted : U64 }),
 		attention_outbox : { serial : U64, request : Attention.Request },
 
+		## The sessions an Inbox pane's rows select, for what acts on them
+		## together.
+		inbox_selected : List(Str),
+
 		## The last poll sent, while `polling`, and whether another is to
 		## follow it at once; the cursor of each topic polled.
 		poll : Poll,
@@ -415,6 +419,7 @@ Model := [].{
 				attention: [],
 				attending: [],
 				attention_outbox: { serial: 0, request: ListItems },
+				inbox_selected: [],
 				poll: { serial: 0, subjects: [], topics: [] },
 				polling: Bool.False,
 				poll_again: Bool.False,
