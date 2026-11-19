@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -114,7 +114,8 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `Finish` and `Cancel` (Audio, below); `rooms.v1`'s `ListRooms`, `Send`,
 `React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
-and `Unlink` (Tickets, below).
+and `Unlink` (Tickets, below); `schedules.v1`'s `ListSchedules`, `Inspect`, `Create`, `Update`,
+`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below).
 
 `{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
 it works on a turn, the message interrupts it, or with `"while_running":
@@ -294,6 +295,8 @@ events when nothing changed:
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
+| `schedules.v1` | `schedules` | snapshot | `{"Schedules": [Schedule]}` |
+| `schedules.v1` | `runs/<schedule_id>` | snapshot | `{"Runs": [Run]}`, the latest first |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -565,6 +568,57 @@ on, so that session links to it.
 
 A provider's credentials are the daemon's alone, read from its environment
 as Paseo's password is, and never reach a client.
+
+### Schedules
+
+`schedules.v1` runs prompts on a cadence, as Paseo's schedules do. A
+schedule sends its `prompt` either to a session that exists, a heartbeat,
+or to a new session each run:
+
+```json
+{ "id": "h1", "provider": "mock", "name": "Check CI", "prompt": "Is CI green?",
+  "cadence": { "Every": 1800000 }, "target": { "Session": "fix-auth" },
+  "status": "Active", "next_run": "2026-01-01T09:30:00.000Z", "last_run": "2026-01-01T09:00:00.000Z" }
+{ "id": "n1", "provider": "mock", "name": "", "prompt": "Update the deps",
+  "cadence": { "Cron": { "expression": "0 3 * * *", "timezone": "Europe/Berlin" } },
+  "target": { "NewSession": { "place": { "Workspace": "main" }, "agent": "claude", "model": "opus", "isolation": "Worktree", "archive_on_finish": true } },
+  "status": "Paused", "max_runs": 10, "expires": "2026-02-01T00:00:00.000Z" }
+```
+
+A cadence is `{"Every": ms}` or `{"Cron": {"expression", "timezone"}}`, the
+time zone UTC when left out. A new session is started as chat.v1's `Create`
+starts one, in a workspace or a directory, with the agent and, left out for
+the defaults, its model, mode and thinking level; `isolation` `Local` works
+in the place itself and `Worktree` in a worktree of its own, and
+`archive_on_finish` archives it once its run is done. `status` is `Active`,
+`Paused` or `Completed`, once it ran `max_runs` times or `expires` passed.
+`next_run`, `last_run`, `max_runs` and `expires` are left out when there is
+none.
+
+A run is `{"id", "scheduled_for", "started", "ended", "status",
+"session_id", "output", "error"}`, `status` `Running`, `Succeeded` or
+`Failed`, `ended` left out while it runs, and the session it prompted, what
+the agent answered and why it failed when its provider tells.
+
+```json
+{ "capability": "schedules.v1", "request": "ListSchedules" }
+{ "Ok": { "Schedules": [ … ] } }
+{ "capability": "schedules.v1", "request": { "Inspect": { "schedule_id": "h1" } } }
+{ "Ok": { "Inspected": { "schedule": { … }, "runs": [ … ] } } }
+{ "capability": "schedules.v1", "provider": "mock", "request": { "Create": { "name": "Check CI", "prompt": "Is CI green?", "cadence": { "Every": 1800000 }, "target": { "Session": "fix-auth" } } } }
+{ "Ok": { "Created": { "schedule_id": "h2" } } }
+{ "capability": "schedules.v1", "request": { "Update": { "schedule_id": "h1", "draft": { … } } } }
+{ "capability": "schedules.v1", "request": { "Pause": { "schedule_id": "h1" } } }
+{ "Ok": "Accepted" }
+```
+
+`Create` takes a draft, `{"name", "prompt", "cadence", "target",
+"max_runs", "expires"}`, for the provider the call names, or the one that
+offers schedules; a heartbeat's goes to its session's. `Update` changes a
+schedule to a draft. `Pause` stops one until `Resume`, `RunOnce` runs it
+now, besides its cadence, and `Delete` forgets it with its runs. Each
+answers `Accepted` or `Rejected` with why, or an error, and the next poll of
+`schedules` shows it.
 
 ### Audio
 

@@ -472,7 +472,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) | ScheduleList | ScheduleRuns(_) => Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -545,6 +545,7 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
 		TicketLinks => Ok(Protocol.snapshot(wanted, Links(ticket_links!(context)?)))
+		ScheduleList | ScheduleRuns(_) => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
 	}
 }
 
