@@ -2,9 +2,20 @@ const std = @import("std");
 
 const SourceTree = struct {
     roc_files: []const []const u8,
+    roc_references: []const RocReference,
     // Apps and packages: what `roc check` and `roc test` take.
     roc_roots: []const []const u8,
     zig_files: []const []const u8,
+    // The UI's page, which its build copies beside the wasm.
+    ui_page_files: []const []const u8,
+};
+
+// A local package a Roc file's header lists, by its directory, or a file it
+// imports, as `import "x" as`, from the repository's root.
+const RocReference = struct {
+    from: []const u8,
+    kind: enum { package, file },
+    path: []const u8,
 };
 
 const excluded_source_dirs = [_][]const u8{
@@ -56,6 +67,33 @@ fn nativeRocTarget(b: *std.Build) []const u8 {
     };
 }
 
+// Local packages are "../x/main.roc" strings, which only a header holds.
+fn appendRocReferences(
+    allocator: std.mem.Allocator,
+    references: *std.ArrayList(RocReference),
+    path: []const u8,
+    contents: []const u8,
+) void {
+    const directory = std.fs.path.dirname(path) orelse "";
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        var quoted = std.mem.splitScalar(u8, line, '"');
+        _ = quoted.next();
+        while (quoted.next()) |string| : (_ = quoted.next()) {
+            const file_import = std.mem.startsWith(u8, line, "import \"");
+            const package = std.mem.startsWith(u8, string, ".") and std.mem.endsWith(u8, string, ".roc");
+            if (!file_import and !package) continue;
+            const resolved = std.fs.path.resolvePosix(allocator, &.{ directory, string }) catch @panic("out of memory");
+            references.append(allocator, if (file_import)
+                .{ .from = path, .kind = .file, .path = resolved }
+            else
+                .{ .from = path, .kind = .package, .path = std.fs.path.dirname(resolved) orelse "" }) catch @panic("out of memory");
+            if (file_import) break;
+        }
+    }
+}
+
 fn sortPaths(paths: [][]const u8) void {
     std.mem.sort([]const u8, paths, {}, struct {
         fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -69,8 +107,10 @@ fn discoverSources(b: *std.Build) SourceTree {
     const io = b.graph.io;
 
     var roc_files = std.ArrayList([]const u8).empty;
+    var roc_references = std.ArrayList(RocReference).empty;
     var roc_roots = std.ArrayList([]const u8).empty;
     var zig_files = std.ArrayList([]const u8).empty;
+    var ui_page_files = std.ArrayList([]const u8).empty;
 
     var source_dir = std.Io.Dir.cwd().openDir(
         io,
@@ -87,7 +127,7 @@ fn discoverSources(b: *std.Build) SourceTree {
             walker.leave(io);
             continue;
         }
-        if (entry.kind != .file) continue;
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
 
         const path = allocator.dupe(u8, entry.path) catch @panic("out of memory");
         if (std.mem.endsWith(u8, path, ".roc")) {
@@ -99,11 +139,14 @@ fn discoverSources(b: *std.Build) SourceTree {
                 .limited(10 * 1024 * 1024),
             ) catch @panic("failed to read Roc source");
             defer allocator.free(contents);
+            appendRocReferences(allocator, &roc_references, path, contents);
             if (isRocRoot(path, contents)) {
                 roc_roots.append(allocator, path) catch @panic("out of memory");
             }
         } else if (std.mem.endsWith(u8, path, ".zig")) {
             zig_files.append(allocator, path) catch @panic("out of memory");
+        } else if (isUi(path) and !std.mem.startsWith(u8, path, "ui/specs/")) {
+            ui_page_files.append(allocator, path) catch @panic("out of memory");
         } else {
             allocator.free(path);
         }
@@ -112,11 +155,14 @@ fn discoverSources(b: *std.Build) SourceTree {
     sortPaths(roc_files.items);
     sortPaths(roc_roots.items);
     sortPaths(zig_files.items);
+    sortPaths(ui_page_files.items);
 
     return .{
         .roc_files = roc_files.toOwnedSlice(allocator) catch @panic("out of memory"),
+        .roc_references = roc_references.toOwnedSlice(allocator) catch @panic("out of memory"),
         .roc_roots = roc_roots.toOwnedSlice(allocator) catch @panic("out of memory"),
         .zig_files = zig_files.toOwnedSlice(allocator) catch @panic("out of memory"),
+        .ui_page_files = ui_page_files.toOwnedSlice(allocator) catch @panic("out of memory"),
     };
 }
 
@@ -152,6 +198,62 @@ fn addRocRoot(
     const test_roc = b.addSystemCommand(&.{ roc, "test", root });
     test_roc.step.dependOn(check_step);
     test_step.dependOn(&test_roc.step);
+}
+
+fn inDirectory(path: []const u8, directory: []const u8) bool {
+    return path.len > directory.len and std.mem.startsWith(u8, path, directory) and path[directory.len] == '/';
+}
+
+// Makes run depend on what compiler reads to build the app at root, so that
+// it runs again only when one of them changes: the Roc files of root's
+// directory and of the local packages it lists, recursively, the files they
+// import, and the compiler's binary.
+fn addRocAppInputs(
+    b: *std.Build,
+    run: *std.Build.Step.Run,
+    sources: SourceTree,
+    compiler: []const u8,
+    root: []const u8,
+) void {
+    var directories = std.ArrayList([]const u8).empty;
+    directories.append(b.allocator, std.fs.path.dirname(root).?) catch @panic("out of memory");
+    var index: usize = 0;
+    while (index < directories.items.len) : (index += 1) {
+        const directory = directories.items[index];
+        for (sources.roc_files) |path| {
+            if (inDirectory(path, directory)) run.addFileInput(b.path(path));
+        }
+        for (sources.roc_references) |reference| {
+            if (!inDirectory(reference.from, directory)) continue;
+            switch (reference.kind) {
+                .file => run.addFileInput(b.path(reference.path)),
+                .package => for (directories.items) |listed| {
+                    if (std.mem.eql(u8, listed, reference.path)) break;
+                } else directories.append(b.allocator, reference.path) catch @panic("out of memory"),
+            }
+        }
+    }
+    // Without the compiler on PATH, the build fails when it runs instead.
+    const compiler_path = b.findProgram(&.{compiler}, &.{}) catch return;
+    run.addFileInput(.{ .cwd_relative = compiler_path });
+}
+
+// Builds the app at root with compiler and flags into a file called name,
+// again only when what it reads changes.
+fn addRocBuild(
+    b: *std.Build,
+    sources: SourceTree,
+    compiler: []const u8,
+    flags: []const []const u8,
+    root: []const u8,
+    name: []const u8,
+) std.Build.LazyPath {
+    const run = b.addSystemCommand(&.{ compiler, "build" });
+    run.addArgs(flags);
+    run.setName(b.fmt("{s} build {s}", .{ compiler, root }));
+    run.addFileArg(b.path(root));
+    addRocAppInputs(b, run, sources, compiler, root);
+    return run.addPrefixedOutputFileArg("--output=", name);
 }
 
 // Runs the development tool with args, every time: what it does reads and
@@ -230,7 +332,9 @@ pub fn build(b: *std.Build) void {
     // change, and the specs check behaviour, not speed; the e2e step drives
     // the specialized module the browser gets.
     const spec_step = b.step("spec", "Run the UI's specs natively");
-    const run_specs = addDevtoolCommand(b, devtool, "spec", &.{ "spec", roc_ui, nativeRocTarget(b) });
+    const spec_runner = addRocBuild(b, sources, roc_ui, &.{ "--specialize=no", b.fmt("--target={s}", .{nativeRocTarget(b)}) }, "ui/main.roc", "liton-specs");
+    const run_specs = addDevtoolCommand(b, devtool, "spec", &.{"spec"});
+    run_specs.addFileArg(spec_runner);
     spec_step.dependOn(&run_specs.step);
     test_step.dependOn(&run_specs.step);
 
@@ -240,39 +344,42 @@ pub fn build(b: *std.Build) void {
     // a long chat (200 messages with code blocks) takes seconds to open or
     // leave, against a third of a second. -Dfast trades that for build time.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const build_ui = addDevtoolCommand(b, devtool, "ui", &.{ "ui", roc_ui });
+    const build_ui = std.Build.Step.Run.create(b, "build the browser UI");
+    build_ui.addFileArg(devtool);
+    build_ui.addArgs(&.{ "ui", roc_ui });
+    const www = build_ui.addOutputDirectoryArg("www");
     build_ui.addFileArg(roc_signals.path("runtime.mjs"));
     build_ui.addFileArg(roc_signals.path("environment.mjs"));
     build_ui.addFileArg(roc_signals.path("worker.mjs"));
     if (fast) build_ui.addArg("--specialize=no");
-    ui_step.dependOn(&build_ui.step);
+    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
+    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
+    ui_step.dependOn(&install_ui.step);
 
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
-    const build_daemon = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build daemon/main.roc --output=zig-out/bin/liton-daemon", "sh", roc });
-    build_daemon.has_side_effects = true;
-    daemon_step.dependOn(&build_daemon.step);
+    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    daemon_step.dependOn(&install_daemon.step);
 
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.
     const cli_step = b.step("cli", "Build the command line client into zig-out/bin/liton");
-    const build_cli = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build cli/main.roc --output=zig-out/bin/liton", "sh", roc });
-    build_cli.has_side_effects = true;
-    cli_step.dependOn(&build_cli.step);
+    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "cli/main.roc", "liton"), "liton");
+    cli_step.dependOn(&install_cli.step);
 
     // The example provider outside the daemon, a server of /liton/v1 on the
     // daemon's platform and compiler.
     const example_step = b.step("example-provider", "Build the example provider into zig-out/bin/provider-echo");
-    const build_example = b.addSystemCommand(&.{ "sh", "-c", "mkdir -p zig-out/bin && \"$1\" build examples/provider-echo/main.roc --output=zig-out/bin/provider-echo", "sh", roc });
-    build_example.has_side_effects = true;
-    example_step.dependOn(&build_example.step);
+    const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
+    example_step.dependOn(&install_example.step);
 
     // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
     // LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
     const run_daemon = b.addSystemCommand(&.{"zig-out/bin/liton-daemon"});
     run_daemon.has_side_effects = true;
-    run_daemon.step.dependOn(&build_ui.step);
-    run_daemon.step.dependOn(&build_daemon.step);
+    run_daemon.step.dependOn(&install_ui.step);
+    run_daemon.step.dependOn(&install_daemon.step);
     run_step.dependOn(&run_daemon.step);
 
     // Drives the UI in headless Chrome (CHROME, or chromium on PATH) against
@@ -282,33 +389,33 @@ pub fn build(b: *std.Build) void {
     const run_e2e = b.addSystemCommand(&.{ "node", "e2e/journey.mjs" });
     run_e2e.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
     run_e2e.has_side_effects = true;
-    run_e2e.step.dependOn(&build_ui.step);
-    run_e2e.step.dependOn(&build_daemon.step);
-    run_e2e.step.dependOn(&build_cli.step);
+    run_e2e.step.dependOn(&install_ui.step);
+    run_e2e.step.dependOn(&install_daemon.step);
+    run_e2e.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_e2e.step);
     const run_protocol = b.addSystemCommand(&.{ "node", "e2e/protocol.mjs" });
     run_protocol.has_side_effects = true;
-    run_protocol.step.dependOn(&build_daemon.step);
-    run_protocol.step.dependOn(&build_cli.step);
+    run_protocol.step.dependOn(&install_daemon.step);
+    run_protocol.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_protocol.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
-    run_federation.step.dependOn(&build_daemon.step);
-    run_federation.step.dependOn(&build_example.step);
+    run_federation.step.dependOn(&install_daemon.step);
+    run_federation.step.dependOn(&install_example.step);
     e2e_step.dependOn(&run_federation.step);
     // Transcribes a fixture only with LITON_STT naming a running speech
     // engine (rig/speech/), and skips that check without one.
     const run_voice = b.addSystemCommand(&.{ "node", "e2e/voice.mjs" });
     run_voice.has_side_effects = true;
-    run_voice.step.dependOn(&build_daemon.step);
+    run_voice.step.dependOn(&install_daemon.step);
     e2e_step.dependOn(&run_voice.step);
     // Dictates in headless Chrome from a fake microphone playing the same
     // fixture, and skips the dictation without an engine.
     const run_voice_ui = b.addSystemCommand(&.{ "node", "e2e/voice-ui.mjs" });
     run_voice_ui.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
     run_voice_ui.has_side_effects = true;
-    run_voice_ui.step.dependOn(&build_ui.step);
-    run_voice_ui.step.dependOn(&build_daemon.step);
+    run_voice_ui.step.dependOn(&install_ui.step);
+    run_voice_ui.step.dependOn(&install_daemon.step);
     e2e_step.dependOn(&run_voice_ui.step);
 
     // Benchmarks liton against Paseo's web client in a private network
@@ -317,7 +424,7 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addSystemCommand(&.{ "node", "bench/bench.mjs" });
     run_bench.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
     run_bench.has_side_effects = true;
-    run_bench.step.dependOn(&build_ui.step);
-    run_bench.step.dependOn(&build_daemon.step);
+    run_bench.step.dependOn(&install_ui.step);
+    run_bench.step.dependOn(&install_daemon.step);
     bench_step.dependOn(&run_bench.step);
 }
