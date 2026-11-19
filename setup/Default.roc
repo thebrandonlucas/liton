@@ -1,7 +1,7 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
 ## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling
-## and Chat presets, Developer first, and the Pastoral, Hypr and Plain themes,
-## Pastoral first. The UI offers these presets and themes when its daemon
+## and Chat presets, Developer first, and the Pastoral, Hypr, Plain and
+## Neutral themes, Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
 import Setup
@@ -11,7 +11,7 @@ Default := [].{
 	## A Workbench of workspaces and their sessions, the chat following the
 	## focus with a tab beside it of the ticket opened, hidden until one is,
 	## and the changes and files of the workspace or session focused and the
-	## tickets, as tabs.
+	## tickets, as tabs, in the Neutral theme.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -29,7 +29,7 @@ Default := [].{
 			},
 			collapsed: [],
 			hidden: ["pane-8"],
-			theme: "",
+			theme: "Neutral",
 		},
 	}
 
@@ -52,6 +52,7 @@ Default := [].{
 						tile,
 			),
 			collapsed: [Right],
+			theme: "",
 		},
 	}
 
@@ -60,7 +61,7 @@ Default := [].{
 	chat : Setup.Preset
 	chat = {
 		name: "Chat",
-		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right] },
+		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right], theme: "" },
 	}
 
 	with_tiles : Grid.Layout, (Grid.Tile -> Grid.Tile) -> Grid.Layout
@@ -148,6 +149,26 @@ Default := [].{
 		motion: Reduced,
 	}
 
+	## Flat and neutral, as Paseo is: near-black opaque tiles side by side,
+	## the platform's font, and no focused edge, so no pane dims either.
+	neutral : Setup.Theme
+	neutral = {
+		name: "Neutral",
+		scheme: Dark,
+		accent: "#fafafa",
+		accent_to: "#fafafa",
+		text: "#fafafa",
+		muted: "#a1a5a4",
+		edge: 6,
+		edge_active: 6,
+		glass: { tint: "#1e2120", opacity: 100, blur: 0 },
+		background: Flat("#1b1d1c"),
+		gap: 0,
+		radius: 8,
+		fonts: { ui: Default.system_font, mono: Default.mono_font, display: Default.system_font },
+		motion: Normal,
+	}
+
 	## The platform's own faces, so no font is downloaded; JetBrains Mono where
 	## it is installed.
 	system_font : Str
@@ -157,5 +178,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral], default_theme: "Pastoral" }
 }

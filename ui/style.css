@@ -1,6 +1,6 @@
 /* The theme is custom properties on .liton (ui/Themes.roc): color-scheme,
    --accent, --accent-to, --text, --muted, --edge-alpha, --edge-active-alpha,
-   --glass-tint, --glass-alpha, --backdrop, --backdrop-bar, --sheet-alpha,
+   --unfocused-opacity, --glass-tint, --glass-alpha, --backdrop, --backdrop-bar, --sheet-alpha,
    --background, --gap, --radius, --font-ui, --font-mono, --font-display and
    --motion. All else derives from them here. */
 :root { color-scheme: light dark; }
@@ -252,7 +252,7 @@ kbd:empty { display: none; }
   opacity: 0; transition: opacity var(--slow) ease; }
 .pane.focused { border-color: transparent; }
 .pane.focused::after { opacity: var(--edge-active-alpha); }
-.grid.focusing .pane:not(.focused) { opacity: .86; }
+.grid.focusing .pane:not(.focused) { opacity: var(--unfocused-opacity); }
 .pane-header { display: flex; gap: 6px; align-items: center; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--edge); font: 12px/1.2 var(--font-mono); }
 .pane-heading { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; }
 .pane-title { font-weight: 600; color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

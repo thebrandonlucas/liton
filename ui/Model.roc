@@ -398,7 +398,7 @@ Model := [].{
 				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
-				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
+				theme: restored.map_ok(|loaded| loaded.theme) ?? Default.developer.snapshot.theme,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				focused_pane: "",
@@ -511,15 +511,15 @@ Model := [].{
 	advertise = |state, offered| { ..state, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
 	## Offers the presets and themes the daemon's setup offers, if any, and
-	## shows the preset it starts with, unless the layout is the one the
-	## browser kept.
+	## shows the preset it starts with, in its theme or else the setup's
+	## default, unless the layout is the one the browser kept.
 	set_up : State, Setup.Offered -> State
 	set_up = |state0, offered| {
 		state = if (offered.themes.is_empty()) state0 else { ..state0, themes: offered.themes, default_theme: offered.default_theme }
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets }, preset.name), kept_layout: Bool.True }
+			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: "" }, preset.name), kept_layout: Bool.True }
 		}
 	}
 
@@ -3239,12 +3239,13 @@ expect {
 	Model.with_tool_cards([call]).map(|shown| shown.card) == [Ok({ tool: "bash", input: "ls", state: Running, output: "", folded: "" })]
 }
 
-# A theme picked is saved with the layout; one never picked follows the
-# setup's default, and a preset naming none keeps the one shown.
+# A theme picked is saved with the layout; one never picked is the
+# Developer preset's, else the setup's default, and a preset naming none
+# keeps the one shown.
 expect {
 	picked = Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Tiling")
 	offered = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), themes: [Default.plain, Default.hypr], default_theme: "Hypr" })
-	Model.theme_shown(Model.initial("")).name == "Pastoral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
+	Model.theme_shown(Model.initial("")).name == "Neutral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session

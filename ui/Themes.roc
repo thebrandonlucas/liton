@@ -5,7 +5,8 @@ import setup.Setup
 Themes := [].{
 
 	## The root's style: the theme's scheme, colors, glass, background,
-	## spacing, fonts and motion. Without `glass`, the tiles keep their tint
+	## spacing, fonts and motion. A theme whose focused edge is no brighter
+	## than the others dims no pane either. Without `glass`, the tiles keep their tint
 	## but blur nothing, which spares the graphics card.
 	style : Setup.Theme, Bool -> Str
 	style = |theme, glass| {
@@ -25,6 +26,7 @@ Themes := [].{
 			("--muted", theme.muted),
 			("--edge-alpha", "${theme.edge.to_str()}%"),
 			("--edge-active-alpha", "${theme.edge_active.to_str()}%"),
+			("--unfocused-opacity", if (theme.edge_active > theme.edge) ".86" else "1"),
 			("--glass-tint", theme.glass.tint),
 			("--glass-alpha", "${theme.glass.opacity.to_str()}%"),
 			("--backdrop", backdrop(theme.glass.blur, "110")),
@@ -68,5 +70,5 @@ Themes := [].{
 
 expect {
 	style = Themes.style({ name: "Plain", scheme: Light, accent: "#3559e0", accent_to: "#3559e0", text: "#1d1d1b", muted: "#5f5f5a", edge: 18, edge_active: 80, glass: { tint: "#ffffff", opacity: 100, blur: 0 }, background: Flat("#f2f2ef"), gap: 8, radius: 8, fonts: { ui: "system-ui", mono: "monospace", display: "serif" }, motion: Reduced }, Bool.True)
-	style == "color-scheme: light; --accent: #3559e0; --accent-to: #3559e0; --text: #1d1d1b; --muted: #5f5f5a; --edge-alpha: 18%; --edge-active-alpha: 80%; --glass-tint: #ffffff; --glass-alpha: 100%; --backdrop: none; --backdrop-bar: none; --sheet-alpha: 100%; --background: #f2f2ef; --gap: 8px; --radius: 8px; --font-ui: system-ui; --font-mono: monospace; --font-display: serif; --motion: 0"
+	style == "color-scheme: light; --accent: #3559e0; --accent-to: #3559e0; --text: #1d1d1b; --muted: #5f5f5a; --edge-alpha: 18%; --edge-active-alpha: 80%; --unfocused-opacity: .86; --glass-tint: #ffffff; --glass-alpha: 100%; --backdrop: none; --backdrop-bar: none; --sheet-alpha: 100%; --background: #f2f2ef; --gap: 8px; --radius: 8px; --font-ui: system-ui; --font-mono: monospace; --font-display: serif; --motion: 0"
 }

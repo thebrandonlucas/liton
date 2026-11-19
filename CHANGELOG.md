@@ -87,6 +87,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Ctrl+K, or ⌘K in a text box too, opens a palette of the commands that apply now and the sessions, workspaces, rooms and tickets to go to, each with its keys. Type to filter it, pick with the arrows or Ctrl+N and Ctrl+P, and run with Enter or a click; what you ran lists first next time, and Escape or Ctrl+K again closes it.
 - ? outside a text box lists the keys and what each runs; ? again or Escape hides the list. The palette's Show or hide the keys shows it too.
 - On a Mac, the palette, the list of keys, Settings and the buttons' tooltips write keys as ⌘B and ⌥1; elsewhere as Ctrl+B and Alt+1.
+- A Neutral theme, flat and near-black like Paseo's, in the platform's font, with no glass, picture or bright edge and no dimming of the panes you aren't in. The Developer preset, and so a new browser, starts in it; pick Pastoral or another in Settings.
 
 ### Changed
 
