@@ -32,7 +32,7 @@ process.on("exit", () => fs.rmSync(scratch, { recursive: true, force: true }));
 check = "liton setup evaluates liton's Litonfile";
 await new Promise((resolve) => execFile(path.join(repo, "zig-out/bin/liton"), ["setup", path.join(repo, "Litonfile.roc")], { cwd: scratch }, (error, _, stderr) => (error ? fail(stderr) : resolve())));
 const setup = JSON.parse(fs.readFileSync(path.join(scratch, "liton.setup.json"), "utf8"));
-const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } };
+const review = { name: "Review", snapshot: { version: 4, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "changes", pinned: "", options: [] }] }] } } };
 fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify({ ...setup, presets: [...setup.presets, review] }));
 check = "the daemon answers";
 const daemon = spawn(path.join(repo, "zig-out/bin/liton-daemon"), {
@@ -222,7 +222,7 @@ try {
       await mouse("mouseMoved", start);
       await mouse("mousePressed", start);
       for (let step = 1; step <= 8; step++) await mouse("mouseMoved", { x: start.x + (end.x - start.x) * step / 8, y: start.y + (end.y - start.y) * step / 8 });
-      await until(`a drop target over ${to}`, () => page.evaluate(() => !!document.querySelector(".column.drop-into")));
+      await until(`a drop target over ${to}`, () => page.evaluate(() => !!document.querySelector(".tile.drop-into")));
       await mouse("mouseReleased", end);
     };
     const tabs = (slot) => page.evaluate((slot) => [...document.querySelectorAll(`[data-testid="slot-${slot}"] .tab-select`)].map((b) => b.textContent).join(), slot);

@@ -59,7 +59,7 @@ await answering(echoPort);
 await answering(peerPort);
 const interval = 1000;
 // A setup as `liton setup` writes one, with a preset of its own.
-const review = { name: "Review", snapshot: { version: 5, shell: "Tiling", collapsed: [], theme: "", columns: [{ id: "column-1", size: 1, tabbed: false, active: "pane-1", panes: [{ id: "pane-1", widget: "chat", pinned: "", options: [] }] }] } };
+const review = { name: "Review", snapshot: { version: 5, shell: "Tiling", collapsed: [], hidden: [], theme: "", grid: { columns: [1], rows: [1], tiles: [{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "chat", pinned: "", options: [] }] }] } } };
 const setup = { remotes: [{ name: "echo", url: `http://127.0.0.1:${echoPort}` }], transformers: ["attention", "needs-you"], presets: [review], default_preset: "Review", themes: [], default_theme: "" };
 fs.writeFileSync(path.join(scratch, "liton.setup.json"), JSON.stringify(setup));
 const main = start("liton-daemon", {

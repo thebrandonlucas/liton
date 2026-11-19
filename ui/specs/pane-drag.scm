@@ -1,54 +1,72 @@
-(test "Liton — dragging a tab or a pane's header moves it at once where it drops, and Escape or a drop outside leaves it"
+(test "Liton — dragging a tab or a pane's header shows the layout as if dropped where it is, drops it there, and Escape or a drop outside leaves it"
   (steps
-    ; A tab dragged over the chat drops into the main area, which shows it.
+    ; Held, the page reports the pointer; over the chat's tile, the main area
+    ; shows the Files tab already, the dragged pane faded, and a ghost of it
+    ; follows the pointer.
     (pointer-down (role button :name "Files"))
-    (pointer-move (role region :name "Chat"))
-    (expect-attr (test-id "slot-main") class "column slot slot-main tabbed drop-into")
-    (expect-attr (role region :name "Files") class "pane hidden dragged")
-    (pointer-up (role region :name "Chat"))
+    (expect-port-subscriptions "liton/drag/pointer" 1)
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
     (expect-text (test-id "show-main") "Chat · Files")
     (expect-text (test-id "show-right") "Changes · Tickets")
-    (expect-attr (test-id "slot-main") class "column slot slot-main tabbed")
+    (expect-attr (test-id "slot-main") class "tile slot slot-main tabbed drop-into")
+    (expect-attr (role region :name "Files") class "pane dragged")
+    (expect-text (test-id "drag-ghost") "Files")
+    ; Released there, it stays, and the page stops reporting.
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (pointer-up (role button :name "Files"))
+    (expect-port-subscriptions "liton/drag/pointer" 0)
+    (expect-absent (test-id "drag-ghost"))
+    (expect-text (test-id "show-main") "Chat · Files")
+    (expect-attr (test-id "slot-main") class "tile slot slot-main tabbed")
     (expect-attr (role button :name "Files") aria-pressed "true")
     ; Over a tab's left half, it goes before it.
     (pointer-down (role button :name "Files"))
-    (pointer-move (role button :name "Chat") :at 10 50)
-    (pointer-up (role button :name "Chat") :at 10 50)
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"pane-2\",\"across\":1000,\"down\":5000}")
     (expect-text (test-id "show-main") "Files · Chat")
-    ; The chat doesn't fit the left drawer, so nothing marks it.
-    (pointer-down (role button :name "Chat"))
-    (pointer-move (role region :name "Workspaces"))
-    (expect-attr (test-id "slot-left") class "column slot slot-left tabbed")
-    (pointer-up (role region :name "Workspaces"))
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"pane-2\",\"across\":1000,\"down\":5000}")
+    (pointer-up (role button :name "Files"))
     (expect-text (test-id "show-main") "Files · Chat")
-    ; Escape leaves a drag, and so does a drop outside the columns.
+    ; Over the bottom fifth of a drawer, a new tile opens below it, the main
+    ; area spanning both rows.
     (pointer-down (role button :name "Files"))
-    (pointer-move (role region :name "Changes"))
-    (expect-attr (test-id "slot-right") class "column slot slot-right tabbed drop-into")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-3\",\"tab\":\"\",\"across\":5000,\"down\":9500}")
+    (expect-text (test-id "show-main") "Chat")
+    (expect-visible (role button :name "Files"))
+    ; The chat doesn't fit the left drawer, so over it the layout is as it was.
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-1\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (expect-text (test-id "show-main") "Files · Chat")
+    ; Escape leaves the drag, and so does a release outside the tiles.
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-3\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (expect-text (test-id "show-right") "Changes · Tickets · Files")
     (press "Escape")
-    (expect-attr (test-id "slot-right") class "column slot slot-right tabbed")
-    (pointer-up (role region :name "Changes"))
+    (pointer-up (role button :name "Files"))
     (expect-text (test-id "show-right") "Changes · Tickets")
-    (pointer-down (role button :name "Files"))
-    (pointer-move (role region :name "Changes"))
-    (pointer-move (test-id "show-left"))
-    (pointer-up (test-id "show-left"))
     (expect-text (test-id "show-main") "Files · Chat")
-    ; In Tiling, a header drops before a stacked pane, or past a pane's edge
-    ; into a new column.
+    (expect-port-subscriptions "liton/drag/pointer" 0)
+    (pointer-down (role button :name "Files"))
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-3\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":600,\"y\":400,\"tile\":\"\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (pointer-up (role button :name "Files"))
+    (expect-text (test-id "show-main") "Files · Chat")
+    ; A press released without moving is a click.
+    (pointer-down (role button :name "Chat"))
+    (pointer-up (role button :name "Chat"))
+    (expect-port-subscriptions "liton/drag/pointer" 0)
+    ; In Tiling, a header drops into a tile's tabs, or by a tile's edge into
+    ; a new tile.
     (click (role button :name "Settings"))
     (click (role button :name "Tiling preset"))
     (click (role button :name "Settings"))
     (pointer-down (test-id "grip-pane-1"))
-    (pointer-move (role region :name "Chat") :at 50 25)
-    (expect-attr (role region :name "Chat") class "pane drop-before")
-    (pointer-up (role region :name "Chat") :at 50 25)
-    (expect-visible (role button :name "Sessions · Chat"))
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":600,\"y\":400,\"tile\":\"tile-2\",\"tab\":\"\",\"across\":5000,\"down\":5000}")
+    (pointer-up (test-id "grip-pane-1"))
+    (expect-visible (role button :name "Chat · Sessions"))
     (pointer-down (test-id "grip-pane-1"))
-    (pointer-move (role region :name "Capabilities") :at 95 50)
-    (expect-attr (role region :name "Capabilities") class "pane")
-    (pointer-up (role region :name "Capabilities") :at 95 50)
-    (expect-absent (role button :name "Sessions · Chat"))
-    (expect-visible (role button :name "Capabilities"))
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":600,\"y\":400,\"tile\":\"tile-3\",\"tab\":\"\",\"across\":9500,\"down\":5000}")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":600,\"y\":400,\"tile\":\"tile-3\",\"tab\":\"\",\"across\":9500,\"down\":5000}")
+    (pointer-up (test-id "grip-pane-1"))
+    (expect-absent (role button :name "Chat · Sessions"))
+    (expect-visible (role button :name "Sessions"))
   )
 )

@@ -8,7 +8,7 @@
     (click (role button :name "Hypr theme"))
     (expect-attr (role button :name "Hypr theme") aria-pressed "true")
     (expect-attr (role button :name "Pastoral theme") aria-pressed "false")
-    (expect-local-storage "liton.snapshot" "{\"collapsed\":[\"Right\"],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"sessions\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-2\",\"id\":\"column-2\",\"panes\":[{\"id\":\"pane-2\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":true},{\"active\":\"pane-3\",\"id\":\"column-3\",\"panes\":[{\"id\":\"pane-3\",\"options\":[],\"pinned\":\"\",\"widget\":\"changes\"}],\"size\":1,\"tabbed\":true}],\"hidden\":[],\"shell\":\"Workbench\",\"theme\":\"Hypr\",\"version\":7}")
+    (expect-local-storage "liton.snapshot" "{\"collapsed\":[\"Right\"],\"grid\":{\"columns\":[1,1,1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"sessions\"}],\"right\":1,\"top\":0},{\"active\":\"pane-2\",\"bottom\":1,\"id\":\"column-2\",\"left\":1,\"panes\":[{\"id\":\"pane-2\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":2,\"top\":0},{\"active\":\"pane-3\",\"bottom\":1,\"id\":\"column-3\",\"left\":2,\"panes\":[{\"id\":\"pane-3\",\"options\":[],\"pinned\":\"\",\"widget\":\"changes\"}],\"right\":3,\"top\":0}]},\"hidden\":[],\"shell\":\"Workbench\",\"theme\":\"Hypr\",\"version\":8}")
     (navigate "/")
     (click (role button :name "Settings"))
     (expect-attr (role button :name "Hypr theme") aria-pressed "true")

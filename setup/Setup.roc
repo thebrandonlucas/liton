@@ -1,30 +1,31 @@
 ## A setup, the layouts its presets hold and the themes it offers. A preset
 ## is a named snapshot, the JSON the UI saves of its layout, so loading one is
 ## loading a snapshot. Keys and options are still to come.
+import Grid
+
 Setup := [].{
 
-	## Where a column sits: in a Workbench's left drawer, main area or right
+	## Where a tile sits: in a Workbench's left drawer, main area or right
 	## drawer, or anywhere (`Free`) in Tiling, which takes every widget.
 	Slot : [Left, Main, Right, Free]
 
-	## How columns are laid out: freely in Tiling, or in a Workbench's three
+	## How tiles are laid out: freely in Tiling, or in a Workbench's three
 	## slots, the left drawer, the main area and the right drawer.
 	Shell : [Workbench, Tiling]
 
-	## `pinned` is the session a pane shows whatever the focus is, or "" to
-	## follow the focus. `options` holds the values set of its widget's options;
-	## the rest have their defaults.
-	Pane : { id : Str, widget : Str, pinned : Str, options : List({ key : Str, value : Str }) }
+	Pane : Grid.Pane
 
-	## Panes side by side make a row of columns. A column stacks its panes, or
-	## when `tabbed` shows only its `active` one. `size` weighs its width.
+	## A column of panes, as snapshots before version 8 laid them out side by
+	## side. It stacks its panes, or when `tabbed` shows only its `active`
+	## one. `size` weighs its width.
 	Column : { id : Str, size : U32, tabbed : Bool, active : Str, panes : List(Pane) }
 
-	## A layout as deterministic JSON others can load. `collapsed` are the
-	## Workbench drawers hidden, and `hidden` the ids of the panes it hides,
-	## which their column's ⋯ menus show again. `theme` names the theme it shows, or is "" for
-	## the setup's default; a preset's "" keeps the theme shown.
-	Snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot), hidden : List(Str), theme : Str }
+	## A layout as deterministic JSON others can load: its grid of tiles.
+	## `collapsed` are the Workbench drawers hidden, and `hidden` the ids of
+	## the panes it hides, which their tile's ⋯ menus show again. `theme`
+	## names the theme it shows, or is "" for the setup's default; a preset's
+	## "" keeps the theme shown.
+	Snapshot : { version : U32, shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str), theme : Str }
 
 	Preset : { name : Str, snapshot : Snapshot }
 
@@ -67,7 +68,26 @@ Setup := [].{
 
 	## The version of the snapshots this layout describes.
 	snapshot_version : U32
-	snapshot_version = 7
+	snapshot_version = 8
+
+	## The grid of columns side by side, as snapshots before version 8 laid
+	## them out: a tile for each column of tabs and each pane a column stacks,
+	## over rows cut where any column's stacked panes meet.
+	grid_of : List(Column) -> Grid.Layout
+	grid_of = |columns| {
+		counts = columns.map(|column| if (column.tabbed or column.panes.len() < 2) 1 else column.panes.len())
+		common = counts.fold(1, |product, count| product * count // divisor(product, count))
+		lines = List.repeat(0, common + 1).map_with_index(|_, at| at).keep_if(|at| counts.any(|count| (at * count) % common == 0))
+		row_of = |at| lines.find_first_index(|line| line == at) ?? 0
+		tiles = columns.map_with_index(|column, index| (column, index)).join_map(
+			|(column, index)|
+				match counts.get(index) ?? 1 {
+					1 => [{ id: column.id, left: index, top: 0, right: index + 1, bottom: lines.len() - 1, active: column.active, panes: column.panes }]
+					count => column.panes.map_with_index(|pane, at| { id: if (at == 0) column.id else "${column.id}-${pane.id}", left: index, top: row_of(at * common // count), right: index + 1, bottom: row_of((at + 1) * common // count), active: pane.id, panes: [pane] })
+				},
+		)
+		Grid.normalized({ columns: columns.map(|column| column.size.to_u64()), rows: lines.drop_first(1).map_with_index(|line, at| line - (lines.get(at) ?? 0)), tiles })
+	}
 
 	empty : Declared
 	empty = { remotes: [], transformers: [], presets: [], default_preset: "", themes: [], default_theme: "" }
@@ -132,25 +152,36 @@ Setup := [].{
 	to_json : Declared -> Str
 	to_json = |setup| Json.to_str(setup)
 
-	## Reads a setup. One evaluated before snapshots hid panes hides none; one
-	## from before setups held themes offers none, and its presets keep the
-	## theme shown.
+	## Reads a setup. One evaluated before snapshots were grids has its
+	## presets' columns laid out as a grid (`grid_of`); one from before they hid
+	## panes hides none; one from before setups held themes offers none, and
+	## its presets keep the theme shown.
 	from_json : Str -> Try(Declared, [Invalid])
 	from_json = |text| {
 		parsed : Try(Declared, _)
 		parsed = Json.parse(text)
-		before_hidden : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot), theme : Str } }), default_preset : Str, themes : List(Theme), default_theme : Str }, _)
-		before_hidden = Json.parse(text)
-		before_themes : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) } }), default_preset : Str }, _)
-		before_themes = Json.parse(text)
-		match (parsed, before_hidden, before_themes) {
-			(Ok(setup), _, _) => Ok(setup)
-			(_, Ok({ remotes, transformers, presets, default_preset, themes, default_theme }), _) => Ok({ remotes, transformers, default_preset, presets: presets.map(|{ name, snapshot }| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, columns: snapshot.columns, collapsed: snapshot.collapsed, hidden: [], theme: snapshot.theme } }), themes, default_theme })
-			(_, _, Ok({ remotes, transformers, presets, default_preset })) => Ok({ remotes, transformers, default_preset, presets: presets.map(|{ name, snapshot }| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, columns: snapshot.columns, collapsed: snapshot.collapsed, hidden: [], theme: "" } }), themes: [], default_theme: "" })
+		columns : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) } }), default_preset : Str }, _)
+		columns = Json.parse(text)
+		hiding : Try({ presets : List({ snapshot : { hidden : List(Str) } }) }, _)
+		hiding = Json.parse(text)
+		themed : Try({ presets : List({ snapshot : { theme : Str } }), themes : List(Theme), default_theme : Str }, _)
+		themed = Json.parse(text)
+		match (parsed, columns) {
+			(Ok(setup), _) => Ok(setup)
+			(_, Ok({ remotes, transformers, presets, default_preset })) => {
+				hidden = |index| hiding.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.hidden) ?? []) ?? []
+				theme = |index| themed.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.theme) ?? "") ?? ""
+				laid_out = presets.map_with_index(|{ name, snapshot }, index| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, grid: Setup.grid_of(snapshot.columns), collapsed: snapshot.collapsed, hidden: hidden(index), theme: theme(index) } })
+				Ok({ remotes, transformers, default_preset, presets: laid_out, themes: themed.map_ok(|saved| saved.themes) ?? [], default_theme: themed.map_ok(|saved| saved.default_theme) ?? "" })
+			}
 			_ => Err(Invalid)
 		}
 	}
 }
+
+## The least common multiple's partner: the greatest common divisor.
+divisor : U64, U64 -> U64
+divisor = |a, b| if (b == 0) a else divisor(b, a % b)
 
 ## `items` with `item` in place of the first that `same` picks, or after them.
 replaced : List(a), a, (a -> Bool) -> List(a)
@@ -161,7 +192,7 @@ replaced = |items, item, same|
 	}
 
 layout : Str -> Setup.Snapshot
-layout = |widget| { version: Setup.snapshot_version, shell: Tiling, columns: [{ id: "column-1", size: 1, tabbed: Bool.False, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }], collapsed: [], hidden: [], theme: "" }
+layout = |widget| { version: Setup.snapshot_version, shell: Tiling, grid: Grid.single({ id: "column-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }), collapsed: [], hidden: [], theme: "" }
 
 chat : Setup.Preset
 chat = { name: "Chat", snapshot: layout("chat") }
@@ -216,10 +247,11 @@ expect {
 expect {
 	setup = { remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
 	text = Setup.to_json(setup)
-	text == "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":7}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
+	text == "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"grid\":{\"columns\":[1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":8}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
 }
 
-# A setup evaluated before snapshots hid panes hides none.
+# A setup evaluated before snapshots were grids has its columns as a grid,
+# and one from before they hid panes hides none.
 expect {
 	setup = { remotes: [echo], transformers: ["attention"], presets: [{ ..chat, snapshot: { ..chat.snapshot, version: 5 } }], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
 	text = "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":5}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}"
@@ -232,3 +264,11 @@ expect {
 	Setup.from_json(text) == Ok({ ..Setup.empty, presets: [{ ..chat, snapshot: { ..chat.snapshot, version: 4 } }], default_preset: "Chat" })
 }
 expect Setup.from_json("{\"remotes\":[]}") == Err(Invalid)
+
+# Columns side by side are a grid's tiles, a column stacking panes a tile
+# for each, over rows cut where any column's panes meet.
+expect {
+	pane = |id| { id, widget: "chat", pinned: "", options: [] }
+	grid = Setup.grid_of([{ id: "c1", size: 1, tabbed: Bool.False, active: "a", panes: [pane("a"), pane("b")] }, { id: "c2", size: 2, tabbed: Bool.True, active: "d", panes: [pane("c"), pane("d")] }, { id: "c3", size: 1, tabbed: Bool.False, active: "e", panes: [pane("e"), pane("f"), pane("g")] }])
+	grid.columns == [1, 2, 1] and grid.rows == [2, 1, 1, 2] and grid.tiles.map(|tile| (tile.id, tile.active, tile.left, tile.top, tile.right, tile.bottom)) == [("c1", "a", 0, 0, 1, 2), ("c1-b", "b", 0, 2, 1, 4), ("c2", "d", 1, 0, 2, 4), ("c3", "e", 2, 0, 3, 1), ("c3-f", "f", 2, 1, 3, 3), ("c3-g", "g", 2, 3, 3, 4)]
+}
