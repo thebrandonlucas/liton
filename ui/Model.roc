@@ -102,6 +102,9 @@ Model := [].{
 		## Whether the pointer is coarse, a touch screen's, whose keyboard has
 		## no Shift+Enter: Enter in a composer then starts a new line.
 		coarse_pointer : Bool,
+
+		## Whether keys are written as a Mac's (⌘B) or as others' (Ctrl+B).
+		operating_system : Platform,
 		outbox : { serial : U64, request : Chat.Request },
 		sent : List(Sent),
 		attention : List(Attention.Item),
@@ -250,6 +253,8 @@ Model := [].{
 		tickets : TicketDesk.State,
 	}
 
+	Platform : [Mac, Other]
+
 	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
 	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
 
@@ -355,6 +360,7 @@ Model := [].{
 				drafts: [],
 				drafts_rewritten: { pane: "", count: 0 },
 				coarse_pointer: Bool.False,
+				operating_system: Other,
 				outbox: { serial: 0, request: ListSessions },
 				sent: [],
 				attention: [],

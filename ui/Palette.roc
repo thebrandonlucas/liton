@@ -22,11 +22,11 @@ Palette := [].{
 	entries = |state| {
 		entry = |key, title, group, keys| { key, title, group, keys, picked: Bool.False }
 		order = Commands.workspace_order(state)
-		workspace_keys = |workspace_id| order.find_first_index(|listed| listed == workspace_id).map_ok(|index| Keymap.text_of(Keymap.defaults, "workspace.${(index + 1).to_str()}")) ?? ""
+		workspace_keys = |workspace_id| order.find_first_index(|listed| listed == workspace_id).map_ok(|index| Keymap.text_of(state.operating_system, Keymap.defaults, "workspace.${(index + 1).to_str()}")) ?? ""
 		project_name = |project_id| state.workspaces.projects.find_first(|project| project.id == project_id).map_ok(|project| " in ${project.name}") ?? ""
 		Commands.all(state)
 			.keep_if(|command| !command.id.starts_with("workspace.") and command.id != "palette" and (command.applies)(state))
-			.map(|command| entry("command:${command.id}", command.title, command.group, Keymap.text_of(Keymap.defaults, command.id)))
+			.map(|command| entry("command:${command.id}", command.title, command.group, Keymap.text_of(state.operating_system, Keymap.defaults, command.id)))
 			.concat(state.sessions.map(|session| entry("session:${session.id}", session.title, "Session", "")))
 			.concat(state.workspaces.workspaces.map(|workspace| entry("workspace:${workspace.id}", workspace.name, "Workspace${project_name(workspace.project_id)}", workspace_keys(workspace.id))))
 			.concat(Palette.other_places(state))

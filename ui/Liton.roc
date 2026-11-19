@@ -44,13 +44,18 @@ Liton := [].{
 	glass_key : Str
 	glass_key = "liton.glass"
 
+	## "mac" on a Mac, whose keys are written ⌘B: ui/ports.mjs writes it as
+	## the page loads, as roc-signals's boot doesn't tell the platform.
+	platform_key : Str
+	platform_key = "liton.platform"
+
 	coarse_pointer_query : Str
 	coarse_pointer_query = "(pointer: coarse)"
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -259,7 +264,7 @@ Liton := [].{
 
 	## Opens or closes Settings.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+, or ⌘,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
 
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
@@ -379,15 +384,15 @@ Liton := [].{
 	## stylesheet's, as are those of every button of class `icon`.
 	drawer_toggle : State(ctx, Model.State), Model.Slot, Signal(ctx, Model.Counts) -> Elem(ctx)
 	drawer_toggle = |model, drawer, workspace_changes| {
-		key = if (drawer == Left) "Ctrl+B or ⌘B" else "Ctrl+E or ⌘E"
-		panes = model.signal().map(|state| Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| Model.shown_panes(state, column).map(|pane| Liton.label(state, pane))), " · "))
+		command = if (drawer == Left) "drawer.left" else "drawer.right"
+		panes = model.signal().map(|state| "${Str.join_with(state.columns.keep_if(|column| Model.slot_of(state, column.id) == drawer).join_map(|column| Model.shown_panes(state, column).map(|pane| Liton.label(state, pane))), " · ")} (${Keymap.text_of(state.operating_system, Keymap.defaults, command)})")
 		Engine.element(
 			"button",
 			[
 				Engine.attr("type", "button"),
 				Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"),
 				Html.aria_label(if (drawer == Left) "Left drawer" else "Right drawer"),
-				Engine.attr_s("title", panes.map(|names| "${names} (${key})")),
+				Engine.attr_s("title", panes),
 				Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer))),
 				Engine.on_click(model.update(|state| Model.toggle_drawer(state, drawer))),
 			],
@@ -408,6 +413,14 @@ Liton := [].{
 			Left => LeftTab
 			_ => Elsewhere
 		}
+	}
+
+	## What Settings says the keys do, written as the platform writes them.
+	keys_help : Model.Platform -> Str
+	keys_help = |system| {
+		key = |command| Keymap.text_of(system, Keymap.defaults, command)
+		heard = if (system == Mac) "in a text box too" else "outside a text box"
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## A side sheet that picks the preset, lists each slot's or column's panes
@@ -439,7 +452,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, Ctrl+K (or ⌘K) the palette of commands and places, ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p_s(model.signal().map(|state| Liton.keys_help(state.operating_system)), [Engine.class("help")]),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

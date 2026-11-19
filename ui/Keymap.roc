@@ -1,7 +1,7 @@
 ## The keys that run commands (ui/Commands.roc), as data: a key or a
 ## sequence of keys, Linear's `g` then `3`, for each command. A key is
-## named as `Keymap.name` names it: `Mod+b` for Ctrl+B or Cmd+B, `Alt+1`,
-## or the key itself, such as `g`, `?` or `Escape`.
+## named as `Keymap.name` names it: `Mod+b` for Ctrl+B or Cmd+B, `Alt+1`
+## (modifiers in the order Mod, Alt, Shift), or the key itself, such as `g`, `?` or `Escape`.
 import pf.Engine
 import Commands
 import Model
@@ -84,12 +84,17 @@ Keymap := [].{
 	paused : Model.State, U64 -> Model.State
 	paused = |state, serial| if (state.keys_typed.serial == serial) { ..state, keys_typed: { ..state.keys_typed, keys: [] } } else state
 
-	## How a binding's keys are written: Ctrl+B, Alt+1, G then 3.
-	text : List(Str) -> Str
-	text = |keys| {
+	## How a binding's keys are written on a platform: Ctrl+B, Alt+1, G
+	## then 3, or on a Mac ⌘B and ⌥1.
+	text : Model.Platform, List(Str) -> Str
+	text = |system, keys| {
+		modifiers = [("Mod+", "Ctrl+", "⌘"), ("Alt+", "Alt+", "⌥"), ("Shift+", "Shift+", "⇧")]
 		written = |key| {
-			(modifier, rest) = if (key.starts_with("Mod+")) ("Ctrl+", key.drop_prefix("Mod+")) else if (key.starts_with("Alt+")) ("Alt+", key.drop_prefix("Alt+")) else ("", key)
-			"${modifier}${if (rest.count_utf8_bytes() == 1) rest.with_ascii_uppercased() else rest}"
+			(prefix, rest) = modifiers.fold(
+				("", key),
+				|(so_far, left), (named, other, mac)| if (left.starts_with(named)) ("${so_far}${if (system == Mac) mac else other}", left.drop_prefix(named)) else (so_far, left),
+			)
+			"${prefix}${if (rest.count_utf8_bytes() == 1) rest.with_ascii_uppercased() else rest}"
 		}
 		Str.join_with(keys.map(written), " then ")
 	}
@@ -99,15 +104,15 @@ Keymap := [].{
 	listed = |bindings, state|
 		Commands.all(state).keep_oks(
 			|command|
-				match bindings.keep_if(|binding| binding.command == command.id).map(|binding| Keymap.text(binding.keys)) {
+				match bindings.keep_if(|binding| binding.command == command.id).map(|binding| Keymap.text(state.operating_system, binding.keys)) {
 					[] => Err(Unbound)
 					written => Ok({ title: command.title, keys: Str.join_with(written, " or ") })
 				},
 		)
 
 	## How the first binding of a command is written, "" for none.
-	text_of : List(Binding), Str -> Str
-	text_of = |bindings, id| bindings.find_first(|binding| binding.command == id).map_ok(|binding| Keymap.text(binding.keys)) ?? ""
+	text_of : Model.Platform, List(Binding), Str -> Str
+	text_of = |system, bindings, id| bindings.find_first(|binding| binding.command == id).map_ok(|binding| Keymap.text(system, binding.keys)) ?? ""
 }
 
 # 1 to 9, with Alt or without, show the presets in order, however the one
@@ -125,4 +130,4 @@ expect {
 	waiting.keys_typed.keys == ["g"] and Model.focused(Keymap.pressed(Keymap.defaults, waiting, "1"), [Workspace]) == Workspace("w1") and Keymap.pressed(Keymap.defaults, waiting, "Escape").keys_typed.keys == [] and Keymap.paused(waiting, waiting.keys_typed.serial).keys_typed.keys == [] and Model.preset_shown(Keymap.pressed(Keymap.defaults, waiting, "3"), "Tiling")
 }
 
-expect Keymap.text(["Mod+,"]) == "Ctrl+," and Keymap.text(["g", "3"]) == "G then 3" and Keymap.text(["Escape"]) == "Escape"
+expect Keymap.text(Other, ["Mod+,"]) == "Ctrl+," and Keymap.text(Mac, ["Mod+,"]) == "⌘," and Keymap.text(Mac, ["Alt+1"]) == "⌥1" and Keymap.text(Other, ["Mod+Shift+x"]) == "Ctrl+Shift+X" and Keymap.text(Mac, ["Mod+Shift+x"]) == "⌘⇧X" and Keymap.text(Other, ["g", "3"]) == "G then 3" and Keymap.text(Mac, ["Escape"]) == "Escape"
