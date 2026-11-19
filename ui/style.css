@@ -425,17 +425,19 @@ kbd:empty { display: none; }
 .reaction, .react { padding: 0 6px; border: 1px solid var(--edge); border-radius: 10px; font-size: 12px; }
 .reaction[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .reaction.pending { opacity: .6; }
-/* The reactions to make show as the pointer is over the message. */
-.react { border-style: dashed; color: var(--muted); opacity: 0; }
-.room-message:hover .react, .react:focus-visible { opacity: 1; }
-@media (hover: none) { .react { opacity: 1; } }
-.room-thread { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
-.room-thread button { padding: 0; border: none; background: none; color: var(--accent); font-size: 12px; }
+.room-reactions:not(:has(button)) { display: none; }
+/* A message's actions float over its top right as the pointer is over it,
+   or a key focuses in them; on a touch screen they sit under it. */
+.room-message { position: relative; border-radius: var(--small-radius); }
+.room-message:hover { background: var(--tool); box-shadow: 0 0 0 4px var(--tool); }
+.message-actions { position: absolute; top: -14px; right: 4px; z-index: 1; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--glass-deep); box-shadow: var(--shadow); opacity: 0; pointer-events: none; }
+.room-message:hover > .message-actions, .message-actions:focus-within { opacity: 1; pointer-events: auto; }
+.message-actions button { padding: 2px 7px; border: none; border-radius: 4px; background: none; font-size: 12px; }
+.message-actions button:hover { background: var(--selected); }
+@media (hover: none) { .message-actions { position: static; grid-column: 2; justify-self: start; opacity: 1; pointer-events: auto; box-shadow: none; } }
+.room-thread { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.room-thread button { padding: 0; border: none; background: none; color: var(--accent); font-size: 12px; font-weight: 600; }
 .room-last-reply { color: var(--muted); }
-/* Reply, to start a thread, shows as the pointer is over a message, but on a forum's posts. */
-.room:not(.forum) .start-thread { opacity: 0; }
-.room-message:hover .start-thread, .room .start-thread:focus-visible { opacity: 1; }
-@media (hover: none) { .room .start-thread { opacity: 1; } }
 .room-typing { margin: 0 12px 4px; color: var(--muted); font-size: 12px; }
 .room-message.pending { opacity: .6; }
 .room-message.failed .sent-status { color: var(--fail); }

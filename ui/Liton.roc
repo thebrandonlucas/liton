@@ -2364,8 +2364,9 @@ Liton := [].{
 
 	## A message: its author's avatar, who wrote it, a person or an agent,
 	## how long ago, and whether edited, all but under a message they wrote
-	## just before (`Model.RoomLine`'s `continued`); its text as Markdown, unless deleted; its reactions;
-	## and its thread's replies.
+	## just before (`Model.RoomLine`'s `continued`); its text as Markdown,
+	## unless deleted; its reactions; its actions, as the pointer is over
+	## it; and its thread's replies.
 	room_message : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.RoomLine) -> Elem(Row(PaneCtx, Model.RoomLine))
 	room_message = |model0, id, row| {
 		model = model0.lift_row()
@@ -2400,13 +2401,27 @@ Liton := [].{
 									model.lift_row().update_by(reaction.field(|shown| shown).map2(row.key().lift_row().map2(id.lift_row().lift_row(), |message_id, pane_id| { message_id, pane_id }), |shown, { message_id, pane_id }| { pane_id, message_id, emoji: shown.emoji, mine: shown.mine }), Model.toggle_reaction),
 								),
 						),
-						# The reactions no one has made yet, to make.
-						Engine.each(
-							row.field(|line| if (line.deleted or !line.status.is_empty()) [] else Liton.reaction_choices.drop_if(|emoji| line.reactions.any(|reaction| reaction.emoji == emoji))),
-							|emoji| emoji,
-							|choice| Html.button_s(choice.key(), [Engine.class("react"), Html.aria_label_s(choice.key().map(|emoji| "React with ${emoji}"))], model.lift_row().update_by(choice.key().map2(row.key().lift_row().map2(id.lift_row().lift_row(), |message_id, pane_id| { message_id, pane_id }), |emoji, { message_id, pane_id }| { pane_id, message_id, emoji, mine: Bool.False }), Model.toggle_reaction)),
-						),
 					],
+				),
+				# Over the message as the pointer is, or a key focuses in it:
+				# the reactions no one has made yet, Reply in its thread, and
+				# Copy link. Absolute, so hidden it leaves no gap.
+				Engine.when(
+					row.field(|line| !line.deleted and line.status.is_empty()),
+					||
+						Html.div(
+							"message-actions",
+							[
+								Engine.each(
+									row.field(|line| Liton.reaction_choices.drop_if(|emoji| line.reactions.any(|reaction| reaction.emoji == emoji))),
+									|emoji| emoji,
+									|choice| Html.button_s(choice.key(), [Engine.class("react"), Html.aria_label_s(choice.key().map(|emoji| "React with ${emoji}"))], model.lift_row().update_by(choice.key().map2(row.key().lift_row().map2(id.lift_row().lift_row(), |message_id, pane_id| { message_id, pane_id }), |emoji, { message_id, pane_id }| { pane_id, message_id, emoji, mine: Bool.False }), Model.toggle_reaction)),
+								),
+								Engine.when(row.field(|line| line.threaded), || Html.button("Reply", [Engine.class("reply"), Html.aria_label("Reply in the thread")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)), || Engine.text("")),
+								Html.button_s(row.key().map2(model.signal(), |message_id, state| if (state.copied == "link:${message_id}") "Copied" else "Copy link"), [Engine.class("copy-link"), Html.aria_label("Copy link")], model.update_by(row.key().map2(id.lift_row(), |message_id, pane_id| { message_id, pane_id }), Model.copy_link)),
+							],
+						),
+					|| Engine.text(""),
 				),
 				Conversation.sent_state(
 					{ status: row.field(|line| line.status), failed: row.field(|line| line.failed), test_id: "room-sent-status" },
@@ -2416,12 +2431,12 @@ Liton := [].{
 					],
 				),
 				Engine.when(
-					row.field(|line| line.threaded and line.status.is_empty()),
+					row.field(|line| line.threaded and line.status.is_empty() and line.replies > 0),
 					||
 						Html.div(
 							"room-thread",
 							[
-								Html.button_s(row.field(Liton.replies_text), [Engine.class_s(row.field(|line| if (line.replies == 0) "start-thread" else "")), Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
+								Html.button_s(row.field(Liton.replies_text), [Engine.test_id("room-replies")], model.update_by(row.key().map2(id.lift_row(), |root, pane_id| { pane_id, root }), Model.open_thread)),
 								Html.span_s(row.field(|line| line.last_reply), [Engine.class("room-last-reply")]),
 							],
 						),
@@ -2438,12 +2453,10 @@ Liton := [].{
 	reaction_choices : List(Str)
 	reaction_choices = ["+", "👀", "🎉"]
 
-	## A thread's replies and who replied, as "2 replies · Scout, Ada", or
-	## Reply to start one.
+	## A thread's replies and who replied, as "2 replies · Scout, Ada".
 	replies_text : Model.RoomLine -> Str
 	replies_text = |line|
 		match line.replies {
-			0 => "Reply"
 			1 => "1 reply · ${line.repliers}"
 			count => "${count.to_str()} replies · ${line.repliers}"
 		}

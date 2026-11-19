@@ -3043,6 +3043,11 @@ Model := [].{
 		reacting.fold(posted.reactions, Rooms.reacted).map(|reaction| { emoji: reaction.emoji, count: reaction.by.len(), mine: reaction.by.contains(me), pending: reacting.any(|asked| asked.emoji == reaction.emoji) })
 	}
 
+	## Copies a link to a message of the room a Room or Thread pane shows,
+	## as its context and id name it: `room:<room>/<message>`.
+	copy_link : State, { pane_id : Str, message_id : Str } -> State
+	copy_link = |state, { pane_id, message_id }| Model.copy(state, { key: "link:${message_id}", text: "${Context.to_str(Room(Model.room_pane(state, pane_id).room_id))}/${message_id}" })
+
 	## Reacts to a message in the room a Rooms pane opened with `emoji`, or
 	## takes back your reaction if `mine`, shown at once.
 	toggle_reaction : State, { pane_id : Str, message_id : Str, emoji : Str, mine : Bool } -> State
