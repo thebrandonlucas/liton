@@ -1960,13 +1960,14 @@ Liton := [].{
 	}
 
 	## A file of a Review pane as a card: its path, how it changed and by
-	## how many lines, over its diff. Top-level for the reason
+	## how many lines, over its diff. Its coming on screen and leaving it
+	## tells the file in view (`Model.card_seen`). Top-level for the reason
 	## `scope_picker` is.
 	review_card : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Model.ReviewCard) -> Elem(Row(PaneCtx, Model.ReviewCard))
 	review_card = |model, id, pane, card| {
 		file = card.field(|shown| shown.file)
 		Html.div_attrs(
-			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path)))],
+			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path))), Engine.on_seen({}, model.lift_row().set_value_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), |state, at, seen| Model.card_seen(state, at, seen.intersecting)))],
 			[
 				Html.div(
 					"review-card-header",

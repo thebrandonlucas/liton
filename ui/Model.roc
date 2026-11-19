@@ -2724,8 +2724,22 @@ Model := [].{
 		} else {
 			views = Model.panes(state).keep_if(|shown| shown.widget == "review" and !state.hidden.contains(shown.id))
 			shown = views.first().map_ok(|view| Model.jump_to(Model.activate_tab(state, view.id), Model.tile_of(state, view.id).map_ok(|tile| tile.id) ?? "", Push)) ?? state
-			{ ..shown, sub_focus: File(path), review_desk: ReviewDesk.scrolled_to(state.review_desk, views.map(|view| ReviewDesk.card_ref(view.id, path))) }
+			{ ..shown, sub_focus: File(path), review_desk: ReviewDesk.scrolled_to(state.review_desk, path, views.map(|view| ReviewDesk.card_ref(view.id, path))) }
 		}
+
+	## Takes a Review view's card of `path` coming on screen or leaving it:
+	## the file in view is the first on screen, once a file scrolled to is.
+	card_seen : State, { pane_id : Str, path : Str }, Bool -> State
+	card_seen = |state, { pane_id, path }, on_screen| {
+		files =
+			match Model.review_files(state, Model.pane(state, pane_id)) {
+				Files(listed) => listed.map(|file| file.path)
+				Loading => []
+			}
+		was = Model.review_focus(state)
+		{ desk, focused: in_view } = ReviewDesk.seen_card(state.review_desk, files, was, { path, on_screen })
+		{ ..state, review_desk: desk, sub_focus: if (in_view == was or in_view.is_empty()) state.sub_focus else File(in_view) }
+	}
 
 	## A file of a Review pane as a card: its diff's rows, annotated, or why
 	## it shows none (`note`).
