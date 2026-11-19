@@ -45,6 +45,11 @@ Model := [].{
 	## The part of the model a snapshot saves: deterministic JSON others can load.
 	Snapshot : Setup.Snapshot
 
+	## A surface of the deck, by its preset's name, as it was left: its
+	## layout and theme, and its own focus, so steering one doesn't move
+	## another.
+	Surface : { name : Str, snapshot : Snapshot, focus : List(Context.Id) }
+
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
 	## A message or permission answer sent, until its session's timeline shows
@@ -153,6 +158,12 @@ Model := [].{
 		## The surface last opened, by its preset's name, which Settings resets
 		## the layout to, "" for none: this browser's, as the layout is.
 		surface : Str,
+
+		## The surfaces this browser switches between, and the one shown by
+		## its place, as it was opened: the layout above is what it shows
+		## now (`Model.deck`).
+		deck : List(Surface),
+		deck_shown : U64,
 
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
@@ -379,7 +390,8 @@ Model := [].{
 
 	initial : Str -> State
 	initial = |saved| {
-		restored = Model.restore(saved)
+		kept = Model.restore_deck(saved)
+		restored = kept.map_ok(|surfaces_kept| surfaces_kept.first().map_ok(|surface| surface.snapshot) ?? Default.developer.snapshot)
 		Model.layout(
 			{
 				daemon: { id: "", name: "" },
@@ -425,7 +437,9 @@ Model := [].{
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),
-				surface: if (restored.is_ok()) "" else Default.setup.default_preset,
+				surface: kept.map_ok(|surfaces_kept| surfaces_kept.first().map_ok(|surface| surface.name) ?? "") ?? Default.setup.default_preset,
+				deck: kept ?? Model.deck_of(Default.setup.presets, Default.developer, Default.setup.deck),
+				deck_shown: 0,
 				git: [],
 				git_changes: [],
 				git_hunks: [],
@@ -484,6 +498,46 @@ Model := [].{
 	snapshot : State -> Snapshot
 	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
+	## The deck as it is now, the surface shown as the layout shows it.
+	deck : State -> List(Surface)
+	deck = |state| state.deck.map_with_index(|surface, index| if (index == state.deck_shown) { name: state.surface, snapshot: Model.snapshot(state), focus: state.focus } else surface)
+
+	## The deck as the browser keeps it, without the focus.
+	deck_snapshot : State -> Setup.Deck
+	deck_snapshot = |state| { version: Setup.snapshot_version, surfaces: Model.deck(state).map(|surface| { name: surface.name, snapshot: surface.snapshot }) }
+
+	## A new deck: the preset a client starts with, then those `names` name.
+	deck_of : List(Setup.Preset), Setup.Preset, List(Str) -> List(Surface)
+	deck_of = |presets, first, names|
+		names.keep_oks(|name| presets.find_first(|preset| preset.name == name and name != first.name)).prepend(first).map(|preset| { name: preset.name, snapshot: preset.snapshot, focus: [] })
+
+	## Shows the deck's surface at `index`, as it was left, keeping the
+	## one shown as it is.
+	show_surface : State, U64 -> State
+	show_surface = |state, index| {
+		kept = Model.deck(state)
+		match kept.get(index) {
+			Ok(surface) if index != state.deck_shown => {
+				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
+				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "" }
+			}
+			_ => state
+		}
+	}
+
+	## Reads the deck a browser kept, or a snapshot of one surface as a deck
+	## of it (`restore`), its name "". A surface that doesn't read is left out.
+	restore_deck : Str -> Try(List(Surface), [Invalid])
+	restore_deck = |text| {
+		decked : Try(Setup.Deck, _)
+		decked = Json.parse(text)
+		read = match decked {
+			Ok({ version, surfaces: kept }) if version >= 9 => kept.keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
+			_ => Model.restore(text).map_ok(|restored| [{ name: "", snapshot: restored }]) ?? []
+		}
+		if (read.is_empty()) Err(Invalid) else Ok(read.map(|kept| { name: kept.name, snapshot: kept.snapshot, focus: [] }))
+	}
+
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
 	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
@@ -532,7 +586,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (gridded, laid, third, second, first) {
-			(Ok(saved), _, _, _, _) if saved.version == 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
+			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
 			(_, Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, grid: Model.split_parts(version, Setup.grid_of(columns)), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, _, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, grid: Setup.grid_of(Model.with_options(columns)), collapsed: [], hidden: [] }))
 			(_, _, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
@@ -578,7 +632,10 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: "" }, preset.name), kept_layout: Bool.True }
+			Ok(preset) => {
+				opened = Model.deck_of(offered.presets, preset, offered.deck).keep_if(|surface| surface.name == preset.name or Model.offers(state, { name: surface.name, snapshot: surface.snapshot }))
+				{ ..Model.use_preset({ ..state, presets: offered.presets, theme: "", deck: opened, deck_shown: 0 }, preset.name), kept_layout: Bool.True }
+			}
 		}
 	}
 
@@ -4776,4 +4833,24 @@ expect {
 		and !Model.pane_visible(Model.close_workspace_tab(ticketed, Ticket("t1")), "pane-8")
 		and Model.focused(Model.open(first, Session("s3")), [Workspace]) == Workspace("w2")
 		and Model.workspace_rows(first, Model.pane(first, "pane-1")).map(|row| row.key) == ["group:p1", "workspace:w1", "s3"]
+}
+
+# A new browser's deck holds liton's: Developer, shown, then Rooms, Review
+# and Board, and a setup's starting preset then those its deck names.
+expect {
+	fresh = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), presets: [Default.developer, Default.rooms, Default.board], default_preset: "Board", deck: ["Developer", "Board", "Gone"] })
+	Model.initial("").deck.map(|surface| surface.name) == ["Developer", "Rooms", "Review", "Board"] and fresh.deck.map(|surface| surface.name) == ["Board", "Developer"] and fresh.surface == "Board"
+}
+
+# Each surface keeps its layout, theme and focus while another is shown,
+# and the deck reads back as it was saved; a snapshot of one surface reads
+# as a deck of it.
+expect {
+	state = { ..Model.initial(""), focus: [Session("a")] }
+	rooms = { ..Model.show_surface(state, 1), focus: [Room("r")] }
+	back = Model.show_surface(Model.use_theme(rooms, "Hypr"), 0)
+	saved = Json.to_str(Model.deck_snapshot(back))
+	restored = Model.initial(saved)
+	single = Model.initial(Json.to_str(Model.snapshot(state)))
+	rooms.surface == "Rooms" and rooms.focus == [Room("r")] and rooms.theme == "Sky" and back.focus == [Session("a")] and back.surface == "Developer" and Model.show_surface(back, 1).theme == "Hypr" and Model.show_surface(back, 1).focus == [Room("r")] and Json.to_str(Model.deck_snapshot(restored)) == saved and restored.deck.len() == 4 and single.deck.len() == 1 and Model.restore_deck("nonsense") == Err(Invalid)
 }

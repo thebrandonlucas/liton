@@ -190,6 +190,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A Graphite theme, dense and dark like Linear's, with opaque tiles a hairline apart and one indigo accent: the Board preset shows it, and Settings offers it for any layout.
 - What is loading, such as a chat's timeline, a room, Files, Changes, Review, Tickets and a ticket, shows a spinner rather than the word Loading, larger where a whole pane loads; screen readers still hear "Loading", and it stands still where the system asks for reduced motion.
 - A row opens wherever you click in it, not only on its title: a workspace or session, a room, a ticket in the list or on the board, a file in Files, Changes or Review, an inbox item and a review thread. Its + and ⋮, Join or Leave and other buttons still do only their own thing.
+- The browser keeps a deck of surfaces, each as you left it with its own theme and focus, as snapshot version 9. A layout saved before loads as a deck of it alone; a new browser starts with its setup's deck.
 
 ### Fixed
 

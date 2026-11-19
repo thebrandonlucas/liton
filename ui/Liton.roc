@@ -70,12 +70,13 @@ Liton := [].{
 		|boot| Engine.state(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
-	## The surface the browser kept, else the one the model starts with.
+	## The surface the browser kept, else the one the model starts with,
+	## where the deck kept doesn't name it, as one from before decks.
 	restored_surface : Model.State, Try(Str, _) -> Model.State
 	restored_surface = |state, kept|
 		match kept {
-			Ok(surface) => { ..state, surface }
-			Err(_) => state
+			Ok(surface) if state.surface.is_empty() => { ..state, surface }
+			_ => state
 		}
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -329,7 +330,7 @@ Liton := [].{
 			model.on_result(|state, clipboard, res| Model.copy_answered(state, clipboard.serial, res == Ok(Bool.True))),
 		),
 		Engine.watch_changes(
-			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
+			model.signal().map(|state| Json.to_str(Model.deck_snapshot(state))),
 			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
