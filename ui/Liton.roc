@@ -825,13 +825,19 @@ Liton := [].{
 								title = row.field(|surface| surface.title)
 								index = row.field(|surface| surface.index)
 								Html.div_attrs(
-									[Engine.class("settings-row deck-row"), Engine.attr_s("data-surface", title)],
+									[Engine.class("deck-entry"), Engine.attr_s("data-surface", title)],
 									[
-										Html.span_s(title, [Engine.class("settings-row-title")]),
-										Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
-										button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
-										button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),
-										button(title.map(|name| "Remove ${name}"), "Remove", rows.signal().map(|state| state.deck.len() < 2), rows.update_by(index, Model.remove_surface)),
+										Html.div(
+											"settings-row deck-row",
+											[
+												Html.span_s(title, [Engine.class("settings-row-title")]),
+												Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
+												button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
+												button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),
+												button(title.map(|name| "Remove ${name}"), "Remove", rows.signal().map(|state| state.deck.len() < 2), rows.update_by(index, Model.remove_surface)),
+											],
+										),
+										Liton.surface_parts(rows, title, index),
 									],
 								)
 							},
@@ -850,6 +856,52 @@ Liton := [].{
 			],
 		)
 	}
+
+	## A deck's surface's parts to check, folded: by the provider offering
+	## what each needs, with its role and what it needs, greyed where the
+	## daemon doesn't offer it. Unchecking one hides it there, and checking
+	## one shows it again or adds it where it fits.
+	surface_parts : State(Row(Ctx, a), Model.State), Signal(Row(Ctx, a), Str), Signal(Row(Ctx, a), U64) -> Elem(Row(Ctx, a))
+	surface_parts = |model, title, index|
+		Engine.element(
+			"details",
+			[Engine.class("deck-parts")],
+			[
+				Engine.element("summary", [Html.aria_label_s(title.map(|name| "Parts of ${name}"))], [Engine.text("Parts")]),
+				Engine.each(
+					index.map2(model.signal(), |at, state| Model.surface_parts(state, at)),
+					|part| part.key,
+					|row| {
+						rows = model.lift_row()
+						at = index.lift_row()
+						Html.div(
+							"deck-part-row",
+							[
+								Engine.when(
+									row.field(|part| part.heading),
+									|| Engine.element("h4", [Engine.class("deck-provider")], [Engine.text_s(row.field(|part| part.title))]),
+									||
+										Engine.element(
+											"label",
+											[Engine.class_s(row.field(|part| if (part.available) "deck-part" else "deck-part unavailable"))],
+											[
+												Html.checkbox(
+													row.field(|part| part.title).map2(title.lift_row(), |part, surface| "${part} on ${surface}"),
+													row.field(|part| part.shown),
+													[Html.boolean("disabled", row.field(|part| !part.available and !part.shown))],
+													rows.set_value_by(row.key().map2(at, |widget, surface| (widget, surface)), |state, (widget, surface), checked| Model.show_part(state, { index: surface, widget, shown: checked })),
+												),
+												Html.span_s(row.field(|part| part.title), [Engine.class("deck-part-title")]),
+												Html.span_s(row.field(|part| part.detail), [Engine.class("help")]),
+											],
+										),
+								),
+							],
+						)
+					},
+				),
+			],
+		)
 
 	## The surface open: the surfaces to open instead, those the daemon
 	## offers what they need; its tiles' panes to swap, move, remove or set

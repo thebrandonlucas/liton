@@ -588,6 +588,81 @@ Model := [].{
 		}
 	}
 
+	## Changes the deck's surface at `index` as `change` changes the layout
+	## shown, without showing it.
+	on_surface : State, U64, (State -> State) -> State
+	on_surface = |state, index, change|
+		if index == state.deck_shown {
+			change(state)
+		} else {
+			returned = Model.show_surface(change(Model.show_surface(state, index)), state.deck_shown)
+			{ ..returned, deck_slide: state.deck_slide, url_hash: state.url_hash, jump: state.jump, active_tile: state.active_tile, focused_pane: state.focused_pane, sub_focus: state.sub_focus }
+		}
+
+	## The parts the deck's surface at `index` may show, a heading over
+	## those of each provider offering what they need: the first that
+	## offers all of it, else a transformer, else liton for those needing
+	## nothing; then those the daemon doesn't offer what they need, with
+	## what is missing. Each is shown while a pane of it shows, neither
+	## hidden nor in a drawer hidden.
+	surface_parts : State, U64 -> List({ key : Str, heading : Bool, title : Str, detail : Str, shown : Bool, available : Bool })
+	surface_parts = |state, index| {
+		laid = Model.deck(state).get(index).map_ok(|surface| surface.snapshot) ?? Model.snapshot(state)
+		shown = |widget| laid.grid.tiles.any(|tile| !laid.collapsed.contains(Model.slot_in(laid.shell, laid.grid, tile.id)) and tile.panes.any(|listed| listed.widget == widget.id and !laid.hidden.contains(listed.id)))
+		offered_by = |widget|
+			match (Widgets.missing(widget, state.capabilities), state.providers.find_first(|provider| widget.needs.all(|need| provider.capabilities.contains(need)))) {
+				([_, ..], _) => "Not offered"
+				(_, Ok(provider)) => provider.name
+				_ if widget.needs.is_empty() => "liton"
+				_ => state.transformers.find_first(|transformer| widget.needs.contains(transformer.offers)).map_ok(|transformer| transformer.name) ?? "Several providers"
+			}
+		found = Widgets.all.fold([], |so_far, widget| if (so_far.contains(offered_by(widget))) so_far else so_far.append(offered_by(widget)))
+		groups = found.drop_if(|group| group == "Not offered").concat(found.keep_if(|group| group == "Not offered"))
+		role = |widget|
+			match widget.role {
+				Navigator => "Navigator"
+				View => "View"
+				Inspector => "Inspector"
+			}
+		needs = |widget|
+			match (widget.needs, Widgets.missing(widget, state.capabilities)) {
+				([], _) => "needs nothing"
+				(_, []) => "needs ${Str.join_with(widget.needs.map(Capability.to_str), ", ")}"
+				(_, lacking) => "needs ${Str.join_with(lacking.map(Capability.to_str), ", ")}, which no provider offers"
+			}
+		groups.join_map(
+			|group| {
+				parts = Widgets.all.keep_if(|widget| offered_by(widget) == group).map(|widget| { key: widget.id, heading: Bool.False, title: widget.title, detail: "${role(widget)} · ${needs(widget)}", shown: shown(widget), available: group != "Not offered" })
+				parts.prepend({ key: "group:${group}", heading: Bool.True, title: group, detail: "", shown: Bool.False, available: Bool.True })
+			},
+		)
+	}
+
+	## Shows a part on the deck's surface at `index`, its panes hidden
+	## there shown again, or else one added where it fits; or hides its
+	## panes, in a Workbench, else closes them.
+	show_part : State, { index : U64, widget : Str, shown : Bool } -> State
+	show_part = |state, { index, widget, shown }|
+		Model.on_surface(
+			state,
+			index,
+			|laid| {
+				holding = laid.grid.tiles.join_map(|tile| tile.panes.keep_if(|listed| listed.widget == widget).map(|listed| (listed.id, tile.id)))
+				if !shown {
+					holding.fold(laid, |so_far, (pane_id, _)| if (so_far.shell == Workbench) Model.hide_pane(so_far, pane_id) else Model.close_pane(so_far, pane_id))
+				} else {
+					match holding.first() {
+						Ok((pane_id, tile_id)) => Model.show_pane({ ..laid, collapsed: laid.collapsed.drop_if(|slot| slot == Model.slot_of(laid, tile_id)) }, pane_id)
+						Err(_) => {
+							added = Model.add_pane(laid, widget)
+							fits = Widgets.find(widget).slots.first() ?? Main
+							if (added.shell == Workbench and fits != Main) Model.move_to_slot(added, "added-${laid.next_id.to_str()}", fits) else added
+						}
+					}
+				}
+			},
+		)
+
 	## Names the surface shown in the URL again once its place changed,
 	## with the panel the URL names.
 	with_deck_hash : State -> State
@@ -5010,4 +5085,14 @@ expect {
 	removed = Model.remove_surface(moved, 0)
 	alone = [1, 1, 1].fold(removed, |so_far, _| Model.remove_surface(so_far, 0))
 	names(moved) == ["Rooms", "Developer", "Review", "Board"] and moved.deck_shown == 0 and moved.url_hash == "#deck=1" and Model.move_surface(moved, 0, Up) == moved and names(removed) == ["Developer", "Review", "Board"] and removed.surface == "Developer" and names(alone) == ["Board"] and names(Model.add_surface(alone, "Inbox")) == ["Board", "Inbox"] and Model.add_surface(alone, "Gone") == alone
+}
+
+# A surface's parts, by the provider offering what they need, each shown
+# while it shows there; hiding one there leaves the surface shown as it was.
+expect {
+	state = Model.advertise(Model.initial(""), { protocol: 1, daemon: { id: "liton", name: "liton" }, providers: [{ id: "mock", name: "Mock", capabilities: [{ name: "chat", version: 1 }, { name: "rooms", version: 1 }] }], transformers: [], topics: [] })
+	parts = Model.surface_parts(state, 1)
+	rooms = |shown| Model.surface_parts(shown, 1).find_first(|part| part.key == "rooms").map_ok(|part| part.shown) ?? Bool.False
+	hidden = Model.show_part(state, { index: 1, widget: "rooms", shown: Bool.False })
+	parts.first().map_ok(|part| part.title) == Ok("Mock") and parts.any(|part| part.key == "group:Not offered") and rooms(state) and !rooms(hidden) and Model.snapshot(hidden) == Model.snapshot(state) and hidden.deck_shown == 0 and rooms(Model.show_part(hidden, { index: 1, widget: "rooms", shown: Bool.True }))
 }
