@@ -1,0 +1,27 @@
+(test "Liton — on a touch screen, a swipe across the deck's strip, or across a trackpad with two fingers goes to the next or previous surface; a tap is a click, and a swipe over Settings does nothing"
+  (setup (initial-media "(pointer: coarse)" true))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"rooms\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (expect-attr (role button :name "Surface 1: Developer") aria-pressed "true")
+    ; Toward the strip's start, the next; toward its end, the previous.
+    (pointer-down (test-id "deck") :at 80 50)
+    (pointer-up (test-id "deck") :at 30 50)
+    (expect-attr (role button :name "Surface 2: Rooms") aria-pressed "true")
+    (pointer-down (test-id "deck") :at 20 50)
+    (pointer-up (test-id "deck") :at 70 50)
+    (expect-attr (role button :name "Surface 1: Developer") aria-pressed "true")
+    (pointer-down (test-id "deck") :at 50 50)
+    (pointer-up (test-id "deck") :at 45 50)
+    (expect-attr (role button :name "Surface 1: Developer") aria-pressed "true")
+    ; A trackpad's swipe, as the page reports it.
+    (emit-port "liton/deck/swipe" "\"previous\"")
+    (expect-attr (role button :name "Surface 4: Board") aria-pressed "true")
+    (emit-port "liton/deck/swipe" "\"next\"")
+    (expect-attr (role button :name "Surface 1: Developer") aria-pressed "true")
+    (click (role button :name "Settings"))
+    (emit-port "liton/deck/swipe" "\"next\"")
+    (click (role button :name "Close settings"))
+    (expect-attr (role button :name "Surface 1: Developer") aria-pressed "true")
+  )
+)

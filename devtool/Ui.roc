@@ -17,7 +17,8 @@ Ui := [].{
 			name = Path.display(Path.filename(Path.utf8(file)) ?? Path.utf8(file))
 			Path.copy!(Path.utf8(file), Path.utf8("${output}/${name}"))?
 		}
-		Path.copy_dir_with!(Path.utf8("ui/backgrounds"), Path.utf8("${output}/backgrounds"), { symlinks: Follow, destination: Merge })
+		Path.copy_dir_with!(Path.utf8("ui/backgrounds"), Path.utf8("${output}/backgrounds"), { symlinks: Follow, destination: Merge })?
+		Path.copy_dir_with!(Path.utf8("ui/previews"), Path.utf8("${output}/previews"), { symlinks: Follow, destination: Merge })
 	}
 
 	## The UI's .scm specs, in `runner`, the native runner roc-signals builds

@@ -35,6 +35,7 @@ Commands := [].{
 			.concat(Commands.layout)
 			.concat(Commands.review)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Open the ${preset.name} surface", group: "Surfaces", applies: |shown| Model.offers(shown, preset), run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+			.concat(Commands.deck(state))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
 	}
 
@@ -91,6 +92,19 @@ Commands := [].{
 			.concat(TicketDesk.labels(state.tickets).map(|label| filter("label.${label}", "labelled ${label}", |kept| { ..kept, label })))
 			.concat(statuses.map(|status| { id: "ticket.status.${status.id}", title: "Set status to ${status.name}", group: "Ticket", applies: acted_on, run: |shown| Model.set_statuses(shown, status) }))
 			.concat(people.map(|person| { id: "ticket.assign.${person.id}", title: if (assigned(state, person.id)) "Unassign ${person.name}" else "Assign to ${person.name}", group: "Ticket", applies: acted_on, run: |shown| Model.assign_all(shown, person.id, !assigned(shown, person.id)) }))
+	}
+
+	## The deck's commands: go to the next or previous surface, round from
+	## its end, to one by its place, or pick one in the palette.
+	deck : Model.State -> List(Command)
+	deck = |state| {
+		several = |shown| shown.deck.len() > 1
+		[
+			{ id: "deck.next", title: "Go to the next surface", group: "Deck", applies: several, run: |shown| Model.step_surface(shown, Next) },
+			{ id: "deck.previous", title: "Go to the previous surface", group: "Deck", applies: several, run: |shown| Model.step_surface(shown, Previous) },
+			{ id: "deck.go", title: "Go to surface…", group: "Deck", applies: |shown| several(shown) and !shown.palette.open, run: |shown| Commands.open_palette_at(shown, "Go to surface ") },
+		]
+			.concat(Model.deck_titles(state).map(|surface| { id: "deck.${(surface.index + 1).to_str()}", title: "Go to surface ${(surface.index + 1).to_str()}: ${surface.title}", group: "Deck", applies: |shown| surface.index != shown.deck_shown and surface.index < shown.deck.len(), run: |shown| Model.show_surface(shown, surface.index) }))
 	}
 
 	## The layout's commands, each for a side: focus, move the pane focused,

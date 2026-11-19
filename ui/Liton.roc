@@ -76,12 +76,13 @@ Liton := [].{
 		|boot| Engine.state(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
-	## The surface the browser kept, else the one the model starts with.
+	## The surface the browser kept, else the one the model starts with,
+	## where the deck kept doesn't name it, as one from before decks.
 	restored_surface : Model.State, Try(Str, _) -> Model.State
 	restored_surface = |state, kept|
 		match kept {
-			Ok(surface) => { ..state, surface }
-			Err(_) => state
+			Ok(surface) if state.surface.is_empty() => { ..state, surface }
+			_ => state
 		}
 
 	## The theme is custom properties on the root (`Themes.style`), which the
@@ -136,12 +137,13 @@ Liton := [].{
 						# a narrower screen, as a thread opened from it shows there.
 						Html.div_attrs(
 							[
-								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}")),
+								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}${Liton.slide_class(state)}")),
 								Engine.attr_s("style", laid.map(Liton.grid_style)),
 								Engine.test_id("grid"),
 							],
 							[Engine.each(laid.map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, laid, row))],
 						),
+						Liton.deck_indicator(model),
 						Liton.ghost(model, drag),
 						Liton.settings(model),
 						Liton.toast(model),
@@ -158,6 +160,62 @@ Liton := [].{
 			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
+
+	## The class sliding the surface the deck switched to in from the side
+	## it lies on, a new animation for each switch (style.css).
+	slide_class : Model.State -> Str
+	slide_class = |state|
+		if (state.deck_slide.serial == 0) "" else " deck-in-${if (state.deck_slide.toward == Next) "next" else "previous"}-${(state.deck_slide.serial % 2).to_str()}"
+
+	## How far across the zone under it a pointer is, in ten thousandths.
+	across_zone : Engine.Pointer -> U16
+	across_zone = |pointer|
+		match pointer.at {
+			In({ x, .. }) => x
+			Outside => 5000
+		}
+
+	## The deck's surfaces, by name, the one shown pressed, while it holds
+	## more than one: a click goes to one, and a swipe across them, as a
+	## phone's, to the next or previous.
+	deck_indicator : State(Ctx, Model.State) -> Elem(Ctx)
+	deck_indicator = |model|
+		Engine.when(
+			model.signal().map(|state| state.deck.len() > 1),
+			||
+				Engine.element(
+					"nav",
+					[
+						Engine.class("deck"),
+						Html.aria_label("Deck"),
+						Engine.test_id("deck"),
+						# A pointer zone on a touch screen only, so a mouse's click is in none.
+						Html.zone_s(model.signal().map(|state| if (state.coarse_pointer) "deck" else "")),
+						Engine.on_pointer(Down, model.set_value(|state, pointer| { ..state, deck_press: Down({ pointer: pointer.id, across: Liton.across_zone(pointer) }) })),
+						Html.on_pointer_up(model.set_value(|state, pointer| Model.deck_swiped(state, { pointer: pointer.id, across: Liton.across_zone(pointer) }))),
+						Html.on_pointer_cancel(model.set_value(|state, _| { ..state, deck_press: Up })),
+					],
+					[
+						Engine.each(
+							model.signal().map(Model.deck_titles),
+							|surface| surface.index.to_str(),
+							|row|
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.class("deck-surface"),
+										Html.aria_label_s(row.field(|surface| "Surface ${(surface.index + 1).to_str()}: ${surface.title}")),
+										Html.flag("aria-pressed", row.field(|surface| surface.shown)),
+										Engine.on_click(model.lift_row().update_by(row.field(|surface| surface.index), Model.show_surface)),
+									],
+									[Engine.text_s(row.field(|surface| surface.title))],
+								),
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
 
 	## While a pane is held, the page reports the pointer (`Drag.pointer`):
 	## its moves drag the pane, and its release drops it.
@@ -240,10 +298,8 @@ Liton := [].{
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
 					# The setup's presets and themes, which a daemon may leave out.
-					set_up : Try({ setup : Setup.Offered }, _)
-					set_up = Json.parse(text)
 					match decoded {
-						Ok(offered) => Model.set_up(Model.advertise(state, offered), set_up.map_ok(|manifest| manifest.setup) ?? Setup.offered(Setup.empty))
+						Ok(offered) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
 						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
@@ -337,7 +393,7 @@ Liton := [].{
 			model.on_result(|state, clipboard, res| Model.copy_answered(state, clipboard.serial, res == Ok(Bool.True))),
 		),
 		Engine.watch_changes(
-			model.signal().map(|state| Json.to_str(Model.snapshot(state))),
+			model.signal().map(|state| Json.to_str(Model.deck_snapshot(state))),
 			|text| [Engine.command(StorageSet(Liton.snapshot_key, text))],
 			Engine.ignore({}),
 		),
@@ -345,6 +401,34 @@ Liton := [].{
 		Engine.watch(model.signal().map(|state| state.surface), |surface| [Engine.command(StorageSet(Liton.surface_key, surface))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.review_desk.viewed), |viewed| [Engine.command(StorageSet(ReviewDesk.viewed_key, Json.to_str(viewed)))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
+		# A trackpad's swipe across the page goes to the deck's next or
+		# previous surface, while nothing covers it.
+		Engine.watch(
+			model.signal().map(|state| state.deck.len() > 1),
+			|several| if (several) [Ports.swipe.ask({})] else [],
+			model.on_result(
+				|state, _, res|
+					match res {
+						_ if state.show_settings or state.palette.open => state
+						Ok("next") => Model.step_surface(state, Next)
+						Ok("previous") => Model.step_surface(state, Previous)
+						_ => state
+					},
+			),
+		),
+		# Another window's change to the deck, such as a surface added there,
+		# shows here too.
+		Engine.watch(
+			Engine.const({}),
+			|_| [Engine.storage_changes(Liton.snapshot_key)],
+			model.on_result(
+				|state, _, res|
+					match res {
+						Ok(Set(text)) => Model.deck_changed(state, text)
+						_ => state
+					},
+			),
+		),
 	]
 
 	## A call, its JSON `body` naming the capability and holding the request.
@@ -532,7 +616,7 @@ Liton := [].{
 	keys_help = |system| {
 		key = |command| Keymap.text_of(system, Keymap.defaults, command)
 		heard = if (system == Mac) "in a text box too" else "outside a text box"
-		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. D then ] or [ goes to the deck's next or previous surface, and D then 1 to 9 to that one, as a swipe across a trackpad with two fingers, or across the deck's strip on a phone, goes to the next or previous: three fingers are the system's, which a page can't hear. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## Settings, a page of its own: a rail of its sections, App's, the
@@ -559,7 +643,7 @@ Liton := [].{
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
 								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))])
-								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
+								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
 							"settings-detail",
@@ -576,6 +660,7 @@ Liton := [].{
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
+								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
 							],
@@ -592,7 +677,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -726,6 +811,123 @@ Liton := [].{
 					[name, _, ..] => if (found.any(|remote| remote.name == name)) found.map(|remote| if (remote.name == name) { ..remote, count: remote.count + 1 } else remote) else found.append({ name, count: 1 })
 					_ => found
 				},
+		)
+
+	## The deck: its surfaces in order, each to move toward its start or
+	## end or to remove, and the surfaces the daemon offers to add.
+	deck_section : State(Ctx, Model.State) -> Elem(Ctx)
+	deck_section = |model| {
+		button = |named, text, disabled, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class("deck-move"), Html.aria_label_s(named), Engine.attr_s("title", named), Html.boolean("disabled", disabled), Engine.on_click(handler)], [Engine.text(text)])
+		Html.div(
+			"settings-section",
+			[
+				Html.p("The surfaces you switch between, in this order. Each window shows one, which its URL names, so a window on another monitor can show another.", "help"),
+				Liton.settings_card(
+					"Surfaces",
+					[
+						Engine.each(
+							model.signal().map(Model.deck_titles),
+							|surface| surface.index.to_str(),
+							|row| {
+								rows = model.lift_row()
+								title = row.field(|surface| surface.title)
+								index = row.field(|surface| surface.index)
+								Html.div_attrs(
+									[Engine.class("deck-entry"), Engine.attr_s("data-surface", title)],
+									[
+										Html.div(
+											"settings-row deck-row",
+											[
+												Liton.thumbnail(row.field(|surface| surface.preview), row.field(|surface| surface.offered)),
+												Html.span_s(title, [Engine.class("settings-row-title")]),
+												Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
+												button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
+												button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),
+												button(title.map(|name| "Remove ${name}"), "Remove", rows.signal().map(|state| state.deck.len() < 2), rows.update_by(index, Model.remove_surface)),
+											],
+										),
+										Liton.surface_parts(rows, title, index),
+									],
+								)
+							},
+						),
+					],
+				),
+				Liton.settings_card(
+					"Add a surface",
+					[
+						Html.div(
+							"choices settings-row",
+							[
+								Engine.each(
+									model.signal().map(Model.surfaces),
+									|preset| preset.name,
+									|row|
+										Engine.element(
+											"button",
+											[Engine.attr("type", "button"), Engine.class("deck-add"), Html.aria_label_s(row.key().map(|name| "Add ${name}")), Engine.on_click(model.lift_row().update_by(row.key(), Model.add_surface))],
+											[Liton.thumbnail(row.key().map(|name| Model.preview("surface", name)), Engine.const(Bool.True)), Engine.text_s(row.key())],
+										),
+								),
+							],
+						),
+					],
+				),
+			],
+		)
+	}
+
+	## A static thumbnail of a surface or part, greyed where the daemon
+	## doesn't offer what it needs. An animated one, a short loop of it in
+	## use, would take its place on hover; none is made yet.
+	thumbnail : Signal(ctx, Str), Signal(ctx, Bool) -> Elem(ctx)
+	thumbnail = |url, offered| Engine.element("img", [Engine.attr_s("src", url), Engine.attr("alt", ""), Engine.attr("loading", "lazy"), Engine.class_s(offered.map(|available| if (available) "preview" else "preview unavailable"))], [])
+
+	## A deck's surface's parts to check, folded: by the provider offering
+	## what each needs, with its role and what it needs, greyed where the
+	## daemon doesn't offer it. Unchecking one hides it there, and checking
+	## one shows it again or adds it where it fits.
+	surface_parts : State(Row(Ctx, a), Model.State), Signal(Row(Ctx, a), Str), Signal(Row(Ctx, a), U64) -> Elem(Row(Ctx, a))
+	surface_parts = |model, title, index|
+		Engine.element(
+			"details",
+			[Engine.class("deck-parts")],
+			[
+				Engine.element("summary", [Html.aria_label_s(title.map(|name| "Parts of ${name}"))], [Engine.text("Parts")]),
+				Engine.each(
+					index.map2(model.signal(), |at, state| Model.surface_parts(state, at)),
+					|part| part.key,
+					|row| {
+						rows = model.lift_row()
+						at = index.lift_row()
+						Html.div(
+							"deck-part-row",
+							[
+								Engine.when(
+									row.field(|part| part.heading),
+									|| Engine.element("h4", [Engine.class("deck-provider")], [Engine.text_s(row.field(|part| part.title))]),
+									||
+										Engine.element(
+											"label",
+											[Engine.class_s(row.field(|part| if (part.available) "deck-part" else "deck-part unavailable")), Engine.attr_s("data-widget", row.key())],
+											[
+												Html.checkbox(
+													row.field(|part| part.title).map2(title.lift_row(), |part, surface| "${part} on ${surface}"),
+													row.field(|part| part.shown),
+													[Html.boolean("disabled", row.field(|part| !part.available and !part.shown))],
+													rows.set_value_by(row.key().map2(at, |widget, surface| (widget, surface)), |state, (widget, surface), checked| Model.show_part(state, { index: surface, widget, shown: checked })),
+												),
+												Liton.thumbnail(row.key().map(|widget| Model.preview("widget", widget)), row.field(|part| part.available)),
+												Html.span_s(row.field(|part| part.title), [Engine.class("deck-part-title")]),
+												Html.span_s(row.field(|part| part.detail), [Engine.class("help")]),
+											],
+										),
+								),
+							],
+						)
+					},
+				),
+			],
 		)
 
 	## The surface open: the surfaces to open instead, those the daemon

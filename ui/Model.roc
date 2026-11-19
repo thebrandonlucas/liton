@@ -51,6 +51,11 @@ Model := [].{
 	## The part of the model a snapshot saves: deterministic JSON others can load.
 	Snapshot : Setup.Snapshot
 
+	## A surface of the deck, by its preset's name, as it was left: its
+	## layout and theme, and its own focus, so steering one doesn't move
+	## another.
+	Surface : { name : Str, snapshot : Snapshot, focus : List(Context.Id) }
+
 	## The entries of a session's timeline the UI has.
 	Timeline : { session_id : Str, entries : List(Chat.Entry) }
 
@@ -162,6 +167,21 @@ Model := [].{
 		## The surface last opened, by its preset's name, which Settings resets
 		## the layout to, "" for none: this browser's, as the layout is.
 		surface : Str,
+
+		## The surfaces this browser switches between, and the one shown by
+		## its place, as it was opened: the layout above is what it shows
+		## now (`Model.deck`).
+		deck : List(Surface),
+		deck_shown : U64,
+
+		## How the deck last switched surfaces, toward the next or the
+		## previous, each switch counted: the surface shown slides in.
+		deck_slide : { serial : U64, toward : [Next, Previous] },
+
+		## A press on the deck's strip, by its pointer and how far across the
+		## strip it began, in ten thousandths, until it lifts: a swipe across
+		## the strip goes to the next or previous surface.
+		deck_press : [Up, Down({ pointer : U32, across : U16 })],
 
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
@@ -404,7 +424,8 @@ Model := [].{
 	## default preset if it can't be read.
 	initial : Str -> State
 	initial = |saved| {
-		restored = Model.restore(saved)
+		kept = Model.restore_deck(saved)
+		restored = kept.map_ok(|surfaces_kept| surfaces_kept.first().map_ok(|surface| surface.snapshot) ?? Default.developer.snapshot)
 		Model.layout(
 			{
 				daemon: { id: "", name: "" },
@@ -450,7 +471,11 @@ Model := [].{
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),
-				surface: if (restored.is_ok()) "" else Default.setup.default_preset,
+				surface: kept.map_ok(|surfaces_kept| surfaces_kept.first().map_ok(|surface| surface.name) ?? "") ?? Default.setup.default_preset,
+				deck: kept ?? Model.deck_of(Default.setup.presets, Default.developer, Default.setup.deck),
+				deck_shown: 0,
+				deck_slide: { serial: 0, toward: Next },
+				deck_press: Up,
 				git: [],
 				git_changes: [],
 				git_hunks: [],
@@ -511,6 +536,247 @@ Model := [].{
 	snapshot : State -> Snapshot
 	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
+	## The deck as it is now, the surface shown as the layout shows it.
+	deck : State -> List(Surface)
+	deck = |state| state.deck.map_with_index(|surface, index| if (index == state.deck_shown) { name: state.surface, snapshot: Model.snapshot(state), focus: state.focus } else surface)
+
+	## The deck as the browser keeps it, without the focus.
+	deck_snapshot : State -> Setup.Deck
+	deck_snapshot = |state| { version: Setup.snapshot_version, surfaces: Model.deck(state).map(|surface| { name: surface.name, snapshot: surface.snapshot }) }
+
+	## A new deck: the preset a client starts with, then those `names` name.
+	deck_of : List(Setup.Preset), Setup.Preset, List(Str) -> List(Surface)
+	deck_of = |presets, first, names|
+		names.keep_oks(|name| presets.find_first(|preset| preset.name == name and name != first.name)).prepend(first).map(|preset| { name: preset.name, snapshot: preset.snapshot, focus: [] })
+
+	## Shows the deck's surface at `index`, as it was left, keeping the
+	## one shown as it is.
+	show_surface : State, U64 -> State
+	show_surface = |state, index| {
+		kept = Model.deck(state)
+		match kept.get(index) {
+			Ok(surface) if index != state.deck_shown => {
+				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
+				panel = Model.slot_of(laid, laid.active_tile)
+				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
+				jump = if (hash == state.url_hash) laid.jump else { ..laid.jump, replace: hash }
+				deck_slide = { serial: state.deck_slide.serial + 1, toward: if (index > state.deck_shown) Next else Previous }
+				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
+			}
+			_ => state
+		}
+	}
+
+	## Shows the deck's next or previous surface, round from its end to its
+	## start.
+	step_surface : State, [Next, Previous] -> State
+	step_surface = |state, toward| {
+		count = state.deck.len()
+		index = if (toward == Next) (state.deck_shown + 1) % count else (state.deck_shown + count - 1) % count
+		stepped = if (count < 2) state else Model.show_surface(state, index)
+		{ ..stepped, deck_slide: { ..stepped.deck_slide, toward } }
+	}
+
+	## Adds a surface the daemon offers, by its preset's name, at the
+	## deck's end.
+	add_surface : State, Str -> State
+	add_surface = |state, name|
+		match state.presets.find_first(|preset| preset.name == name) {
+			Ok(preset) => { ..state, deck: Model.deck(state).append({ name, snapshot: preset.snapshot, focus: [] }) }
+			Err(NotFound) => state
+		}
+
+	## Moves the deck's surface at `index` a place toward its start or its
+	## end, the surface shown staying shown.
+	move_surface : State, U64, [Up, Down] -> State
+	move_surface = |state, index, way| {
+		other = if (way == Up) U64.max(index, 1) - 1 else index + 1
+		kept = Model.deck(state)
+		match (kept.get(index), kept.get(other)) {
+			(Ok(moved), Ok(passed)) if other != index => {
+				swapped = kept.map_with_index(|surface, at| if (at == index) passed else if (at == other) moved else surface)
+				shown = if (state.deck_shown == index) other else if (state.deck_shown == other) index else state.deck_shown
+				Model.with_deck_hash({ ..state, deck: swapped, deck_shown: shown })
+			}
+			_ => state
+		}
+	}
+
+	## Removes the deck's surface at `index`, showing the one before it,
+	## else after it, if it was shown. The deck keeps one.
+	remove_surface : State, U64 -> State
+	remove_surface = |state0, index| {
+		state = if (index == state0.deck_shown) Model.show_surface(state0, if (index > 0) index - 1 else 1) else state0
+		kept = Model.deck(state)
+		if kept.len() < 2 or index >= kept.len() {
+			state0
+		} else {
+			Model.with_deck_hash({ ..state, deck: kept.drop_at(index), deck_shown: if (state.deck_shown > index) state.deck_shown - 1 else state.deck_shown })
+		}
+	}
+
+	## Changes the deck's surface at `index` as `change` changes the layout
+	## shown, without showing it.
+	on_surface : State, U64, (State -> State) -> State
+	on_surface = |state, index, change|
+		if index == state.deck_shown {
+			change(state)
+		} else {
+			returned = Model.show_surface(change(Model.show_surface(state, index)), state.deck_shown)
+			{ ..returned, deck_slide: state.deck_slide, url_hash: state.url_hash, jump: state.jump, active_tile: state.active_tile, focused_pane: state.focused_pane, sub_focus: state.sub_focus }
+		}
+
+	## The parts the deck's surface at `index` may show, a heading over
+	## those of each provider offering what they need: the first that
+	## offers all of it, else a transformer, else liton for those needing
+	## nothing; then those the daemon doesn't offer what they need, with
+	## what is missing. Each is shown while a pane of it shows, neither
+	## hidden nor in a drawer hidden.
+	surface_parts : State, U64 -> List({ key : Str, heading : Bool, title : Str, detail : Str, shown : Bool, available : Bool })
+	surface_parts = |state, index| {
+		laid = Model.deck(state).get(index).map_ok(|surface| surface.snapshot) ?? Model.snapshot(state)
+		shown = |widget| laid.grid.tiles.any(|tile| !laid.collapsed.contains(Model.slot_in(laid.shell, laid.grid, tile.id)) and tile.panes.any(|listed| listed.widget == widget.id and !laid.hidden.contains(listed.id)))
+		offered_by = |widget|
+			match (Widgets.missing(widget, state.capabilities), state.providers.find_first(|provider| widget.needs.all(|need| provider.capabilities.contains(need)))) {
+				([_, ..], _) => "Not offered"
+				(_, Ok(provider)) => provider.name
+				_ if widget.needs.is_empty() => "liton"
+				_ => state.transformers.find_first(|transformer| widget.needs.contains(transformer.offers)).map_ok(|transformer| transformer.name) ?? "Several providers"
+			}
+		found = Widgets.all.fold([], |so_far, widget| if (so_far.contains(offered_by(widget))) so_far else so_far.append(offered_by(widget)))
+		groups = found.drop_if(|group| group == "Not offered").concat(found.keep_if(|group| group == "Not offered"))
+		role = |widget|
+			match widget.role {
+				Navigator => "Navigator"
+				View => "View"
+				Inspector => "Inspector"
+			}
+		needs = |widget|
+			match (widget.needs, Widgets.missing(widget, state.capabilities)) {
+				([], _) => "needs nothing"
+				(_, []) => "needs ${Str.join_with(widget.needs.map(Capability.to_str), ", ")}"
+				(_, lacking) => "needs ${Str.join_with(lacking.map(Capability.to_str), ", ")}, which no provider offers"
+			}
+		groups.join_map(
+			|group| {
+				parts = Widgets.all.keep_if(|widget| offered_by(widget) == group).map(|widget| { key: widget.id, heading: Bool.False, title: widget.title, detail: "${role(widget)} · ${needs(widget)}", shown: shown(widget), available: group != "Not offered" })
+				parts.prepend({ key: "group:${group}", heading: Bool.True, title: group, detail: "", shown: Bool.False, available: Bool.True })
+			},
+		)
+	}
+
+	## Shows a part on the deck's surface at `index`, its panes hidden
+	## there shown again, or else one added where it fits; or hides its
+	## panes, in a Workbench, else closes them.
+	show_part : State, { index : U64, widget : Str, shown : Bool } -> State
+	show_part = |state, { index, widget, shown }|
+		Model.on_surface(
+			state,
+			index,
+			|laid| {
+				holding = laid.grid.tiles.join_map(|tile| tile.panes.keep_if(|listed| listed.widget == widget).map(|listed| (listed.id, tile.id)))
+				if !shown {
+					holding.fold(laid, |so_far, (pane_id, _)| if (so_far.shell == Workbench) Model.hide_pane(so_far, pane_id) else Model.close_pane(so_far, pane_id))
+				} else {
+					match holding.first() {
+						Ok((pane_id, tile_id)) => Model.show_pane({ ..laid, collapsed: laid.collapsed.drop_if(|slot| slot == Model.slot_of(laid, tile_id)) }, pane_id)
+						Err(_) => {
+							added = Model.add_pane(laid, widget)
+							fits = Widgets.find(widget).slots.first() ?? Main
+							if (added.shell == Workbench and fits != Main) Model.move_to_slot(added, "added-${laid.next_id.to_str()}", fits) else added
+						}
+					}
+				}
+			},
+		)
+
+	## Names the surface shown in the URL again once its place changed,
+	## with the panel the URL names.
+	with_deck_hash : State -> State
+	with_deck_hash = |state| {
+		panel = Str.split_on(state.url_hash.drop_prefix("#"), "&").drop_if(|part| part.is_empty() or part.starts_with("deck=")).map(|part| "#${part}")
+		hash = Model.hash_of(state, panel.first() ?? "")
+		if (hash == state.url_hash) state else { ..state, url_hash: hash, jump: { serial: state.jump.serial + 1, panel: "", replace: hash, push: "" } }
+	}
+
+	## A press lifted off the deck's strip: a swipe a fifth of its width or
+	## more toward its start goes to the next surface, toward its end to
+	## the previous, as a page is turned.
+	deck_swiped : State, { pointer : U32, across : U16 } -> State
+	deck_swiped = |state, { pointer, across }| {
+		lifted = { ..state, deck_press: Up }
+		match state.deck_press {
+			Down(press) if press.pointer == pointer and press.across >= across + 2000 => Model.step_surface(lifted, Next)
+			Down(press) if press.pointer == pointer and across >= press.across + 2000 => Model.step_surface(lifted, Previous)
+			_ => lifted
+		}
+	}
+
+	## The deck's surfaces by their places, titled by their names, else
+	## by their places.
+	## Each has its preview's URL and whether the daemon offers what it needs.
+	deck_titles : State -> List({ index : U64, title : Str, shown : Bool, preview : Str, offered : Bool })
+	deck_titles = |state| Model.deck(state).map_with_index(|surface, index| { index, title: if (surface.name.is_empty()) "Surface ${(index + 1).to_str()}" else surface.name, shown: index == state.deck_shown, preview: Model.preview("surface", surface.name), offered: Model.offers(state, { name: surface.name, snapshot: surface.snapshot }) })
+
+	## The URL of the thumbnail of a surface or a part (`kind` "surface" or
+	## "widget") by its name, as `zig build devtool -- previews` renders
+	## them into ui/previews.
+	preview : Str, Str -> Str
+	preview = |kind, name| "previews/${kind}-${Str.join_with(Str.split_on(name.with_ascii_lowercased(), " "), "-")}.webp"
+
+	## The URL hash naming a Workbench's panel (`slot_hash`) on the deck's
+	## surface shown, which it names once the deck has switched:
+	## `#deck=2&left` is the left drawer of the second.
+	hash_of : State, Str -> Str
+	hash_of = |state, panel_hash| {
+		deck_part = if (state.deck_shown > 0 or state.url_hash.contains("deck=")) ["deck=${(state.deck_shown + 1).to_str()}"] else []
+		parts = deck_part.concat(if (panel_hash.is_empty()) [] else [panel_hash.drop_prefix("#")])
+		if (parts.is_empty()) "" else "#${Str.join_with(parts, "&")}"
+	}
+
+	## The surface a URL hash names by its place in the deck.
+	deck_hashed : Str -> Try(U64, [NotFound])
+	deck_hashed = |hash|
+		match Str.split_on(hash.drop_prefix("#"), "&").keep_oks(|part| if (part.starts_with("deck=")) U64.from_str(part.drop_prefix("deck=")) else Err(NotFound)) {
+			[number, ..] if number >= 1 => Ok(number - 1)
+			_ => Err(NotFound)
+		}
+
+	## Takes the deck another window of this browser kept, whose surfaces
+	## were added, removed, moved or changed there. This window keeps
+	## showing its surface, at its place, else where it moved, else the
+	## nearest, as that window left it if it changed; each surface keeps
+	## this window's focus.
+	deck_changed : State, Str -> State
+	deck_changed = |state, text|
+		match Model.restore_deck(text) {
+			Ok(read) => {
+				own = Model.deck(state)
+				followed = read.map_with_index(|surface, at| { ..surface, focus: own.get(at).map_ok(|old| if (old.name == surface.name) old.focus else []) ?? [] })
+				named = |at| followed.get(at).map_ok(|surface| surface.name == state.surface) ?? Bool.False
+				index = if (named(state.deck_shown)) state.deck_shown else followed.find_first_index(|surface| surface.name == state.surface) ?? U64.min(state.deck_shown, followed.len() - 1)
+				moved = { ..state, deck: followed, deck_shown: index }
+				match followed.get(index) {
+					Ok(shown) if shown.name != state.surface or Json.to_str(shown.snapshot) != Json.to_str(Model.snapshot(state)) => { ..Model.layout(moved, Model.layout_of(shown.snapshot)), theme: shown.snapshot.theme, surface: shown.name, focus: shown.focus }
+					_ => moved
+				}
+			}
+			Err(Invalid) => state
+		}
+
+	## Reads the deck a browser kept, or a snapshot of one surface as a deck
+	## of it (`restore`), its name "". A surface that doesn't read is left out.
+	restore_deck : Str -> Try(List(Surface), [Invalid])
+	restore_deck = |text| {
+		decked : Try(Setup.Deck, _)
+		decked = Json.parse(text)
+		read = match decked {
+			Ok({ version, surfaces: kept }) if version >= 9 => kept.keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
+			_ => Model.restore(text).map_ok(|restored| [{ name: "", snapshot: restored }]) ?? []
+		}
+		if (read.is_empty()) Err(Invalid) else Ok(read.map(|kept| { name: kept.name, snapshot: kept.snapshot, focus: [] }))
+	}
+
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
 	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
@@ -560,7 +826,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (gridded, laid, third, second, first) {
-			(Ok(saved), _, _, _, _) if saved.version == 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
+			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
 			(_, Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, grid: Model.split_parts(version, Setup.grid_of(columns)), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, _, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, grid: Setup.grid_of(Model.with_options(columns)), collapsed: [], hidden: [] }))
 			(_, _, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
@@ -612,7 +878,10 @@ Model := [].{
 		match Setup.starting(offered) {
 			Err(NoPresets) => state
 			Ok(_) if state.kept_layout => { ..state, presets: offered.presets }
-			Ok(preset) => { ..Model.use_preset({ ..state, presets: offered.presets, theme: if (state.theme_chosen) state.theme else "" }, preset.name), kept_layout: Bool.True }
+			Ok(preset) => {
+				opened = Model.deck_of(offered.presets, preset, offered.deck).keep_if(|surface| surface.name == preset.name or Model.offers(state, { name: surface.name, snapshot: surface.snapshot }))
+				{ ..Model.use_preset({ ..state, presets: offered.presets, theme: if (state.theme_chosen) state.theme else "", deck: opened, deck_shown: 0 }, preset.name), kept_layout: Bool.True }
+			}
 		}
 	}
 
@@ -1208,14 +1477,15 @@ Model := [].{
 	## unless the URL names the panel shown already.
 	jump_to : State, Str, [Replace, Push] -> State
 	jump_to = |state, tile_id, how| {
-		(from, to) = (Model.slot_hash(Model.slot_of(state, state.active_tile)), Model.slot_hash(Model.slot_of(state, tile_id)))
+		panel = Model.slot_hash(Model.slot_of(state, tile_id))
+		(from, to) = (Model.hash_of(state, Model.slot_hash(Model.slot_of(state, state.active_tile))), Model.hash_of(state, panel))
 		(replace, push) = match how {
 			Replace if to != state.url_hash => (to, "")
 			Push if to != state.url_hash and from != to => (from, to)
 			_ => ("", "")
 		}
 		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(Model.slot_of(state, tile_id)), replace, push }
-		if (to.is_empty()) { ..state, active_tile: tile_id } else { ..state, active_tile: tile_id, jump, url_hash: to }
+		if (panel.is_empty()) { ..state, active_tile: tile_id } else { ..state, active_tile: tile_id, jump, url_hash: to }
 	}
 
 	## The URL hash naming a Workbench slot's panel, and the slot a hash
@@ -1225,13 +1495,18 @@ Model := [].{
 
 	## The slot the URL hash `hash` names (see `slot_hash`).
 	slot_hashed : Str -> Slot
-	slot_hashed = |hash| [Left, Right].find_first(|slot| Model.slot_hash(slot) == hash) ?? Main
+	slot_hashed = |hash| [Left, Right].find_first(|slot| Str.split_on(hash.drop_prefix("#"), "&").contains(Model.slot_name(slot))) ?? Main
 
 	## Follows the browser to `url`, by its back or forward or on loading the
-	## page: a Workbench shows the panel its hash names.
+	## page: the deck shows the surface its hash names, without sliding,
+	## and a Workbench the panel.
 	went : State, Str -> State
 	went = |state0, url| {
-		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
+		hashed = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
+		state = match Model.deck_hashed(hashed.url_hash) {
+			Ok(index) if index != hashed.deck_shown and index < hashed.deck.len() => { ..Model.show_surface(hashed, index), url_hash: hashed.url_hash, jump: hashed.jump, deck_slide: hashed.deck_slide }
+			_ => hashed
+		}
 		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 
@@ -5050,6 +5325,57 @@ expect {
 		and !Model.pane_visible(Model.close_workspace_tab(ticketed, Ticket("t1")), "pane-8")
 		and Model.focused(Model.open(first, Session("s3")), [Workspace]) == Workspace("w2")
 		and Model.workspace_rows(first, Model.pane(first, "pane-1")).map(|row| row.key) == ["group:p1", "workspace:w1", "s3"]
+}
+
+# A new browser's deck holds liton's: Developer, shown, then Rooms, Review
+# and Board, and a setup's starting preset then those its deck names.
+expect {
+	fresh = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), presets: [Default.developer, Default.rooms, Default.board], default_preset: "Board", deck: ["Developer", "Board", "Gone"] })
+	Model.initial("").deck.map(|surface| surface.name) == ["Developer", "Rooms", "Review", "Board"] and fresh.deck.map(|surface| surface.name) == ["Board", "Developer"] and fresh.surface == "Board"
+}
+
+# Each surface keeps its layout, theme and focus while another is shown,
+# and the deck reads back as it was saved; a snapshot of one surface reads
+# as a deck of it.
+expect {
+	state = { ..Model.initial(""), focus: [Session("a")] }
+	rooms = { ..Model.show_surface(state, 1), focus: [Room("r")] }
+	back = Model.show_surface(Model.use_theme(rooms, "Hypr"), 0)
+	saved = Json.to_str(Model.deck_snapshot(back))
+	restored = Model.initial(saved)
+	single = Model.initial(Json.to_str(Model.snapshot(state)))
+	rooms.surface == "Rooms" and rooms.focus == [Room("r")] and rooms.theme == "Sky" and back.focus == [Session("a")] and back.surface == "Developer" and Model.show_surface(back, 1).theme == "Hypr" and Model.show_surface(back, 1).focus == [Room("r")] and Json.to_str(Model.deck_snapshot(restored)) == saved and restored.deck.len() == 4 and single.deck.len() == 1 and Model.restore_deck("nonsense") == Err(Invalid)
+}
+
+# Another window's change to the deck shows here: this window keeps its
+# surface where it moved, as that window left it, and its own focus.
+expect {
+	here = { ..Model.show_surface(Model.initial(""), 1), focus: [Room("r")] }
+	there = Model.show_surface(Model.close_pane(Model.initial(""), "pane-3"), 1)
+	moved = { ..there, deck: [there.deck.get(1) ?? { name: "", snapshot: Default.rooms.snapshot, focus: [] }, there.deck.get(0) ?? { name: "", snapshot: Default.developer.snapshot, focus: [] }], deck_shown: 0 }
+	followed = Model.deck_changed(here, Json.to_str(Model.deck_snapshot(moved)))
+	followed.deck.map(|surface| surface.name) == ["Rooms", "Developer"] and followed.deck_shown == 0 and followed.surface == "Rooms" and followed.focus == [Room("r")] and Model.deck_changed(here, "nonsense") == here and Json.to_str(Model.deck_snapshot(Model.deck_changed(here, Json.to_str(Model.deck_snapshot(here))))) == Json.to_str(Model.deck_snapshot(here))
+}
+
+# The deck's surfaces move, the one shown staying shown, and go, the one
+# before it shown if it was; the deck keeps one, and adds what is offered.
+expect {
+	state = Model.show_surface(Model.initial(""), 1)
+	moved = Model.move_surface(state, 1, Up)
+	names = |shown| Model.deck(shown).map(|surface| surface.name)
+	removed = Model.remove_surface(moved, 0)
+	alone = [1, 1, 1].fold(removed, |so_far, _| Model.remove_surface(so_far, 0))
+	names(moved) == ["Rooms", "Developer", "Review", "Board"] and moved.deck_shown == 0 and moved.url_hash == "#deck=1" and Model.move_surface(moved, 0, Up) == moved and names(removed) == ["Developer", "Review", "Board"] and removed.surface == "Developer" and names(alone) == ["Board"] and names(Model.add_surface(alone, "Inbox")) == ["Board", "Inbox"] and Model.add_surface(alone, "Gone") == alone
+}
+
+# A surface's parts, by the provider offering what they need, each shown
+# while it shows there; hiding one there leaves the surface shown as it was.
+expect {
+	state = Model.advertise(Model.initial(""), { protocol: 1, daemon: { id: "liton", name: "liton" }, providers: [{ id: "mock", name: "Mock", capabilities: [{ name: "chat", version: 1 }, { name: "rooms", version: 1 }] }], transformers: [], topics: [] })
+	parts = Model.surface_parts(state, 1)
+	rooms = |shown| Model.surface_parts(shown, 1).find_first(|part| part.key == "rooms").map_ok(|part| part.shown) ?? Bool.False
+	hidden = Model.show_part(state, { index: 1, widget: "rooms", shown: Bool.False })
+	parts.first().map_ok(|part| part.title) == Ok("Mock") and parts.any(|part| part.key == "group:Not offered") and rooms(state) and !rooms(hidden) and Model.snapshot(hidden) == Model.snapshot(state) and hidden.deck_shown == 0 and rooms(Model.show_part(hidden, { index: 1, widget: "rooms", shown: Bool.True }))
 }
 
 expect [0, 950, 1_000, 41_234, 200_000, 999_960, 1_250_000].map(Model.tokens_text) == ["0", "950", "1k", "41.2k", "200k", "1M", "1.3M"]

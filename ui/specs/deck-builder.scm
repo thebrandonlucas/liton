@@ -1,0 +1,35 @@
+(test "Liton — Settings' Deck lists the deck's surfaces in order, to move up or down or remove at once, the one shown staying shown, and adds a surface the daemon offers"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"rooms\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (click (role button :name "Surface 2: Rooms"))
+    (click (role button :name "Settings"))
+    (click (role button :name "Deck"))
+    (expect-attr (role button :name "Deck") aria-pressed "true")
+    (expect-disabled (role button :name "Move Developer up") true)
+    (expect-disabled (role button :name "Move Board down") true)
+    (expect-visible (text "Shown here"))
+    ; Moving the surface shown keeps it shown, at its new place.
+    (click (role button :name "Move Rooms up"))
+    (expect-text (test-id "deck") "RoomsDeveloperReviewBoard")
+    (expect-attr (role button :name "Surface 1: Rooms") aria-pressed "true")
+    (expect-current-location "/#deck=1")
+    (click (role button :name "Move Developer down"))
+    (expect-text (test-id "deck") "RoomsReviewDeveloperBoard")
+    (click (role button :name "Remove Board"))
+    (expect-text (test-id "deck") "RoomsReviewDeveloper")
+    ; Only what the daemon offers what it needs can be added: no Inbox
+    ; without attention.v1.
+    (expect-absent (role button :name "Add Inbox") :never-drawn)
+    (click (role button :name "Add Chat"))
+    (expect-text (test-id "deck") "RoomsReviewDeveloperChat")
+    ; Removing the surface shown shows the one after it, at its place.
+    (click (role button :name "Remove Rooms"))
+    (expect-text (test-id "deck") "ReviewDeveloperChat")
+    (expect-attr (role button :name "Surface 1: Review") aria-pressed "true")
+    (click (role button :name "Remove Review"))
+    (click (role button :name "Remove Developer"))
+    (expect-disabled (role button :name "Remove Chat") true)
+    (expect-absent (test-id "deck"))
+  )
+)

@@ -26,6 +26,10 @@ main! = |arguments| {
 		}
 		Ui({ roc_ui, output, runtime_files, flags }) => Ui.build!(roc_ui, output, runtime_files, flags)
 		Specs(runner) => Ui.specs!(runner)
+		Previews(cdp) => {
+			Exec.needs!("node", "nodejs", given)?
+			Exec.call!(".", "node", ["e2e/previews.mjs", cdp])
+		}
 		Docs({ roc, roc_ui, output }) => Docs.build!(roc, roc_ui, output)
 		Paseo(command) => {
 			Exec.needs!("node", "nodejs", given)?

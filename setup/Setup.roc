@@ -32,6 +32,10 @@ Setup := [].{
 	## A layout to start from, named: a snapshot of the UI's layout.
 	Preset : { name : Str, snapshot : Snapshot }
 
+	## The surfaces a browser switches between, in order, each a preset as
+	## it was last left: what the UI keeps from snapshot version 9.
+	Deck : { version : U32, surfaces : List(Preset) }
+
 	## How the UI looks: a light or dark `scheme`; an `accent`, which the
 	## focused tile's edge fades into `accent_to` along; the text colors; how
 	## much of the accent, in percent, the tiles' faint `edge` and the focused
@@ -63,15 +67,17 @@ Setup := [].{
 	Remote : { name : Str, url : Str }
 
 	## The remotes the daemon connects, the transformers it hosts by id, the
-	## presets and themes its clients offer and the ones they start with.
-	Declared : { remotes : List(Remote), transformers : List(Str), presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str }
+	## presets and themes its clients offer and the ones they start with,
+	## and the presets, by name, a new browser's deck holds after it.
+	Declared : { remotes : List(Remote), transformers : List(Str), presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str, deck : List(Str) }
 
 	## What a daemon's manifest offers of its setup.
-	Offered : { presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str }
+	Offered : { presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str, deck : List(Str) }
 
-	## The version of the snapshots this layout describes.
+	## The version of the snapshots this layout describes. From version 9 a
+	## browser keeps a deck of them.
 	snapshot_version : U32
-	snapshot_version = 8
+	snapshot_version = 9
 
 	## The grid of columns side by side, as snapshots before version 8 laid
 	## them out: a tile for each column of tabs and each pane a column stacks,
@@ -94,7 +100,7 @@ Setup := [].{
 
 	## A setup that declares nothing.
 	empty : Declared
-	empty = { remotes: [], transformers: [], presets: [], default_preset: "", themes: [], default_theme: "" }
+	empty = { remotes: [], transformers: [], presets: [], default_preset: "", themes: [], default_theme: "", deck: [] }
 
 	## Adds a remote, in place of one of the same name.
 	with_remote : Declared, Remote -> Declared
@@ -136,20 +142,35 @@ Setup := [].{
 	with_default_theme : Declared, Str -> Declared
 	with_default_theme = |setup, name| { ..setup, default_theme: name }
 
+	## Sets the presets, by name, a new browser's deck holds.
+	with_deck : Declared, List(Str) -> Declared
+	with_deck = |setup, names| { ..setup, deck: names }
+
 	## `base` with what `changes` declares added over it: its remotes, presets
 	## and themes in place of those of the same name, its transformers, and
-	## its default preset and theme if it names them.
+	## its default preset and theme and its deck if it names them.
 	merge : Declared, Declared -> Declared
 	merge = |base, changes| {
 		with_all = |setup, items, add| items.fold(setup, add)
 		merged = with_all(with_all(with_all(with_all(base, changes.remotes, Setup.with_remote), changes.transformers, Setup.with_transformer), changes.presets, Setup.with_preset), changes.themes, Setup.with_theme)
 		preset_set = if (changes.default_preset.is_empty()) merged else Setup.with_default_preset(merged, changes.default_preset)
-		if (changes.default_theme.is_empty()) preset_set else Setup.with_default_theme(preset_set, changes.default_theme)
+		theme_set = if (changes.default_theme.is_empty()) preset_set else Setup.with_default_theme(preset_set, changes.default_theme)
+		if (changes.deck.is_empty()) theme_set else Setup.with_deck(theme_set, changes.deck)
 	}
 
 	## What a daemon's manifest offers of `setup`: its presets and themes.
 	offered : Declared -> Offered
-	offered = |{ presets, default_preset, themes, default_theme, .. }| { presets, default_preset, themes, default_theme }
+	offered = |{ presets, default_preset, themes, default_theme, deck, .. }| { presets, default_preset, themes, default_theme, deck }
+
+	## A manifest's setup, one from before setups declared a deck with none.
+	offered_from_json : Str -> Try(Offered, [Invalid])
+	offered_from_json = |text| {
+		parsed : Try({ setup : { presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str } }, _)
+		parsed = Json.parse(text)
+		decked : Try({ setup : { deck : List(Str) } }, _)
+		decked = Json.parse(text)
+		parsed.map_ok(|{ setup }| { presets: setup.presets, default_preset: setup.default_preset, themes: setup.themes, default_theme: setup.default_theme, deck: decked.map_ok(|saved| saved.setup.deck) ?? [] }).map_err(|_| Invalid)
+	}
 
 	## The preset a client starts with: the default, or the first if it names
 	## none there is.
@@ -167,10 +188,14 @@ Setup := [].{
 	## Reads a setup. One evaluated before snapshots were grids has its
 	## presets' columns laid out as a grid (`grid_of`); one from before they hid
 	## panes hides none; one from before setups held themes offers none, and
-	## its presets keep the theme shown.
+	## its presets keep the theme shown; one from before setups declared a
+	## deck declares none.
 	from_json : Str -> Try(Declared, [Invalid])
 	from_json = |text| {
-		parsed : Try(Declared, _)
+		decked : Try({ deck : List(Str) }, _)
+		decked = Json.parse(text)
+		deck = decked.map_ok(|saved| saved.deck) ?? []
+		parsed : Try({ remotes : List(Remote), transformers : List(Str), presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str }, _)
 		parsed = Json.parse(text)
 		columns : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) } }), default_preset : Str }, _)
 		columns = Json.parse(text)
@@ -179,12 +204,12 @@ Setup := [].{
 		themed : Try({ presets : List({ snapshot : { theme : Str } }), themes : List(Theme), default_theme : Str }, _)
 		themed = Json.parse(text)
 		match (parsed, columns) {
-			(Ok(setup), _) => Ok(setup)
+			(Ok({ remotes, transformers, presets, default_preset, themes, default_theme }), _) => Ok({ remotes, transformers, presets, default_preset, themes, default_theme, deck })
 			(_, Ok({ remotes, transformers, presets, default_preset })) => {
 				hidden = |index| hiding.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.hidden) ?? []) ?? []
 				theme = |index| themed.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.theme) ?? "") ?? ""
 				laid_out = presets.map_with_index(|{ name, snapshot }, index| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, grid: Setup.grid_of(snapshot.columns), collapsed: snapshot.collapsed, hidden: hidden(index), theme: theme(index) } })
-				Ok({ remotes, transformers, default_preset, presets: laid_out, themes: themed.map_ok(|saved| saved.themes) ?? [], default_theme: themed.map_ok(|saved| saved.default_theme) ?? "" })
+				Ok({ remotes, transformers, default_preset, presets: laid_out, themes: themed.map_ok(|saved| saved.themes) ?? [], default_theme: themed.map_ok(|saved| saved.default_theme) ?? "", deck })
 			}
 			_ => Err(Invalid)
 		}
@@ -247,8 +272,8 @@ expect {
 	base = { ..Setup.empty, remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
 	team = { ..Setup.empty, remotes: [{ name: "team", url: "https://liton.example" }], transformers: ["needs-you"], presets: [{ name: "Inbox", snapshot: layout("inbox") }], themes: [{ ..dusk, name: "Team" }] }
 	merged = Setup.merge(base, team)
-	changed = Setup.merge(base, { ..team, default_preset: "Inbox", default_theme: "Team" })
-	merged.remotes.map(|remote| remote.name) == ["echo", "team"] and merged.transformers == ["attention", "needs-you"] and merged.presets.map(|preset| preset.name) == ["Chat", "Inbox"] and merged.themes.map(|theme| theme.name) == ["Dusk", "Team"] and merged.default_preset == "Chat" and merged.default_theme == "Dusk" and changed.default_preset == "Inbox" and changed.default_theme == "Team"
+	changed = Setup.merge(base, { ..team, default_preset: "Inbox", default_theme: "Team", deck: ["Inbox", "Chat"] })
+	merged.deck == [] and changed.deck == ["Inbox", "Chat"] and merged.remotes.map(|remote| remote.name) == ["echo", "team"] and merged.transformers == ["attention", "needs-you"] and merged.presets.map(|preset| preset.name) == ["Chat", "Inbox"] and merged.themes.map(|theme| theme.name) == ["Dusk", "Team"] and merged.default_preset == "Chat" and merged.default_theme == "Dusk" and changed.default_preset == "Inbox" and changed.default_theme == "Team"
 }
 expect {
 	offered = |presets, default_preset| Setup.offered({ ..Setup.empty, presets, default_preset })
@@ -257,17 +282,24 @@ expect {
 
 # Fields in order, so a setup is always the same text, and it reads back.
 expect {
-	setup = { remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
+	setup = { remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk", deck: ["Chat"] }
 	text = Setup.to_json(setup)
-	text == "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"grid\":{\"columns\":[1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":8}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
+	text == "{\"deck\":[\"Chat\"],\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"grid\":{\"columns\":[1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":9}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
 }
 
 # A setup evaluated before snapshots were grids has its columns as a grid,
 # and one from before they hid panes hides none.
 expect {
-	setup = { remotes: [echo], transformers: ["attention"], presets: [{ ..chat, snapshot: { ..chat.snapshot, version: 5 } }], default_preset: "Chat", themes: [dusk], default_theme: "Dusk" }
+	setup = { remotes: [echo], transformers: ["attention"], presets: [{ ..chat, snapshot: { ..chat.snapshot, version: 5 } }], default_preset: "Chat", themes: [dusk], default_theme: "Dusk", deck: [] }
 	text = "{\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"columns\":[{\"active\":\"pane-1\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":1,\"tabbed\":false}],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":5}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}"
 	Setup.from_json(text) == Ok(setup)
+}
+
+# A setup evaluated before setups declared a deck declares none, and a
+# manifest's setup from then offers none.
+expect {
+	text = "{\"default_preset\":\"Chat\",\"default_theme\":\"\",\"presets\":[],\"remotes\":[],\"themes\":[],\"transformers\":[]}"
+	Setup.from_json(text) == Ok({ ..Setup.empty, default_preset: "Chat" }) and Setup.offered_from_json("{\"setup\":${text}}") == Ok({ ..Setup.offered(Setup.empty), default_preset: "Chat" }) and Setup.offered_from_json("{\"setup\":{\"deck\":[\"Chat\"],${text.drop_prefix("{")}}") == Ok({ ..Setup.offered(Setup.empty), default_preset: "Chat", deck: ["Chat"] })
 }
 
 # A setup evaluated before setups held themes offers none.

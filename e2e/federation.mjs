@@ -86,7 +86,7 @@ try {
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "echo/echo", "peer/mock"]);
     assert.deepEqual(manifest.providers[2].capabilities, [{ name: "chat", version: 1 }]);
   });
-  await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [{ ...review, snapshot: { ...review.snapshot, hidden: [] } }], themes: [], default_theme: "" }));
+  await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [{ ...review, snapshot: { ...review.snapshot, hidden: [] } }], themes: [], default_theme: "", deck: [] }));
   await step("ListSessions merges every provider's sessions, named under their remotes", async () => {
     const sessions = await until("remote sessions", async () => {
       const listed = (await call("chat.v1", "ListSessions")).Ok.Sessions;
