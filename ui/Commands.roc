@@ -21,8 +21,27 @@ Commands := [].{
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
+			.concat(Commands.layout)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
+	}
+
+	## The layout's commands, each for a side: focus, move the pane focused,
+	## swap, join into tabs and resize by the tile focused, and split it
+	## right or down.
+	layout : List(Command)
+	layout = {
+		sides = [(Left, "left", "on the left"), (Right, "right", "on the right"), (Up, "up", "above"), (Down, "down", "below")]
+		beside = |side| |shown| Model.beside_focus(shown, side).is_ok()
+		focused = |shown| Model.focused_tile(shown).is_ok()
+		each_side = |name, title, applies, run| sides.map(|(side, word, placed)| { id: "layout.${name}-${word}", title: "${title} ${placed}", group: "Layout", applies: applies(side), run: |shown| run(shown, side) })
+		[]
+			.concat(each_side("focus", "Focus the tile", beside, Model.focus_beside))
+			.concat(each_side("move", "Move the pane to the tile", |_| focused, Model.move_focused))
+			.concat(each_side("swap", "Swap with the tile", beside, Model.swap_beside))
+			.concat(each_side("join", "Join the tabs of the tile", beside, Model.join_beside))
+			.concat(each_side("resize", "Move the tile's edge", |_| focused, Model.resize_focused))
+			.concat([(Right, "right", "Split the pane off to the right"), (Down, "down", "Split the pane off below")].map(|(side, word, title)| { id: "layout.split-${word}", title, group: "Layout", applies: |shown| Model.tile_of(shown, shown.focused_pane).map_ok(|tile| tile.panes.len() > 1) ?? Bool.False, run: |shown| Model.split_focused(shown, side) }))
 	}
 
 	## The workspaces by their ids, in the order the first Workspaces pane

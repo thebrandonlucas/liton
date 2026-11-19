@@ -1022,6 +1022,69 @@ Model := [].{
 				}
 		}
 
+	## The tile of the pane focused, else the tile shown on a narrow screen,
+	## which the layout's keys act on.
+	focused_tile : State -> Try(Tile, [NotFound])
+	focused_tile = |state| Model.tile_of(state, state.focused_pane).on_err(|_| state.grid.tiles.find_first(|tile| tile.id == state.active_tile))
+
+	## The tile beside the focused one on `side`.
+	beside_focus : State, Grid.Side -> Try(Tile, [NotFound])
+	beside_focus = |state, side|
+		match Model.focused_tile(state) {
+			Ok(tile) => Grid.beside(state.grid, tile.id, side)
+			Err(NotFound) => Err(NotFound)
+		}
+
+	## Focuses the pane the tile beside the focused one on `side` shows.
+	focus_beside : State, Grid.Side -> State
+	focus_beside = |state, side|
+		match Model.beside_focus(state, side) {
+			Ok(tile) => Model.focus_pane(state, { pane: tile.active, tile: tile.id })
+			Err(NotFound) => state
+		}
+
+	## Moves the pane focused as its ⋯ menu would (`move_pane`).
+	move_focused : State, Grid.Side -> State
+	move_focused = |state, side| Model.move_pane(state, state.focused_pane, side)
+
+	## Takes the pane focused out of its tile's tabs into a new tile on
+	## `side` of it.
+	split_focused : State, Grid.Side -> State
+	split_focused = |state, side|
+		match Model.tile_of(state, state.focused_pane) {
+			Ok(tile) => Model.place(state, state.focused_pane, Model.drop_place(state, state.focused_pane, Beside({ tile: tile.id, side })))
+			Err(NotFound) => state
+		}
+
+	## The focused tile and the one beside it on `side` in each other's
+	## place; in a Workbench, only within one slot.
+	swap_beside : State, Grid.Side -> State
+	swap_beside = |state, side|
+		match (Model.focused_tile(state), Model.beside_focus(state, side)) {
+			(Ok(tile), Ok(other)) if state.shell == Tiling or Model.slot_of(state, tile.id) == Model.slot_of(state, other.id) => { ..state, grid: Grid.swapped(state.grid, tile.id, other.id) }
+			_ => state
+		}
+
+	## The focused tile's panes joined into the tabs of the tile beside it on
+	## `side`, where they fit, the focused pane still focused.
+	join_beside : State, Grid.Side -> State
+	join_beside = |state, side|
+		match (Model.focused_tile(state), Model.beside_focus(state, side)) {
+			(Ok(tile), Ok(other)) if tile.panes.all(|listed_pane| Widgets.fits(Widgets.find(listed_pane.widget), Model.slot_of(state, other.id))) => {
+				joined = Model.tidied({ ..state, grid: Grid.join(state.grid, tile.id, other.id, |grows, closed| Model.slot_of(state, grows) == Model.slot_of(state, closed)), active_tile: other.id })
+				if (state.shell == Workbench and !Model.workbench_holds(joined.grid)) state else joined
+			}
+			_ => state
+		}
+
+	## Moves the focused tile's edge on `side` that way (`Grid.nudged`).
+	resize_focused : State, Grid.Side -> State
+	resize_focused = |state, side|
+		match Model.focused_tile(state) {
+			Ok(tile) => { ..state, grid: Grid.nudged(state.grid, tile.id, side) }
+			Err(NotFound) => state
+		}
+
 	## Where a pane's ⋯ menu moves it, each named: in a Workbench, the other
 	## slots its widget fits; in Tiling, into the tile beside it each way, or
 	## into a new tile on that side unless it is alone in its own.
@@ -3108,6 +3171,27 @@ expect {
 		and allowed(tiling, "pane-1", Beside({ tile: "tile-3", side: Right }))
 		and !allowed(tiling, "pane-1", Beside({ tile: "tile-1", side: Right }))
 		and !allowed(tiling, "pane-1", Into({ tile: "tile-9", at: End }))
+}
+
+# The layout's keys focus, move, swap, split, join and resize tiles by the
+# one focused, within a Workbench's slots.
+expect {
+	tiling = { ..Model.layout(Model.initial(""), Model.tiling), focused_pane: "pane-2" }
+	developer = { ..Model.initial(""), focused_pane: "pane-3" }
+	joined = Model.join_beside(tiling, Left)
+	split = Model.split_focused(joined, Down)
+	Model.focus_beside(tiling, Right).focused_pane == "pane-3"
+		and Model.focus_beside(tiling, Up) == tiling
+		and laid(Model.move_focused(tiling, Right)) == [["pane-1"], ["pane-3", "pane-2"]]
+		and laid(Model.swap_beside(tiling, Left)) == [["pane-2"], ["pane-1"], ["pane-3"]]
+		and laid(joined) == [["pane-1", "pane-2"], ["pane-3"]]
+		and Model.tile_of(joined, "pane-2").map_ok(|tile| tile.active) == Ok("pane-2")
+		and laid(split) == [["pane-1", "pane-2"], ["pane-3"]]
+		and split.grid.rows == [1, 1]
+		and Model.resize_focused(tiling, Right).grid.columns == [100, 229, 71]
+		and Model.swap_beside(developer, Left) == developer
+		and Model.join_beside(developer, Left) == developer
+		and Model.join_beside({ ..developer, focused_pane: "pane-1" }, Right) == { ..developer, focused_pane: "pane-1" }
 }
 
 # In a Workbench, splitting the main area adds rows the drawers span, or

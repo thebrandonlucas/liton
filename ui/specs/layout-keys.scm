@@ -1,0 +1,22 @@
+(test "Liton — outside a text field, Ctrl or Cmd with Shift and an arrow focuses the tile that way, and w then a letter, or m and a letter, focuses or moves the pane"
+  (steps
+    (click (role button :name "Settings"))
+    (click (role button :name "Tiling preset"))
+    (click (role button :name "Settings"))
+    (click (role region :name "Chat"))
+    (expect-attr (role region :name "Chat") class "pane focused")
+    (press "Control+Shift+ArrowRight")
+    (expect-attr (role region :name "Capabilities") class "pane focused")
+    (press "Meta+Shift+ArrowLeft")
+    (expect-attr (role region :name "Chat") class "pane focused")
+    (press "w")
+    (press "h")
+    (expect-attr (role region :name "Sessions") class "pane focused")
+    ; w, m and l move the pane focused into the tile on the right.
+    (press "w")
+    (press "m")
+    (press "l")
+    (expect-visible (role button :name "Chat · Sessions"))
+    (expect-attr (role region :name "Sessions") class "pane focused")
+  )
+)
