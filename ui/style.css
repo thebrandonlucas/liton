@@ -662,7 +662,7 @@ kbd:empty { display: none; }
    long it has worked over its actions, then its latest activity. */
 .session-overview { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 10px; border-bottom: 1px solid var(--edge); }
 .overview-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--muted); }
-.overview-line .status-word { font-weight: 600; text-transform: capitalize; }
+.overview-line .status-word { font-weight: 600; }
 .overview-line .status-word.running { color: var(--ok); }
 .overview-line .status-word.waiting { color: var(--warn); }
 .overview-line .status-word.failed { color: var(--fail); }
@@ -1224,6 +1224,14 @@ kbd:empty { display: none; }
   .tree-session { padding-left: calc(12px + var(--depth, 0) * 18px); }
   .create-form input, .create-form select, .create-actions button { min-height: 44px; }
   .inbox-main .row-title, .inbox-actions button, .permission button { min-height: 44px; }
+  /* The inbox: its counters and filters each one row that scrolls, and a
+     row's time and actions under it, so its title and lines have the width. */
+  .inbox-counters, .inbox-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .inbox-counters .inbox-counter { flex: 0 0 auto; padding: 4px 10px; }
+  .inbox-counter .count { font-size: 16px; }
+  .inbox-filter, .inbox-counters .mark-read { flex: none; }
+  .inbox-row { grid-template-columns: auto minmax(0, 1fr); }
+  .inbox-side { grid-column: 2; flex-direction: row; align-items: center; }
   .inbox-actions .icon { min-width: 40px; }
   .git-file { min-height: 44px; }
   .changes .scope { min-height: 40px; }
