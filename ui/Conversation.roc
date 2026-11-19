@@ -4,11 +4,12 @@
 import pf.Engine exposing [Elem, HandlerOf, Signal, State]
 import pf.Html
 import Model
+import Spinner
 
 Conversation := [].{
 
 	## A timeline of the entries a caller draws, as a list of class `class`
-	## and part `part`, with "Loading…" under it while `loading`. Its key
+	## and part `part`, with a spinner in its place while `loading`. Its key
 	## names the pane's jumps and anchor. A `jump` button, such as Jump to
 	## latest, scrolls back to the newest entry ("" for none); while
 	## `earlier`, Show earlier shows more.
@@ -37,7 +38,7 @@ Conversation := [].{
 					Engine.when(earlier, || Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier"), Engine.on_seen({ ahead: Bool.True }, model.set_value_by(key, |state, pane_id, seen| if (seen.intersecting) Model.show_earlier(state, pane_id) else state))], model.update_by(key, Model.show_earlier))]), || Engine.text("")),
 				]),
 			),
-			Engine.when(loading, || Html.p("Loading…", "missing"), || Engine.text("")),
+			Engine.when(loading, || Spinner.spinner("Loading", Pane), || Engine.text("")),
 		]
 	}
 

@@ -12,11 +12,11 @@
     (click (role button :name "src/Auth.roc"))
     ; Picked before the daemon answers, and asked for at once.
     (expect-attr (role button :name "src/Auth.roc") aria-pressed "true")
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/Uncommitted\",\"cursor\":\"g1\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"file/fix-auth/Uncommitted/src%2FAuth.roc\",\"cursor\":\"h1\",\"events\":[{\"File\":{\"path\":\"src/Auth.roc\",\"hunks\":[{\"old_start\":40,\"old_count\":3,\"new_start\":40,\"new_count\":3,\"lines\":[{\"kind\":\"Context\",\"text\":\"login\",\"old_line\":40,\"new_line\":40},{\"kind\":\"Removed\",\"text\":\"go(login_page)\",\"old_line\":41,\"new_line\":0},{\"kind\":\"Added\",\"text\":\"go(came_from)\",\"old_line\":0,\"new_line\":41},{\"kind\":\"Context\",\"text\":\"start\",\"old_line\":42,\"new_line\":42}]}]}}]}]}")
     (run-effect 4)
-    (expect-absent (text "Loading…"))
+    (expect-absent (role status :name "Loading"))
     (expect-visible (text "@@ -40,3 +40,3 @@"))
     ; Each line highlighted, after its sign.
     (expect-visible (text "- "))

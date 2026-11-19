@@ -2693,34 +2693,36 @@ Model := [].{
 	file_rows : State, Pane -> List(Row)
 	file_rows = |state, shown| folder_rows(state, Model.context_of(state, shown), Model.file_pane(state, shown.id), ".", 0)
 
-	## What a Files pane says of its root, "" once it lists it.
-	tree_status : State, Pane -> Str
+	## What a Files pane says of its root, "" once it lists it, or that it
+	## is loading it.
+	tree_status : State, Pane -> [Loading, Said(Str)]
 	tree_status = |state, shown| {
 		context = Model.context_of(state, shown)
 		match state.trees.find_first(|known| known.context == context and known.tree.path == ".").map_ok(|known| known.tree.listing) {
-			_ if context == Session("") => "Pick a session to see its files."
-			Ok(Listed([])) => "No files."
-			Ok(Listed(_)) => ""
-			Ok(Unreadable(why)) => "Can't read its files: ${why}"
-			_ => "Loading…"
+			_ if context == Session("") => Said("Pick a session to see its files.")
+			Ok(Listed([])) => Said("No files.")
+			Ok(Listed(_)) => Said("")
+			Ok(Unreadable(why)) => Said("Can't read its files: ${why}")
+			_ => Loading
 		}
 	}
 
 	## What a Files pane says of its file: why it shows none of it or not
-	## all, "" when it shows it whole or there is none.
-	file_status : State, Pane -> Str
+	## all, "" when it shows it whole or there is none, or that it is
+	## loading it.
+	file_status : State, Pane -> [Loading, Said(Str)]
 	file_status = |state, shown| {
 		context = Model.context_of(state, shown)
 		{ file, .. } = Model.file_pane(state, shown.id)
 		match state.texts.find_first(|known| known.context == context and known.contents.path == file) {
-			_ if file.is_empty() => ""
-			Ok({ contents: { read: Binary({ size, .. }), .. }, .. }) => "A binary file of ${size_text(size)}."
-			Ok({ contents: { read: TooLarge, .. }, .. }) => "Too large to show."
-			Ok({ contents: { read: Unreadable(why), .. }, .. }) => "Can't read it: ${why}"
-			Ok({ contents: { read: Text({ truncated: Bool.True, size, .. }), .. }, .. }) => "Its first ${size_text(Files.text_limit)} of ${size_text(size)}."
-			Ok({ contents: { read: Text(_), .. }, lines, .. }) if lines.len() == Model.lines_shown => "Its first ${Model.lines_shown.to_str()} lines."
-			Ok({ contents: { read: Text(_), .. }, .. }) => ""
-			_ => "Loading…"
+			_ if file.is_empty() => Said("")
+			Ok({ contents: { read: Binary({ size, .. }), .. }, .. }) => Said("A binary file of ${size_text(size)}.")
+			Ok({ contents: { read: TooLarge, .. }, .. }) => Said("Too large to show.")
+			Ok({ contents: { read: Unreadable(why), .. }, .. }) => Said("Can't read it: ${why}")
+			Ok({ contents: { read: Text({ truncated: Bool.True, size, .. }), .. }, .. }) => Said("Its first ${size_text(Files.text_limit)} of ${size_text(size)}.")
+			Ok({ contents: { read: Text(_), .. }, lines, .. }) if lines.len() == Model.lines_shown => Said("Its first ${Model.lines_shown.to_str()} lines.")
+			Ok({ contents: { read: Text(_), .. }, .. }) => Said("")
+			_ => Loading
 		}
 	}
 
@@ -3651,7 +3653,7 @@ Model := [].{
 
 	## A file of a Review pane as a card: its diff's rows, annotated, or why
 	## it shows none (`note`), and whether it is marked viewed.
-	ReviewCard : { path : Str, file : WorkspaceGit.File, rows : List(CodeRow), note : Str, viewed : Bool }
+	ReviewCard : { path : Str, file : WorkspaceGit.File, rows : List(CodeRow), note : [Loading, Said(Str)], viewed : Bool }
 
 	## The files of a Review pane's scope as cards, in the order the scope
 	## lists them, once its poll answers.
@@ -3664,10 +3666,10 @@ Model := [].{
 			rows = hunks.map_ok(|known| Model.annotated_on(state, shown, { path: file.path, scope: Model.review_scope(scope) }, Model.diff_code(Model.option(shown, "diff_layout"), file.path, known.hunks))) ?? []
 			note =
 				match (file.body, hunks) {
-					(Binary, _) => "A binary file."
-					(TooLarge, _) => "Too large to show."
-					(Text, Err(_)) => "Loading…"
-					(Text, Ok(_)) => ""
+					(Binary, _) => Said("A binary file.")
+					(TooLarge, _) => Said("Too large to show.")
+					(Text, Err(_)) => Loading
+					(Text, Ok(_)) => Said("")
 				}
 			{ path: file.path, file, rows: Model.hunk_marked(state, shown, file.path, rows), note, viewed: Model.viewed_file(state, shown, file.path) }
 		}

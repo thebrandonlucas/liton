@@ -15,7 +15,7 @@
     ; At once: the Room tab comes forward showing the room, its messages loading.
     (expect-attr (role button :name "Room") aria-pressed "true")
     (expect-text (test-id "room-title") "#general")
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (click (role button :name "Room menu"))
     (expect-visible (text "following #general"))
     (click (role button :name "Pin"))

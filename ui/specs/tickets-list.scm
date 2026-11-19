@@ -8,12 +8,12 @@
     (run-effect 3)
     ; Tickets is the right drawer's third tab, followed once shown.
     (click (role button :name "Tickets"))
-    (expect-visible (text "Loading tickets…"))
+    (expect-visible (role status :name "Loading"))
     ; Shown, the pane follows the tickets and their links.
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Tickets\":{\"sources\":[{\"id\":\"gh\",\"provider\":\"mock\",\"name\":\"mock/liton\",\"url\":\"https://example.com/gh\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"}]},{\"id\":\"LIT\",\"provider\":\"mock\",\"name\":\"Liton team\",\"url\":\"https://example.com/LIT\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"todo\",\"name\":\"Todo\",\"kind\":\"Open\"},{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},{\"id\":\"done\",\"name\":\"Done\",\"kind\":\"Done\"}]}],\"tickets\":[{\"id\":\"LIT-12\",\"provider\":\"mock\",\"source\":\"LIT\",\"key\":\"LIT-12\",\"title\":\"Logging in sends you back to /login\",\"url\":\"https://example.com/LIT/LIT-12\",\"status\":{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},\"assignees\":[{\"id\":\"ada\",\"name\":\"Ada\"}],\"labels\":[\"bug\"],\"waiting_on\":[],\"branch\":\"fix-auth\",\"updated\":\"2026-01-01T08:30:00.000Z\"},{\"id\":\"gh#9\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#9\",\"title\":\"Document the review flow\",\"url\":\"https://example.com/gh/9\",\"status\":{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},\"assignees\":[],\"labels\":[\"docs\"],\"waiting_on\":[\"ada\"],\"updated\":\"2026-01-01T07:00:00.000Z\"},{\"id\":\"gh#4\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#4\",\"title\":\"Archive sessions from their menu\",\"url\":\"https://example.com/gh/4\",\"status\":{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"},\"assignees\":[{\"id\":\"bo\",\"name\":\"Bo\"}],\"labels\":[],\"waiting_on\":[],\"updated\":\"2025-12-20T09:00:00.000Z\"}]}}]},{\"capability\":\"tickets.v1\",\"topic\":\"links\",\"cursor\":\"k1\",\"events\":[{\"Links\":[]}]}]}")
     (run-effect 4)
-    (expect-absent (text "Loading tickets…"))
+    (expect-absent (role status :name "Loading"))
     (expect-visible (text "Logging in sends you back to /login"))
     (expect-visible (text "Document the review flow"))
     (expect-absent (text "Archive sessions from their menu"))

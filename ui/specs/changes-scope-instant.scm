@@ -11,7 +11,7 @@
     (select-option (label "Scope") "AgainstBase")
     ; Switched before the daemon answers, and asked for at once.
     (expect-value (label "Scope") "AgainstBase")
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (expect-absent (role button :name "src/Auth.roc"))
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/AgainstBase\",\"cursor\":\"g2\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"AgainstBase\",\"fingerprint\":\"f2\",\"files\":[{\"additions\":1,\"body\":\"Text\",\"change\":\"Modified\",\"deletions\":1,\"path\":\"src/Auth.roc\"},{\"additions\":3,\"body\":\"Text\",\"change\":\"Added\",\"deletions\":0,\"path\":\"tests/Auth.roc\"}]},\"commits\":[]}}]}]}")
@@ -21,7 +21,7 @@
     (expect-visible (text "+4"))
     ; Back to uncommitted, its files show from the cache while it asks again.
     (select-option (label "Scope") "Uncommitted")
-    (expect-absent (text "Loading…"))
+    (expect-absent (role status :name "Loading"))
     (expect-absent (role button :name "tests/Auth.roc"))
     (expect-visible (role button :name "src/Auth.roc"))
     (expect-pending-effects 1)
