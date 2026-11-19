@@ -2182,8 +2182,8 @@ Liton := [].{
 	}
 
 	## A Workspaces pane's form, while open in it: an agent to start in a
-	## workspace, of a kind its provider offers, with a model and a first
-	## prompt; or a workspace to create of a project, a worktree on a new
+	## workspace, of a kind its provider offers, with a model, a mode and a
+	## thinking level, picked of those it offers, and a first prompt; or a workspace to create of a project, a worktree on a new
 	## branch or a checkout. Either shows starting at once. Both are one
 	## form, whose class shows the fields of the one open, to keep the
 	## module small.
@@ -2192,6 +2192,16 @@ Liton := [].{
 		form = id.map2(model.signal(), |pane_id, state| if (state.form.pane == pane_id) state.form else Model.closed_form)
 		set = |change| model.set_value(|state, text| { ..state, form: change(state.form, text) })
 		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", form.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part)], set(change))
+		# What the agent picked offers: a drop-down of each, its first
+		# option its default, while it offers any.
+		offered = form.map2(model.signal(), |shown, state| Model.form_choices(state, shown))
+		default_option = |said| Engine.element("option", [Engine.prop(Engine.Prop.value, "")], [Engine.text_s(said)])
+		picker = |name, value, listed, default_label, change|
+			Engine.when(
+				offered.map(|offers| !listed(offers).is_empty()),
+				|| Dropdown.select(Engine.const(name), form.map(value), [Engine.class("agent-field")], [default_option(offered.map(default_label))].concat(Liton.choices(offered.map(listed))), set(change)),
+				|| Engine.text(""),
+			)
 		Engine.when(
 			form.map(|shown| shown.kind != Closed),
 			||
@@ -2200,8 +2210,14 @@ Liton := [].{
 					[Engine.class_s(form.map(|shown| if (shown.kind == Agent) "create-form for-agent" else "create-form for-workspace")), Engine.on("submit", model.update(Model.submit_form))],
 					[
 						Html.p_s(form.map2(model.signal(), |shown, state| if (shown.kind == Agent) "New agent in ${state.workspaces.workspaces.find_first(|listed| listed.id == shown.place).map_ok(|listed| listed.name) ?? shown.place}" else "New workspace"), [Engine.class("create-title")]),
-						Dropdown.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field")], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| { ..shown, agent: text })),
-						field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
+						Dropdown.select(Engine.const("Agent"), form.map(|shown| shown.agent), [Engine.class("agent-field")], Liton.choices(form.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(Model.pick_agent)),
+						Engine.when(
+							offered.map(|offers| offers.models.is_empty()),
+							|| field("Model", "agent-field", "Model (optional)", |shown| shown.model, |shown, text| { ..shown, model: text }),
+							|| Dropdown.select(Engine.const("Model"), form.map(|shown| shown.model), [Engine.class("agent-field")], [default_option(offered.map(|offers| offers.defaults.model))].concat(Liton.choices(offered.map(|offers| offers.models))), model.set_value(|state, text| { ..state, form: Model.pick_model(state, state.form, text) })),
+						),
+						picker("Mode", |shown| shown.mode, |offers| offers.modes, |offers| offers.defaults.mode, |shown, text| { ..shown, mode: text }),
+						picker("Thinking", |shown| shown.thinking, |offers| offers.levels, |offers| offers.defaults.thinking, |shown, text| { ..shown, thinking: text }),
 						field("First prompt", "agent-field", "First prompt (optional)", |shown| shown.prompt, |shown, text| { ..shown, prompt: text }),
 						Dropdown.select(Engine.const("Project"), form.map(|shown| shown.place), [Engine.class("workspace-field")], Liton.choices(model.signal().map(|state| state.workspaces.projects.map(|project| { value: project.id, label: project.name }))), set(|shown, text| { ..shown, place: text })),
 						Dropdown.select(Engine.const("Kind"), form.map(|shown| if (shown.worktree) "Worktree" else "Checkout"), [Engine.class("workspace-field")], [Dropdown.option("Worktree", "Worktree on a new branch"), Dropdown.option("Checkout", "Checkout of the project")], set(|shown, text| { ..shown, worktree: text == "Worktree" })),

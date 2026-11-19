@@ -297,16 +297,17 @@ Model := [].{
 	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
 
 	## A Workspaces pane's form: an agent to start in the workspace `place`,
-	## or a workspace to create of the project `place`. `failed` says why the
-	## daemon didn't, "" until it refuses.
-	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
+	## or a workspace to create of the project `place`. An agent's model,
+	## mode and thinking level are "" for its provider's defaults. `failed`
+	## says why the daemon didn't, "" until it refuses.
+	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, mode : Str, thinking : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
 
 	## An agent started or a workspace created, from `form`, until a listing
 	## has it; `id` is "" until the daemon answers with it.
 	Creating : { serial : U64, form : Form, title : Str, id : Str }
 
 	closed_form : Form
-	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
+	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", mode: "", thinking: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
 	## cursors the UI had.
@@ -3804,6 +3805,44 @@ Model := [].{
 		state.agents.keep_if(|kind| kind.provider == provider).map(|kind| kind.agent)
 	}
 
+	## What the form's agent offers, each a value and its label: its models,
+	## its modes and the thinking levels of the model picked, or else of its
+	## default one; and what each "" picks, by its label.
+	form_choices : State, Form -> { models : List({ value : Str, label : Str }), modes : List({ value : Str, label : Str }), levels : List({ value : Str, label : Str }), defaults : { model : Str, mode : Str, thinking : Str } }
+	form_choices = |state, form| {
+		provider = state.workspaces.workspaces.find_first(|listed| listed.id == form.place).map_ok(|listed| listed.provider) ?? ""
+		kind = state.agents.find_first(|offered| offered.provider == provider and offered.agent == form.agent)
+		models = kind.map_ok(|offered| offered.models ?? []) ?? []
+		modes = kind.map_ok(|offered| offered.modes ?? []) ?? []
+		default_model = models.find_first(|offered| offered.default)
+		picked = if (form.model.is_empty()) default_model else models.find_first(|offered| offered.id == form.model)
+		levels = picked.map_ok(|offered| offered.thinking) ?? []
+		default_mode = kind.map_ok(|offered| offered.default_mode ?? "") ?? ""
+		said = |label| if (label.is_empty()) "Default" else "${label} (default)"
+		{
+			models: models.map(|offered| { value: offered.id, label: offered.label }),
+			modes: modes.map(|offered| { value: offered.id, label: offered.label }),
+			levels: levels.map(|level| { value: level.id, label: level.label }),
+			defaults: {
+				model: said(default_model.map_ok(|offered| offered.label) ?? ""),
+				mode: said(modes.find_first(|offered| offered.id == default_mode).map_ok(|offered| offered.label) ?? ""),
+				thinking: said(levels.find_first(|level| level.default).map_ok(|level| level.label) ?? ""),
+			},
+		}
+	}
+
+	## The form with another kind of agent picked, its model, mode and
+	## thinking level back to that agent's defaults; or another model, its
+	## thinking level too unless the model has it.
+	pick_agent : Form, Str -> Form
+	pick_agent = |form, agent| if (agent == form.agent) form else { ..form, agent, model: "", mode: "", thinking: "" }
+
+	pick_model : State, Form, Str -> Form
+	pick_model = |state, form, model| {
+		picked = { ..form, model }
+		if (Model.form_choices(state, picked).levels.any(|level| level.value == form.thinking)) picked else { ..picked, thinking: "" }
+	}
+
 	## Starts the agent or creates the workspace the form describes, shown
 	## at once as starting, and closes the form. An agent is focused, so the
 	## chat shows it starting.
@@ -3815,7 +3854,7 @@ Model := [].{
 		prompt = form.prompt.trim()
 		if form.kind == Agent {
 			call : { capability : Str, request : Chat.Request }
-			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), mode: Err(Missing), thinking: Err(Missing), prompt }) }
+			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), mode: optional(form.mode), thinking: optional(form.thinking), prompt }) }
 			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
 			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
 			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))
