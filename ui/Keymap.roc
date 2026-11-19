@@ -13,9 +13,10 @@ Keymap := [].{
 	## Cmd or Ctrl with B switches a Board on screen between its list and its
 	## board, else shows or hides the left drawer. Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
-	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
-	## goes to a workspace. Escape closes what is open, else goes back
-	## to a Board's list, else stops the agent.
+	## Mac. 1 to 9, with or without Alt, show a preset, and Cmd or Ctrl or
+	## `g` then 1 to 9 goes to a workspace, and `g` then `r` to the rooms.
+	## Escape closes what is open, else a room's thread, else cancels a
+	## comment, else goes back to a Board's list, else stops the agent.
 	defaults : List(Binding)
 	defaults = {
 		digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -27,14 +28,19 @@ Keymap := [].{
 			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
+			{ keys: ["Escape"], command: "thread.close" },
+			{ keys: ["Escape"], command: "review.cancel" },
 			{ keys: ["Escape"], command: "board.back" },
 			{ keys: ["Escape"], command: "board.clear" },
 			{ keys: ["Escape"], command: "agent.stop" },
+			{ keys: ["g", "r"], command: "rooms.focus" },
 		]
 			.concat(Keymap.board)
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
-			.concat(digits.map(|digit| { keys: ["g", digit], command: "workspace.${digit}" }))
+			.concat(digits.join_map(|digit| [{ keys: ["Mod+${digit}"], command: "workspace.${digit}" }, { keys: ["g", digit], command: "workspace.${digit}" }]))
+			.concat(Keymap.workspaces)
 			.concat(Keymap.layout)
+			.concat(Keymap.review)
 	}
 
 	## The Board's keys, Linear's: J or K, or the arrows, move the cursor
@@ -54,6 +60,40 @@ Keymap := [].{
 		{ keys: ["a"], command: "ticket.assign" },
 		{ keys: ["f"], command: "board.filter" },
 		{ keys: ["/"], command: "board.search" },
+	]
+
+	## The Review surface's keys, crit.md's: j and k focus the next and
+	## previous hunk, ] and [ the next and previous thread, c comments on
+	## what is focused, Ctrl+Enter or Cmd+Enter keeps the comment (its box
+	## hears them too), a marks the file in view viewed and Shift+F finishes
+	## the review.
+	review : List(Binding)
+	review = [
+		{ keys: ["j"], command: "review.next-hunk" },
+		{ keys: ["k"], command: "review.previous-hunk" },
+		{ keys: ["]"], command: "review.next-comment" },
+		{ keys: ["["], command: "review.previous-comment" },
+		{ keys: ["c"], command: "review.comment" },
+		{ keys: ["Mod+Enter"], command: "review.submit" },
+		{ keys: ["a"], command: "review.viewed" },
+		{ keys: ["F"], command: "review.finish" },
+	]
+
+	## Paseo's keys between workspaces and tabs: Cmd or Ctrl with [ or ], or
+	## `g` then [ or ], goes to the workspace before or after; Cmd or Ctrl
+	## with T, or `t` then `n`, opens the new tab menu, and with W, or `t`
+	## then `w`, closes the tab. A browser's tab keeps Cmd+T and Cmd+W, and
+	## Ctrl+1 to 9, for itself.
+	workspaces : List(Binding)
+	workspaces = [
+		{ keys: ["Mod+["], command: "workspace.previous" },
+		{ keys: ["g", "["], command: "workspace.previous" },
+		{ keys: ["Mod+]"], command: "workspace.next" },
+		{ keys: ["g", "]"], command: "workspace.next" },
+		{ keys: ["Mod+t"], command: "tab.new" },
+		{ keys: ["t", "n"], command: "tab.new" },
+		{ keys: ["Mod+w"], command: "tab.close" },
+		{ keys: ["t", "w"], command: "tab.close" },
 	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the
@@ -164,7 +204,7 @@ Keymap := [].{
 # shown was changed.
 expect {
 	state = Keymap.pressed(Keymap.defaults, Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Keymap.pressed(Keymap.defaults, Model.close_pane(state, "pane-2"), "Alt+1"), "Developer") and Keymap.pressed(Keymap.defaults, state, "7") == state
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Keymap.pressed(Keymap.defaults, Model.close_pane(state, "pane-2"), "Alt+1"), "Developer") and Keymap.pressed(Keymap.defaults, state, "8") == state
 }
 
 # `g` waits for the key after it: a digit goes to that workspace, Escape

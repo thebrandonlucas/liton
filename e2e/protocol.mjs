@@ -201,13 +201,13 @@ try {
   await step("liton setup evaluates a Litonfile to the same JSON each time, which the manifest offers", async () => {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
-    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Board"], "Developer"]);
+    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
     assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme });
-    assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain", "Graphite"], "Pastoral"]);
+    assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain", "Neutral", "Sky", "Graphite"], "Pastoral"]);
   });
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
-    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Chat", "Board", "Review"], "Review"]);
+    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"], "Review"]);
   });
   await step("review.v1 keeps a context's threads, moves one to its lines, and sends the drafts to the agent as one message", async () => {
     const threads = async () => (await post("poll", { topics: [{ capability: "review.v1", topic: "threads/notes", after: "" }] })).topics[0].events[0].Threads;
@@ -275,9 +275,9 @@ try {
     const poll = async (...topics) => (await post("poll", { topics })).topics;
     const send = (room_id, text) => call("rooms.v1", { Send: { room_id, text, place: "TopLevel", mentions: [] } });
     const rooms = async () => (await call("rooms.v1", "ListRooms")).Ok.Rooms;
-    assert.deepEqual((await rooms()).map((r) => [r.id, r.kind, r.joined]), [["general", "Channel", true], ["ideas", "Forum", true], ["releases", "Announce", false]]);
+    assert.deepEqual((await rooms()).map((r) => [r.id, r.kind, r.joined]), [["general", "Channel", true], ["ideas", "Forum", true], ["releases", "Announce", false], ["scout", "Direct", true]]);
     const [listed, members, general, thread, missing] = await poll(room("rooms"), room("members/general"), room("messages/general"), room("thread/general/general-1"), room("messages/nope"));
-    assert.deepEqual([listed.events[0].Rooms.length, members.events[0].Members.map((m) => m.id)], [3, ["you", "ada", "scout", "patch"]]);
+    assert.deepEqual([listed.events[0].Rooms.length, members.events[0].Members.map((m) => m.id)], [4, ["you", "ada", "scout", "patch"]]);
     assert.deepEqual([general.events.map((e) => e.RoomEntry.sequence), thread.events.map((e) => e.RoomEntry.sequence)], [[1, 3, 5], [2, 4]]);
     assert.equal(missing.error.code, "NotFound");
     assert.deepEqual(await send("general", "@Scout run the tests"), { Ok: { Sent: { message_id: "general-6" } } });

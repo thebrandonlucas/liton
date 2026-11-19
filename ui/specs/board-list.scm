@@ -6,8 +6,8 @@
     (run-effect 2)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/docs\",\"cursor\":\"t1\",\"events\":[]}]}")
     (run-effect 3)
-    ; The Board preset is the fifth.
-    (press "5")
+    ; The Board preset is the seventh.
+    (press "7")
     (expect-visible (role region :name "Scopes"))
     (expect-visible (role region :name "Properties"))
     (expect-visible (text "Loading tickets…"))

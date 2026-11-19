@@ -8,6 +8,7 @@
     (run-effect 3)
     (click (role button :name "Settings"))
     (expect-port-call 4 "liton/voice/voices" "{}")
+    (click (role button :name "Voice"))
     (answer-port 4 reply "{\"voices\":[{\"name\":\"Samantha\",\"local\":true},{\"name\":\"Google US English\",\"local\":false}],\"voice\":\"default\",\"rate\":\"1\"}")
     (expect-value (label "Speaking voice") "default")
     (expect-visible (text "Google US English (online)"))

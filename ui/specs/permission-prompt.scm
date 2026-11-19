@@ -5,11 +5,11 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"AwaitingPermission\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"w1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\",\"s2\"],\"state\":\"Idle\"}]}}]}]}")
     (run-effect 2)
     (expect-text (test-id "session-status") "idle")
-    (expect-visible (text "waiting for you"))
+    (expect-visible (role button :name "Needs input"))
     (expect-absent (role button :name "Allow"))
-    ; Selecting the session makes the chat follow it, and polls for its
+    ; Picking its tab makes the chat follow it, and polls for its
     ; timeline once the poll on its way, of the first session's, answers.
-    (click (role button :name "Fix tests"))
+    (click (role tab :name "Fix tests"))
     (expect-text (test-id "session-title") "Fix tests")
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
@@ -28,7 +28,7 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c2\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s2\",\"cursor\":\"2\",\"events\":[{\"Entry\":{\"event\":{\"PermissionAnswered\":{\"allowed\":true,\"request_id\":\"p1\"}},\"sequence\":2}}]}]}")
     (run-effect 6)
     (expect-absent (role button :name "Allow"))
-    (expect-absent (text "waiting for you"))
+    (expect-absent (role button :name "Needs input"))
     (expect-visible (text "allowed"))
     (expect-absent (text "Allowing…"))
   )

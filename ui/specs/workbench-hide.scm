@@ -22,7 +22,7 @@
     (click (role button :name "Hide right drawer"))
     (expect-attr (role button :name "Right drawer") aria-expanded "false")
     (click (role button :name "Right drawer"))
-    (expect-attr (role region :name "Files") class "pane")
+    (expect-attr (role region :name "Files") class "pane focused")
     (click (role button :name "Files menu"))
     (click (role button :name "Show Changes"))
     (expect-attr (role region :name "Changes") class "pane focused")

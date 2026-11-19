@@ -6,7 +6,7 @@
     (click (role button :name "Move to main area"))
     (expect-text (test-id "show-main") "Chat · Files")
     (expect-text (test-id "show-right") "Changes · Tickets")
-    (expect-attr (role button :name "Files") aria-pressed "true")
+    (expect-attr (role tab :name "Files") aria-selected "true")
     (click (role button :name "Files menu"))
     (click (role button :name "Move to right drawer"))
     (expect-text (test-id "show-main") "Chat")
