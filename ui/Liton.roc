@@ -292,7 +292,10 @@ Liton := [].{
 							"Palette",
 							[Engine.class("palette"), Engine.attr("role", "dialog")],
 							[
-								Html.text_input(Engine.const("Command or place"), "text", model.signal().map(|state| state.palette.query), [Engine.ref("palette"), Engine.attr("placeholder", "Type a command, session or workspace"), Engine.attr("autocomplete", "off"), Engine.on_key({ keymap: Engine.const(Engine.Keymap.prevent(moves)) }, model.set_value(moved))], model.set_value(Palette.typed)),
+								# Password managers fill any text box that looks like a login unless
+								# told not to, each by its own attribute (Bitwarden, 1Password,
+								# LastPass, Dashlane); a search combobox reads as no login.
+								Html.text_input(Engine.const("Command or place"), "search", model.signal().map(|state| state.palette.query), [Engine.ref("palette"), Engine.attr("placeholder", "Type a command, session or workspace"), Engine.attr("autocomplete", "off"), Engine.attr("role", "combobox"), Engine.attr("aria-autocomplete", "list"), Engine.attr("spellcheck", "false"), Engine.attr("data-bwignore", "true"), Engine.attr("data-1p-ignore", "true"), Engine.attr("data-lpignore", "true"), Engine.attr("data-form-type", "other"), Engine.on_key({ keymap: Engine.const(Engine.Keymap.prevent(moves)) }, model.set_value(moved))], model.set_value(Palette.typed)),
 								Engine.when(shown.map(List.is_empty), || Html.p("Nothing matches.", "palette-empty"), || Engine.text("")),
 								Html.ul(
 									[Engine.class("palette-entries"), Engine.attr("role", "listbox"), Html.aria_label("Commands and places")],

@@ -140,6 +140,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Password managers such as Bitwarden, 1Password and LastPass no longer offer to fill the ⌘K palette's search box.
 - On a phone, a tool call that is still running shows its card again, not an empty box.
 - The page title's count of what needs you now leaves out sessions you settled or snoozed, and is the same whatever the layout, not only when an Inbox pane is open.
 - Sending a message by pressing Enter clears the message box, so the next message no longer starts with the text of the last.

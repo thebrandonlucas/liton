@@ -8,6 +8,11 @@
     (press "Control+k")
     (expect-visible (role dialog :name "Palette"))
     (expect-focused (label "Command or place"))
+    ; Password managers leave it alone.
+    (expect-attr (label "Command or place") data-bwignore "true")
+    (expect-attr (label "Command or place") data-1p-ignore "true")
+    (expect-attr (label "Command or place") data-lpignore "true")
+    (expect-attr (label "Command or place") autocomplete "off")
     ; Each command shows its keys.
     (expect-text (role option :name "Open or close Settings") "Open or close SettingsViewCtrl+,")
     (expect-text (role option :name "docs") "docsWorkspace in appG then 2")
