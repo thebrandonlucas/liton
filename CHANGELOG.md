@@ -115,6 +115,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Since round, in the Review view's bar once a round is sent, shows only the files the agent changed since the round you sent from this browser, in the view and the navigator. Without that round's files (another browser sent it, or the page reloaded since) it says it can't tell: the daemon doesn't keep the code each round was sent against yet.
 - chat.v1 sessions tell the mode their agent works in, its thinking level, the modes it can switch to and what its last turn used (`mode`, `thinking`, `modes`, `usage`), and the `agents` topic each kind's models with their thinking levels, and its modes. `Configure` switches a session's model, mode or thinking level, and `Create` starts an agent in a mode and at a thinking level.
 - The mock's agents offer two models each, with low, medium and high thinking, and modes such as Plan; their sessions switch them with `Configure` and tell what their last turn used, more with each message.
+- Paseo's agents tell, as chat.v1 sessions, the mode they work in and the modes they can switch to, their thinking level, and what their last turn used: the context window filled, tokens and cost.
 
 ### Changed
 

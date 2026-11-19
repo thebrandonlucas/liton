@@ -31,6 +31,22 @@ Paseo := [].{
 		}
 	}
 
+	## A number Paseo sends, such as a cost, read as a Dec, or none when it
+	## is one a Dec can't hold, so an odd number costs the listing nothing.
+	Number := [Number(Dec), NotNumber].{
+		parser_for = |encoding| {
+			parse_number = Dec.parser_for(encoding)
+			|state|
+				match parse_number(state) {
+					Ok(parsed) => Ok({ value: Number(parsed.value), rest: parsed.rest })
+					Err(_) => Ok({ value: NotNumber, rest: encoding.skip_record_field(state)? })
+				}
+		}
+	}
+
+	## What an agent's last turn used, as Paseo's `lastUsage` tells it.
+	Usage : { input_tokens : Try(Number, [Missing]), cached_input_tokens : Try(Number, [Missing]), output_tokens : Try(Number, [Missing]), total_cost_usd : Try(Number, [Missing]), context_window_max_tokens : Try(Number, [Missing]), context_window_used_tokens : Try(Number, [Missing]) }
+
 	## The object a `Loose` value can be.
 	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
 		parser_for : _
@@ -322,6 +338,11 @@ Paseo := [].{
 		updated_at : Str,
 		last_user_message_at : Try(Str, [Null]),
 		attention_timestamp : Try(Try(Str, [Null]), [Missing]),
+		current_mode_id : Try(Try(Str, [Null]), [Missing]),
+		available_modes : Try(List(Chat.Option), [Missing]),
+		thinking_option_id : Try(Try(Str, [Null]), [Missing]),
+		effective_thinking_option_id : Try(Try(Str, [Null]), [Missing]),
+		last_usage : Try(Usage, [Missing]),
 	}
 
 	## Asks for as many agents as Paseo lists at once, without archived ones.
@@ -335,7 +356,9 @@ Paseo := [].{
 	## wants because it finished, until you look, is finished. An untitled one
 	## goes by its id's first 7 characters, as Paseo's short id. Each session
 	## tells its model, workspace, the branch Paseo placed it on, when its
-	## running turn started and when it last changed, as far as Paseo does.
+	## running turn started and when it last changed, its mode and the modes
+	## it has, the thinking level it runs at and what its last turn used, as
+	## far as Paseo does.
 	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
 	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
 	agents_answer = |text, request_id| {
@@ -353,11 +376,35 @@ Paseo := [].{
 						branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
 						running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
 						updated: Ok(agent.updated_at),
+						mode: optional(agent.current_mode_id ?? Err(Null)),
+						thinking: match (agent.effective_thinking_option_id, agent.thinking_option_id) {
+							(Ok(Ok(effective)), _) => Ok(effective)
+							(_, Ok(Ok(chosen))) => Ok(chosen)
+							_ => Err(Missing)
+						},
+						modes: if ((agent.available_modes ?? []).is_empty()) Err(Missing) else agent.available_modes,
+						usage: agent.last_usage.map_ok(Paseo.usage),
 					}
 					{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
 				},
 			),
 		)
+	}
+
+	## An agent's `lastUsage` as chat.v1's, its token counts whole.
+	usage : Usage -> Chat.Usage
+	usage = |used| {
+		amount = |field|
+			match field {
+				Ok(Number(value)) => Ok(value)
+				_ => Err(Missing)
+			}
+		tokens = |field|
+			match amount(field) {
+				Ok(value) => value.round_to_u64_try().map_err(|_| Missing)
+				Err(Missing) => Err(Missing)
+			}
+		{ context_used: tokens(used.context_window_used_tokens), context_max: tokens(used.context_window_max_tokens), input_tokens: tokens(used.input_tokens), cached_input_tokens: tokens(used.cached_input_tokens), output_tokens: tokens(used.output_tokens), cost_usd: amount(used.total_cost_usd) }
 	}
 
 	## The ids of the `count` sessions that changed last, by `updated`, the
@@ -809,10 +856,10 @@ expect !Paseo.answers_request("{\"type\":\"pong\"}", "r1")
 
 expect {
 	not_git = "\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null,\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"
-	agent = |fields, checkout| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"currentModeId\":null,\"availableModes\":[],\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{${checkout}}}}"
+	agent = |fields, checkout| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{${checkout}}}}"
 	entries = [
-		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
-		agent("\"id\":\"a3\",\"model\":null,\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
+		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"thinkingOptionId\":null,\"effectiveThinkingOptionId\":\"high\",\"currentModeId\":\"plan\",\"availableModes\":[{\"id\":\"default\",\"label\":\"Default\",\"icon\":\"shield\"},{\"id\":\"plan\",\"label\":\"Plan\"}],\"lastUsage\":{\"inputTokens\":1200,\"outputTokens\":300,\"totalCostUsd\":0.0125,\"contextWindowMaxTokens\":200000,\"contextWindowUsedTokens\":41000.0},\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
+		agent("\"id\":\"a3\",\"model\":null,\"currentModeId\":null,\"availableModes\":[],\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
 		agent("\"id\":\"a4\",\"model\":null,\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]", not_git),
 	]
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
@@ -821,7 +868,7 @@ expect {
 		== Ok([
 			{ session: listed("a3", "Done", Finished, Ok("w1"), "2026-01-01T00:00:00.000Z"), directory: "/work", workspace_id: "w1" },
 			{ session: listed("a4", "Asks", AwaitingPermission, Err(Missing), "2026-01-02T00:00:00.000Z"), directory: "/work", workspace_id: "" },
-			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z") }, directory: "/work", workspace_id: "w1" },
+			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z"), mode: Ok("plan"), thinking: Ok("high"), modes: Ok([{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }]), usage: Ok({ context_used: Ok(41_000), context_max: Ok(200_000), input_tokens: Ok(1_200), cached_input_tokens: Err(Missing), output_tokens: Ok(300), cost_usd: Ok(0.0125) }) }, directory: "/work", workspace_id: "w1" },
 		])
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
