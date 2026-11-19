@@ -1,0 +1,91 @@
+## Every action keys run, by name: what it is called, the group it is
+## listed under, when it applies and what it does to the model.
+import Model
+
+Commands := [].{
+
+	## `applies` says whether the command can run now, and `run` runs it.
+	Command : { id : Str, title : Str, group : Str, applies : Model.State -> Bool, run : Model.State -> Model.State }
+
+	## The commands, each preset's numbered by its place, the first's `preset.1`.
+	all : Model.State -> List(Command)
+	all = |state| {
+		workbench = |shown| shown.shell == Workbench
+		always = |_| Bool.True
+		[
+			{ id: "drawer.left", title: "Show or hide the left drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Left) },
+			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
+			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
+			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
+			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
+		].concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+	}
+
+	## Runs the first of the commands named that applies, if any does.
+	run_first : Model.State, List(Str) -> Model.State
+	run_first = |state, ids| {
+		commands = Commands.all(state)
+		match ids.join_map(|id| commands.keep_if(|command| command.id == id)).find_first(|command| (command.applies)(state)) {
+			Ok(command) => (command.run)(state)
+			Err(NotFound) => state
+		}
+	}
+
+	## Whether something is open to close: a row's renaming, a menu,
+	## Settings or a Workspaces pane's form.
+	closes : Model.State -> Bool
+	closes = |state| !state.renaming.key.is_empty() or state.show_settings or !state.menu.is_empty() or state.form.kind != Closed
+
+	## Leaves a row's renaming, else closes a menu and Settings, else a
+	## Workspaces pane's form.
+	close : Model.State -> Model.State
+	close = |state|
+		if !state.renaming.key.is_empty() {
+			{ ..state, renaming: Model.not_renaming }
+		} else if state.show_settings or !state.menu.is_empty() {
+			{ ..state, show_settings: Bool.False, menu: "" }
+		} else {
+			{ ..state, form: Model.closed_form }
+		}
+
+	## The chat focused, else the first.
+	chat : Model.State -> Model.Pane
+	chat = |state| {
+		chats = Model.panes(state).keep_if(|shown| shown.widget == "chat")
+		chats.find_first(|shown| shown.id == state.focused_pane) ?? (chats.first() ?? Model.pane(state, ""))
+	}
+
+	## Whether the agent of `chat`'s session is working and not being stopped.
+	stops : Model.State -> Bool
+	stops = |state| {
+		session = Model.session(state, Model.session_of(state, Commands.chat(state)))
+		Model.busy(session.status) and Model.stopping(state, session.id) != Stopping
+	}
+
+	## A key pressed outside a text field: 1 to 9, with or without Alt (or
+	## Option, which types ¡ to ª on a Mac), shows that preset, and Ctrl+B
+	## and Ctrl+E show or hide a Workbench's drawers and Ctrl+, opens or
+	## closes Settings, as Cmd+B, Cmd+E and Cmd+, do anywhere. Escape,
+	## anywhere, closes what is open (`close`), else stops the agent of the
+	## chat focused, or of the first chat.
+	pressed : Model.State, Str -> Model.State
+	pressed = |state, key| {
+		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
+		option_glyph = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
+		ids = match (numbered, option_glyph) {
+			(Ok(index), _) | (_, Ok(index)) => ["preset.${(index + 1).to_str()}"]
+			_ if key == "Escape" => ["close", "agent.stop"]
+			_ if key == "Ctrl+B" => ["drawer.left"]
+			_ if key == "Ctrl+E" => ["drawer.right"]
+			_ if key == "Ctrl+," => ["settings"]
+			_ => []
+		}
+		Commands.run_first(state, ids)
+	}
+}
+
+# 1 to 9 show the presets in order, however the one shown was changed.
+expect {
+	state = Commands.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
+	Model.preset_shown(state, "Tiling") and Model.preset_shown(Commands.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Commands.pressed(state, "7") == state
+}

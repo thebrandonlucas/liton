@@ -480,33 +480,6 @@ Model := [].{
 	use_theme : State, Str -> State
 	use_theme = |state, name| { ..state, theme: name }
 
-	## A key pressed outside a text field: 1 to 9, with or without Alt (or
-	## Option, which types ¡ to ª on a Mac), shows that preset, and Ctrl+B
-	## and Ctrl+E show or hide a Workbench's drawers and Ctrl+, opens or
-	## closes Settings, as Cmd+B, Cmd+E and Cmd+, do anywhere. Escape,
-	## anywhere, leaves a row's renaming, else closes a menu or Settings,
-	## else a Workspaces pane's form, else stops the agent of the chat
-	## focused, or of the first chat.
-	pressed : State, Str -> State
-	pressed = |state, key| {
-		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
-		option_glyph = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
-		chats = Model.panes(state).keep_if(|shown| shown.widget == "chat")
-		chat = chats.find_first(|shown| shown.id == state.focused_pane) ?? (chats.first() ?? Model.pane(state, ""))
-		chat_session = Model.session(state, Model.session_of(state, chat))
-		match (numbered, option_glyph, state.presets.get(numbered ?? (option_glyph ?? 9))) {
-			_ if key == "Escape" and !state.renaming.key.is_empty() => { ..state, renaming: Model.not_renaming }
-			(_, _, Ok(preset)) => Model.with_snapshot_text(Model.use_preset(state, preset.name))
-			_ if key == "Escape" and (state.show_settings or !state.menu.is_empty()) => { ..state, show_settings: Bool.False, menu: "" }
-			_ if key == "Escape" and state.form.kind != Closed => { ..state, form: Model.closed_form }
-			_ if key == "Escape" and Model.busy(chat_session.status) and Model.stopping(state, chat_session.id) != Stopping => Model.stop(state, chat.id)
-			_ if key == "Ctrl+B" and state.shell == Workbench => Model.toggle_drawer(state, Left)
-			_ if key == "Ctrl+E" and state.shell == Workbench => Model.toggle_drawer(state, Right)
-			_ if key == "Ctrl+," => Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })
-			_ => state
-		}
-	}
-
 	## Marks the pane clicked or focused in, and shows its column on a narrow
 	## screen. Another pane's menu, or one of its rows', closes.
 	focus_pane : State, { pane : Str, column : Str } -> State
@@ -2976,12 +2949,6 @@ expect {
 	picked = Model.use_preset(Model.use_theme(Model.initial(""), "Plain"), "Tiling")
 	offered = Model.set_up(Model.initial(""), { ..Setup.offered(Setup.empty), themes: [Default.plain, Default.hypr], default_theme: "Hypr" })
 	Model.theme_shown(Model.initial("")).name == "Pastoral" and Model.theme_shown(Model.initial(Json.to_str(Model.snapshot(picked)))).name == "Plain" and Model.theme_shown(offered).name == "Hypr" and Model.theme_shown(Model.use_theme(offered, "Pastoral")).name == "Hypr"
-}
-
-# 1 to 9 show the presets in order, however the one shown was changed.
-expect {
-	state = Model.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Model.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Model.pressed(state, "7") == state
 }
 
 # Focused on a workspace, Changes follows its git, and the chat its session

@@ -17,6 +17,7 @@ import Microphone
 import Ports
 import Themes
 import Model
+import Commands
 import TicketDesk
 import Widgets
 import Dropdown
@@ -53,7 +54,7 @@ Liton := [].{
 	## The theme is custom properties on the root (`Themes.style`), which the
 	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`) with Cmd
 	## anywhere, and with Ctrl or other keys outside a text field, whose
-	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Model.pressed`.
+	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Commands.pressed`.
 	page : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> Elem(Ctx)
 	page = |model, drag|
 		Engine.element(
@@ -61,7 +62,7 @@ Liton := [].{
 			[
 				Engine.class("liton"),
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
-				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_meta())).concat(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_ctrl())).outside_text()).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Model.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord.primary().any(|alternative| alternative == key.heard)).map_ok(|(_, name)| name) ?? key.key)).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
+				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_meta())).concat(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_ctrl())).outside_text()).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Commands.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord.primary().any(|alternative| alternative == key.heard)).map_ok(|(_, name)| name) ?? key.key)).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
 			],
 			[
 				# A Workbench has no bar: its drawers' buttons are in the main
@@ -226,7 +227,7 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
-	## The keys heard with Ctrl or Cmd, by the names `Model.pressed` takes:
+	## The keys heard with Ctrl or Cmd, by the names `Commands.pressed` takes:
 	## B and E show or hide the drawers, as in Paseo, and comma Settings.
 	shortcuts : List((Engine.Chord, Str))
 	shortcuts = [(Engine.Chord.plain("b"), "Ctrl+B"), (Engine.Chord.plain("e"), "Ctrl+E"), (Engine.Chord.plain(","), "Ctrl+,")]
