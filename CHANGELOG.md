@@ -83,6 +83,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Change a ticket from its Tickets pane: set its status to one of its source's, assign it to its source's people or take them off, and comment on it in Markdown. Each change shows at once, marked Saving… until the daemon has it, and goes back, with why, if the tracker refuses it.
 - A ticket shows the sessions working on it, linked by hand or by their branch: open one to focus it, as the chat shows it, or unlink it. Link to links the session in focus to the ticket. Each shows at once, and goes back, with why, if the daemon refuses it.
 - The Developer preset has Tickets as the right drawer's third tab, after Changes and Files.
+- Outside a text box, G then 1 to 9 goes to that workspace, in the order the Workspaces pane lists them. Escape, or a pause of a second and a half, cancels the G.
 
 ### Changed
 

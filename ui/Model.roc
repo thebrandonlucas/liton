@@ -188,6 +188,11 @@ Model := [].{
 		## name typed.
 		renaming : { pane : Str, key : Str, text : Str },
 
+		## The keys of a sequence typed so far outside a text field
+		## (ui/Keymap.roc), and how many sequences began, so that a pause ends
+		## only the one it timed.
+		keys_typed : { keys : List(Str), serial : U64 },
+
 		## The time, in milliseconds since 1970, as of the last minute that
 		## began, or second while a chat on screen shows a turn running: what
 		## rows count the time since their last activity from, and the chat
@@ -330,6 +335,7 @@ Model := [].{
 				cursors: [],
 				notice: "",
 				show_settings: Bool.False,
+				keys_typed: { keys: [], serial: 0 },
 				snapshot_text: "",
 				presets: Default.setup.presets,
 				kept_layout: restored.is_ok(),

@@ -17,7 +17,7 @@ import Microphone
 import Ports
 import Themes
 import Model
-import Commands
+import Keymap
 import TicketDesk
 import Widgets
 import Dropdown
@@ -52,9 +52,8 @@ Liton := [].{
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
-	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`) with Cmd
-	## anywhere, and with Ctrl or other keys outside a text field, whose
-	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Commands.pressed`.
+	## stylesheet alone uses. Keys run commands as `Keymap.defaults` binds
+	## them, and a sequence begun ends after a pause.
 	page : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> Elem(Ctx)
 	page = |model, drag|
 		Engine.element(
@@ -62,7 +61,7 @@ Liton := [].{
 			[
 				Engine.class("liton"),
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
-				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_meta())).concat(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_ctrl())).outside_text()).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Commands.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord.primary().any(|alternative| alternative == key.heard)).map_ok(|(_, name)| name) ?? key.key)).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
+				Engine.on_document_key({ keymap: Engine.const(Keymap.heard(Keymap.defaults)) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Keymap.pressed(Keymap.defaults, state, Keymap.name(key))).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
 			],
 			[
 				# A Workbench has no bar: its drawers' buttons are in the main
@@ -137,6 +136,7 @@ Liton := [].{
 			),
 		),
 		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, at| Model.tick(state, at ?? state.now))),
+		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
 			model.signal().map(|state| state.poll),
@@ -226,11 +226,6 @@ Liton := [].{
 		),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
-
-	## The keys heard with Ctrl or Cmd, by the names `Commands.pressed` takes:
-	## B and E show or hide the drawers, as in Paseo, and comma Settings.
-	shortcuts : List((Engine.Chord, Str))
-	shortcuts = [(Engine.Chord.plain("b"), "Ctrl+B"), (Engine.Chord.plain("e"), "Ctrl+E"), (Engine.Chord.plain(","), "Ctrl+,")]
 
 	## A call, its JSON `body` naming the capability and holding the request.
 	call : Str -> Engine.Ask(Str, Engine.HttpError)
@@ -344,7 +339,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

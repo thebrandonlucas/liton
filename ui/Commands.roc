@@ -18,7 +18,28 @@ Commands := [].{
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: |shown| Model.with_snapshot_text({ ..shown, show_settings: !shown.show_settings }) },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
-		].concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+		]
+			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
+			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
+	}
+
+	## The workspaces by their ids, in the order the first Workspaces pane
+	## shows them, else as listed.
+	workspace_order : Model.State -> List(Str)
+	workspace_order = |state| {
+		listed = state.workspaces.workspaces
+		match Model.panes(state).find_first(|shown| shown.widget == "workspaces") {
+			Ok(shown) =>
+				Model.workspace_rows(state, shown).keep_oks(
+					|row|
+						match row.kind {
+							Workspace => Ok(row.key.drop_prefix("workspace:"))
+							Session if row.depth == 0 => listed.find_first(|workspace| workspace.session_ids.contains(row.key)).map_ok(|workspace| workspace.id)
+							_ => Err(NotFound)
+						},
+				)
+			Err(NotFound) => listed.map(|workspace| workspace.id)
+		}
 	}
 
 	## Runs the first of the commands named that applies, if any does.
@@ -61,31 +82,4 @@ Commands := [].{
 		session = Model.session(state, Model.session_of(state, Commands.chat(state)))
 		Model.busy(session.status) and Model.stopping(state, session.id) != Stopping
 	}
-
-	## A key pressed outside a text field: 1 to 9, with or without Alt (or
-	## Option, which types ¡ to ª on a Mac), shows that preset, and Ctrl+B
-	## and Ctrl+E show or hide a Workbench's drawers and Ctrl+, opens or
-	## closes Settings, as Cmd+B, Cmd+E and Cmd+, do anywhere. Escape,
-	## anywhere, closes what is open (`close`), else stops the agent of the
-	## chat focused, or of the first chat.
-	pressed : Model.State, Str -> Model.State
-	pressed = |state, key| {
-		numbered = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find_first_index(|digit| digit == key)
-		option_glyph = ["¡", "™", "£", "¢", "∞", "§", "¶", "•", "ª"].find_first_index(|glyph| glyph == key)
-		ids = match (numbered, option_glyph) {
-			(Ok(index), _) | (_, Ok(index)) => ["preset.${(index + 1).to_str()}"]
-			_ if key == "Escape" => ["close", "agent.stop"]
-			_ if key == "Ctrl+B" => ["drawer.left"]
-			_ if key == "Ctrl+E" => ["drawer.right"]
-			_ if key == "Ctrl+," => ["settings"]
-			_ => []
-		}
-		Commands.run_first(state, ids)
-	}
-}
-
-# 1 to 9 show the presets in order, however the one shown was changed.
-expect {
-	state = Commands.pressed(Model.toggle_drawer(Model.initial(""), Right), "3")
-	Model.preset_shown(state, "Tiling") and Model.preset_shown(Commands.pressed(Model.toggle_tabs(state, "pane-2"), "¡"), "Developer") and Commands.pressed(state, "7") == state
 }
