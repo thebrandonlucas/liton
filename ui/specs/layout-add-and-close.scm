@@ -11,7 +11,7 @@
     ; closed so it isn't behind them.
     (expect-attr (role button :name "Settings") aria-expanded "false")
     (expect-text (test-id "show-main") "Chat · CI runs")
-    (expect-attr (role button :name "CI runs") aria-pressed "true")
+    (expect-attr (role tab :name "CI runs") aria-selected "true")
     (expect-attr (role region :name "CI runs") class "pane focused")
     (expect-attr (role region :name "Chat") class "pane hidden")
     (expect-visible (text "This widget needs ci.v1, which no connected provider supplies. Connect one that does, and it fills in here."))

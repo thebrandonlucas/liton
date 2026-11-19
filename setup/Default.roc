@@ -8,10 +8,10 @@ import Setup
 
 Default := [].{
 
-	## A Workbench of workspaces and their sessions, the chat following the
-	## focus with a tab beside it of the ticket opened, hidden until one is,
-	## and the changes and files of the workspace or session focused and the
-	## tickets, as tabs, in the Neutral theme.
+	## A Workbench as Paseo's: the workspaces by their status, the one
+	## picked as tabs of its sessions' chats and the ticket opened, and the
+	## changes and files of the workspace and the tickets, as tabs, in the
+	## Neutral theme.
 	developer : Setup.Preset
 	developer = {
 		name: "Developer",
@@ -22,7 +22,7 @@ Default := [].{
 				columns: [1, 1, 1],
 				rows: [1],
 				tiles: [
-					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [] }] },
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "workspaces", pinned: "", options: [{ key: "group_by", value: "Status" }, { key: "sessions", value: "Tabs" }] }] },
 					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [] }, { id: "pane-8", widget: "ticket", pinned: "", options: [] }] },
 					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "changes", pinned: "", options: [] }, { id: "pane-4", widget: "files", pinned: "", options: [] }, { id: "pane-5", widget: "tickets", pinned: "", options: [] }] },
 				],

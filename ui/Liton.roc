@@ -736,7 +736,7 @@ Liton := [].{
 				),
 				Engine.when(
 					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
-					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, tile)]),
+					|| Html.div("workspace-view-header", [Liton.workspace_header(model), Liton.workspace_tabs(model, drag, tile)]),
 					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
@@ -830,38 +830,49 @@ Liton := [].{
 
 	## The workspace tile's tabs (`Model.tab_rows`): a chat of each of the
 	## focused workspace's sessions with its status, then the views it
-	## opened and the tile's other panes, each with a × that closes it, and
-	## + to start an agent in the workspace.
-	workspace_tabs : State(TileCtx, Model.State), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
-	workspace_tabs = |model, tile|
+	## opened and the tile's other panes, which drag as a tile's tabs do,
+	## each with a × that closes it, and + to start an agent in the workspace.
+	workspace_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
+	workspace_tabs = |model, drag, tile|
 		Html.div_attrs(
 			[Engine.class("workspace-tabs"), Engine.attr("role", "tablist"), Html.aria_label_s(Engine.const("Tabs"))],
 			[
 				Engine.each(
 					tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown)),
 					|tab| tab.key,
-					|tab|
+					|tab| {
+						# Another pane's tab drags it, as a tile's tab does.
+						pane_id = tab.field(
+							|shown|
+								match shown.tab {
+									Pane(id) => id
+									Tab(_) => ""
+								},
+						)
+						button = |dragging|
+							Engine.element(
+								"button",
+								[
+									Engine.attr("type", "button"),
+									Engine.attr("role", "tab"),
+									Engine.class_s(tab.field(|shown| "tab-select widget-${shown.widget}${if (shown.dot.is_empty() or shown.dot == "idle") "" else " with-status"}")),
+									Html.flag("aria-selected", tab.field(|shown| shown.shown)),
+									Engine.on_click(model.lift_row().update_by(tab.field(|shown| shown.tab), Model.pick_tab)),
+								].concat(dragging),
+								[
+									Html.span_s(Engine.const(""), [Engine.class_s(tab.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+									Html.span_s(tab.field(|shown| shown.title), [Engine.class("tab-title")]),
+								],
+							)
 						Engine.element(
 							"span",
-							[Engine.class_s(tab.field(|shown| if (shown.shown) "workspace-tab shown" else "workspace-tab"))],
+							[Engine.class_s(tab.field(|shown| if (shown.shown) "workspace-tab shown" else "workspace-tab")), Engine.attr_s("data-tab", pane_id)],
 							[
-								Engine.element(
-									"button",
-									[
-										Engine.attr("type", "button"),
-										Engine.attr("role", "tab"),
-										Engine.class_s(tab.field(|shown| "tab-select widget-${shown.widget}${if (shown.dot.is_empty() or shown.dot == "idle") "" else " with-status"}")),
-										Html.flag("aria-selected", tab.field(|shown| shown.shown)),
-										Engine.on_click(model.lift_row().update_by(tab.field(|shown| shown.tab), Model.pick_tab)),
-									],
-									[
-										Html.span_s(Engine.const(""), [Engine.class_s(tab.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
-										Html.span_s(tab.field(|shown| shown.title), [Engine.class("tab-title")]),
-									],
-								),
+								Engine.when(pane_id.map(|id| id.is_empty()), || button([]), || button(Liton.grip(drag.lift_row(), pane_id))),
 								Engine.when(tab.field(|shown| shown.closes), || Liton.icon_button(tab.field(|shown| "Close ${shown.title}"), "icon tab-close", model.lift_row().update_by(tab.field(|shown| shown.tab), Model.close_picked_tab)), || Engine.text("")),
 							],
-						),
+						)
+					},
 				),
 				Liton.icon_button(Engine.const("New agent in this workspace"), "icon new-tab", model.update(Model.new_agent_tab)),
 			],
@@ -904,6 +915,8 @@ Liton := [].{
 			[
 				Html.aria_label_s(title),
 				Engine.class_s(id.map2(tile.lift_row(), |pane_id, group| { pane_id, group }).map2(laid.lift_row(), |{ pane_id, group }, state| Str.join_with(["pane", if (pane_id != group.active or state.hidden.contains(pane_id)) "hidden" else "", if (pane_id == state.focused_pane) "focused" else ""].drop_if(Str.is_empty), " ")).map2(id.map2(drag.signal(), Liton.pane_drag_class), Liton.joined_classes)),
+				# A tab of the workspace a Workbench shows has no header of its own.
+				Engine.attr_presence("data-tab-view", id.map2(model.signal(), |pane_id, state| if (Model.workspace_view(state, pane_id)) Present("") else Absent)),
 				# Clicking anywhere in it focuses it, or what was clicked in it.
 				Engine.attr("tabindex", "-1"),
 				Engine.on("focus", model.update_by(id.map2(tile.lift_row(), |pane_id, group| { pane: pane_id, tile: group.id }), Model.focus_pane)),

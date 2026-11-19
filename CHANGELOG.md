@@ -145,6 +145,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Keys for the layout, also in the ⌘K palette and the `?` list: outside a text box, Ctrl+Shift or ⌘⇧ with an arrow focuses the tile that way, as does W then H, J, K or L; W then M, X, T or R and one of those letters moves the pane, swaps the tiles, joins the tile into the other's tabs or moves the tile's edge that way; W then V or B splits the pane off into a new tile to the right or below.
 - Drag the line between two tiles to resize the columns or rows beside it; in the Developer, Inbox and Chat presets the drawers keep their width, and the main area's tiles and rows resize.
 - Workspaces grouped by status list them in Paseo's order, each group headed by its icon: Needs input (an agent waits for you or failed), Ready to review (done, with something you haven't seen, and changes), Working and Done.
+- The Developer preset takes Paseo's shape: Workspaces lists the workspaces by status, each once, and the main area shows the one picked as tabs of its sessions, starting on the latest session's workspace. A workspace is as urgent as its most urgent session. Set Workspaces' Group by and Sessions options in Settings to list them under their projects with their sessions as rows, as before.
 
 ### Fixed
 

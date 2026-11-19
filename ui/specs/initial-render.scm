@@ -1,4 +1,4 @@
-(test "Liton — the Developer preset lists the workspaces and their sessions once the daemon answers"
+(test "Liton — the Developer preset lists the workspaces by status once the daemon answers, the latest session's workspace shown as tabs of its sessions"
   (steps
     ; The manifest, and the first poll, of the sessions and the workspaces.
     (expect-pending-effects 2)
@@ -8,12 +8,12 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Running\",\"title\":\"Fix tests\"},{\"agent\":\"codex\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"w1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\",\"s2\"],\"state\":\"Idle\"}]}}]}]}")
     (run-effect 2)
     (expect-visible (role region :name "Workspaces"))
-    (expect-visible (role button :name "App"))
+    (expect-visible (role button :name "Working"))
     (expect-visible (role button :name "main"))
     (expect-visible (role region :name "Chat"))
     (expect-absent (role region :name "Capabilities") :never-drawn)
-    (expect-visible (role button :name "Fix tests"))
-    (expect-visible (role button :name "Write docs"))
+    (expect-visible (role tab :name "Fix tests"))
+    (expect-visible (role tab :name "Write docs"))
     (expect-text (test-id "session-status") "running")
     (expect-text (test-id "session-title") "Fix tests")
     (expect-absent (text "Connecting to the daemon…"))
