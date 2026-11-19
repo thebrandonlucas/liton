@@ -2134,9 +2134,14 @@ Liton := [].{
 					|row| {
 						model = model0.lift_row()
 						asked = |pick| row.field(|shown| (shown.path, pick(shown))).map2(id.lift_row(), |(path, picked), pane_id| { pane_id, path, picked })
-						# A row of an each is one element.
-						Html.div(
-							"code-item",
+						# A row of an each is one element, a hunk's header named to be
+						# scrolled to.
+						Html.div_attrs(
+							[
+								Engine.class("code-item"),
+								Engine.ref_s(row.field(|shown| shown).map2(id.lift_row(), |shown, pane_id| if (shown.right_class == "hunk-header") Model.hunk_ref(pane_id, shown.path, shown.key) else "")),
+								Engine.test_id_s(row.field(|shown| if (shown.right_class == "hunk-header") "hunk-${shown.path}/${shown.key}" else "")),
+							],
 							[
 								Engine.switch(
 									row.field(|shown| shown.kind),
@@ -2165,7 +2170,8 @@ Liton := [].{
 		)
 
 	## The composer of a comment on lines, a reply or a draft edited, in
-	## Markdown: Comment keeps it as a draft at once, Cancel closes it.
+	## Markdown: Comment, or Ctrl+Enter or Cmd+Enter, keeps it as a draft at
+	## once, Cancel closes it.
 	comment_composer : State(ctx, Model.State) -> Elem(ctx)
 	comment_composer = |model|
 		Html.form(
@@ -2173,7 +2179,7 @@ Liton := [].{
 			[Engine.class("comment-composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update(Model.submit_comment))],
 			[
 				Html.p_s(model.signal().map(|state| Liton.composing(state.composer)), [Engine.class("composer-title")]),
-				Html.textarea(Engine.const("Your comment"), model.signal().map(|state| state.composer.text), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown"), Engine.ref("comment")], model.set_value(|state, text| { ..state, composer: { ..state.composer, text } })),
+				Html.textarea(Engine.const("Your comment"), model.signal().map(|state| state.composer.text), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown"), Engine.ref("comment"), Engine.on_key({ keymap: Engine.const(Engine.Keymap.prevent(Engine.Chord.plain("Enter").primary())) }, model.set_value(|state, _| Commands.run_first(state, ["review.submit"])))], model.set_value(|state, text| { ..state, composer: { ..state.composer, text } })),
 				Html.div("comment-actions", [Html.submit_button("Comment", []), Html.button("Cancel", [], model.update(|state| { ..state, composer: Model.closed_composer }))]),
 			],
 		)

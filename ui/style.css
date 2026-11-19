@@ -719,6 +719,8 @@ kbd:empty { display: none; }
 .code-row.marked > .number { color: var(--warn); box-shadow: inset -2px 0 var(--warn); }
 .code-row.picked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .code-row.picked > .number { color: var(--accent); box-shadow: inset -2px 0 var(--accent); }
+.code-row.focused:not(.picked) { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.code-row.focused > .number { box-shadow: inset 2px 0 var(--warn); }
 .comment, .comment-composer { position: sticky; left: 0; box-sizing: border-box; width: min(64ch, 100cqw - 12px); margin: 4px 0 6px; padding: 6px 10px;
   font: 13px/1.45 var(--font-ui); white-space: normal; border: 1px solid var(--edge); border-left: 3px solid var(--warn); border-radius: var(--small-radius); background: var(--glass-deep); }
 .comment:not(.last) { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }

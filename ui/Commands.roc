@@ -1,5 +1,6 @@
 ## Every action keys run, by name: what it is called, the group it is
 ## listed under, when it applies and what it does to the model.
+import cap.Review
 import Model
 
 Commands := [].{
@@ -22,6 +23,7 @@ Commands := [].{
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 		]
 			.concat(Commands.layout)
+			.concat(Commands.review)
 			.concat(state.presets.map_with_index(|preset, index| { id: "preset.${(index + 1).to_str()}", title: "Show the ${preset.name} preset", group: "Presets", applies: always, run: |shown| Model.with_snapshot_text(Model.use_preset(shown, preset.name)) }))
 			.concat(Commands.workspace_order(state).map_with_index(|workspace_id, index| { id: "workspace.${(index + 1).to_str()}", title: "Go to workspace ${(index + 1).to_str()}", group: "Workspaces", applies: always, run: |shown| Model.open(shown, Workspace(workspace_id)) }))
 	}
@@ -43,6 +45,36 @@ Commands := [].{
 			.concat(each_side("resize", "Move the tile's edge", |_| focused, Model.resize_focused))
 			.concat([(Right, "right", "Split the pane off to the right"), (Down, "down", "Split the pane off below")].map(|(side, word, title)| { id: "layout.split-${word}", title, group: "Layout", applies: |shown| Model.tile_of(shown, shown.focused_pane).map_ok(|tile| tile.panes.len() > 1) ?? Bool.False, run: |shown| Model.split_focused(shown, side) }))
 	}
+
+	## The Review surface's commands, as crit.md's keys run them: on the
+	## Review view on screen, step through its hunks and threads, comment on
+	## what is focused, mark the file in view viewed and finish the review;
+	## and submit or cancel the comment being written.
+	review : List(Command)
+	review = {
+		viewing = |state| Model.review_shown(state).is_ok()
+		on_view = |change| |state| Model.review_shown(state).map_ok(|view| change(state, view.id)) ?? state
+		composing = |state| !state.composer.pane.is_empty()
+		[
+			{ id: "review.next-hunk", title: "Focus the next hunk", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_hunk(state, pane_id, Next)) },
+			{ id: "review.previous-hunk", title: "Focus the previous hunk", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_hunk(state, pane_id, Previous)) },
+			{ id: "review.next-comment", title: "Focus the next thread", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_thread(state, pane_id, Next)) },
+			{ id: "review.previous-comment", title: "Focus the previous thread", group: "Review", applies: viewing, run: on_view(|state, pane_id| Model.step_thread(state, pane_id, Previous)) },
+			{ id: "review.comment", title: "Comment on the lines or thread focused", group: "Review", applies: |state| viewing(state) and Commands.review_focused(state), run: on_view(Model.comment_focused) },
+			{ id: "review.submit", title: "Keep the comment as a draft", group: "Review", applies: composing, run: Model.submit_comment },
+			{ id: "review.cancel", title: "Cancel the comment", group: "Review", applies: composing, run: |state| { ..state, composer: Model.closed_composer } },
+			{ id: "review.viewed", title: "Mark the file in view viewed", group: "Review", applies: |state| viewing(state) and !Model.review_focus(state).is_empty(), run: on_view(|state, pane_id| Model.toggle_viewed(state, { pane_id, path: Model.review_focus(state) })) },
+			{ id: "review.finish", title: "Finish the review", group: "Review", applies: |state| Model.review_shown(state).map_ok(|view| Review.drafts(Model.review_of(state, Model.context_of(state, view))) > 0) ?? Bool.False, run: on_view(Model.send_review) },
+		]
+	}
+
+	## Whether the Review surface has lines or a thread focused.
+	review_focused : Model.State -> Bool
+	review_focused = |state|
+		match state.sub_focus {
+			Lines(_) | ReviewThread(_) => Bool.True
+			_ => Bool.False
+		}
 
 	## The workspaces by their ids, in the order the first Workspaces pane
 	## shows them, else as listed.

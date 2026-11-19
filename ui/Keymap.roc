@@ -13,7 +13,8 @@ Keymap := [].{
 	## Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
 	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
-	## goes to a workspace. Escape closes what is open, else stops the agent.
+	## goes to a workspace. Escape closes what is open, else cancels a
+	## comment, else stops the agent.
 	defaults : List(Binding)
 	defaults = {
 		digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -24,12 +25,31 @@ Keymap := [].{
 			{ keys: ["Mod+k"], command: "palette" },
 			{ keys: ["?"], command: "shortcuts" },
 			{ keys: ["Escape"], command: "close" },
+			{ keys: ["Escape"], command: "review.cancel" },
 			{ keys: ["Escape"], command: "agent.stop" },
 		]
 			.concat(digits.join_map(|digit| [{ keys: [digit], command: "preset.${digit}" }, { keys: ["Alt+${digit}"], command: "preset.${digit}" }]))
 			.concat(digits.map(|digit| { keys: ["g", digit], command: "workspace.${digit}" }))
 			.concat(Keymap.layout)
+			.concat(Keymap.review)
 	}
+
+	## The Review surface's keys, crit.md's: j and k focus the next and
+	## previous hunk, ] and [ the next and previous thread, c comments on
+	## what is focused, Ctrl+Enter or Cmd+Enter keeps the comment (its box
+	## hears them too), a marks the file in view viewed and Shift+F finishes
+	## the review.
+	review : List(Binding)
+	review = [
+		{ keys: ["j"], command: "review.next-hunk" },
+		{ keys: ["k"], command: "review.previous-hunk" },
+		{ keys: ["]"], command: "review.next-comment" },
+		{ keys: ["["], command: "review.previous-comment" },
+		{ keys: ["c"], command: "review.comment" },
+		{ keys: ["Mod+Enter"], command: "review.submit" },
+		{ keys: ["a"], command: "review.viewed" },
+		{ keys: ["F"], command: "review.finish" },
+	]
 
 	## The layout's keys: Cmd or Ctrl with Shift and an arrow focuses the
 	## tile that way, outside a text field, as does `w` then h, j, k or l,

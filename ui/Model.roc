@@ -75,8 +75,9 @@ Model := [].{
 
 		## What a view shows within its focused context: the thread open in a
 		## room, by the room and its top-level message, or the file of the
-		## Review surface in view, or its thread focused, by its id.
-		sub_focus : [None, Thread({ room_id : Str, root : Str }), File(Str), ReviewThread(Str)],
+		## Review surface in view, its lines focused, or its thread focused,
+		## by its id.
+		sub_focus : [None, Thread({ room_id : Str, root : Str }), File(Str), Lines({ path : Str, start : U32, end : U32 }), ReviewThread(Str)],
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
@@ -2695,6 +2696,7 @@ Model := [].{
 	review_focus = |state|
 		match state.sub_focus {
 			File(path) => path
+			Lines({ path, .. }) => path
 			ReviewThread(thread_id) => Model.review_of(state, Model.focused(state, [Session, Workspace])).threads.find_first(|thread| thread.id == thread_id).map_ok(|thread| thread.anchor.path) ?? ""
 			_ => ""
 		}
@@ -2711,6 +2713,80 @@ Model := [].{
 			Loading => []
 		}
 	}
+
+	## A hunk of a Review view's files: its file, its place among the
+	## file's hunks, and its lines, on the new side or, for one that only
+	## removes lines, the old.
+	ReviewHunk : { path : Str, index : U64, side : Review.Side, start : U32, end : U32 }
+
+	## The hunks a Review view shows, in the order of its files.
+	review_hunks : State, Pane -> List(ReviewHunk)
+	review_hunks = |state, shown| {
+		context = Model.context_of(state, shown)
+		scope = state.review_desk.scope
+		lines = |path, index, hunk| if (hunk.new_count == 0) { path, index, side: Old, start: hunk.old_start, end: hunk.old_start + U32.max(hunk.old_count, 1) - 1 } else { path, index, side: New, start: hunk.new_start, end: hunk.new_start + hunk.new_count - 1 }
+		of_file = |file| (state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == file.path).map_ok(|known| known.hunks) ?? []).map_with_index(|hunk, index| lines(file.path, index, hunk))
+		match Model.review_files(state, shown) {
+			Files(files) => files.join_map(of_file)
+			Loading => []
+		}
+	}
+
+	## The hunk of a Review view whose lines are focused.
+	focused_hunk : State, Pane -> Try(ReviewHunk, [NotFound])
+	focused_hunk = |state, shown| Model.review_hunks(state, shown).find_first(|hunk| state.sub_focus == Lines({ path: hunk.path, start: hunk.start, end: hunk.end }))
+
+	## A Review card's rows, those of the hunk focused marked.
+	hunk_marked : State, Pane, Str, List(CodeRow) -> List(CodeRow)
+	hunk_marked = |state, shown, path, rows|
+		match Model.focused_hunk(state, shown) {
+			Ok(hunk) if hunk.path == path => {
+				at = hunk.index.to_str()
+				rows.map(|row| if (row.kind == Code and (row.key == at or row.key.starts_with("${at}/"))) { ..row, class: Str.join_with([row.class, "focused"].drop_if(Str.is_empty), " ") } else row)
+			}
+			_ => rows
+		}
+
+	## Focuses the lines of the next hunk a Review view shows after the one
+	## focused, or the one before it, the first of the file in view when
+	## none is, and scrolls to it.
+	step_hunk : State, Str, [Next, Previous] -> State
+	step_hunk = |state, pane_id, way| {
+		shown = Model.pane(state, pane_id)
+		hunks = Model.review_hunks(state, shown)
+		in_view = Model.review_focus(state)
+		index =
+			match (hunks.find_first_index(|hunk| state.sub_focus == Lines({ path: hunk.path, start: hunk.start, end: hunk.end })), way) {
+				(Ok(found), Next) => U64.min(found + 1, hunks.len() - 1)
+				(Ok(found), Previous) => if (found == 0) 0 else found - 1
+				(Err(_), _) => hunks.find_first_index(|hunk| hunk.path == in_view) ?? 0
+			}
+		match hunks.get(index) {
+			Ok(hunk) => { ..state, sub_focus: Lines({ path: hunk.path, start: hunk.start, end: hunk.end }), review_desk: ReviewDesk.scrolled_to(state.review_desk, hunk.path, [Model.hunk_ref(pane_id, hunk.path, hunk.index.to_str())]) }
+			Err(_) => state
+		}
+	}
+
+	## The reference of a hunk's header as a pane shows it, by its file and
+	## its key among the file's rows.
+	hunk_ref : Str, Str, Str -> Str
+	hunk_ref = |pane_id, path, key| "${pane_id}/hunk/${path}/${key}"
+
+	## Comments on what a Review view has focused: the lines of a hunk, as
+	## picking them does, or a thread, as Reply does.
+	comment_focused : State, Str -> State
+	comment_focused = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		match (state.sub_focus, Model.focused_hunk(state, shown)) {
+			(ReviewThread(thread), _) => Model.compose(state, { pane_id, thread, editing: "" })
+			(_, Ok(hunk)) => Model.composing(state, { ..Model.closed_composer, pane: pane_id, path: hunk.path, scope: Model.review_scope(state.review_desk.scope), side: hunk.side, start: hunk.start, end: hunk.end })
+			_ => state
+		}
+	}
+
+	## The Review view on screen, if one is.
+	review_shown : State -> Try(Pane, [NotFound])
+	review_shown = |state| Model.panes(state).find_first(|shown| shown.widget == "review" and Model.pane_visible(state, shown.id))
 
 	## How many comments the threads a Review view shows have, as "3
 	## comments".
@@ -2945,7 +3021,7 @@ Model := [].{
 					(Text, Err(_)) => "Loading…"
 					(Text, Ok(_)) => ""
 				}
-			{ path: file.path, file, rows, note, viewed: Model.viewed_file(state, shown, file.path) }
+			{ path: file.path, file, rows: Model.hunk_marked(state, shown, file.path, rows), note, viewed: Model.viewed_file(state, shown, file.path) }
 		}
 		match Model.review_files(state, shown) {
 			Files(files) => Cards(files.map(card))
