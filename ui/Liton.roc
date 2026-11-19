@@ -614,7 +614,7 @@ Liton := [].{
 											"pane-heading",
 											[
 												Html.span_s(shown.map(|{ pane, state }| Liton.label(state, pane)), [Engine.class("pane-title")]),
-												Html.span_s(shown.map(|{ pane, state }| if (Widgets.find(pane.widget).follows_session) Model.context_title(state, pane) else ""), [Engine.class("pane-context")]),
+												Html.span_s(shown.map(|{ pane, state }| if (!Widgets.find(pane.widget).follows.is_empty()) Model.context_title(state, pane) else ""), [Engine.class("pane-context")]),
 											],
 										),
 								),
@@ -815,7 +815,7 @@ Liton := [].{
 							[
 								Html.p_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
 								Engine.when(
-									shown.map(|{ pane, .. }| Widgets.find(pane.widget).follows_session),
+									shown.map(|{ pane, .. }| !Widgets.find(pane.widget).follows.is_empty()),
 									|| Html.button_s(shown.map(|{ pane, .. }| if (pane.pinned.is_empty()) "Pin" else "Unpin"), [Engine.class("pin")], model.update_by(id, closing(Model.toggle_pin))),
 									|| Engine.text(""),
 								),
@@ -908,7 +908,7 @@ Liton := [].{
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
 						Html.li(
-							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == state.focus) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")],
+							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")],
 							[
 								Html.button_s(title, [], model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))),
 								Html.div(
@@ -1021,7 +1021,7 @@ Liton := [].{
 
 	context_label : Model.State, Model.Pane -> Str
 	context_label = |state, pane|
-		if (!Widgets.find(pane.widget).follows_session)
+		if (Widgets.find(pane.widget).follows.is_empty())
 			""
 		else {
 			title = Model.context_title(state, pane)
@@ -1160,7 +1160,7 @@ Liton := [].{
 						),
 						Engine.when(
 							summary.map2(model.signal(), |listed, state| Liton.linkable(state, listed.id)),
-							|| Html.button_s(model.signal().map(|state| "Link to ${Model.session(state, Model.session_of(state, Model.pane(state, ""))).title}"), [Engine.class("link-session")], model.update_by(summary.map(|listed| listed.id), Model.link_ticket)),
+							|| Html.button_s(model.signal().map(|state| "Link to ${Model.session(state, Model.focused_session(state)).title}"), [Engine.class("link-session")], model.update_by(summary.map(|listed| listed.id), Model.link_ticket)),
 							|| Engine.text(""),
 						),
 					],
@@ -1206,7 +1206,7 @@ Liton := [].{
 	## that isn't starting nor linked to it already.
 	linkable : Model.State, Str -> Bool
 	linkable = |state, ticket_id| {
-		session_id = Model.session_of(state, Model.pane(state, ""))
+		session_id = Model.focused_session(state)
 		!session_id.is_empty() and !Model.starting(state, session_id) and !TicketDesk.links_shown(state.tickets).contains({ session_id, ticket_id, inferred: Bool.False }) and !TicketDesk.links_shown(state.tickets).contains({ session_id, ticket_id, inferred: Bool.True })
 	}
 

@@ -1,9 +1,11 @@
 ## The widgets a layout can hold, declared as data apart from their views:
-## the capabilities each needs, the slots it fits and its minimum width,
-## whether it shows a context (a session) that follows the focus or is pinned,
-## its options, and the parts of it that are stable hooks for styling. When a
-## widget is relevant (a `when` expression over the focus) is still to come.
+## its role, the capabilities each needs, the slots it fits and its minimum
+## width, the kinds of context it sets the focus to and those it shows,
+## following the focus or pinned, its options, and the parts of it that are
+## stable hooks for styling. When a widget is relevant (a `when` expression
+## over the focus) is still to come.
 import cap.Capability
+import cap.Context
 import setup.Setup
 
 Widgets := [].{
@@ -17,27 +19,35 @@ Widgets := [].{
 
 	Option : { key : Str, label : Str, help : Str, kind : Kind }
 
-	Widget : { id : Str, title : Str, needs : List(Capability.Id), slots : List(Slot), minimum_width : U32, follows_session : Bool, options : List(Option), parts : List(Str) }
+	## A navigator chooses what is in focus, a view shows it large, and an
+	## inspector shows details of it beside the view.
+	Role : [Navigator, View, Inspector]
+
+	Widget : { id : Str, title : Str, role : Role, needs : List(Capability.Id), slots : List(Slot), minimum_width : U32, sets : List(Context.Kind), follows : List(Context.Kind), options : List(Option), parts : List(Str) }
 
 	all : List(Widget)
 	all = [
 		{
 			id: "sessions",
 			title: "Sessions",
+			role: Navigator,
 			needs: [Capability.chat_v1],
 			slots: [Left, Main],
 			minimum_width: 200,
-			follows_session: Bool.False,
+			sets: [Session],
+			follows: [],
 			options: [{ key: "show_agent", label: "Show agent", help: "Name the agent under each session.", kind: Bool(Bool.True) }, Widgets.order],
 			parts: ["header", "list", "session"],
 		},
 		{
 			id: "workspaces",
 			title: "Workspaces",
+			role: Navigator,
 			needs: [Capability.workspaces_v1],
 			slots: [Left, Main],
 			minimum_width: 220,
-			follows_session: Bool.False,
+			sets: [Workspace, Session],
+			follows: [],
 			options: [
 				{ key: "group_by", label: "Group by", help: "List workspaces under their project, or under what they need from you.", kind: Choice({ default: "Project", choices: ["Project", "Status"] }) },
 				{ key: "show_idle", label: "Show idle workspaces", help: "List workspaces whose agents need nothing.", kind: Bool(Bool.True) },
@@ -48,10 +58,12 @@ Widgets := [].{
 		{
 			id: "chat",
 			title: "Chat",
+			role: View,
 			needs: [Capability.chat_v1],
 			slots: [Main, Right],
 			minimum_width: 300,
-			follows_session: Bool.True,
+			sets: [],
+			follows: [Session, Workspace],
 			options: [
 				{ key: "tool_output", label: "Tool output", help: "How much of a tool call's output its card shows.", kind: Choice({ default: "Folded", choices: ["Full", "Folded", "Hidden"] }) },
 				{ key: "show_status", label: "Show status lines", help: "Show when the agent starts, stops or waits.", kind: Bool(Bool.True) },
@@ -62,10 +74,12 @@ Widgets := [].{
 		{
 			id: "inbox",
 			title: "Inbox",
+			role: Navigator,
 			needs: [Capability.attention_v1],
 			slots: [Left, Main],
 			minimum_width: 240,
-			follows_session: Bool.False,
+			sets: [Session],
+			follows: [],
 			options: [
 				{ key: "show_idle", label: "Show idle sessions", help: "List sessions whose agents sit idle, with the rest.", kind: Bool(Bool.True) },
 				{ key: "snooze_length", label: "Snooze length", help: "How long Snooze sets an item aside.", kind: Choice({ default: "1 hour", choices: ["1 hour", "1 day", "1 week"] }) },
@@ -75,10 +89,12 @@ Widgets := [].{
 		{
 			id: "changes",
 			title: "Changes",
+			role: Inspector,
 			needs: [Capability.workspace_git_v1],
 			slots: [Right, Main],
 			minimum_width: 240,
-			follows_session: Bool.True,
+			sets: [],
+			follows: [Session, Workspace],
 			options: [
 				{ key: "diff_layout", label: "Diff layout", help: "Show a file's diff in one column, or old beside new.", kind: Choice({ default: "Unified", choices: ["Unified", "Split"] }) },
 				{ key: "show_commits", label: "Show commits", help: "List the branch's commits under its changes.", kind: Bool(Bool.True) },
@@ -88,35 +104,41 @@ Widgets := [].{
 		{
 			id: "files",
 			title: "Files",
+			role: Inspector,
 			needs: [Capability.files_v1],
 			slots: [Right, Main],
 			minimum_width: 240,
-			follows_session: Bool.True,
+			sets: [],
+			follows: [Session, Workspace],
 			options: [],
 			parts: ["header", "list", "folder", "file", "line"],
 		},
 		{
 			id: "tickets",
 			title: "Tickets",
+			role: Navigator,
 			needs: [Capability.tickets_v1],
 			slots: [Left, Main, Right],
 			minimum_width: 260,
-			follows_session: Bool.False,
+			sets: [],
+			follows: [],
 			options: [],
 			parts: ["header", "filters", "list", "ticket"],
 		},
 		{
 			id: "rooms",
 			title: "Rooms",
+			role: Navigator,
 			needs: [Capability.rooms_v1],
 			slots: [Left, Main, Right],
 			minimum_width: 260,
-			follows_session: Bool.False,
+			sets: [],
+			follows: [],
 			options: [],
 			parts: ["header", "list", "room"],
 		},
-		{ id: "capabilities", title: "Capabilities", needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: ["header", "manifest"] },
-		{ id: "ci", title: "CI runs", needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, follows_session: Bool.True, options: [], parts: ["header"] },
+		{ id: "capabilities", title: "Capabilities", role: View, needs: [], slots: [Left, Main, Right], minimum_width: 200, sets: [], follows: [], options: [], parts: ["header", "manifest"] },
+		{ id: "ci", title: "CI runs", role: Inspector, needs: [{ name: "ci", version: 1 }], slots: [Main, Right], minimum_width: 240, sets: [], follows: [Session, Workspace], options: [], parts: ["header"] },
 	]
 
 	## The order of a list of sessions or workspaces: the latest first, or by name.
@@ -124,7 +146,11 @@ Widgets := [].{
 	order = { key: "order", label: "Order", help: "List the latest first, or by name.", kind: Choice({ default: "Latest", choices: ["Latest", "Name"] }) }
 
 	find : Str -> Widget
-	find = |id| Widgets.all.find_first(|widget| widget.id == id) ?? { id, title: id, needs: [], slots: [Left, Main, Right], minimum_width: 200, follows_session: Bool.False, options: [], parts: [] }
+	find = |id| Widgets.all.find_first(|widget| widget.id == id) ?? { id, title: id, role: View, needs: [], slots: [Left, Main, Right], minimum_width: 200, sets: [], follows: [], options: [], parts: [] }
+
+	## Whether a widget in `role` shows the focus when it is of `kind`.
+	shows : Widget, Role, Context.Kind -> Bool
+	shows = |widget, role, kind| widget.role == role and widget.follows.contains(kind)
 
 	## The capabilities a widget needs that `advertised` lacks.
 	missing : Widget, List(Capability.Id) -> List(Capability.Id)
