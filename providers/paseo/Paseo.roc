@@ -8,6 +8,8 @@ import cap.Manifest
 ## Paseo's own JSON is camelCase, which `Json.parser_camel` reads into the
 ## snake_case fields below; liton reads only these fields.
 Paseo := [].{
+
+	## The Paseo provider, with the capabilities it offers.
 	provider : Manifest.Provider
 	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1] }
 
@@ -19,6 +21,8 @@ Paseo := [].{
 	## A JSON value Paseo leaves open, such as a tool's output or error: liton
 	## shows a string, or an object's `message` or `content` string.
 	Loose := [Text(Str), NotText].{
+
+		## How a codec reads a `Loose` value.
 		parser_for = |encoding| {
 			parse_str = Str.parser_for(encoding)
 			parse_object = LooseObject.parser_for(encoding)
@@ -49,6 +53,8 @@ Paseo := [].{
 
 	## The object a `Loose` value can be.
 	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
+
+		## How a codec reads a `LooseObject`, derived from its fields.
 		parser_for : _
 	}
 
@@ -65,6 +71,8 @@ Paseo := [].{
 	## `active_turn` is the turn it is working on, if any.
 	Snapshot : { status : Str, pending_permissions : List(Permission), last_error : Try(Str, [Missing]), updated_at : Try(Str, [Missing]), active_turn : Try(Try({ started_at : Try(Str, [Null]) }, [Null]), [Missing]) }
 
+	## A tool call's detail, as a timeline entry carries it: its `type`, such
+	## as shell or edit, and the fields of that type Paseo fills in.
 	Detail : {
 		type : Str,
 		command : Try(Str, [Missing]),
@@ -121,6 +129,7 @@ Paseo := [].{
 	## A turn: when it started, if liton saw, and its last entry's time.
 	Turn : { started : Try(Str, [Missing]), last : Str }
 
+	## A session's state before its first fetch.
 	initial : State
 	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle, turn: Err(Missing) }
 
@@ -169,6 +178,8 @@ Paseo := [].{
 		}
 	}
 
+	## Whether the `agent_permission_resolved` answer to `request_id` took the
+	## permission's answer.
 	resolved : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	resolved = |text, request_id| Paseo.write_answer(text, "agent_permission_resolved", request_id).map_ok(|_| {})
 
@@ -178,6 +189,8 @@ Paseo := [].{
 	cancel_request : Str, Str -> Str
 	cancel_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "cancel_agent_request", agentId: agent_id, requestId: request_id } })
 
+	## Whether the `cancel_agent_response` to `request_id` says the agent
+	## stopped, or why it couldn't.
 	canceled : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	canceled = |text, request_id| {
 		answered : Try({ message : { payload : { error : Try(Try(Str, [Null]), [Missing]) } } }, _)
@@ -198,6 +211,8 @@ Paseo := [].{
 	archive_request : Str, Str -> Str
 	archive_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "archive_agent_request", agentId: agent_id, requestId: request_id } })
 
+	## Whether the `agent_archived` answer to `request_id` says the agent was
+	## archived.
 	archived : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	archived = |text, request_id| Paseo.write_answer(text, "agent_archived", request_id).map_ok(|_| {})
 
@@ -258,6 +273,8 @@ Paseo := [].{
 	agent_kinds_request : Str -> Str
 	agent_kinds_request = |request_id| Json.to_str({ type: "session", message: { type: "list_available_providers_request", requestId: request_id } })
 
+	## The kinds of agent a `list_available_providers_response` answering
+	## `request_id` lists as available.
 	agent_kinds : Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	agent_kinds = |text, request_id| {
 		answered : Try({ message : { payload : { providers : List({ provider : Str, available : Bool }) } } }, _)
@@ -329,6 +346,8 @@ Paseo := [].{
 	agent_request : Str, Str -> Str
 	agent_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "fetch_agent_request", agentId: agent_id, requestId: request_id } })
 
+	## The agent's state a `fetch_agent_response` answering `request_id` holds,
+	## or why Paseo has none.
 	agent_snapshot : Str, Str -> Try(Snapshot, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	agent_snapshot = |text, request_id| {
 		answered : Try({ message : { payload : { agent : Try(Snapshot, [Null]), error : Try(Str, [Null]) } } }, _)
@@ -370,6 +389,8 @@ Paseo := [].{
 	## Importing one (`import_agent_request`) would make it an agent.
 	Importable : { provider_id : Str, provider_label : Str, provider_handle_id : Str, cwd : Str, title : Try(Str, [Null]), first_prompt_preview : Try(Str, [Null]) }
 
+	## The importable sessions a `fetch_recent_provider_sessions_response`
+	## answering `request_id` lists, each with its directory.
 	importable_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str }), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	importable_answer = |text, request_id| {
 		answered : Try({ message : { payload : { entries : List(Importable) } } }, _)
@@ -478,6 +499,8 @@ Paseo := [].{
 	newest : List(Chat.Session), U64 -> List(Str)
 	newest = |sessions, count| sessions.sort_with(|left, right| compared(moment(right.updated ?? ""), moment(left.updated ?? ""))).take_first(count).map(|session| session.id)
 
+	## A listed agent's status, from its state and what Paseo says it needs
+	## attention for.
 	listed_status : ListedAgent -> Chat.Status
 	listed_status = |agent|
 		match (agent.attention_reason, Paseo.chat_status({ status: agent.status, pending_permissions: agent.pending_permissions, last_error: agent.last_error, updated_at: Ok(agent.updated_at), active_turn: agent.active_turn })) {
@@ -499,6 +522,8 @@ Paseo := [].{
 		if (answered?.message.payload.request_id == request_id) Ok(text) else Err(OtherMessage)
 	}
 
+	## An agent's chat.v1 status, from its state: awaiting permission while a
+	## request is pending.
 	chat_status : Snapshot -> Chat.Status
 	chat_status = |{ status: paseo_status, pending_permissions, last_error, .. }|
 		if !pending_permissions.is_empty() {

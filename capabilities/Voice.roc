@@ -2,6 +2,9 @@
 ## in numbered chunks to the daemon's audio route (docs/protocol.md), each
 ## acknowledged, then asks for its transcript with `Finish`.
 Voice := [].{
+
+	## What an utterance is for: text for a box, or a turn of a conversation
+	## with a session's agent.
 	Purpose : [Dictation, Conversation({ session_id : Str })]
 
 	## `Begin` checks the engine is up before the client records. `Finish`
@@ -16,6 +19,7 @@ Voice := [].{
 	## before it, left out until chunk 0 is.
 	Acked : { acked : Try(U64, [Missing]) }
 
+	## Whether the speech engine is ready, still loading, or down and why.
 	Engine : [Ready, Loading, Down(Str)]
 
 	## The `status` topic's value.
@@ -39,6 +43,7 @@ Voice := [].{
 			_ => Err("expected /liton/v1/audio/voice.v1/<utterance_id>/<seq>, an utterance id of 1 to 64 letters, digits, - and _")
 		}
 
+	## Whether `text` is an utterance id: 1 to 64 letters, digits, `-` and `_`.
 	is_utterance_id : Str -> Bool
 	is_utterance_id = |text| {
 		bytes = text.to_utf8()
@@ -49,6 +54,7 @@ Voice := [].{
 	contiguous : List(U64) -> U64
 	contiguous = |held| held.fold(0, |count, seq| if (seq == count) count + 1 else count)
 
+	## What the audio route answers, of the seqs `held` in order.
 	acked : List(U64) -> Acked
 	acked = |held| {
 		count = Voice.contiguous(held)

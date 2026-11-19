@@ -8,6 +8,7 @@ import Model
 
 Keymap := [].{
 
+	## A command and the keys that run it.
 	Binding : { keys : List(Str), command : Str }
 
 	## Cmd or Ctrl with B switches a Board on screen between its list and its

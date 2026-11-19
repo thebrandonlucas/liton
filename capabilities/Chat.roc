@@ -2,6 +2,9 @@
 ## watches one session's timeline from a sequence number on, sends messages,
 ## answers the agent's permission requests, and stops a running agent.
 Chat := [].{
+
+	## Where a session is: idle, running, waiting for an answer to a permission
+	## request, finished, or failed with why.
 	Status : [Idle, Running, AwaitingPermission, Finished, Failed(Str)]
 
 	## Beyond its status, what a provider tells of a session, each left out
@@ -100,8 +103,13 @@ Chat := [].{
 		Configure({ session_id : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }),
 	]
 
+	## A session to start: where it works (a workspace, or a directory), the
+	## agent and, if not their defaults, the model, mode and thinking level,
+	## and the first prompt.
 	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str }
 
+	## What a request answers: sessions, a timeline's entries, whether the
+	## provider took it, or the id of a session started.
 	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str), Started({ session_id : Str })]
 
 	## A kind of agent a provider can start, such as `claude`, and, when its

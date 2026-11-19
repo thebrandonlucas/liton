@@ -47,6 +47,8 @@ Speech := [].{
 	## The voice and rate settings picked, unknown until settings ask the page.
 	Picked : [Unknown, Picked({ voice : Str, rate : Str })]
 
+	## The voice's state at start: nothing recording, and the engine not
+	## checked yet.
 	initial : State
 	initial = {
 		engine: Down("checking the speech engine"),
@@ -88,6 +90,7 @@ Speech := [].{
 	## changes; and keep the voice and rate picked.
 	Order : { stop : U64, hush : U64, session : Str, replies : List({ sequence : U64, text : Str }), picked : Picked }
 
+	## Tells the page what to do with the voice (see `Order`).
 	order : Port.Command(Order)
 	order = Port.command({ name: "liton/voice/order" })
 

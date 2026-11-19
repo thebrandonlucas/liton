@@ -9,6 +9,7 @@ Review := [].{
 	## diff, on its new side or, for removed lines, its old one.
 	Scope : [File, Uncommitted, AgainstBase, Commit(Str)]
 
+	## The side of a diff a thread's lines are on: the new file or the old.
 	Side : [New, Old]
 
 	## The lines a thread is on, numbered from 1, and their text, `quote`,
@@ -43,8 +44,11 @@ Review := [].{
 		Send({ context : Str, session_id : Str }),
 	]
 
+	## What a request answers: that the daemon took it, or the round `Send`
+	## sent the drafts as.
 	Response : [Accepted, Sent({ round : U32 })]
 
+	## A context with no threads or comments, before its first round.
 	empty : Snapshot
 	empty = { round: 0, next: 1, threads: [], comments: [] }
 

@@ -13,6 +13,7 @@ Ports := [].{
 	copy : Port.Call(Str, Bool)
 	copy = Port.call({ name: "liton/copy", timeout: Ms(5000) })
 
+	## The ports the page's JavaScript answers.
 	registrations : List(Engine.PortRegistration)
 	registrations = Port.registrations({ copy: Ports.copy, capture: Speech.capture, drag: Drag.pointer, order: Speech.order, voices: Speech.voices })
 }

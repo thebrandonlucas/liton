@@ -36,10 +36,13 @@ Liton := [].{
 	## moves wake only what shows the drag.
 	Ctx : In(In(Root, Model.State), Drag.Gesture)
 
+	## What a tile's view reads: its row of the grid's tiles.
 	TileCtx : Row(Ctx, Model.Tile)
 
+	## What a pane's view reads: its row of its tile's panes.
 	PaneCtx : Row(TileCtx, Model.Pane)
 
+	## Where the browser keeps the layout's snapshot.
 	snapshot_key : Str
 	snapshot_key = "liton.snapshot"
 
@@ -61,9 +64,12 @@ Liton := [].{
 	views_key : Str
 	views_key = "liton.ticket-views"
 
+	## The media query of a touch screen, where Enter in the composer starts a
+	## new line rather than sending.
 	coarse_pointer_query : Str
 	coarse_pointer_query = "(pointer: coarse)"
 
+	## The UI: its state restored from what the browser keeps, and its page.
 	program : Engine.Program
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.views_key, Liton.glass_key, Liton.surface_key, Wallpaper.url_key, Wallpaper.dim_key, ReviewDesk.viewed_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
@@ -584,6 +590,7 @@ Liton := [].{
 	settings_sections : List((Str, Str))
 	settings_sections = [("appearance", "Appearance"), ("keys", "Keys"), ("voice", "Voice"), ("about", "About")]
 
+	## The title of Settings' section `section`.
 	section_title : Str -> Str
 	section_title = |section| Liton.settings_sections.concat([("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
@@ -668,7 +675,7 @@ Liton := [].{
 			],
 		)
 
-	## The versions of what this UI speaks.
+	## The versions of what this UI speaks, and its API docs.
 	about : Elem(Ctx)
 	about =
 		Liton.settings_card(
@@ -676,6 +683,7 @@ Liton := [].{
 			[
 				Html.div("settings-row", [Html.p("Protocol", ""), Html.p("liton/v1, version ${Manifest.protocol.to_str()}", "help")]),
 				Html.div("settings-row", [Html.p("Snapshots", ""), Html.p("version ${Setup.snapshot_version.to_str()}", "help")]),
+				Html.div("settings-row", [Html.p("Docs", ""), Engine.element("a", [Engine.attr("href", "/docs/index.html"), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("help")], [Engine.text("The API, from the code's comments")])]),
 			],
 		)
 
@@ -783,6 +791,7 @@ Liton := [].{
 		)
 	}
 
+	## What a Workbench's slot is called, as a tile's menu names it.
 	slot_title : Model.Slot -> Str
 	slot_title = |slot|
 		match slot {
@@ -1073,6 +1082,7 @@ Liton := [].{
 			],
 		)
 
+	## Whether a grid line runs across, between rows, rather than down.
 	across : [Across(U64), Down(U64)] -> Bool
 	across = |line|
 		match line {
@@ -1098,6 +1108,7 @@ Liton := [].{
 		"grid-template-columns: ${Str.join_with(state.grid.columns.map_with_index(column), " ")}; grid-template-rows: ${Str.join_with(state.grid.rows.map(|size| "minmax(0, ${size.to_str()}fr)"), " ")}"
 	}
 
+	## A pane of a tile: its header and its widget's view.
 	pane_view : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.State), Signal(TileCtx, Model.Tile), RowRef(TileCtx, Model.Pane) -> Elem(PaneCtx)
 	pane_view = |model0, drag0, laid, tile, row| {
 		model = model0.lift_row()
@@ -1262,6 +1273,7 @@ Liton := [].{
 			_ => ""
 		}
 
+	## Two class lists as one, either of them possibly "".
 	joined_classes : Str, Str -> Str
 	joined_classes = |first, second| Str.join_with([first, second].drop_if(Str.is_empty), " ")
 
@@ -1302,6 +1314,7 @@ Liton := [].{
 	## refused (`not_stopped`).
 	Agent : { title : Str, status : Str, dot : Str, reason : Str, kind : Str, place : Str, not_stopped : Str }
 
+	## How a chat pane's header shows its session's agent.
 	agent_of : Model.State, Model.Pane -> Agent
 	agent_of = |state, pane| {
 		session = Model.session(state, Model.session_of(state, pane))
@@ -1459,6 +1472,7 @@ Liton := [].{
 			],
 		)
 
+	## A section of the Inbox called `name`, of `items`, shown only with some.
 	inbox_section : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
 	inbox_section = |model, pane, name, items|
 		Engine.when(
@@ -1557,9 +1571,11 @@ Liton := [].{
 			],
 		)
 
+	## A permission card's value while it has none to show.
 	no_permission : { session_id : Str, asked : Chat.Permission }
 	no_permission = { session_id: "", asked: Chat.permission({ request_id: "", tool: "", description: "" }) }
 
+	## The class of a permission choice's button, by its style.
 	choice_class : [Primary, Secondary, Danger] -> Str
 	choice_class = |style|
 		match style {
@@ -1568,6 +1584,7 @@ Liton := [].{
 			Danger => "deny"
 		}
 
+	## "3 unread", or "All read".
 	unread_text : U64 -> Str
 	unread_text = |count| if (count == 0) "All read" else "${count.to_str()} unread"
 
@@ -1579,6 +1596,7 @@ Liton := [].{
 			_ => Err(NotAnswer)
 		}
 
+	## How a badge names an attention state, such as "needs you".
 	attention_text : Attention.State -> Str
 	attention_text = |state|
 		match state {
@@ -1589,6 +1607,7 @@ Liton := [].{
 			Idle => "idle"
 		}
 
+	## The classes of an attention state's badge.
 	attention_class : Attention.State -> Str
 	attention_class = |state|
 		match state {
@@ -1597,6 +1616,7 @@ Liton := [].{
 			_ => "badge"
 		}
 
+	## What a pane follows or is pinned to, "" for one that follows nothing.
 	context_label : Model.State, Model.Pane -> Str
 	context_label = |state, pane|
 		if (Widgets.find(pane.widget).follows.is_empty())
@@ -2265,6 +2285,8 @@ Liton := [].{
 		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
 	}
 
+	## A chat pane: its session's timeline, a permission it asks for, and the
+	## composer.
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
 		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
@@ -2878,6 +2900,8 @@ Liton := [].{
 			],
 		)
 
+	## What the review composer is for: editing a draft, a reply, or a comment
+	## on lines.
 	composing : Model.Composer -> Str
 	composing = |composer|
 		if !composer.editing.is_empty() {
@@ -3078,6 +3102,7 @@ Liton := [].{
 			],
 		)
 
+	## The branch checked out, "detached", or "" without a status.
 	branch_text : [Status(WorkspaceGit.Status), NoStatus] -> Str
 	branch_text = |status|
 		match status {
@@ -3094,6 +3119,7 @@ Liton := [].{
 			_ => ""
 		}
 
+	## Whether a workspace has uncommitted changes.
 	dirty : [Status(WorkspaceGit.Status), NoStatus] -> Bool
 	dirty = |status|
 		match status {
@@ -3109,6 +3135,8 @@ Liton := [].{
 			_ => ""
 		}
 
+	## What a Changes pane says of a scope without changed files, "" while
+	## loading or with some.
 	no_files_text : [Files(List(WorkspaceGit.File)), Loading], WorkspaceGit.Scope -> Str
 	no_files_text = |files, scope|
 		match (files, scope) {
@@ -3126,6 +3154,7 @@ Liton := [].{
 			_ => file.path
 		}
 
+	## How a file changed, such as "added".
 	change_text : WorkspaceGit.Change -> Str
 	change_text = |change|
 		match change {
@@ -3489,6 +3518,7 @@ Liton := [].{
 		)
 	}
 
+	## "1 member" or "3 members".
 	members_text : U64 -> Str
 	members_text = |count| if (count == 1) "1 member" else "${count.to_str()} members"
 
@@ -3532,6 +3562,7 @@ Liton := [].{
 			[Engine.class("manifest"), Engine.attr("data-part", "manifest")],
 		)
 
+	## How a session's status reads, such as "idle".
 	status_text : Chat.Status -> Str
 	status_text = |status|
 		match status {
@@ -3597,6 +3628,7 @@ Liton := [].{
 			model.update_by(fold.map2(id, |shown, pane_id| { pane_id, key: shown.key }), Model.toggle_fold),
 		)
 
+	## How a tool call's state reads, such as "running".
 	tool_state : [Running, Done, Failed] -> Str
 	tool_state = |state|
 		match state {
@@ -3715,6 +3747,7 @@ Liton := [].{
 			],
 		)
 
+	## An event as one line of text.
 	describe : Chat.Event -> Str
 	describe = |event|
 		match event {
@@ -3728,6 +3761,8 @@ Liton := [].{
 			TurnEnded({ started, ended }) => Model.worked(started ?? "", ended)
 		}
 
+	## What a request on its way shows: a message's text, or "Allowing…" or
+	## "Denying…".
 	sent_text : Chat.Request -> Str
 	sent_text = |request|
 		match request {
@@ -3744,6 +3779,7 @@ Liton := [].{
 			_ => ""
 		}
 
+	## The classes of a request on its way, as its timeline entry.
 	sent_class : Model.Sent -> Str
 	sent_class = |sent|
 		match sent.request {
@@ -3751,6 +3787,7 @@ Liton := [].{
 			_ => "entry answer pending"
 		}
 
+	## The classes of a timeline entry, by its event.
 	entry_class : Chat.Event -> Str
 	entry_class = |event|
 		match event {

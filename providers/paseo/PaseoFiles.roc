@@ -22,9 +22,12 @@ PaseoFiles := [].{
 	## Paseo's kind is "text", "image" or "binary".
 	File : { kind : Str, content : Try(Str, [Missing]), size : U64, modified_at : Str }
 
+	## Lists `path` in `directory` (see `tree_answer`).
 	tree_request : Str, Str, Str -> Str
 	tree_request = |directory, path, request_id| Json.to_str({ type: "session", message: { type: "file_explorer_request", cwd: directory, path, mode: "list", requestId: request_id } })
 
+	## Reads the file at `path` in `directory`, up to `read_limit` bytes (see
+	## `contents_answer`).
 	contents_request : Str, Str, Str -> Str
 	contents_request = |directory, path, request_id| Json.to_str({ type: "session", message: { type: "file_explorer_request", cwd: directory, path, mode: "file", maxBytes: PaseoFiles.read_limit, requestId: request_id } })
 
