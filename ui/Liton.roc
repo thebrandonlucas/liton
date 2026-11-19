@@ -1,6 +1,6 @@
 ## liton's UI: a grid of tiles of panes, each a widget bound to a capability
 ## the daemon advertises, and the effects that keep them current.
-import pf.Engine exposing [Elem, Handler, In, Root, Row, RowRef, Signal, State]
+import pf.Engine exposing [Elem, Handler, HandlerOf, In, Root, Row, RowRef, Signal, State]
 import pf.Html
 import cap.Attention
 import cap.Capability
@@ -1359,7 +1359,7 @@ Liton := [].{
 		)
 
 	## An icon's button, its name for screen readers also its tooltip.
-	icon_button : Signal(ctx, Str), Str, Handler(ctx) -> Elem(ctx)
+	icon_button : Signal(ctx, Str), Str, HandlerOf(ctx, Engine.Click) -> Elem(ctx)
 	icon_button = |name, class, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class(class), Html.aria_label_s(name), Engine.attr_s("title", name), Engine.on_click(handler)], [])
 
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, where it
@@ -2820,7 +2820,7 @@ Liton := [].{
 
 	## A changed file: its path, which picks it, how it changed and by how many
 	## lines.
-	git_file : Signal(ctx, WorkspaceGit.File), Signal(ctx, Bool), Handler(ctx) -> Elem(ctx)
+	git_file : Signal(ctx, WorkspaceGit.File), Signal(ctx, Bool), HandlerOf(ctx, Engine.Click) -> Elem(ctx)
 	git_file = |file, picked, pick|
 		Html.li(
 			[Engine.class("git-file"), Engine.attr("data-part", "file")],

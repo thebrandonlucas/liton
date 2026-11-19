@@ -16,7 +16,7 @@ Cli := [].{
 		\\                        download a speech model into rig/speech/models
 		\\  speech sherpa         sherpa-onnx with Parakeet on port 6006 (rig/speech/)
 		\\  speech whisper        whisper.cpp's whisper-server on 127.0.0.1:8178
-		\\  ui <roc-ui> <output> <runtime.mjs> <environment.mjs> <worker.mjs> [<flag>...]
+		\\  ui <roc-ui> <output> <runtime.mjs> <environment.mjs> <startup.mjs> <worker.mjs> [<flag>...]
 		\\                        build the browser UI into the directory output (zig build ui)
 		\\  spec <runner>         run the UI's specs in roc-signals's native runner (zig build spec)
 		\\  help
@@ -29,7 +29,7 @@ Cli := [].{
 	parse = |arguments|
 		match arguments {
 			[] | ["help"] | ["--help"] | ["-h"] => Help
-			["ui", roc_ui, output, runtime, environment, worker, .. as flags] => Ui({ roc_ui, output, runtime_files: [runtime, environment, worker], flags })
+			["ui", roc_ui, output, runtime, environment, startup, worker, .. as flags] => Ui({ roc_ui, output, runtime_files: [runtime, environment, startup, worker], flags })
 			["spec", runner] => Specs(runner)
 			["paseo", "daemon"] => Paseo(Daemon)
 			["paseo", "relay"] => Paseo(Relay)
@@ -47,4 +47,4 @@ expect Cli.parse([]) == Help and Cli.parse(["help"]) == Help
 expect Cli.parse(["deploy"]) == Usage("unknown command or arguments for deploy")
 expect Cli.parse(["paseo", "cli", "daemon", "pair", "--json"]) == Paseo(Cli(["daemon", "pair", "--json"])) and Cli.parse(["paseo", "relay"]) == Paseo(Relay)
 expect Cli.parse(["speech", "model", "parakeet"]) == Speech(Model(Parakeet)) and Cli.parse(["speech", "model"]) == Usage("unknown command or arguments for speech")
-expect Cli.parse(["ui", "roc-ui", "www", "r.mjs", "e.mjs", "w.mjs", "--specialize=no"]) == Ui({ roc_ui: "roc-ui", output: "www", runtime_files: ["r.mjs", "e.mjs", "w.mjs"], flags: ["--specialize=no"] })
+expect Cli.parse(["ui", "roc-ui", "www", "r.mjs", "e.mjs", "s.mjs", "w.mjs", "--specialize=no"]) == Ui({ roc_ui: "roc-ui", output: "www", runtime_files: ["r.mjs", "e.mjs", "s.mjs", "w.mjs"], flags: ["--specialize=no"] })

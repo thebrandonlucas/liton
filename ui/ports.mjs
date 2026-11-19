@@ -1,14 +1,6 @@
 // liton: what the app (app.wasm, from ui/) asks of the page that
 // roc-signals does not model. The ports are declared in ui/Ports.roc.
 
-// A chat shows its latest entries; scrolling up to within a screen of its
-// Show earlier button presses it, so earlier entries come as they are read.
-document.addEventListener("scroll", (event) => {
-  const box = event.target;
-  const earlier = box.matches?.(".timeline-scroll") && box.querySelector(":scope > .earlier > .show-earlier");
-  if (earlier && earlier.getBoundingClientRect().bottom > box.getBoundingClientRect().top - box.clientHeight) earlier.click();
-}, { capture: true, passive: true });
-
 // FIXME: roc-signals's boot doesn't tell the platform, so the page writes
 // whether it is a Mac, whose keys liton writes as ⌘B, for the app to read
 // at boot (`Liton.platform_key`). Drop this once the boot carries it.

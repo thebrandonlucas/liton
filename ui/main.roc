@@ -1,6 +1,6 @@
 app [main] {
 	cap: "../capabilities/main.roc",
-	pf: platform "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.6.0/3kWiwEo2KWAQTrPidpkPTMNGCY6AX7qup9K6tJVYMhB9.tar.zst",
+	pf: platform "https://github.com/lukewilliamboswell/roc-signals/releases/download/0.7.0-rc1/EWXzR62Lkva6BKW4qbvpkHHEsR6ZswDBXi2sef7Sf9Mk.tar.zst",
 	setup: "../setup/main.roc",
 }
 
