@@ -215,6 +215,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- A Paseo session whose turn ended while Paseo was still starting no longer goes without a summary until its next turn: the summary waits until Paseo lists the agent's models.
 - In the rooms list, Leave no longer covers a room's unread count or @-count: while you point at a joined room, Leave takes the count's place.
 - Password managers such as Bitwarden, 1Password and LastPass no longer offer to fill the ⌘K palette's search box.
 - On a phone, a tool call that is still running shows its card again, not an empty box.

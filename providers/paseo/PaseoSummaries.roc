@@ -55,8 +55,9 @@ PaseoSummaries := [].{
 	## `agent:model` for another kind of agent, or else the first of the
 	## agent's models whose id or label names it small, such as Claude's
 	## Haiku or a `mini`. None when the agent offers no small model, so a
-	## summary never runs on a large one unasked.
-	model : List(Chat.Agent), Str, Str -> Try({ agent : Str, model : Str }, [Missing])
+	## summary never runs on a large one unasked, and `NotListed` while
+	## Paseo lists no models for the agent yet, as just after it started.
+	model : List(Chat.Agent), Str, Str -> Try({ agent : Str, model : Str }, [Missing, NotListed])
 	model = |kinds, agent, configured| {
 		if !configured.is_empty() {
 			return match configured.split_first(":") {
@@ -66,8 +67,10 @@ PaseoSummaries := [].{
 		}
 		small = ["haiku", "mini", "nano", "flash", "lite", "small"]
 		named_small = |offered| small.any(|word| offered.id.with_ascii_lowercased().contains(word) or offered.label.with_ascii_lowercased().contains(word))
-		models = kinds.find_first(|kind| kind.agent == agent).map_ok(|kind| kind.models ?? []) ?? []
-		models.find_first(named_small).map_ok(|offered| { agent, model: offered.id }).map_err(|_| Missing)
+		match kinds.find_first(|kind| kind.agent == agent).map_ok(|kind| kind.models) {
+			Ok(Ok(models)) => models.find_first(named_small).map_ok(|offered| { agent, model: offered.id }).map_err(|_| Missing)
+			_ => Err(NotListed)
+		}
 	}
 
 	## The prompt that asks for a summary: the summary so far, if any, and
@@ -178,7 +181,9 @@ expect {
 expect {
 	kinds = [{ ..Chat.agent_kind({ provider: "paseo", agent: "claude" }), models: Ok([{ id: "opus", label: "Opus 4.5", default: Bool.True, context_max: Err(Missing), thinking: [] }, { id: "claude-haiku-4-5", label: "Haiku 4.5", default: Bool.False, context_max: Err(Missing), thinking: [] }]) }]
 	PaseoSummaries.model(kinds, "claude", "") == Ok({ agent: "claude", model: "claude-haiku-4-5" })
-		and PaseoSummaries.model(kinds, "codex", "") == Err(Missing)
+		and PaseoSummaries.model(kinds, "codex", "") == Err(NotListed)
+		and PaseoSummaries.model(kinds.append({ ..Chat.agent_kind({ provider: "paseo", agent: "codex" }), models: Ok([{ id: "gpt-5", label: "GPT-5", default: Bool.True, context_max: Err(Missing), thinking: [] }]) }), "codex", "") == Err(Missing)
+		and PaseoSummaries.model([Chat.agent_kind({ provider: "paseo", agent: "claude" })], "claude", "") == Err(NotListed)
 		and PaseoSummaries.model(kinds, "codex", "claude:haiku") == Ok({ agent: "claude", model: "haiku" })
 		and PaseoSummaries.model(kinds, "codex", "gpt-5-mini") == Ok({ agent: "codex", model: "gpt-5-mini" })
 }
