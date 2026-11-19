@@ -20,6 +20,7 @@ import Model
 import Keymap
 import Palette
 import Commands
+import Conversation
 import TicketDesk
 import Widgets
 import Dropdown
@@ -723,8 +724,7 @@ Liton := [].{
 				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
 				Engine.test_id_s(slot.map(|shown| "slot-${Model.slot_name(shown)}")),
 				Engine.attr_s("data-tile", id),
-				# Named, a view transition moves each tile to its new place.
-				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}; view-transition-name: tile-${shown.id}")),
+				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.update_by(id, |state, tile_id| { ..state, active_tile: tile_id })),
 			],
@@ -1786,111 +1786,79 @@ Liton := [].{
 		chip = shown.map(|{ pane, state }| Liton.model_chip(Model.session(state, Model.session_of(state, pane))))
 		Html.div(
 			"chat",
-			[
-				# Reversed in CSS, so the scroll position stays on the newest entry.
-				Html.div(
-					"timeline-scroll",
-					[
-						# Shown by CSS once scrolled up from the newest entry, where
-						# browsers can (animation-timeline). Jumping builds this pane's
-						# anchor anew, so it is the one `Liton.effects` focuses.
-						Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model0.update_by(id, Model.jump_to_latest))]),
-						Engine.remount_on(id.map2(model0.signal(), |pane_id, state| Model.jumps_of(state, pane_id)), || Engine.element("span", [Engine.ref_s(id.map(|pane_id| "latest-${pane_id}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
-						Html.ul(
-							[Engine.class("timeline"), Engine.attr("data-part", "timeline")],
-							[
-								Engine.each(
-									shown.map(|{ pane, state }| Model.chat_entries(state, pane)),
-									|entry| entry.fold.map_ok(|fold| fold.key) ?? entry.sequence.to_str(),
-									|row|
-										Html.li(
-											[Engine.class_s(row.field(|entry| if (entry.fold.is_ok()) "entry fold" else Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
-											[
-												Engine.switch(
-													row.field(|entry| if (entry.fold.is_ok()) Fold else if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
-													[Fold, Card, Message, Plain],
-													|kind|
-														match kind {
-															Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
-															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }), shown.lift_row().map(|{ pane, .. }| Model.option(pane, "collapse") == "Full"))
-															Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
-															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
-														},
-												),
-											],
-										),
-								),
-								Engine.each(
-									shown.map(|{ pane, state }| Model.unconfirmed(state, Model.session_of(state, pane))),
-									|sent| sent.serial.to_str(),
-									|row|
-										Html.li(
-											[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
-											[
-												Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
-												Html.span_s(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
-												Engine.when(
-													row.field(|sent| !sent.failed.is_empty()),
-													|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
-													|| Engine.text(""),
-												),
-											],
-										),
-								),
-								# While the agent works on a turn: a loader and for how long.
-								Engine.when(
-									shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
-									|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
-									|| Engine.text(""),
-								),
-							],
-						),
-						# Last, so shown first: the timeline is reversed. ui/ports.mjs
-						# presses it as it scrolls into view.
-						Engine.when(
-							shown.map(|{ pane, state }| Model.has_earlier(state, pane)),
-							|| Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier")], model0.update_by(id, Model.show_earlier))]),
-							|| Engine.text(""),
-						),
-					],
-				),
-				Engine.when(
-					shown.map(|{ pane, state }| Model.loading(state, Model.session_of(state, pane))),
-					|| Html.p("Loading…", "missing"),
-					|| Engine.text(""),
-				),
+			Conversation.timeline(
+				model0,
+				id,
+				{ class: "timeline", part: "timeline", jump: Bool.True, earlier: shown.map(|{ pane, state }| Model.has_earlier(state, pane)), loading: shown.map(|{ pane, state }| Model.loading(state, Model.session_of(state, pane))) },
+				[
+					Engine.each(
+						shown.map(|{ pane, state }| Model.chat_entries(state, pane)),
+						|entry| entry.fold.map_ok(|fold| fold.key) ?? entry.sequence.to_str(),
+						|row|
+							Html.li(
+								[Engine.class_s(row.field(|entry| if (entry.fold.is_ok()) "entry fold" else Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
+								[
+									Engine.switch(
+										row.field(|entry| if (entry.fold.is_ok()) Fold else if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
+										[Fold, Card, Message, Plain],
+										|kind|
+											match kind {
+												Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
+												Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }), shown.lift_row().map(|{ pane, .. }| Model.option(pane, "collapse") == "Full"))
+												Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
+												Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
+											},
+									),
+								],
+							),
+					),
+					Engine.each(
+						shown.map(|{ pane, state }| Model.unconfirmed(state, Model.session_of(state, pane))),
+						|sent| sent.serial.to_str(),
+						|row|
+							Html.li(
+								[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
+								[
+									Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
+									Conversation.sent_state({ status: row.field(|sent| Liton.sent_status(sent)), failed: row.field(|sent| !sent.failed.is_empty()), test_id: "sent-status" }, [{ label: "Retry", handler: model0.lift_row().update_by(row.key(), Model.retry) }]),
+								],
+							),
+					),
+					# While the agent works on a turn: a loader and for how long.
+					Engine.when(
+						shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
+						|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
+						|| Engine.text(""),
+					),
+				],
+			).concat([
 				Engine.when(
 					pending.map(|waiting| waiting.is_ok()),
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
-				Html.form(
-					"Send a message",
-					[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model0.update_by(id, Microphone.send))],
+				Conversation.composer(
+					model0,
+					id,
+					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [] },
 					[
-						Liton.composer_input(model0, id, { name: "Message", placeholder: Engine.const("Message the agent") }, Microphone.send),
-						Html.div(
-							"composer-row",
-							[
-								Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
-								Microphone.controls(model0, id),
-								# One round button: Send, or Stop while the agent works and
-								# nothing is typed, then a ring until it stops.
-								Engine.switch(
-									shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
-									[Send, Stop, Stopping],
-									|action|
-										match action {
-											Send => Html.submit_button("", [Engine.class("send"), Html.aria_label("Send")])
-											Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
-											Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
-										},
-								),
-							],
+						Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")]),
+						Microphone.controls(model0, id),
+						# One round button: Send, or Stop while the agent works and
+						# nothing is typed, then a ring until it stops.
+						Engine.switch(
+							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+							[Send, Stop, Stopping],
+							|action|
+								match action {
+									Send => Conversation.send_button("Send")
+									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+								},
 						),
 					],
 				),
-			],
+			]),
 		)
 	}
 
@@ -1914,17 +1882,6 @@ Liton := [].{
 			Ok(model) => { name: model.drop_prefix("${session.agent}-"), title: "${session.agent}, running ${model}" }
 			Err(Missing) => { name: session.agent, title: if (session.agent.is_empty()) "" else "${session.agent}: its provider doesn't say which model it runs" }
 		}
-
-	## A box that grows with the draft kept under `key` to a few lines, with
-	## the reference `composer-<key>`, which no other box shares. Enter sends it and Shift+Enter starts a new line,
-	## except on a touch screen, where Enter starts one and Send sends. Enter
-	## that ends an IME composition is never heard.
-	composer_input : State(ctx, Model.State), Signal(ctx, Str), { name : Str, placeholder : Signal(ctx, Str) }, (Model.State, Str -> Model.State) -> Elem(ctx)
-	composer_input = |model, key, { name, placeholder }, send| {
-		enter = Engine.Chord.plain("Enter")
-		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
-		Html.textarea(Engine.const(name), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "1"), Engine.attr_s("placeholder", placeholder), Engine.ref_s(key.map(|draft_key| "composer-${draft_key}")), Engine.on_key({ keymap: sends }, model.update_by(key, send))], model.set_value_by(key, Model.set_draft))
-	}
 
 	## The git of the session a pane shows: its branch, the files of the scope
 	## picked, the diff of the file picked and the branch's commits. Polls
@@ -2432,53 +2389,41 @@ Liton := [].{
 
 	## A room's header, messages and who is typing.
 	room_main : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, Rooms.Room) -> List(Elem(PaneCtx))
-	room_main = |model, id, room_id, shown|
-		[
-			Html.div(
-				"room-header",
-				[
-					Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
-					Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
-					Liton.join_controls(model, shown),
-				],
-			),
-			Html.div(
-				"timeline-scroll",
-				[
-					Html.ul(
-						[Engine.class("timeline room-timeline"), Engine.attr("data-part", "room")],
-						[Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
-					),
-				],
-			),
-			Engine.when(room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")), || Html.p("Loading…", "missing"), || Engine.text("")),
-			Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
-			Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
-		]
+	room_main = |model, id, room_id, shown| {
+		header = Html.div(
+			"room-header",
+			[
+				Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
+				Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
+				Liton.join_controls(model, shown),
+			],
+		)
+		messages = Engine.each(id.map2(model.signal(), |pane_id, state| Model.room_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
+		[header]
+			.concat(Conversation.timeline(model, id, { class: "timeline room-timeline", part: "room", jump: Bool.True, earlier: Engine.const(Bool.False), loading: room_id.map2(model.signal(), |opened, state| !Model.room_loaded(state, opened, "")) }, [messages]))
+			.concat([
+				Html.p_s(room_id.map2(model.signal(), |opened, state| Model.typing(state, opened, "")), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("room-typing")]),
+				Liton.room_composer(model, id, Room, shown.map(|room| if (room.kind == Forum) "New post in #${room.name}" else "Message #${room.name}")),
+			])
+	}
 
 	## The thread a Rooms pane opened: its top-level message, its replies and
 	## who is typing in it, and × to close it.
 	room_thread : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.RoomPane) -> Elem(PaneCtx)
-	room_thread = |model, id, opened|
+	room_thread = |model, id, opened| {
+		header = Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))])
+		replies = Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))
 		Html.section(
 			"Thread",
 			"room-thread-pane",
-			[
-				Html.div("room-header", [Html.span_s(Engine.const("Thread"), [Engine.class("room-title")]), Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" })))]),
-				Html.div(
-					"timeline-scroll",
-					[
-						Html.ul(
-							[Engine.class("timeline room-timeline"), Engine.attr("data-part", "thread")],
-							[Engine.each(id.map2(model.signal(), |pane_id, state| Model.thread_lines(state, pane_id)), |line| line.id, |row| Liton.room_message(model, id, row))],
-						),
-					],
-				),
-				Engine.when(opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)), || Html.p("Loading…", "missing"), || Engine.text("")),
-				Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
-				Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),
-			],
+			[header]
+				.concat(Conversation.timeline(model, id.map(|pane_id| "${pane_id}/thread"), { class: "timeline room-timeline", part: "thread", jump: Bool.True, earlier: Engine.const(Bool.False), loading: opened.map2(model.signal(), |{ room_id, root, .. }, state| !Model.room_loaded(state, room_id, root)) }, [replies]))
+				.concat([
+					Html.p_s(opened.map2(model.signal(), |{ room_id, root, .. }, state| Model.typing(state, room_id, root)), [Engine.class("room-typing"), Engine.attr("role", "status"), Engine.test_id("thread-typing")]),
+					Liton.room_composer(model, id, Thread, Engine.const("Reply in the thread")),
+				]),
 		)
+	}
 
 	## The composer of a Rooms pane's room, or of the thread it opened, as
 	## the chat's: Send shows the message at once as sending. A mention being
@@ -2486,23 +2431,11 @@ Liton := [].{
 	room_composer : State(PaneCtx, Model.State), Signal(PaneCtx, Str), [Room, Thread], Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	room_composer = |model, id, place, placeholder| {
 		key = id.map(|pane_id| if (place == Thread) "${pane_id}/thread" else pane_id)
-		Html.form(
-			if (place == Thread) "Reply in the thread" else "Send to the room",
-			[Engine.class("composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(key, Model.send_to_room))],
-			[
-				Html.div(
-					"mention-choices",
-					[
-						Engine.each(
-							key.map2(model.signal(), |draft_key, state| Model.mention_choices(state, draft_key)),
-							|name| name,
-							|row| Html.button_s(row.key().map(|name| "@${name}"), [], model.lift_row().update_by(row.key().map2(key.lift_row(), |name, draft_key| { key: draft_key, name }), Model.mention)),
-						),
-					],
-				),
-				Liton.composer_input(model, key, { name: if (place == Thread) "Your reply" else "Your message", placeholder }, Model.send_to_room),
-				Html.div("composer-row", [Html.submit_button("", [Engine.class("send"), Html.aria_label(if (place == Thread) "Send the reply" else "Send to the room")])]),
-			],
+		Conversation.composer(
+			model,
+			key,
+			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices },
+			[Conversation.send_button(if (place == Thread) "Send the reply" else "Send to the room")],
 		)
 	}
 
@@ -2550,18 +2483,12 @@ Liton := [].{
 						),
 					],
 				),
-				Engine.when(row.field(|line| !line.status.is_empty()), || Html.span_s(row.field(|line| line.status), [Engine.class("sent-status"), Engine.test_id("room-sent-status")]), || Engine.text("")),
-				Engine.when(
-					row.field(|line| line.failed),
-					||
-						Html.div(
-							"room-retry",
-							[
-								Html.button("Retry", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.True }), Model.resend)),
-								Html.button("Discard", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.False }), Model.resend)),
-							],
-						),
-					|| Engine.text(""),
+				Conversation.sent_state(
+					{ status: row.field(|line| line.status), failed: row.field(|line| line.failed), test_id: "room-sent-status" },
+					[
+						{ label: "Retry", handler: model.update_by(row.field(|line| { serial: line.serial, again: Bool.True }), Model.resend) },
+						{ label: "Discard", handler: model.update_by(row.field(|line| { serial: line.serial, again: Bool.False }), Model.resend) },
+					],
 				),
 				Engine.when(
 					row.field(|line| line.threaded and line.status.is_empty()),
