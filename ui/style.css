@@ -554,8 +554,13 @@ kbd:empty { display: none; }
 .room-members { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 12px; }
 .room-members::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-users) center / contain no-repeat; mask: var(--icon-users) center / contain no-repeat; }
 .room-members[aria-pressed="true"] { background: var(--selected); }
-.room-header .room-menu { position: relative; }
-.room-header:not(:has(.room-members)) .room-menu { margin-left: auto; }
+/* A room's pane header names it in place of a header of its own: its
+   name and topic in the room's type, its members and ⋯. */
+.pane-heading .room-title { flex: none; font: 650 14px/1.2 var(--font-ui); }
+.pane-heading .room-topic { font: 12px/1.2 var(--font-ui); }
+.room-controls { flex: none; display: flex; align-items: center; gap: 4px; }
+.pane-header .room-members { border-color: var(--edge); font: 12px/1.2 var(--font-ui); }
+@media (max-width: 640px) { .pane-heading .room-topic { display: none; } .pane-header .room-members { padding: 2px 8px; } }
 .room-preview { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 12px 6px; padding: 6px 10px; border-radius: var(--small-radius); background: var(--tool); color: var(--muted); font-size: 13px; }
 .mention-choices { display: flex; flex-wrap: wrap; gap: 4px; }
 .mention-choices:empty { display: none; }
