@@ -18,6 +18,11 @@
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
 ## PASEO_PORT (default 6767), reached over its WebSocket alone.
 ##
+## LITON_AUTH says when /liton/v1 answers only paired devices (Auth.roc,
+## docs/protocol.md, Authentication): `on`, the default, always, unless
+## LITON_HOST is loopback and no proxy forwarded the request; `required`
+## always; `off` never.
+##
 ## LITON_SETUP names the setup a Litonfile evaluates to (`liton setup`), by
 ## default liton.setup.json if there is one, or else liton's own
 ## (setup/Default.roc). It declares the remotes, the transformers and the
@@ -29,7 +34,8 @@
 ## https://). Their providers, sessions and workspaces are named
 ## `<name>/<their id>`. The daemon asks each at most every
 ## LITON_PROVIDERS_INTERVAL_MS (default 1000) for all that polls watch of it,
-## in one poll of its own.
+## in one poll of its own. LITON_PROVIDER_TOKENS gives the token each was
+## paired with, comma-separated as `name=token`.
 ##
 ## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
 ## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
@@ -95,11 +101,14 @@ import speech.LocalSpeech
 import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
+import Auth
+import Sha256
 
 ## What each request is answered from: the database, the hosts it answers,
+## when it must come from a paired device,
 ## the providers and transformers configured, the model Paseo's summaries
 ## are written with ("" for the agent's smallest), and the setup it offers.
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -148,7 +157,8 @@ init! = || {
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	summary_model = if (env_or!("LITON_SUMMARY", "on") == "off") Err(Off) else Ok(env_or!("LITON_SUMMARY_MODEL", ""))
-	context = { db, allowed_hosts, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	auth = checked!(Auth.mode(env_or!("LITON_AUTH", ""), host))?
+	context = { db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -218,7 +228,8 @@ shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
 shutdown! = |_reason, _context| Ok({})
 
 ## Answers a request: the UI's redirect, the protocol's manifest, calls
-## and polls, and voice's audio, refusing other sites.
+## and polls, voice's audio, and pairing and the devices paired, refusing
+## other sites and, where LITON_AUTH asks it to, devices not paired.
 respond! : Server.Request, Context => Try(Server.Outcome, [ServerErr(Str)])
 respond! = |request, context| {
 	asked = {
@@ -233,23 +244,148 @@ respond! = |request, context| {
 		headers: request.headers().map(|field| { name: field.name, value: field.value }),
 	}
 	response =
-		match (cross_site_refusal(context.allowed_hosts, asked), request.method(), request.target()) {
-			(Err(why), _, _) => Ok(text(403, why))
-			(Ok({}), GET, Resource({ raw_path: "/", .. })) =>
-				Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
-			(Ok({}), GET, Resource({ raw_path: "/liton/v1/manifest", .. })) =>
-				manifest!(context)
-			(Ok({}), POST, Resource({ raw_path: "/liton/v1/call", .. })) =>
-				call!(context, request)
-			(Ok({}), POST, Resource({ raw_path: "/liton/v1/poll", .. })) =>
-				polled_topics!(context, request)
-			(Ok({}), POST, Resource({ raw_path, .. })) if raw_path.starts_with(audio_route) =>
-				audio_chunk!(context, request, raw_path.drop_prefix(audio_route))
-			_ => Ok(text(404, "Not found"))
+		match cross_site_refusal(context.allowed_hosts, asked) {
+			Err(why) => Ok(text(403, why))
+			Ok({}) => routed!(context, request, asked.headers)
 		}
 	match response {
 		Ok(answer) => Ok(Server.respond(answer))
 		Err(err) => Ok(Server.respond(text(500, Str.inspect(err))))
+	}
+}
+
+## Answers a request of this site, once its device is known: every route of
+## /liton/v1 but pairing answers a device that must be paired and isn't
+## with 401.
+routed! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+routed! = |context, request, headers| {
+	path =
+		match request.target() {
+			Resource({ raw_path, .. }) => raw_path
+			_ => ""
+		}
+	seen = if (path.starts_with("/liton/v1/") and path != "/liton/v1/pair") signed_in!(context, headers)? else Ok(Open)
+	match (seen, request.method(), path) {
+		(Err(Unpaired), _, _) =>
+			Ok(text(401, "this device isn't paired with the daemon: run `liton pair` on the daemon's machine, or open Settings → Devices on a paired one, for a pairing code").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
+		(_, GET, "/") => Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
+		(_, GET, "/liton/v1/manifest") => manifest!(context)
+		(_, POST, "/liton/v1/call") => call!(context, request)
+		(_, POST, "/liton/v1/poll") => polled_topics!(context, request)
+		(_, POST, "/liton/v1/pair") => paired!(context, request, headers)
+		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
+		(_, POST, "/liton/v1/devices/code") => pairing_code!(context)
+		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
+		(_, POST, _) if path.starts_with(audio_route) => audio_chunk!(context, request, path.drop_prefix(audio_route))
+		_ => Ok(text(404, "Not found"))
+	}
+}
+
+## The device a request comes from, by the token it shows (`Auth.credential`):
+## `Device(id)` when the token is one paired, else `Open` when this request
+## needn't be paired (`Auth.required`), or else `Unpaired`. A device's last
+## use is kept to the minute.
+signed_in! : Context, List({ name : Str, value : Str }) => Try(Try([Device(Str), Open], [Unpaired]), _)
+signed_in! = |context, headers| {
+	unknown = if (Auth.required(context.auth, headers)) Err(Unpaired) else Ok(Open)
+	match Auth.credential(headers) {
+		Ok({ id, secret }) => {
+			kept : List({ token_hash : Str })
+			kept = Sqlite.query_many!({ db: context.db, query: "SELECT token_hash FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+			match kept {
+				[{ token_hash }] if Auth.same(Sha256.hex(secret.to_utf8()), token_hash) => {
+					now = now_ms!()
+					Sqlite.execute!({ db: context.db, query: "UPDATE devices SET seen_at = :now WHERE id = :id AND seen_at < :since;", params: { id, now, since: now - 60_000 } })?
+					Ok(Ok(Device(id)))
+				}
+				_ => Ok(unknown)
+			}
+		}
+		Err(Missing) => Ok(unknown)
+	}
+}
+
+## How long a pairing code lasts.
+pairing_code_ms : I64
+pairing_code_ms = 600_000
+
+## How many pairings the daemon tries a minute, right or wrong: an 8-symbol
+## code has 2^40 values, so guessing one before it expires is hopeless.
+pairings_per_minute : I64
+pairings_per_minute = 10
+
+## Answers /liton/v1/pair: a pairing code, used once, for a token of a new
+## device. A browser gets it as an HttpOnly cookie, out of its scripts'
+## reach; a client asking `token: true`, as the CLI or another daemon, in
+## the answer too.
+paired! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+paired! = |{ db, .. }, request, headers| {
+	now = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM pairing_attempts WHERE at < :since;", params: { since: now - 60_000 } })?
+	attempts : { count : I64 }
+	attempts = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM pairing_attempts;", params: {}, limits: Sqlite.default_query_limits })?
+	if attempts.count >= pairings_per_minute {
+		return Ok(text(429, "too many pairing attempts; try again in a minute"))
+	}
+	Sqlite.execute!({ db, query: "INSERT INTO pairing_attempts (at) VALUES (:now);", params: { now } })?
+	given : Try({ code : Str, name : Try(Str, [Missing]), token : Try(Bool, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Err(_) => Ok(text(400, "a pairing is {\"code\": \"ABCD-EFGH\", \"name\": \"this device's name\"}"))
+		Ok({ code, name, token: wants_token }) => {
+			used : List({ code : Str })
+			used = Sqlite.query_many!({ db, query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: Auth.typed_code(code), now }, limits: Sqlite.default_query_limits })?
+			if used.is_empty() {
+				return Ok(text(401, "that pairing code is wrong, used or expired"))
+			}
+			# SQLite's randomblob is its ChaCha20 generator, seeded from the system's.
+			random : { id : Str, secret : Str }
+			random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(32))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+			device = { id: random.id, name: Str.from_utf8_lossy((name ?? "").trim().to_utf8().take_first(80)) }
+			named = if (device.name == "") { ..device, name: "A device" } else device
+			Sqlite.execute!({ db, query: "INSERT INTO devices (id, name, token_hash, created_at, seen_at) VALUES (:id, :name, :token_hash, :now, :now);", params: { id: named.id, name: named.name, token_hash: Sha256.hex(random.secret.to_utf8()), now } })?
+			token = "${random.id}.${random.secret}"
+			body = if (wants_token == Ok(Bool.True)) Json.to_str({ device: named, token }) else Json.to_str({ device: named })
+			Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+		}
+	}
+}
+
+## Answers /liton/v1/devices: the devices paired, the oldest first, the one
+## asking marked `current`. A token is never shown.
+devices! : Context, [Device(Str), Open] => Try(Response, _)
+devices! = |{ db, .. }, asking| {
+	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at }| { id, name, created_at, seen_at, current: asking == Device(id) }) })))
+}
+
+## Answers /liton/v1/devices/code: a new pairing code, for
+## `pairing_code_ms`, and when it expires.
+pairing_code! : Context => Try(Response, _)
+pairing_code! = |{ db, .. }| {
+	now = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM pairing_codes WHERE expires_at <= :now;", params: { now } })?
+	random : { bytes : Sqlite.Blob }
+	random = Sqlite.query!({ db, query: "SELECT randomblob(8) AS bytes;", params: {}, limits: Sqlite.default_query_limits })?
+	code = Auth.code(random.bytes.to_bytes())
+	expires_at = now + pairing_code_ms
+	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at) VALUES (:code, :expires_at);", params: { code, expires_at } })?
+	Ok(json(Json.to_str({ code, expires_at })))
+}
+
+## Answers /liton/v1/devices/revoke: forgets the device `id` names, so its
+## token is refused from then on. The device revoking itself is signed out.
+revoked! : Context, Server.Request, [Device(Str), Open] => Try(Response, _)
+revoked! = |{ db, .. }, request, asking| {
+	given : Try({ id : Str }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Err(_) => Ok(text(400, "a revocation is {\"id\": \"the device's id\"}"))
+		Ok({ id }) => {
+			Sqlite.execute!({ db, query: "DELETE FROM devices WHERE id = :id;", params: { id } })?
+			Ok(if (asking == Device(id)) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
+		}
 	}
 }
 
@@ -1318,6 +1454,9 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_transcripts (utterance_id TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', through INTEGER NOT NULL DEFAULT 0, agent_id TEXT NOT NULL DEFAULT '', asking_through INTEGER NOT NULL DEFAULT 0, asking_at TEXT NOT NULL DEFAULT '', asked_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
@@ -2209,12 +2348,25 @@ forwarded_workspaces! = |endpoint, provider, asked| {
 remote_asked! : Remote.Endpoint, [GET, POST], Str, Str => Try(Str, _)
 remote_asked! = |endpoint, method, what, body| {
 	asked = Request.from_method(if (method == GET) GET else POST).with_uri("${endpoint.url}/liton/v1/${what}").with_body(body.to_utf8()).with_timeout(TimeoutMilliseconds(remote_timeout_ms.to_u64_wrap()))
-	response = Http.send!(if (method == GET) asked else asked.add_header("Content-Type", "application/json"))?
+	typed = if (method == GET) asked else asked.add_header("Content-Type", "application/json")
+	response = Http.send!(
+		match remote_token(env_or!("LITON_PROVIDER_TOKENS", ""), endpoint.name) {
+			Ok(token) => typed.add_header("Authorization", "Bearer ${token}")
+			Err(NoToken) => typed
+		},
+	)?
 	if response.status() != 200 {
 		return Err(AnsweredStatus(response.status()))
 	}
 	Str.from_utf8(response.body())
 }
+
+## The token `tokens`, LITON_PROVIDER_TOKENS, gives the remote `name`.
+remote_token : Str, Str -> Try(Str, [NoToken])
+remote_token = |tokens, name|
+	tokens.split_on(",").map(|pair| pair.trim()).find_first(|pair| pair.starts_with("${name}=")).map_ok(|pair| pair.drop_prefix("${name}=")).map_err(|_| NoToken)
+
+expect remote_token("peer=abc.def, team=123.456", "team") == Ok("123.456") and remote_token("peer=abc.def", "team") == Err(NoToken)
 
 ## Runs each remote's cycle that is due.
 remotes_cycle! : Context => Try({}, _)
