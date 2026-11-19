@@ -48,7 +48,8 @@
     (expect-absent (role tab :name "Diff"))
     (expect-visible (label "Message"))
     ; + opens the form to start an agent in the workspace, as its header's menu does.
-    (click (role button :name "New agent in this workspace"))
+    (click (role button :name "New tab"))
+    (click (role button :name "New agent"))
     (expect-visible (text "New agent in main"))
     (click (role button :name "Cancel"))
     (expect-absent (text "New agent in main"))

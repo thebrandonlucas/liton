@@ -501,7 +501,7 @@ Liton := [].{
 	keys_help = |system| {
 		key = |command| Keymap.text_of(system, Keymap.defaults, command)
 		heard = if (system == Mac) "in a text box too" else "outside a text box"
-		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## A side sheet that picks the preset, lists each slot's or tile's panes
@@ -831,7 +831,8 @@ Liton := [].{
 	## The workspace tile's tabs (`Model.tab_rows`): a chat of each of the
 	## focused workspace's sessions with its status, then the views it
 	## opened and the tile's other panes, which drag as a tile's tabs do,
-	## each with a × that closes it, and + to start an agent in the workspace.
+	## each with a × that closes it, and + with its menu of a new agent in
+	## the workspace and the tile's panes hidden (`Model.tab_menu_items`).
 	workspace_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
 	workspace_tabs = |model, drag, tile|
 		Html.div_attrs(
@@ -874,7 +875,29 @@ Liton := [].{
 						)
 					},
 				),
-				Liton.icon_button(Engine.const("New agent in this workspace"), "icon new-tab", model.update(Model.new_agent_tab)),
+				Html.div(
+					"row-menu tab-menu",
+					[
+						Engine.element(
+							"button",
+							[
+								Engine.attr("type", "button"),
+								Engine.class("icon new-tab"),
+								Html.aria_label("New tab"),
+								Engine.attr_s("title", model.signal().map(|state| "New tab (${Keymap.text_of(state.operating_system, Keymap.defaults, "tab.new")})")),
+								Engine.attr("aria-haspopup", "true"),
+								Html.flag("aria-expanded", model.signal().map(|state| state.menu == Model.tab_menu)),
+								Engine.on_click(model.update(|state| Model.toggle_menu(state, Model.tab_menu))),
+							],
+							[],
+						),
+						Engine.when(
+							model.signal().map(|state| state.menu == Model.tab_menu),
+							|| Html.div("menu", [Engine.each(model.signal().map(Model.tab_menu_items), |item| item.label, |item| Html.button_s(item.field(|shown| shown.label), [], model.lift_row().update_by(item.field(|shown| shown.pane), Model.pick_tab_menu)))]),
+							|| Engine.text(""),
+						),
+					],
+				),
 			],
 		)
 

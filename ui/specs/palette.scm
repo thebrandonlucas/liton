@@ -15,7 +15,7 @@
     (expect-attr (label "Command or place") autocomplete "off")
     ; Each command shows its keys.
     (expect-text (role option :name "Open or close Settings") "Open or close SettingsViewCtrl+,")
-    (expect-text (role option :name "docs") "docsWorkspace in appG then 2")
+    (expect-text (role option :name "docs") "docsWorkspace in appCtrl+2")
     ; Typing filters, and Enter runs the entry picked.
     (fill (label "Command or place") "settings")
     (expect-visible (role option :name "Open or close Settings"))

@@ -93,6 +93,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Workspaces grouped by status lists the pinned ones first under Pinned, apart from the rest, and each workspace's project, and its host where several providers list workspaces, on a muted line under it.
 - Over Workspaces' list, when it lists sessions as tabs as the Developer preset's does, New workspace opens the form to create one, and Search opens the palette.
 - The Developer preset's main area says what to do while there is nothing to chat with: with no projects yet, where they come from and a button to see what is connected; with none picked, to pick a workspace or create one; and in a workspace with no agents, a button to start one.
+- Paseo's keys between workspaces and tabs: ⌘1 to ⌘9 (Ctrl elsewhere) go to that workspace, as G then 1 to 9 do; ⌘] and ⌘[, or G then ] and [, go to the workspace after or before; ⌘T, or T then N, opens the new tab menu, the + after the tabs, which starts an agent or shows a pane hidden there; and ⌘W, or T then W, closes the tab. A browser's tab keeps ⌘T, ⌘W and Ctrl+1 to 9 for itself, so use the letters there.
 
 ### Changed
 

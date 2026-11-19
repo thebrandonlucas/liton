@@ -1352,6 +1352,37 @@ Model := [].{
 			Pane(pane_id) => Model.close_tab(state, pane_id)
 		}
 
+	## What names the workspace tile's new tab menu in `menu`.
+	tab_menu : Str
+	tab_menu = "new-tab"
+
+	## What the new tab menu offers: a new agent in the workspace focused,
+	## and each pane its tile hides, shown again.
+	tab_menu_items : State -> List({ label : Str, pane : Str })
+	tab_menu_items = |state| {
+		hidden = Model.workspace_tile(state).map_ok(|tile_id| state.grid.tiles.find_first(|tile| tile.id == tile_id).map_ok(|tile| tile.panes.keep_if(|shown| state.hidden.contains(shown.id) and !Model.workspace_view(state, shown.id) and !Widgets.shows(Widgets.find(shown.widget), View, Ticket))) ?? []) ?? []
+		(if (Model.focused(state, [Workspace]) == Session("")) [] else [{ label: "New agent", pane: "" }]).concat(hidden.map(|shown| { label: Widgets.find(shown.widget).title, pane: shown.id }))
+	}
+
+	## Does what the new tab menu offers: starts an agent, or shows a pane.
+	pick_tab_menu : State, Str -> State
+	pick_tab_menu = |state0, pane_id| {
+		state = { ..state0, menu: "" }
+		if (pane_id.is_empty()) Model.new_agent_tab(state) else Model.show_pane(state, pane_id)
+	}
+
+	## Closes the workspace tile's tab shown, if × closes it.
+	close_shown_tab : State -> State
+	close_shown_tab = |state| Model.shown_closing_tab(state).map_ok(|row| Model.close_picked_tab(state, row.tab)) ?? state
+
+	## The workspace tile's tab shown, if × closes it.
+	shown_closing_tab : State -> Try(TabRow, [NotFound])
+	shown_closing_tab = |state|
+		match Model.workspace_tile(state).map_ok(|tile_id| state.grid.tiles.find_first(|tile| tile.id == tile_id)) {
+			Ok(Ok(tile)) => Model.tab_rows(state, tile).find_first(|row| row.shown and row.closes)
+			_ => Err(NotFound)
+		}
+
 	## Opens the form to start an agent in the workspace focused, in the
 	## first Workspaces pane, its drawer shown.
 	new_agent_tab : State -> State
