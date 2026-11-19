@@ -959,7 +959,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView, Welcome, NoAgents],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -976,6 +976,13 @@ Liton := [].{
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
 							NoView => Html.p("liton can't show this widget yet.", "missing")
+							Welcome => Liton.welcome(model)
+							NoAgents =>
+								Liton.empty_state(
+									shown.map(|{ state, .. }| "No agents in ${Model.workspace_header(state).title} yet"),
+									"Start one to work in this workspace: it shows here as a tab.",
+									[Html.button("Start an agent", [Engine.class("empty-action")], model.update(Model.new_agent_tab))],
+								)
 							Missing =>
 								Html.p_s(
 									shown.map(|{ pane, state }| "This widget needs ${Model.missing(state, pane)}, which no connected provider supplies. Connect one that does, and it fills in here."),
@@ -1588,6 +1595,39 @@ Liton := [].{
 						)
 					},
 				),
+			],
+		)
+
+	## What the main area says while no workspace is picked: on a first run,
+	## that projects come from the daemon's providers, with what is connected
+	## a click away; else to pick a workspace or create one.
+	welcome : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	welcome = |model|
+		Engine.when(
+			model.signal().map(|state| state.workspaces.projects.is_empty()),
+			||
+				Liton.empty_state(
+					Engine.const("No projects yet"),
+					"liton shows the projects of the providers its daemon connects. Start the daemon with PASEO_PASSWORD set to connect Paseo, or LITON_PROVIDERS for other providers, and their projects and workspaces appear here.",
+					[Html.button("See what's connected", [Engine.class("empty-action")], model.update(|state| Model.add_pane(state, "capabilities")))],
+				),
+			||
+				Liton.empty_state(
+					Engine.const("Pick a workspace"),
+					"Its agents show here as tabs, its changes and files beside them.",
+					[Html.button("Create a workspace", [Engine.class("empty-action")], model.update(Model.new_workspace))],
+				),
+		)
+
+	## An empty state: what is missing, why, and the actions that fill it.
+	empty_state : Signal(ctx, Str), Str, List(Elem(ctx)) -> Elem(ctx)
+	empty_state = |title, text, actions|
+		Html.div_attrs(
+			[Engine.class("empty-state"), Engine.test_id("empty-state")],
+			[
+				Html.p_s(title, [Engine.class("empty-title")]),
+				Html.p(text, "empty-text"),
+				Html.div("empty-actions", actions),
 			],
 		)
 

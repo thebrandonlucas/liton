@@ -340,6 +340,12 @@ kbd:empty { display: none; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 4; }
 .pane:has(.menu) { z-index: 6; overflow: visible; }
 .missing { padding: 12px; color: var(--muted); }
+/* An empty state: centred, quiet, what is missing and the action that fills it. */
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; }
+.empty-title { margin: 0; font-size: 16px; color: var(--text); }
+.empty-text { margin: 0 0 8px; max-width: 420px; color: var(--muted); }
+.empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.empty-action { padding: 6px 14px; }
 
 .inbox-item:hover { background: var(--tool); }
 .inbox-item.focused { background: var(--selected); }

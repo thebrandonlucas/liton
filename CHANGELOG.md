@@ -92,6 +92,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Over a workspace's tabs, a header names it and its project, with its ⋯ menu (new agent, rename, pin, archive) between the drawers' buttons, the right one counting its changed lines.
 - Workspaces grouped by status lists the pinned ones first under Pinned, apart from the rest, and each workspace's project, and its host where several providers list workspaces, on a muted line under it.
 - Over Workspaces' list, when it lists sessions as tabs as the Developer preset's does, New workspace opens the form to create one, and Search opens the palette.
+- The Developer preset's main area says what to do while there is nothing to chat with: with no projects yet, where they come from and a button to see what is connected; with none picked, to pick a workspace or create one; and in a workspace with no agents, a button to start one.
 
 ### Changed
 

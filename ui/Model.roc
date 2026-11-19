@@ -1356,12 +1356,27 @@ Model := [].{
 	## first Workspaces pane, its drawer shown.
 	new_agent_tab : State -> State
 	new_agent_tab = |state|
-		match (Model.focused(state, [Workspace]), Model.panes(state).find_first(|shown| shown.widget == "workspaces")) {
-			(Workspace(workspace_id), Ok(listing)) => {
-				opened = Model.open_form({ ..state, collapsed: state.collapsed.drop_if(|slot| slot == Model.slot_of(state, Model.tile_of(state, listing.id).map_ok(|tile| tile.id) ?? "")) }, { pane_id: listing.id, key: Context.to_str(Workspace(workspace_id)) })
-				Model.tile_of(state, listing.id).map_ok(|tile| Model.jump_to(opened, tile.id, Push)) ?? opened
-			}
+		match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => Model.navigator_form(state, Context.to_str(Workspace(workspace_id)))
 			_ => state
+		}
+
+	## Opens the form to create a workspace of the first project, as
+	## `Model.new_agent_tab` does.
+	new_workspace : State -> State
+	new_workspace = |state| Model.navigator_form(state, "")
+
+	## Opens the first Workspaces pane's form for the row `key` names
+	## (`Model.open_form`), its drawer shown.
+	navigator_form : State, Str -> State
+	navigator_form = |state, key|
+		match Model.panes(state).find_first(|shown| shown.widget == "workspaces") {
+			Ok(listing) => {
+				tile_id = Model.tile_of(state, listing.id).map_ok(|tile| tile.id) ?? ""
+				opened = Model.open_form({ ..state, collapsed: state.collapsed.drop_if(|slot| slot == Model.slot_of(state, tile_id)) }, { pane_id: listing.id, key })
+				if (tile_id.is_empty()) opened else Model.jump_to(opened, tile_id, Push)
+			}
+			Err(NotFound) => state
 		}
 
 	## Shows a tab of the workspace focused.
@@ -3294,8 +3309,11 @@ Model := [].{
 	## What a pane's body shows: its widget, a wait for the daemon's manifest,
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
-	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	## `NoView` is a widget's that liton has no view of yet. A chat showing
+	## a workspace's tabs says what to do while there is nothing to chat
+	## with, where workspaces are offered: `Welcome` while no workspace is picked, `NoAgents` while the one
+	## picked has none.
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView, Welcome, NoAgents]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3310,6 +3328,8 @@ Model := [].{
 			Missing
 		else if (shown.id == Model.main_area_pane(state) and !Model.main_diff(state).is_empty())
 			MainDiff
+		else if (shown.widget == "chat" and state.capabilities.contains(Capability.workspaces_v1) and Model.tile_of(state, shown.id).map_ok(|tile| Ok(tile.id) == Model.workspace_tile(state)) == Ok(Bool.True) and Model.session_of(state, shown).is_empty())
+			if (Model.focused(state, [Workspace]) == Session("")) Welcome else NoAgents
 		else
 			match shown.widget {
 				"sessions" => Sessions
