@@ -187,7 +187,7 @@ picked and loading, is budgeted.
 ## Comparing liton builds
 
 `--liton-www` points liton's daemon at another UI directory, such as one with
-an `app.wasm` built with `roc-ui build --opt=size`. `--precompressed` puts a
+an `app.wasm` built with `roc build --opt=size`. `--precompressed` puts a
 small file server (`bench/static.mjs`) in front of liton's daemon that serves
 each file's `.br` sibling (made with `brotli -q 11 -k`) with
 `Content-Encoding: br`, and passes the API to the daemon, to estimate what

@@ -67,7 +67,7 @@ MockTickets := [].{
 	## The tickets as the daemon keeps their changes: each seeded one as it
 	## was changed last, if it was.
 	with_changes : List(Tickets.Ticket) -> List(Tickets.Ticket)
-	with_changes = |stored| MockTickets.seeds.map(|seeded| stored.find_first(|changed| changed.summary.id == seeded.summary.id) ?? seeded)
+	with_changes = |stored| MockTickets.seeds.map(|seeded| stored.find_first(|stored_ticket| stored_ticket.summary.id == seeded.summary.id) ?? seeded)
 
 	listing : List(Tickets.Ticket) -> Tickets.Listing
 	listing = |tickets| { sources: MockTickets.sources, tickets: tickets.map(|shown| shown.summary) }

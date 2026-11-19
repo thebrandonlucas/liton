@@ -274,10 +274,10 @@ fn addDevtoolCommand(
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
-    // The UI's Roc compiler and the daemon's, as Kaifile.roc provides them.
-    // With one compiler again, roc-ui's default becomes "roc".
+    // The Roc compiler Kaifile.roc provides, and the UI's, the same unless
+    // -Droc-ui tries the UI on another.
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
-    const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse "roc-ui";
+    const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse roc;
     // For iterating: the UI built without specialization, in under a minute
     // rather than about six, and slower to run. Never for the preview or a
     // final e2e run, which drive what ships.
@@ -306,13 +306,13 @@ pub fn build(b: *std.Build) void {
     addFilesCommand(b, fmt_step, &.{ "zig", "fmt" }, sources.zig_files);
 
     // The capabilities and setup packages are imported by the UI and the
-    // daemon, so both compilers check and test them.
+    // daemon, so a UI compiler of its own checks and tests them too.
     const test_step = b.step("test", "Run checks and Roc tests");
     test_step.dependOn(check_step);
     for (sources.roc_roots) |root| {
         const shared = std.mem.startsWith(u8, root, "capabilities/") or std.mem.startsWith(u8, root, "setup/");
-        if (shared or !isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
-        if (shared or isUi(root)) addRocRoot(b, check_step, test_step, roc_ui, root);
+        if (!isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
+        if (isUi(root) or (shared and !std.mem.eql(u8, roc_ui, roc))) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
 
     // liton's development tool (devtool/), on the daemon's compiler, which

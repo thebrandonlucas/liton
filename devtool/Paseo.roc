@@ -106,7 +106,7 @@ Paseo := [].{
 			.args(["--home", home, "daemon", "pair", "--json"].map(OsStr.from_str))
 			.envs(cli_environment(home, password).map(|(name, value)| (OsStr.from_str(name), OsStr.from_str(value))))
 			.capture!()?
-		offer = match Paseo.offer(paired) {
+		offer_url = match Paseo.offer(paired) {
 			Ok(url) => url
 			Err(_) => return Err(NoPairingOffer(paired))
 		}
@@ -117,7 +117,7 @@ Paseo := [].{
 		Exec.replace!(
 			Exec.from_root!("")?,
 			inherited_paseo,
-			[("PASEO_BRIDGE_OFFER", offer), ("PASEO_BRIDGE_PASSWORD", password), ("PASEO_BRIDGE_PORT", bridge_port)],
+			[("PASEO_BRIDGE_OFFER", offer_url), ("PASEO_BRIDGE_PASSWORD", password), ("PASEO_BRIDGE_PORT", bridge_port)],
 			"node",
 			["${bridge}/bridge.mjs"],
 		)

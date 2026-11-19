@@ -16,14 +16,6 @@ Paseo := [].{
 	page_limit : U64
 	page_limit = 200
 
-	## Declared before `Loose`, whose parser uses it: declared after, its
-	## derived parser_for "does not exist" (Roc nightly-2026-11-07;
-	## https://github.com/roc-lang/roc/issues/12994, repro in roc-issues
-	## archive/BUG-028-derived-parser-for-before-declaration).
-	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
-		parser_for : _
-	}
-
 	## A JSON value Paseo leaves open, such as a tool's output or error: liton
 	## shows a string, or an object's `message` or `content` string.
 	Loose := [Text(Str), NotText].{
@@ -37,6 +29,11 @@ Paseo := [].{
 					_ => Ok({ value: NotText, rest: encoding.skip_record_field(state)? })
 				}
 		}
+	}
+
+	## The object a `Loose` value can be.
+	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
+		parser_for : _
 	}
 
 	## A pending permission request. A plan's carries the plan in its
@@ -504,7 +501,7 @@ Paseo := [].{
 	## - Paseo's error items, as agent messages;
 	## - a permission request when it appears in the snapshot, and an answer
 	##   when it disappears. Paseo doesn't say how a request was answered, so
-	##   an answer liton didn't give counts as allowed (see `answered`);
+	##   an answer liton didn't give counts as allowed (see `forget_answered`);
 	## - a turn's end before a user message that follows it, and once the
 	##   agent stopped working;
 	## - the status, when it changes.
@@ -563,8 +560,8 @@ Paseo := [].{
 	## Forgets a permission request liton answered itself, once Paseo took the
 	## answer (`resolved`), so `update` doesn't
 	## emit an answer for it; the daemon records the real one.
-	answered : State, Str -> State
-	answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
+	forget_answered : State, Str -> State
+	forget_answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
 }
 
 Walk : { through : U64, open_calls : List(Str), events : List(Chat.Event), holding : Try(U64, [NotHolding]), turn : Try(Paseo.Turn, [Missing]) }
@@ -767,7 +764,7 @@ expect {
 	choices = [{ id: "reject", label: "Reject", allows: Bool.False, style: Danger }, { id: "implement", label: "Implement", allows: Bool.True, style: Primary }, { id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary }]
 	planned.events.first() == Ok(PermissionRequested({ ..Chat.permission({ request_id: "permission-1", tool: "ExitPlanMode", description: "Plan" }), body: Ok("## Plan\n1. Rename it"), choices: Ok(choices) }))
 }
-expect fetched(Paseo.answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
+expect fetched(Paseo.forget_answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
 
 # An idle agent's history: each turn ends before the next one's message, and the last at its last entry.
 expect {

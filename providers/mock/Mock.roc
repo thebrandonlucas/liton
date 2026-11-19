@@ -15,11 +15,11 @@ Mock := [].{
 
 	## The mock provider offering only the capabilities of `parts`.
 	offering : Parts -> Manifest.Provider
-	offering = |{ agents, rooms, tickets }| {
+	offering = |parts| {
 		..Mock.provider,
 		capabilities: Mock.provider.capabilities.keep_if(
 			|capability|
-				if (capability == Capability.rooms_v1) rooms else if (capability == Capability.tickets_v1) tickets else agents,
+				if (capability == Capability.rooms_v1) parts.rooms else if (capability == Capability.tickets_v1) parts.tickets else parts.agents,
 		),
 	}
 
@@ -139,19 +139,9 @@ Mock := [].{
 
 	## What follows starting an agent with a first prompt: it runs at once,
 	## as `on_message` goes on. Without a prompt it waits, idle.
-	## Matched, not compared with `==`: compared, Roc nightly-2026-11-07 says
-	## its is_eq "never resolved to a concrete type" once an event can hold a
-	## plan's choices (near https://github.com/roc-lang/roc/issues/12883).
-	## nightly-2026-11-15 compiles it: compare again once .roc-version moves
-	## there, with basic-webserver.
 	on_create : Str -> List(Scheduled)
 	on_create = |prompt|
-		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(
-			|scheduled| match scheduled.event {
-				StatusChanged(Running) => { ..scheduled, delay_ms: 0 }
-				_ => scheduled
-			},
-		)
+		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(|scheduled| if (scheduled.event == StatusChanged(Running)) { ..scheduled, delay_ms: 0 } else scheduled)
 
 	## `scheduled`, run from `at` (ms since the epoch), with each turn's end
 	## before the status that ends it: a turn starts when the agent runs, or
@@ -203,13 +193,13 @@ Mock := [].{
 
 	## A session from its timeline's visible events, each with when it became
 	## visible (ms since the epoch): its status, its agent's model, the
-	## workspace of `workspaces` it works in and its branch, when the turn it
+	## workspace of `listed_workspaces` it works in and its branch, when the turn it
 	## is working on started, waiting for you or not, and when it last
 	## changed.
 	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
-	session = |{ id, agent, title }, workspaces, timed| {
+	session = |{ id, agent, title }, listed_workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
-		placed = workspaces.find_first(|shown| shown.session_ids.contains(id))
+		placed = listed_workspaces.find_first(|shown| shown.session_ids.contains(id))
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
 			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),
