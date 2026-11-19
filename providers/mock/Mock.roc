@@ -139,19 +139,9 @@ Mock := [].{
 
 	## What follows starting an agent with a first prompt: it runs at once,
 	## as `on_message` goes on. Without a prompt it waits, idle.
-	## Matched, not compared with `==`: compared, Roc nightly-2026-11-07 says
-	## its is_eq "never resolved to a concrete type" once an event can hold a
-	## plan's choices (near https://github.com/roc-lang/roc/issues/12883).
-	## nightly-2026-11-15 compiles it: compare again once .roc-version moves
-	## there, with basic-webserver.
 	on_create : Str -> List(Scheduled)
 	on_create = |prompt|
-		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(
-			|scheduled| match scheduled.event {
-				StatusChanged(Running) => { ..scheduled, delay_ms: 0 }
-				_ => scheduled
-			},
-		)
+		if (prompt.is_empty()) [{ delay_ms: 0, event: StatusChanged(Idle) }] else Mock.on_message(prompt, 1).map(|scheduled| if (scheduled.event == StatusChanged(Running)) { ..scheduled, delay_ms: 0 } else scheduled)
 
 	## `scheduled`, run from `at` (ms since the epoch), with each turn's end
 	## before the status that ends it: a turn starts when the agent runs, or
