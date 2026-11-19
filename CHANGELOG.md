@@ -190,6 +190,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- In the rooms list, Leave no longer covers a room's unread count or @-count: while you point at a joined room, Leave takes the count's place.
 - Password managers such as Bitwarden, 1Password and LastPass no longer offer to fill the ⌘K palette's search box.
 - On a phone, a tool call that is still running shows its card again, not an empty box.
 - The page title's count of what needs you now leaves out sessions you settled or snoozed, and is the same whatever the layout, not only when an Inbox pane is open.
