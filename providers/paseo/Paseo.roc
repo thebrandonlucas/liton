@@ -260,6 +260,48 @@ Paseo := [].{
 		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| Chat.agent_kind({ provider: Paseo.provider.id, agent: listed.provider })))
 	}
 
+	## Paseo's providers with their models and modes, as Paseo knows them
+	## at the time (see `with_choices`).
+	providers_snapshot_request : Str -> Str
+	providers_snapshot_request = |request_id| Json.to_str({ type: "session", message: { type: "get_providers_snapshot_request", requestId: request_id } })
+
+	## A provider as a `get_providers_snapshot_response` lists it.
+	ProviderChoices : { provider : Str, models : Try(List(ProviderModel), [Missing]), modes : Try(List(Chat.Option), [Missing]), default_mode_id : Try(Try(Str, [Null]), [Missing]) }
+
+	ProviderModel : { id : Str, label : Str, is_default : Try(Bool, [Missing]), is_selectable : Try(Bool, [Missing]), context_window_max_tokens : Try(Number, [Missing]), thinking_options : Try(List({ id : Str, label : Str, is_default : Try(Bool, [Missing]) }), [Missing]), default_thinking_option_id : Try(Str, [Missing]) }
+
+	## The kinds of agent `kinds` with the models, thinking levels and modes
+	## of each provider a `get_providers_snapshot_response` lists, those a
+	## user can pick. A level is the default where the model's
+	## `defaultThinkingOptionId` names it, or it says it is.
+	with_choices : List(Chat.Agent), Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	with_choices = |kinds, text, request_id| {
+		answered : Try({ message : { payload : { entries : List(ProviderChoices) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "get_providers_snapshot_response", request_id)?)
+		entries = answered?.message.payload.entries
+		model = |offered| {
+			default_level = offered.default_thinking_option_id ?? ""
+			{
+				id: offered.id,
+				label: offered.label,
+				default: offered.is_default ?? Bool.False,
+				context_max: match offered.context_window_max_tokens {
+					Ok(Number(tokens)) => tokens.round_to_u64_try().map_err(|_| Missing)
+					_ => Err(Missing)
+				},
+				thinking: (offered.thinking_options ?? []).map(|level| { id: level.id, label: level.label, default: level.is_default ?? (level.id == default_level) }),
+			}
+		}
+		Ok(
+			kinds.map(
+				|kind| match entries.find_first(|entry| entry.provider == kind.agent) {
+					Ok(entry) => { ..kind, models: entry.models.map_ok(|models| models.keep_if(|offered| offered.is_selectable ?? Bool.True).map(model)), modes: entry.modes, default_mode: entry.default_mode_id.map_ok(|mode| mode.map_err(|_| Missing)) ?? Err(Missing) }
+					Err(_) => kind
+				},
+			),
+		)
+	}
+
 	## A version 4 UUID, as Paseo takes for an agent's id, from `seed`.
 	uuid : Str -> Str
 	uuid = |seed| {
@@ -1020,3 +1062,11 @@ expect {
 }
 
 expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([Chat.agent_kind({ provider: "paseo", agent: "claude" })])
+
+expect {
+	kinds = [Chat.agent_kind({ provider: "paseo", agent: "claude" }), Chat.agent_kind({ provider: "paseo", agent: "codex" })]
+	text = session("{\"type\":\"get_providers_snapshot_response\",\"payload\":{\"requestId\":\"r1\",\"generatedAt\":\"x\",\"entries\":[{\"provider\":\"claude\",\"status\":\"ready\",\"models\":[{\"provider\":\"claude\",\"id\":\"opus\",\"label\":\"Opus\",\"isDefault\":true,\"contextWindowMaxTokens\":200000,\"thinkingOptions\":[{\"id\":\"low\",\"label\":\"Low\"},{\"id\":\"high\",\"label\":\"High\"}],\"defaultThinkingOptionId\":\"high\"},{\"provider\":\"claude\",\"id\":\"old\",\"label\":\"Old\",\"isSelectable\":false}],\"modes\":[{\"id\":\"plan\",\"label\":\"Plan\",\"icon\":\"map\"}],\"defaultModeId\":\"plan\"},{\"provider\":\"pi\",\"status\":\"loading\"}]}}")
+	claude = { ..Chat.agent_kind({ provider: "paseo", agent: "claude" }), models: Ok([{ id: "opus", label: "Opus", default: Bool.True, context_max: Ok(200_000), thinking: [{ id: "low", label: "Low", default: Bool.False }, { id: "high", label: "High", default: Bool.True }] }]), modes: Ok([{ id: "plan", label: "Plan" }]), default_mode: Ok("plan") }
+	Paseo.with_choices(kinds, text, "r1") == Ok([claude, Chat.agent_kind({ provider: "paseo", agent: "codex" })])
+		and Paseo.with_choices(kinds, text, "r2").map_ok(|_| {}) == Err(OtherMessage)
+}

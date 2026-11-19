@@ -1767,13 +1767,16 @@ listed_importable! = |db, connection, request_id|
 	}
 
 ## Keeps the kinds of agent Paseo can start, every `importable_interval_ms`
-## at most: Paseo checks each provider's command to answer.
+## at most: Paseo checks each provider's command to answer. Each has its
+## models and modes, as far as Paseo's providers snapshot lists them.
 listed_agent_kinds! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
 listed_agent_kinds! = |db, connection, request_id|
 	if recently_checked!(db, "agent_kinds", importable_interval_ms)? {
 		Ok({})
 	} else {
-		listed = Paseo.agent_kinds(exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
+		kinds = Paseo.agent_kinds(exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
+		snapshot_id = "${request_id}-providers"
+		listed = exchange!(connection, Paseo.providers_snapshot_request(snapshot_id), snapshot_id).map_ok(|answered| Paseo.with_choices(kinds, answered, snapshot_id) ?? kinds) ?? kinds
 		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('agent_kinds', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
 	}
 
