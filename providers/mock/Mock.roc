@@ -15,11 +15,11 @@ Mock := [].{
 
 	## The mock provider offering only the capabilities of `parts`.
 	offering : Parts -> Manifest.Provider
-	offering = |{ agents, rooms, tickets }| {
+	offering = |parts| {
 		..Mock.provider,
 		capabilities: Mock.provider.capabilities.keep_if(
 			|capability|
-				if (capability == Capability.rooms_v1) rooms else if (capability == Capability.tickets_v1) tickets else agents,
+				if (capability == Capability.rooms_v1) parts.rooms else if (capability == Capability.tickets_v1) parts.tickets else parts.agents,
 		),
 	}
 
@@ -203,13 +203,13 @@ Mock := [].{
 
 	## A session from its timeline's visible events, each with when it became
 	## visible (ms since the epoch): its status, its agent's model, the
-	## workspace of `workspaces` it works in and its branch, when the turn it
+	## workspace of `listed_workspaces` it works in and its branch, when the turn it
 	## is working on started, waiting for you or not, and when it last
 	## changed.
 	session : { id : Str, agent : Str, title : Str }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
-	session = |{ id, agent, title }, workspaces, timed| {
+	session = |{ id, agent, title }, listed_workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
-		placed = workspaces.find_first(|shown| shown.session_ids.contains(id))
+		placed = listed_workspaces.find_first(|shown| shown.session_ids.contains(id))
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
 			model: Ok(if (agent == "codex") "gpt-5-codex" else "claude-sonnet-4-5"),

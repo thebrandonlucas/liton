@@ -504,7 +504,7 @@ Paseo := [].{
 	## - Paseo's error items, as agent messages;
 	## - a permission request when it appears in the snapshot, and an answer
 	##   when it disappears. Paseo doesn't say how a request was answered, so
-	##   an answer liton didn't give counts as allowed (see `answered`);
+	##   an answer liton didn't give counts as allowed (see `forget_answered`);
 	## - a turn's end before a user message that follows it, and once the
 	##   agent stopped working;
 	## - the status, when it changes.
@@ -563,8 +563,8 @@ Paseo := [].{
 	## Forgets a permission request liton answered itself, once Paseo took the
 	## answer (`resolved`), so `update` doesn't
 	## emit an answer for it; the daemon records the real one.
-	answered : State, Str -> State
-	answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
+	forget_answered : State, Str -> State
+	forget_answered = |state, request_id| { ..state, permissions: state.permissions.drop_if(|id| id == request_id) }
 }
 
 Walk : { through : U64, open_calls : List(Str), events : List(Chat.Event), holding : Try(U64, [NotHolding]), turn : Try(Paseo.Turn, [Missing]) }
@@ -767,7 +767,7 @@ expect {
 	choices = [{ id: "reject", label: "Reject", allows: Bool.False, style: Danger }, { id: "implement", label: "Implement", allows: Bool.True, style: Primary }, { id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary }]
 	planned.events.first() == Ok(PermissionRequested({ ..Chat.permission({ request_id: "permission-1", tool: "ExitPlanMode", description: "Plan" }), body: Ok("## Plan\n1. Rename it"), choices: Ok(choices) }))
 }
-expect fetched(Paseo.answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
+expect fetched(Paseo.forget_answered(asked.state, "p1"), response({ epoch: "e1", reset: "false", end: "null", status: "running", permissions: "", entries: [] })).events == [StatusChanged(Running)]
 
 # An idle agent's history: each turn ends before the next one's message, and the last at its last entry.
 expect {
