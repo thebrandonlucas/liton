@@ -6,6 +6,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Added
 
+- A browser the daemon doesn't answer as it isn't paired shows "Pair this browser", with a box for a pairing code, in place of errors; a link ending `#pair=CODE` pairs it at once. Settings → Devices lists the devices paired, with when each was paired and last seen, revokes one (revoking this browser signs it out), and makes a code and link to pair another device.
 - `liton pair`, run on the daemon's machine with `LITON_DB` set as the daemon's, prints a pairing code for a new device and a link that pairs a browser with it; `liton login <code>` pairs the command line itself, keeping its token readable by you alone.
 - `zig build run` serves liton at http://127.0.0.1:8095 (`LITON_HOST` and `LITON_PORT` change it): panes, each a widget bound to a capability the daemon advertises. Add panes from Settings; a widget whose capability no provider supplies shows what it needs.
 - Sessions, Chat and Capabilities widgets on chat.v1. Chat panes follow the session selected in Sessions, or are pinned to one; they show the agent's messages, tool calls and results, and ask you to allow or deny what it requests.
