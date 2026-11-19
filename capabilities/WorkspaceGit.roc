@@ -13,25 +13,35 @@ WorkspaceGit := [].{
 	## the branch's upstream.
 	Status : { branch : [Branch(Str), Detached], base : [Base(Str), NoBase], dirty : Bool, ahead : U32, behind : U32, upstream : [Upstream({ ahead : U32, behind : U32 }), NoUpstream] }
 
+	## The changes shown: those not committed yet, the branch's against its
+	## base, or a commit's.
 	Scope : [Uncommitted, AgainstBase, Commit(Str)]
 
 	## A rename's `from` is "" when the provider doesn't say.
 	Change : [Added, Modified, Deleted, Renamed({ from : Str })]
 
+	## A changed file: its path, how it changed, its lines added and removed,
+	## and whether its body is text, binary or too large to show.
 	File : { path : Str, change : Change, additions : U32, deletions : U32, body : [Text, Binary, TooLarge] }
 
+	## Whether a diff's line was added, removed, or is context around them.
 	LineKind : [Added, Removed, Context]
 
 	## An added line's `old_line` is 0, as is a removed line's `new_line`.
 	Line : { kind : LineKind, text : Str, old_line : U32, new_line : U32 }
 
+	## A hunk of a diff: where it starts and how many lines it spans in the old
+	## file and the new, and its lines.
 	Hunk : { old_start : U32, old_count : U32, new_start : U32, new_count : U32, lines : List(Line) }
 
+	## A changed file and its hunks.
 	FileDiff : { file : File, hunks : List(Hunk) }
 
 	## `fingerprint` changes whenever the files or their hunks do.
 	Changes : { scope : Scope, fingerprint : Str, files : List(File) }
 
+	## A commit of the branch: its subject, author and date, whether it is
+	## pushed or on the base, and the files it changed.
 	Commit : { sha : Str, short_sha : Str, subject : Str, author : Str, date : Str, pushed : Bool, on_base : Bool, files : List(File) }
 
 	## What a client asks of a workspace: a scope, and a file of it whose hunks
@@ -62,6 +72,8 @@ WorkspaceGit := [].{
 			Err(Unknown) => { workspace: Unknown, status: NoStatus, changes: { scope, fingerprint: WorkspaceGit.fingerprint(scope, []), files: [] }, commits: [] }
 		}
 
+	## The file at `path`'s hunks of what a provider `found`, none when it has
+	## no such file or the workspace can't be read.
 	file_hunks : Str, Try(Found, [Unknown]) -> FileHunks
 	file_hunks = |path, found| { path, hunks: found.map_ok(|{ diff, .. }| diff.find_first(|shown| shown.file.path == path).map_ok(|shown| shown.hunks) ?? []) ?? [] }
 

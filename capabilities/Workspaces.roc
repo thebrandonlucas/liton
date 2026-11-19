@@ -6,6 +6,8 @@ import Attention
 import Chat
 
 Workspaces := [].{
+
+	## A project: a directory its provider makes workspaces of.
 	Project : { id : Str, provider : Str, name : Str, directory : Str }
 
 	## `changes` counts the lines of the uncommitted changes, when the provider
@@ -26,6 +28,7 @@ Workspaces := [].{
 		session_ids : List(Str),
 	}
 
+	## The projects and workspaces a provider lists.
 	Listed : { projects : List(Project), workspaces : List(Workspace) }
 
 	## `Create` makes a workspace of a project: a checkout of its directory,
@@ -43,8 +46,12 @@ Workspaces := [].{
 		RenameProject({ project_id : Str, name : Str }),
 	]
 
+	## A workspace to make of a project: a checkout, or a worktree on a new
+	## branch, named `branch` or by the provider.
 	Create : { project_id : Str, kind : [Checkout, Worktree], branch : Try(Str, [Missing]) }
 
+	## What a request answers: the listing, the id of a workspace created,
+	## that the provider took it, or why it refused.
 	Response : [Listed(Listed), Rejected(Str), Created({ workspace_id : Str }), Accepted]
 
 	## The most urgent state of the sessions of `session_ids`, as attention

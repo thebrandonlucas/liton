@@ -3,6 +3,8 @@
 import Capability
 
 Manifest := [].{
+
+	## A provider, by its id and name, and the capabilities it supplies.
 	Provider : { id : Str, name : Str, capabilities : List(Capability.Id) }
 
 	## What `/api/manifest` answers, until the UI moves to `/liton/v1`.

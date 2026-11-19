@@ -43,8 +43,11 @@ Attention := [].{
 		Seen(List(Mark)),
 	]
 
+	## That a session was seen as its item was `updated` at `through`.
 	Mark : { session_id : Str, through : Str }
 
+	## What a request answers: the items for `ListItems`, else whether the
+	## daemon took it.
 	Response : [Items(List(Item)), Accepted, Rejected(Str)]
 
 	## A settle or snooze as the daemon stores it: an item with `signature` is
@@ -52,6 +55,7 @@ Attention := [].{
 	## it is 0, a settle.
 	Aside : { session_id : Str, signature : Str, snoozed_until : I64 }
 
+	## The states, most urgent first, the order the inbox groups items in.
 	ranks : List(State)
 	ranks = [NeedsYou, Failed, Working, Done, Idle]
 
