@@ -69,6 +69,10 @@ Model := [].{
 		## is focused.
 		focus : List(Context.Id),
 
+		## What a view shows within its focused context: the thread open in a
+		## room, by the room and its top-level message.
+		sub_focus : [None, Thread({ room_id : Str, root : Str })],
+
 		workspaces : Workspaces.Listed,
 		shell : Shell,
 		columns : List(Column),
@@ -153,8 +157,7 @@ Model := [].{
 
 		## What polls answered of rooms.v1: the rooms, each room's members, and
 		## the entries of each room's messages (`root` "") and of each thread
-		## (`root` its top-level message); what each Rooms pane shows; and the
-		## requests on their way (sent as `call_outbox`). A request is shown at
+		## (`root` its top-level message); and the requests on their way (sent as `call_outbox`). A request is shown at
 		## once (`rooms_listed`, `sending_lines`) until the daemon refuses it,
 		## or until the poll numbered `accepted` answers, the first sent after
 		## it accepted it (0 while it waits); a message sent until a log posts
@@ -163,7 +166,6 @@ Model := [].{
 		rooms : List(Rooms.Room),
 		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
-		room_panes : List(RoomPane),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
 		## The themes settings offer and the one a snapshot naming none shows:
@@ -261,8 +263,8 @@ Model := [].{
 	## with the lines they add and remove as its `file`'s.
 	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
-	## What a Rooms pane shows: the room opened, "" for the list of rooms,
-	## and the thread opened in it by its root, "" for none.
+	## What a Room pane shows: its room, "" for none, and the thread open
+	## in it by its root, "" for none.
 	RoomPane : { pane : Str, room_id : Str, root : Str }
 
 	## A message as a Rooms pane shows it: its author's name, and whether an
@@ -282,9 +284,19 @@ Model := [].{
 	## or a draft edited. Closed, its pane is "".
 	Composer : { pane : Str, path : Str, scope : Review.Scope, side : Review.Side, start : U32, end : U32, thread : Str, editing : Str, text : Str }
 
-	## The layout of a preset or snapshot.
+	## The layout of a preset or snapshot, its parts split as `split_parts`
+	## does.
 	layout_of : Snapshot -> Layout
-	layout_of = |{ shell, columns, collapsed, hidden, .. }| { shell, columns, collapsed, hidden }
+	layout_of = |{ version, shell, columns, collapsed, hidden, .. }| { shell, columns: Model.split_parts(version, columns), collapsed, hidden }
+
+	## The columns of a snapshot of `version`, with a part split since then
+	## followed by the part split from it: before version 7, a Rooms pane
+	## showed a room too, which a Room pane beside it now does.
+	split_parts : U32, List(Column) -> List(Column)
+	split_parts = |version, columns| {
+		split = |listed_pane| if (version < 7 and listed_pane.widget == "rooms") [listed_pane, { id: "${listed_pane.id}-room", widget: "room", pinned: "", options: [] }] else [listed_pane]
+		columns.map(|column| { ..column, panes: column.panes.join_map(split) })
+	}
 
 	## liton's own presets (setup/Default.roc): Developer, the default,
 	## Inbox and Tiling.
@@ -310,6 +322,7 @@ Model := [].{
 				editing: [],
 				timelines: [],
 				focus: [],
+				sub_focus: None,
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
 				columns: [],
@@ -349,7 +362,6 @@ Model := [].{
 				rooms: [],
 				room_members: [],
 				room_logs: [],
-				room_panes: [],
 				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
@@ -399,7 +411,8 @@ Model := [].{
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 6, it hides no panes; before version
+	## Reads a snapshot. Before version 7, its parts split as `split_parts`
+	## does; before version 6, it hides no panes; before version
 	## 5, it shows the setup's default theme; before version 4, panes have
 	## their options' defaults and the drawers show. A version 1 or 2 one loads in Tiling, a version 1 one with a
 	## column for each pane, unless it holds just the old default's widgets:
@@ -422,7 +435,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (laid, third, second, first) {
-			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 6 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed, hidden: if (version == 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns: Model.split_parts(version, columns), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [], hidden: [] }))
 			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
 			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
@@ -1280,14 +1293,14 @@ Model := [].{
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		# The rooms, and the messages and members of the room each Rooms pane
-		# opened, and of the thread opened in it.
+		# The rooms, and the messages and members of the room each Room pane
+		# shows, and of the thread open in it.
 		room_topics = |shown| {
 			{ room_id, root, .. } = Model.room_pane(state, shown.id)
 			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
 		}
-		rooms_shown = laid_out.keep_if(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))
-		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.join_map(room_topics).prepend(RoomList) else []
+		rooms_shown = laid_out.keep_if(|shown| (shown.widget == "rooms" or shown.widget == "room") and Model.pane_visible(state, shown.id))
+		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget == "room").join_map(room_topics).prepend(RoomList) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -2575,16 +2588,24 @@ Model := [].{
 		}
 
 	room_pane : State, Str -> RoomPane
-	room_pane = |state, pane_id| state.room_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, room_id: "", root: "" }
-
-	## Opens a room in a Rooms pane, or with "" the list of rooms again.
-	open_room : State, { pane_id : Str, room_id : Str } -> State
-	open_room = |state, { pane_id, room_id }| { ..state, room_panes: state.room_panes.drop_if(|shown| shown.pane == pane_id).append({ pane: pane_id, room_id, root: "" }) }
+	room_pane = |state, pane_id| {
+		room_id =
+			match Model.context_of(state, Model.pane(state, pane_id)) {
+				Room(shown) => shown
+				_ => ""
+			}
+		root =
+			match state.sub_focus {
+				Thread(thread) if thread.room_id == room_id and !room_id.is_empty() => thread.root
+				_ => ""
+			}
+		{ pane: pane_id, room_id, root }
+	}
 
 	## Opens a thread beside the room a Rooms pane shows, by its root, or
 	## closes it with "".
 	open_thread : State, { pane_id : Str, root : Str } -> State
-	open_thread = |state, { pane_id, root }| { ..state, room_panes: state.room_panes.map(|shown| if (shown.pane == pane_id) { ..shown, root } else shown) }
+	open_thread = |state, { pane_id, root }| { ..state, sub_focus: if (root.is_empty()) None else Thread({ room_id: Model.room_pane(state, pane_id).room_id, root }) }
 
 	## A room as listed, or as its id alone tells.
 	room_of : State, Str -> Rooms.Room
@@ -2819,7 +2840,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2844,6 +2865,7 @@ Model := [].{
 				"files" => Files
 				"tickets" => Tickets
 				"rooms" => Rooms
+				"room" => Room
 				"capabilities" => Capabilities
 				_ => NoView
 			}
@@ -3143,7 +3165,7 @@ mention_typed = |text| {
 # "@sc" offers Scout, who replaces it, and the message sent mentions Scout.
 expect {
 	scout = { id: "scout", provider: "mock", name: "Scout", picture: Err(Missing), kind: Agent({ owner: Err(Missing) }), role: Member, presence: Online }
-	state = { ..Model.initial(""), room_panes: [{ pane: "p", room_id: "general", root: "" }], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
+	state = { ..Model.initial(""), columns: [{ id: "c", size: 1, tabbed: Bool.False, active: "p", panes: [{ id: "p", widget: "room", pinned: "", options: [] }] }], focus: [Room("general")], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
 	chosen = Model.mention(state, { key: "p", name: "Scout" })
 	Model.mention_choices(state, "p") == ["Scout"] and Model.draft(chosen, "p") == "thanks\n@Scout " and Model.send_to_room(chosen, "p").room_asks.map(|asked| asked.request) == [Send({ room_id: "general", text: "thanks\n@Scout", place: TopLevel, mentions: ["scout"] })]
 }

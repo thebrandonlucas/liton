@@ -634,7 +634,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -644,7 +644,8 @@ Liton := [].{
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
-							Rooms => Liton.rooms(model, id)
+							Rooms => Liton.rooms(model)
+							Room => Liton.room_view(model, id)
 							Capabilities => Liton.capabilities(model)
 							MainDiff => Liton.main_diff(model, id)
 							Connecting => Html.p("Connecting to the daemon…", "missing")
@@ -1978,14 +1979,15 @@ Liton := [].{
 			TooLarge => "Too large"
 		}
 
-	## A Rooms pane: the rooms, or the room opened from them.
-	rooms : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	rooms = |model, id| Engine.when(id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id.is_empty()), || Liton.room_list(model, id), || Liton.room_opened(model, id))
+	## A Room pane: the room it shows, or where to pick one.
+	room_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	room_view = |model, id| Engine.when(id.map2(model.signal(), |pane_id, state| Model.room_pane(state, pane_id).room_id.is_empty()), || Html.p("Pick a room in Rooms to show it here.", "missing"), || Liton.room_opened(model, id))
 
-	## The rooms the daemon lists: each one's name, which opens it, its kind
-	## and what is unread in it, and Join or Leave.
-	room_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
-	room_list = |model0, id|
+	## A Rooms pane: the rooms the daemon lists, the one focused marked, each
+	## one's name, which focuses it, its kind and what is unread in it, and
+	## Join or Leave.
+	rooms : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	rooms = |model0|
 		Html.ul(
 			[Engine.class("room-list"), Engine.attr("data-part", "list")],
 			[
@@ -1995,9 +1997,9 @@ Liton := [].{
 					|row| {
 						model = model0.lift_row()
 						Html.li(
-							[Engine.class_s(row.field(|room| if (room.joined) "room-row" else "room-row not-joined")), Engine.attr("data-part", "room")],
+							[Engine.class_s(row.key().map2(model.signal(), |room_id, state| if (Model.focused(state, [Room]) == Room(room_id)) "focused" else "").map2(row.field(|room| if (room.joined) "room-row" else "room-row not-joined"), Liton.joined_classes)), Engine.attr("data-part", "room")],
 							[
-								Html.button_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")], model.update_by(row.key().map2(id.lift_row(), |room_id, pane_id| { pane_id, room_id }), Model.open_room)),
+								Html.button_s(row.field(|room| "#${room.name}"), [Engine.class("room-name")], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
 								Html.span_s(row.field(|room| Liton.room_kind(room.kind)), [Engine.class("room-kind")]),
 								Html.span_s(row.field(|room| Liton.room_unread(room.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
 								Liton.join_controls(model, row.field(|room| room)),
@@ -2019,7 +2021,7 @@ Liton := [].{
 			],
 		)
 
-	## A room opened: its name and topic, Join or Leave, and its messages,
+	## A room shown: its name and topic, Join or Leave, and its messages,
 	## the newest at the bottom, with who is typing. A forum's are its posts.
 	## A thread opened shows beside them, or in their place in a narrow pane.
 	room_opened : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
@@ -2040,8 +2042,7 @@ Liton := [].{
 			Html.div(
 				"room-header",
 				[
-					Html.button("‹", [Engine.class("room-back"), Html.aria_label("All rooms")], model.update_by(id, |state, pane_id| Model.open_room(state, { pane_id, room_id: "" }))),
-					Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title")]),
+					Html.span_s(shown.map(|opened| "#${opened.name}"), [Engine.class("room-title"), Engine.test_id("room-title")]),
 					Html.span_s(shown.map(|opened| opened.topic ?? ""), [Engine.class("room-topic")]),
 					Liton.join_controls(model, shown),
 				],

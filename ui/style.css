@@ -339,6 +339,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .room-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
 .room-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: var(--small-radius); }
 .room-row:hover { background: var(--tool); }
+.room-row.focused { background: var(--selected); }
 .room-name { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .room-kind, .room-joined { color: var(--muted); font: 11px var(--font-mono); white-space: nowrap; }
 .room-row .room-kind { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -354,7 +355,6 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 /* A thread shows beside its room, or in its place in a narrow pane. */
 @container (max-width: 520px) { .room.threaded .room-main { display: none; } .room-thread-pane { border-left: none; } }
 .room-header { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
-.room-back { padding: 0 6px; }
 .room-title { font-weight: 650; }
 .room-topic { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .room-message { display: flex; flex-direction: column; gap: 2px; }

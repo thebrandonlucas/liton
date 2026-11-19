@@ -8,6 +8,6 @@
     (expect-absent (role region :name "Sessions") :never-drawn)
     ; The first change saves the layout, as version 3.
     (click (label "Make column wider"))
-    (expect-local-storage "liton.snapshot" "{\"collapsed\":[],\"columns\":[{\"active\":\"pane-7\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-7\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":2,\"tabbed\":false},{\"active\":\"pane-8\",\"id\":\"column-2\",\"panes\":[{\"id\":\"pane-8\",\"options\":[],\"pinned\":\"\",\"widget\":\"capabilities\"}],\"size\":1,\"tabbed\":false}],\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":6}")
+    (expect-local-storage "liton.snapshot" "{\"collapsed\":[],\"columns\":[{\"active\":\"pane-7\",\"id\":\"column-1\",\"panes\":[{\"id\":\"pane-7\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"size\":2,\"tabbed\":false},{\"active\":\"pane-8\",\"id\":\"column-2\",\"panes\":[{\"id\":\"pane-8\",\"options\":[],\"pinned\":\"\",\"widget\":\"capabilities\"}],\"size\":1,\"tabbed\":false}],\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":7}")
   )
 )

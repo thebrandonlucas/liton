@@ -28,12 +28,24 @@ Default := [].{
 	}
 
 	## A Workbench of what needs you, with the rooms as a tab beside it, the
-	## chat following the item opened, and the Developer preset's right
-	## drawer, collapsed.
+	## chat following the item opened with the room opened as a tab beside
+	## it, and the Developer preset's right drawer, collapsed.
 	inbox : Setup.Preset
 	inbox = {
 		name: "Inbox",
-		snapshot: { ..Default.developer.snapshot, columns: Default.developer.snapshot.columns.map(|column| if (column.id == "column-1") { ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }, { id: "pane-5", widget: "rooms", pinned: "", options: [] }] } else column), collapsed: [Right] },
+		snapshot: {
+			..Default.developer.snapshot,
+			columns: Default.developer.snapshot.columns.map(
+				|column|
+					if (column.id == "column-1")
+						{ ..column, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }, { id: "pane-6", widget: "rooms", pinned: "", options: [] }] }
+					else if (column.id == "column-2")
+						{ ..column, panes: column.panes.append({ id: "pane-7", widget: "room", pinned: "", options: [] }) }
+					else
+						column,
+			),
+			collapsed: [Right],
+		},
 	}
 
 	## A chat app: the sessions, the latest first, beside one large chat,
