@@ -12,7 +12,7 @@
 ## LITON_ALLOWED_HOSTS lists, comma-separated, such as a proxy's domain.
 ## LITON_MOCK=off leaves out the mock provider, and a comma-separated list
 ## of its parts offers only those: `agents`, its scripted sessions (chat.v1,
-## workspaces.v1, workspace.git.v1 and files.v1), `rooms` and `tickets`, so
+## workspaces.v1, workspace.git.v1, files.v1 and schedules.v1), `rooms` and `tickets`, so
 ## LITON_MOCK=rooms,tickets offers its rooms and tickets beside Paseo's
 ## agents. The default, `on`, is all of them. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
@@ -69,12 +69,14 @@ import cap.Manifest
 import cap.Protocol
 import cap.Review
 import cap.Rooms
+import cap.Schedules
 import cap.Tickets
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
 import mock.MockRooms
+import mock.MockSchedules
 import mock.MockTickets
 import paseo.Paseo
 import paseo.PaseoFiles
@@ -395,6 +397,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("schedules.v1", provider)) => {
+				decoded : Try(Protocol.Call(Schedules.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Schedules.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => schedules_call!(context, provider, asked)?
+					Err(_) => Err(unanswered("schedules.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("voice.v1", _)) => {
 				decoded : Try(Protocol.Call(Voice.Request), _)
 				decoded = Json.parse(body)
@@ -545,7 +557,12 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
 		TicketLinks => Ok(Protocol.snapshot(wanted, Links(ticket_links!(context)?)))
-		ScheduleList | ScheduleRuns(_) => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
+		ScheduleList => Ok(Protocol.snapshot(wanted, Schedules(schedules!(context)?.map(|kept| kept.schedule))))
+		ScheduleRuns(schedule_id) =>
+			match schedules!(context)?.find_first(|kept| kept.schedule.id == schedule_id) {
+				Ok(kept) => Ok(Protocol.snapshot(wanted, Runs(kept.runs)))
+				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
+			}
 	}
 }
 
@@ -1008,6 +1025,130 @@ tickets_call! = |context, provider, asked| {
 	}
 }
 
+## The mock's schedules, each run first if it is due (see
+## `mock_schedules_due!`).
+schedules! : Context => Try(List(MockSchedules.Kept), _)
+schedules! = |context|
+	if context.mock.agents {
+		mock_schedules_due!(context)?
+		mock_schedules!(context.db)
+	} else {
+		Ok([])
+	}
+
+## The mock's schedules as the daemon keeps them, in the order made.
+mock_schedules! : Sqlite.Db => Try(List(MockSchedules.Kept), _)
+mock_schedules! = |db| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM mock_schedules ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows.map_try(
+		|row| {
+			kept : Try(MockSchedules.Kept, _)
+			kept = Json.parse(row.value)
+			kept
+		},
+	)
+}
+
+## Keeps a mock schedule, after those made before it.
+schedule_kept! : Sqlite.Db, MockSchedules.Kept => Try({}, _)
+schedule_kept! = |db, kept|
+	Sqlite.execute!({ db, query: "INSERT INTO mock_schedules (id, position, value) VALUES (:id, (SELECT coalesce(max(position), -1) + 1 FROM mock_schedules), :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: kept.schedule.id, value: Json.to_str(kept) } })
+
+## Runs each mock schedule due by now (`MockSchedules.due`) once: it
+## prompts its session, or starts one, and keeps the run.
+mock_schedules_due! : Context => Try({}, _)
+mock_schedules_due! = |context| {
+	for kept in mock_schedules!(context.db)? {
+		match MockSchedules.due(kept, now_ms!()) {
+			Ok({ scheduled_for, kept: next }) => schedule_kept!(context.db, MockSchedules.ran(next, scheduled_for, now_ms!(), schedule_prompted!(context, next.schedule)?))?
+			Err(NotDue) => {}
+		}
+	}
+	Ok({})
+}
+
+## Prompts a mock schedule's session, or starts one for it, and answers
+## with the session prompted, or why it couldn't.
+schedule_prompted! : Context, Schedules.Schedule => Try(Try(Str, Str), _)
+schedule_prompted! = |context, { prompt, target, .. }|
+	match target {
+		Session(session_id) =>
+			match provider!(context, session_id)? {
+				MockSession => {
+					schedule!(context.db, session_id, |next| Mock.on_message(prompt, next))?
+					Ok(Ok(session_id))
+				}
+				_ => Ok(Err("no session ${session_id}"))
+			}
+		NewSession({ place, agent, model, mode, thinking, .. }) =>
+			match started!(context, Ok(Mock.provider.id), { place, agent, model, mode, thinking, prompt })? {
+				Ok(Started({ session_id })) => Ok(Ok(session_id))
+				Ok(Rejected(reason)) => Ok(Err(reason))
+				Ok(_) => Ok(Err("the session didn't start"))
+				Err({ message, .. }) => Ok(Err(message))
+			}
+	}
+
+## Answers a schedules.v1 request, of the mock's schedules (see
+## `MockSchedules`).
+schedules_call! : Context, Try(Str, [Missing]), Schedules.Request => Try(Protocol.Answer(Schedules.Response), _)
+schedules_call! = |context, provider, asked| {
+	db = context.db
+	kept = if (Protocol.serves(provider, Mock.provider.id)) schedules!(context)? else []
+	found = kept.find_first(|listed| listed.schedule.id == Schedules.schedule_of(asked))
+	no_schedule = Err({ code: NotFound, message: "no schedule ${Schedules.schedule_of(asked)}" })
+	changed! = |change|
+		match found {
+			Ok(listed) =>
+				match change(listed) {
+					Ok(next) => {
+						schedule_kept!(db, next)?
+						Ok(Ok(Accepted))
+					}
+					Err(reason) => Ok(Ok(Rejected(reason)))
+				}
+			Err(_) => Ok(no_schedule)
+		}
+	match asked {
+		ListSchedules => Ok(Ok(Schedules(kept.map(|listed| listed.schedule))))
+		Inspect(_) =>
+			match found {
+				Ok(listed) => Ok(Ok(Inspected({ schedule: listed.schedule, runs: listed.runs })))
+				Err(_) => Ok(no_schedule)
+			}
+		Create(draft) if Protocol.serves(provider, Mock.provider.id) and context.mock.agents => {
+			schedule_id = "schedule-${now_ms!().to_str()}"
+			match MockSchedules.created(schedule_id, draft, now_ms!()) {
+				Ok(made) => {
+					schedule_kept!(db, made)?
+					Ok(Ok(Created({ schedule_id: schedule_id })))
+				}
+				Err(reason) => Ok(Ok(Rejected(reason)))
+			}
+		}
+		Create(_) => Ok(Err({ code: NotFound, message: "no provider makes schedules" }))
+		Update({ draft, .. }) => changed!(|listed| MockSchedules.updated(listed, draft, now_ms!()))
+		Pause(_) => changed!(|listed| Ok(MockSchedules.paused(listed)))
+		Resume(_) => changed!(|listed| Ok(MockSchedules.resumed(listed, now_ms!())))
+		RunOnce(_) =>
+			match found {
+				Ok(listed) => {
+					schedule_kept!(db, MockSchedules.ran(listed, now_ms!(), now_ms!(), schedule_prompted!(context, listed.schedule)?))?
+					Ok(Ok(Accepted))
+				}
+				Err(_) => Ok(no_schedule)
+			}
+		Delete({ schedule_id }) =>
+			if found.is_ok() {
+				Sqlite.execute!({ db, query: "DELETE FROM mock_schedules WHERE id = :schedule_id;", params: { schedule_id } })?
+				Ok(Ok(Accepted))
+			} else {
+				Ok(no_schedule)
+			}
+	}
+}
+
 ## review.v1, which the daemon hosts itself (see `offered`).
 review_provider : Manifest.Provider
 review_provider = { id: "review", name: "Review", capabilities: [Capability.review_v1] }
@@ -1397,6 +1538,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_events (room_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (room_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_joins (room_id TEXT PRIMARY KEY, joined INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_schedules (id TEXT PRIMARY KEY, position INTEGER NOT NULL, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
@@ -1426,6 +1568,12 @@ seed! = |db| {
 		for (seed, position) in Mock.seeds.map_with_index(|seed, position| (seed, position)) {
 			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'mock', :agent, :title, :position);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap() } })?
 			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!(), seed.events.map(|event| { delay_ms: 0, event })), now_ms!())?
+		}
+		# A nightly schedule, of a new session each night.
+		nightly = { name: "Nightly dependencies", prompt: "Update the dependencies and run the tests.", cadence: Cron({ expression: "0 3 * * *", timezone: Err(Missing) }), target: NewSession({ place: Workspace("main"), agent: "claude", model: Err(Missing), mode: Err(Missing), thinking: Err(Missing), isolation: Worktree, archive_on_finish: Bool.True }), max_runs: Err(Missing), expires: Err(Missing) }
+		match MockSchedules.created("nightly", nightly, now_ms!()) {
+			Ok(kept) => schedule_kept!(db, kept)?
+			Err(_) => {}
 		}
 		# Archived a day ago, after a day's work.
 		for (seed, position) in Mock.archived_seeds.map_with_index(|seed, position| (seed, position + Mock.seeds.len())) {

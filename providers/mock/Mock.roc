@@ -9,10 +9,11 @@ Mock := [].{
 
 	## The mock provider, with every capability it can offer.
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1, Capability.schedules_v1] }
 
 	## The parts of the mock a daemon offers: its scripted agents (chat,
-	## workspaces, workspace.git and files), its rooms and its tickets.
+	## workspaces, workspace.git, files and schedules), its rooms and its
+	## tickets.
 	Parts : { agents : Bool, rooms : Bool, tickets : Bool }
 
 	## The mock provider offering only the capabilities of `parts`.

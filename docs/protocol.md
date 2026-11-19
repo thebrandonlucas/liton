@@ -620,6 +620,13 @@ now, besides its cadence, and `Delete` forgets it with its runs. Each
 answers `Accepted` or `Rejected` with why, or an error, and the next poll of
 `schedules` shows it.
 
+The mock's schedules run by the daemon's clock, each due one run when a
+poll or call finds it due, prompting its session or starting one in the
+mock's workspaces; their cron expressions are of the minute and hour alone
+(`0 9 * * *`, `*/15 * * * *`), in UTC, and their cadences every second at
+most, and they don't archive the sessions they start. Its pure functions take the time, so its tests run them by a clock of
+their own. A fresh mock has a schedule of a new session each night at 03:00.
+
 ### Audio
 
 `voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
