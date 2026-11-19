@@ -902,6 +902,16 @@ Model := [].{
 		if (cents == 0 and amount > 0) "<$0.01" else "$${(cents // 100).to_str()}.${padding}${(cents % 100).to_str()}"
 	}
 
+	## Switches the session a chat pane shows to the mode after its own, the
+	## first after the last, as Shift+Tab does in its composer.
+	cycle_mode : State, Str -> State
+	cycle_mode = |state, pane_id| {
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		{ value, choices: modes, .. } = Model.setting(state, session_id, Mode)
+		next = modes.find_first_index(|choice| choice.value == value).map_ok(|at| (at + 1) % modes.len()) ?? 0
+		Model.configure(state, session_id, Mode, modes.get(next).map_ok(|choice| choice.value) ?? "")
+	}
+
 	## Whether a switch of a session's setting is on its way.
 	configuring : State, Str, Setting -> Bool
 	configuring = |state, session_id, which|

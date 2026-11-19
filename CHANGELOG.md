@@ -119,6 +119,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A chat's composer has a chip each for its session's mode, model and thinking level, in place of the model's name alone. Pick another in one to switch the agent to it: it shows at once, marked as switching, until the daemon has switched it, or goes back with why.
 - A ring in a chat's composer shows how much of the context window the agent's last turn filled; click it for the tokens it read (of them, cached) and wrote, and what it cost.
 - New agent picks the model, mode and thinking level to start with from those its kind of agent offers, each its default unless you pick another; a kind that tells no models still takes one by name.
+- Shift+Tab in a chat's message box switches the agent to its next mode, as in Paseo; ⌘K offers Set mode…, Set model… and Set thinking… for the chat focused, and each choice by name, such as Set model to Opus 4.1.
 
 ### Changed
 

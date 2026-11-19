@@ -2325,7 +2325,7 @@ Liton := [].{
 				Conversation.composer(
 					model0,
 					id,
-					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [] },
+					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 					[
 						Html.div(
 							"composer-chips",
@@ -3359,7 +3359,7 @@ Liton := [].{
 		Conversation.composer(
 			model,
 			key,
-			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices },
+			{ form: if (place == Thread) "Reply in the thread" else "Send to the room", name: if (place == Thread) "Your reply" else "Your message", placeholder, send: Model.send_to_room, completions: Model.mention_choices, shift_tab: Ignored },
 			[Conversation.send_button(if (place == Thread) "Send the reply" else "Send to the room")],
 		)
 	}
