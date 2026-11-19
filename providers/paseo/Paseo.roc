@@ -16,14 +16,6 @@ Paseo := [].{
 	page_limit : U64
 	page_limit = 200
 
-	## Declared before `Loose`, whose parser uses it: declared after, its
-	## derived parser_for "does not exist" (Roc nightly-2026-11-07;
-	## https://github.com/roc-lang/roc/issues/12994, repro in roc-issues
-	## archive/BUG-028-derived-parser-for-before-declaration).
-	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
-		parser_for : _
-	}
-
 	## A JSON value Paseo leaves open, such as a tool's output or error: liton
 	## shows a string, or an object's `message` or `content` string.
 	Loose := [Text(Str), NotText].{
@@ -37,6 +29,11 @@ Paseo := [].{
 					_ => Ok({ value: NotText, rest: encoding.skip_record_field(state)? })
 				}
 		}
+	}
+
+	## The object a `Loose` value can be.
+	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
+		parser_for : _
 	}
 
 	## A pending permission request. A plan's carries the plan in its
