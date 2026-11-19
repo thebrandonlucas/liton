@@ -429,6 +429,7 @@ Paseo := [].{
 		thinking_option_id : Try(Try(Str, [Null]), [Missing]),
 		effective_thinking_option_id : Try(Try(Str, [Null]), [Missing]),
 		last_usage : Try(Usage, [Missing]),
+		archived_at : Try(Try(Str, [Null]), [Missing]),
 	}
 
 	## Asks for as many agents as Paseo lists at once, without archived ones.
@@ -448,34 +449,72 @@ Paseo := [].{
 	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
 	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
 	agents_answer = |text, request_id| {
-		answered : Try({ message : { payload : { entries : List({ agent : ListedAgent, project : Try({ checkout : { current_branch : Try(Try(Str, [Null]), [Missing]) } }, [Missing]) }) } } }, _)
+		answered : Try({ message : { payload : { entries : List(Listed) } } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_agents_response", request_id)?)
-		Ok(
-			answered?.message.payload.entries.sort_with(|left, right| listed_order(left.agent, right.agent)).map(
-				|{ agent, project }| {
-					title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
-					optional = |value| value.map_err(|_| Missing)
-					session = {
-						..Chat.session({ id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }),
-						model: optional(agent.model),
-						workspace: Ok({ id: agent.workspace_id, directory: agent.cwd }),
-						branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
-						running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
-						updated: Ok(agent.updated_at),
-						mode: optional(agent.current_mode_id ?? Err(Null)),
-						thinking: match (agent.effective_thinking_option_id, agent.thinking_option_id) {
-							(Ok(Ok(effective)), _) => Ok(effective)
-							(_, Ok(Ok(chosen))) => Ok(chosen)
-							_ => Err(Missing)
-						},
-						modes: if ((agent.available_modes ?? []).is_empty()) Err(Missing) else agent.available_modes,
-						usage: agent.last_usage.map_ok(Paseo.usage),
-					}
-					{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
-				},
-			),
-		)
+		Ok(answered?.message.payload.entries.sort_with(|left, right| listed_order(left.agent, right.agent)).map(Paseo.listed_session))
 	}
+
+	## An agent as Paseo's agent lists list it, with its project's checkout.
+	Listed : { agent : ListedAgent, project : Try({ checkout : { current_branch : Try(Try(Str, [Null]), [Missing]) } }, [Missing]) }
+
+	## A listed agent as a chat.v1 session (see `agents_answer`), with the
+	## directory and the workspace it works in.
+	listed_session : Listed -> { session : Chat.Session, directory : Str, workspace_id : Str }
+	listed_session = |{ agent, project }| {
+		title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
+		optional = |value| value.map_err(|_| Missing)
+		session = {
+			..Chat.session({ id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }),
+			model: optional(agent.model),
+			workspace: Ok({ id: agent.workspace_id, directory: agent.cwd }),
+			branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
+			running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
+			updated: Ok(agent.updated_at),
+			mode: optional(agent.current_mode_id ?? Err(Null)),
+			thinking: match (agent.effective_thinking_option_id, agent.thinking_option_id) {
+				(Ok(Ok(effective)), _) => Ok(effective)
+				(_, Ok(Ok(chosen))) => Ok(chosen)
+				_ => Err(Missing)
+			},
+			modes: if ((agent.available_modes ?? []).is_empty()) Err(Missing) else agent.available_modes,
+			usage: agent.last_usage.map_ok(Paseo.usage),
+			archived: optional(agent.archived_at ?? Err(Null)),
+		}
+		{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
+	}
+
+	## Asks for a page of Paseo's agent history, archived agents too, the
+	## latest first: those matching `search`, `limit` of them after `cursor`
+	## ("" for the first page). Paseo lists the features that offer it as
+	## `agentHistorySearch` (see `Features`).
+	history_request : { search : Str, cursor : Str, limit : U64 }, Str -> Str
+	history_request = |{ search, cursor, limit }, request_id| {
+		after : Try(Str, [Missing])
+		after = if (cursor.is_empty()) Err(Missing) else Ok(cursor)
+		Json.to_str({ type: "session", message: { type: "fetch_agent_history_request", requestId: request_id, filter: { includeArchived: Bool.True }, search, sort: [{ key: "updated_at", direction: "desc" }], page: { limit: U64.min(limit, 200), cursor: after } } })
+	}
+
+	## The agents a `fetch_agent_history_response` answering `request_id`
+	## lists, in its order, each with its directory and workspace and when it
+	## was archived, and the cursor of the next page, if there is one.
+	history_answer : Str, Str -> Try({ agents : List({ session : Chat.Session, directory : Str, workspace_id : Str }), next : Try(Str, [Missing]) }, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	history_answer = |text, request_id| {
+		answered : Try({ message : { payload : { entries : List(Listed), page_info : { next_cursor : Try(Str, [Null]), has_more : Bool } } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "fetch_agent_history_response", request_id)?)
+		payload = answered?.message.payload
+		Ok({ agents: payload.entries.map(Paseo.listed_session), next: if (payload.page_info.has_more) payload.page_info.next_cursor.map_err(|_| Missing) else Err(Missing) })
+	}
+
+	## Unarchives an agent: Paseo's `refresh_agent_request` lists it again and
+	## reloads it, and answers with an `agent_refreshed` status (see
+	## `refreshed`).
+	unarchive_request : Str, Str -> Str
+	unarchive_request = |agent_id, request_id| Json.to_str({ type: "session", message: { type: "refresh_agent_request", agentId: agent_id, requestId: request_id } })
+
+	## Whether the status answering `request_id` says Paseo refreshed the
+	## agent, or why not.
+	refreshed : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	refreshed = |text, request_id| Paseo.write_answer(text, "status", request_id).map_ok(|_| {})
 
 	## An agent's `lastUsage` as chat.v1's, its token counts whole.
 	usage : Usage -> Chat.Usage
@@ -557,19 +596,20 @@ Paseo := [].{
 	protocol = |password| "paseo.bearer.${password}"
 
 	## What liton uses of the features a Paseo's `server_info` lists:
-	## whether it applies an agent's config in one request (from 0.3.2).
-	Features : { agent_config_apply : Bool }
+	## whether it applies an agent's config in one request (from 0.3.2), and
+	## whether it searches its agent history (from 0.3.0).
+	Features : { agent_config_apply : Bool, agent_history_search : Bool }
 
 	## What a message after `hello` says of it: Paseo welcomes a client with
 	## its `server_info` and its features, or refuses it with
 	## `hello.rejected` and a reason.
 	greeting : Str -> [Welcomed(Features), Rejected(Str), NotGreeting]
 	greeting = |text| {
-		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]), agent_history_search : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
 		parsed = Json.parser_camel()(text)
 		match parsed {
 			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
-			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False })
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False, agent_history_search: features.map_ok(|listed| listed.agent_history_search ?? Bool.False) ?? Bool.False })
 			_ => NotGreeting
 		}
 	}
@@ -968,6 +1008,17 @@ expect {
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
 
+expect {
+	history_entry = |id, archived| "{\"agent\":{\"id\":\"${id}\",\"provider\":\"codex\",\"cwd\":\"/work\",\"model\":null,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"lastUserMessageAt\":null,\"title\":\"${id}\",\"status\":\"closed\",\"pendingPermissions\":[],\"archivedAt\":${archived}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null}}}"
+	page = |more, cursor| session("{\"type\":\"fetch_agent_history_response\",\"payload\":{\"requestId\":\"h1\",\"entries\":[${history_entry("a9", "\"2026-01-03T00:00:00.000Z\"")},${history_entry("a8", "null")}],\"pageInfo\":{\"nextCursor\":${cursor},\"prevCursor\":null,\"hasMore\":${more}}}}")
+	shown = |id, archived| { session: { ..Chat.session({ id, provider: "paseo", agent: "codex", title: id, status: Finished }), workspace: Ok({ id: Err(Missing), directory: "/work" }), updated: Ok("2026-01-02T00:00:00.000Z"), archived }, directory: "/work", workspace_id: "" }
+	Paseo.history_answer(page("true", "\"c2\""), "h1") == Ok({ agents: [shown("a9", Ok("2026-01-03T00:00:00.000Z")), shown("a8", Err(Missing))], next: Ok("c2") })
+		and Paseo.history_answer(page("false", "null"), "h1").map_ok(|answered| answered.next) == Ok(Err(Missing))
+		and Paseo.history_request({ search: "login", cursor: "", limit: 500 }, "h1") == request("{\"filter\":{\"includeArchived\":true},\"page\":{\"limit\":200},\"requestId\":\"h1\",\"search\":\"login\",\"sort\":[{\"direction\":\"desc\",\"key\":\"updated_at\"}],\"type\":\"fetch_agent_history_request\"}")
+		and Paseo.refreshed(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_refreshed\",\"agentId\":\"a9\",\"requestId\":\"u1\",\"timelineSize\":4}}"), "u1") == Ok({})
+		and Paseo.refreshed(session("{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"u1\",\"requestType\":\"refresh_agent_request\",\"error\":\"Agent not found: a9\"}}"), "u1") == Err(Refused("Agent not found: a9"))
+}
+
 # The sessions that changed last, a session telling no time the oldest.
 expect {
 	changed = |id, updated| { ..Chat.session({ id, provider: "paseo", agent: "claude", title: id, status: Idle }), updated }
@@ -1041,14 +1092,14 @@ expect {
 
 expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
 
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False })
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true}}}")) == Welcomed({ agent_config_apply: Bool.True })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False, agent_history_search: Bool.False })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true,\"agentHistorySearch\":true}}}")) == Welcomed({ agent_config_apply: Bool.True, agent_history_search: Bool.True })
 
 # One request where Paseo applies a config at once, else one for each change.
 expect {
 	changes = { model: Ok("opus"), mode: Err(Missing), thinking: Ok("high") }
-	Paseo.configure_requests({ agent_config_apply: Bool.True }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
-		and Paseo.configure_requests({ agent_config_apply: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
+	Paseo.configure_requests({ agent_config_apply: Bool.True, agent_history_search: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
+		and Paseo.configure_requests({ agent_config_apply: Bool.False, agent_history_search: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
 }
 expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting

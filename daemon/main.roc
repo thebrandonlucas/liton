@@ -680,14 +680,24 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 		Create(asked_create) => started!(context, provider, asked_create)
-		ListHistory(asked_history) => Ok(Ok(History(history!(context, provider, asked_history)?)))
+		ListHistory(asked_history) =>
+			match history!(context, provider, asked_history)? {
+				Ok(page) => Ok(Ok(History(page)))
+				Err(error) => Ok(Err(error))
+			}
 		Unarchive({ session_id }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
 					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 0 WHERE id = :session_id;", params: { session_id } })?
 					Ok(Ok(Accepted))
 				}
-				_ => Ok(no_session(session_id))
+				PaseoSession(daemon) => {
+					request_id = "liton-unarchive-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.unarchive_request(session_id, request_id), request_id, Paseo.refreshed)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
 			}
 		Configure({ session_id, model, mode, thinking }) =>
 			match routed_provider!(context, provider, session_id)? {
@@ -719,7 +729,7 @@ HistoryCursor : List({ provider : Str, cursor : Str })
 ## A page of history (see `Chat.Request`): of each provider the call
 ## reaches, or that `cursor` goes on with, its next `limit` sessions, the
 ## latest first, archived ones too, and where each goes on from.
-history! : Context, Try(Str, [Missing]), { search : Str, cursor : Try(Str, [Missing]), limit : U64 } => Try({ sessions : List(Chat.Session), next : Try(Str, [Missing]) }, _)
+history! : Context, Try(Str, [Missing]), { search : Str, cursor : Try(Str, [Missing]), limit : U64 } => Try(Protocol.Answer({ sessions : List(Chat.Session), next : Try(Str, [Missing]) }), _)
 history! = |context, provider, { search, cursor, limit }| {
 	db = context.db
 	from_cursor : Try(HistoryCursor, _)
@@ -748,9 +758,42 @@ history! = |context, provider, { search, cursor, limit }| {
 		}
 		_ => {}
 	}
+	match (start(Paseo.provider.id), context.paseo) {
+		(Ok(at), Ok(daemon)) =>
+			match paseo_history!(db, daemon, { search, cursor: at, limit }) {
+				Ok(Ok(page)) => {
+					$sessions = $sessions.concat(page.agents.map(|{ session, .. }| session))
+					$next = page.next.map_ok(|cursor_next| $next.append({ provider: Paseo.provider.id, cursor: cursor_next })) ?? $next
+				}
+				Ok(Err(NoSearch)) => {}
+				Err(err) => return Ok(Err(paseo_error(err)))
+			}
+		_ => {}
+	}
 	next : HistoryCursor
 	next = $next
-	Ok({ sessions: $sessions, next: if (next.is_empty()) Err(Missing) else Ok(Json.to_str(next)) })
+	Ok(Ok({ sessions: $sessions, next: if (next.is_empty()) Err(Missing) else Ok(Json.to_str(next)) }))
+}
+
+## A page of Paseo's agent history, over a connection of its own, its
+## agents kept so that an archived one's timeline and Unarchive reach
+## Paseo; `NoSearch` from a Paseo that doesn't search its history (before
+## 0.3.0), which has none to page through.
+paseo_history! : Sqlite.Db, PaseoDaemon, { search : Str, cursor : Str, limit : U64 } => Try(Try({ agents : List({ session : Chat.Session, directory : Str, workspace_id : Str }), next : Try(Str, [Missing]) }, [NoSearch]), _)
+paseo_history! = |db, daemon, asked| {
+	{ connection, features } = connected!(daemon, "liton-daemon-history")?
+	request_id = "liton-history-${now_ms!().to_str()}"
+	if !features.agent_history_search {
+		_ = connection.write!(WebSocket.close(websocket_mask))
+		return Ok(Err(NoSearch))
+	}
+	answered = exchange!(connection, Paseo.history_request(asked, request_id), request_id)
+	_ = connection.write!(WebSocket.close(websocket_mask))
+	page = Paseo.history_answer(answered?, request_id)?
+	for { session, .. } in page.agents {
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_history (id, listed) VALUES (:id, :listed) ON CONFLICT (id) DO UPDATE SET listed = excluded.listed;", params: { id: session.id, listed: Json.to_str(session) } })?
+	}
+	Ok(Ok(page))
 }
 
 ## Starts an agent in a workspace of the provider that has it, or in a
@@ -1346,6 +1389,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_history (id TEXT PRIMARY KEY, listed TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
@@ -1435,7 +1479,8 @@ timed! = |db, session_id, until| {
 provider! : Context, Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSession], _)
 provider! = |{ db, mock, paseo, .. }, session_id| {
 	rows : List({ provider : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+	# An archived Paseo agent its history listed is Paseo's too.
+	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id UNION ALL SELECT 'paseo' AS provider FROM paseo_history WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
 		match (rows.first().map_ok(|row| row.provider), paseo) {
 			(Ok("mock"), _) => if (mock.agents) MockSession else NoSession

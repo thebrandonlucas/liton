@@ -177,8 +177,8 @@ or with a Paseo that doesn't list `agentConfigApply` among its features,
 its `set_agent_model_request`, `set_agent_mode_request` and
 `set_agent_thinking_request` one after the other; the mock's agents offer
 two models of three thinking levels each and a few modes, and refuse others;
-Paseo can't unarchive an agent or a workspace
-over its protocol, and neither can liton. The mock keeps its own changes.
+Paseo can't unarchive a workspace over its protocol, and neither can liton.
+The mock keeps its own changes.
 
 `ListHistory` pages through every session a provider keeps, archived ones
 too, the latest first: those whose title, agent or directory holds `search`
@@ -197,7 +197,14 @@ together. `Unarchive` lists an archived session again:
 
 An archived session's timeline still follows (`timeline/<session_id>`), for
 a client to show it read only. The mock keeps the sessions it archives, and
-starts with one archived a day ago.
+starts with one archived a day ago. From Paseo, a page is its
+`fetch_agent_history_request` with archived agents included, sorted by
+`updated_at`, its `pageInfo.nextCursor` the provider's cursor, and an
+archived agent's `archivedAt` its `archived`; `Unarchive` is its
+`refresh_agent_request`, which lists the agent again and reloads it. Paseo
+lists `agentHistorySearch` among its features from 0.3.0, so each Paseo
+liton speaks (0.9.2 to 0.15.3) has a history; one that doesn't list it adds
+no sessions to a page.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is
