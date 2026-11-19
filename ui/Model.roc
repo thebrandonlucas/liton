@@ -2243,7 +2243,8 @@ Model := [].{
 	set_draft = |state, pane_id, text| { ..state, drafts: state.drafts.drop_if(|found| found.pane == pane_id).append({ pane: pane_id, text }) }
 
 	## Sends a pane's draft to the session the pane shows, and clears its
-	## composer.
+	## composer. While its agent works, the draft steers the turn it works
+	## on; Stop interrupts it.
 	submit : State, Str -> State
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
@@ -2251,7 +2252,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: Err(Missing) }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing) }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer

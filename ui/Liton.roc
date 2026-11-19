@@ -2325,7 +2325,7 @@ Liton := [].{
 				Conversation.composer(
 					model0,
 					id,
-					{ form: "Send a message", name: "Message", placeholder: Engine.const("Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
+					{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 					[
 						Html.div(
 							"composer-chips",
