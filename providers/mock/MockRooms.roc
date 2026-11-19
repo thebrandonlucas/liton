@@ -14,12 +14,15 @@ MockRooms := [].{
 	me : Str
 	me = "you"
 
-	## The rooms as the daemon starts with them, all joined but releases.
+	## The rooms as the daemon starts with them, all joined but releases,
+	## with a direct conversation with Scout; ideas and that conversation
+	## unread.
 	rooms : List(Rooms.Room)
 	rooms = [
 		{ ..Rooms.room({ id: "general", provider: "mock", name: "general", kind: Channel }), topic: Ok("Everything liton"), links: ["https://github.com/thebrandonlucas/liton.git"], me: Ok(MockRooms.me) },
-		{ ..Rooms.room({ id: "ideas", provider: "mock", name: "ideas", kind: Forum }), topic: Ok("A post per idea, discussed in its thread"), me: Ok(MockRooms.me) },
+		{ ..Rooms.room({ id: "ideas", provider: "mock", name: "ideas", kind: Forum }), topic: Ok("A post per idea, discussed in its thread"), unread: Counted({ messages: 1, mentions: 1 }), me: Ok(MockRooms.me) },
 		{ ..Rooms.room({ id: "releases", provider: "mock", name: "releases", kind: Announce }), joined: Bool.False, me: Ok(MockRooms.me) },
+		{ ..Rooms.room({ id: "scout", provider: "mock", name: "Scout", kind: Direct }), unread: Counted({ messages: 1, mentions: 0 }), me: Ok(MockRooms.me) },
 	]
 
 	## Everyone in the mock rooms: you, Ada, and the agents Scout, yours, and
@@ -32,13 +35,20 @@ MockRooms := [].{
 		{ id: "patch", provider: "mock", name: "Patch", picture: Err(Missing), kind: Agent({ owner: Ok("ada") }), role: Member, presence: Online },
 	]
 
-	## A room's members: everyone, but releases has only Ada.
+	## A room's members: everyone, but releases has only Ada, and the
+	## direct conversation you and Scout.
 	members_of : Str -> List(Rooms.Member)
-	members_of = |room_id| if (room_id == "releases") MockRooms.members.keep_if(|member| member.id == "ada") else MockRooms.members
+	members_of = |room_id|
+		match room_id {
+			"releases" => MockRooms.members.keep_if(|member| member.id == "ada")
+			"scout" => MockRooms.members.keep_if(|member| member.id == MockRooms.me or member.id == "scout")
+			_ => MockRooms.members
+		}
 
 	## What a room holds when the daemon starts: in general, a question to
 	## Scout with its answer in a thread and a reaction; in ideas, a post
-	## with a reply; in releases, an announcement.
+	## with a reply; in releases, an announcement; and from Scout, that its
+	## fix is ready.
 	seed : Str -> List(Rooms.Event)
 	seed = |room_id| {
 		at = |minute| "2026-01-01T09:0${minute.to_str()}:00.000Z"
@@ -60,6 +70,7 @@ MockRooms := [].{
 				Threaded({ root: "ideas-1", replies: 1, last_reply: Ok(at(3)), participants: ["patch"] }),
 			]
 			"releases" => [said("releases-1", "ada", "liton 0.1 is out.", 0, TopLevel, [])]
+			"scout" => [said("scout-1", "scout", "The login fix is ready for review in its worktree.", 4, TopLevel, [MockRooms.me])]
 			_ => []
 		}
 	}

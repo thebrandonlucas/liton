@@ -155,6 +155,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A room's message shows its actions over its top right as the pointer is over it: react with an emoji no one has used on it yet, Reply in its thread, and Copy link, which copies `room:<room>/<message>` and says Copied at once. They no longer leave a gap under every message; a message with no replies shows no thread line.
 - An @mention in a room's message shows as a chip, an agent's with a robot before its name.
 - A room's header holds its name, topic, members and a ⋯ menu, which copies a link to the room or leaves it. A room you haven't joined says so over its composer, with Join.
+- The mock provider's rooms include a direct conversation with its agent Scout, and start with it and #ideas unread, #ideas mentioning you.
 
 ### Fixed
 
