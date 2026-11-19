@@ -52,6 +52,8 @@ Model := [].{
 	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
 
 	State : {
+		## The daemon, "" before its manifest is read, and what it offers.
+		daemon : { id : Str, name : Str },
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
 		transformers : List(Manifest.Transformer),
@@ -346,6 +348,7 @@ Model := [].{
 		restored = Model.restore(saved)
 		Model.layout(
 			{
+				daemon: { id: "", name: "" },
 				capabilities: [],
 				providers: [],
 				transformers: [],
@@ -521,7 +524,7 @@ Model := [].{
 		}
 
 	advertise : State, Manifest.Offered -> State
-	advertise = |state, offered| { ..state, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
+	advertise = |state, offered| { ..state, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
 	## Offers the presets and themes the daemon's setup offers, if any, and
 	## shows the preset it starts with, unless the layout is the one the

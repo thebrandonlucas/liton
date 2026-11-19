@@ -522,6 +522,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -531,13 +532,14 @@ Liton := [].{
 									"settings-header",
 									[
 										Html.button("←", [Engine.class("back-to-sections"), Html.aria_label("Back to the sections")], model.update(|state| { ..state, settings_page: { ..state.settings_page, pushed: Bool.False } })),
-										Html.h2_s(picked.map(Liton.section_title), []),
+										Html.h2_s(model.signal().map(|state| if (state.settings_page.section == "host") "Host · ${state.daemon.name}" else Liton.section_title(state.settings_page.section)), []),
 									],
 								),
 								shown("appearance", || Liton.appearance(model)),
 								shown("keys", || Liton.keys_section(model)),
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
+								shown("host", || Liton.host_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
 							],
@@ -645,6 +647,47 @@ Liton := [].{
 				Html.div("settings-row", [Html.p("Protocol", ""), Html.p("liton/v1, version ${Manifest.protocol.to_str()}", "help")]),
 				Html.div("settings-row", [Html.p("Snapshots", ""), Html.p("version ${Setup.snapshot_version.to_str()}", "help")]),
 			],
+		)
+
+	## What the daemon offers: its providers, each remote's under its name,
+	## with the capabilities each supplies, and its transformers, each with
+	## what it derives from what.
+	host_section : State(Ctx, Model.State) -> Elem(Ctx)
+	host_section = |model| {
+		row = |title, detail| Html.div("settings-row", [Html.span_s(title, [Engine.class("settings-row-title")]), Html.p_s(detail, [Engine.class("help")])])
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Providers",
+					[Engine.each(model.signal().map(|state| state.providers), |provider| provider.id, |provider| row(provider.field(|shown| "${shown.name} (${shown.id})"), provider.field(|shown| Str.join_with(shown.capabilities.map(Capability.to_str), ", "))))],
+				),
+				Liton.settings_card(
+					"Remotes",
+					[
+						Engine.each(model.signal().map(Liton.remotes), |remote| remote.name, |remote| row(remote.key(), remote.field(|shown| "${shown.count.to_str()} providers"))),
+						Engine.when(model.signal().map(|state| Liton.remotes(state).is_empty()), || Html.div("settings-row", [Html.p("No remotes: every provider runs in this daemon.", "help")]), || Engine.text("")),
+					],
+				),
+				Liton.settings_card(
+					"Transformers",
+					[Engine.each(model.signal().map(|state| state.transformers), |transformer| transformer.id, |transformer| row(transformer.field(|shown| shown.name), transformer.field(|shown| "${Capability.to_str(shown.offers)} from ${Str.join_with(shown.uses.map(Capability.to_str), ", ")}")))],
+				),
+			],
+		)
+	}
+
+	## The remotes whose providers the daemon offers, as their ids name
+	## them (`<remote>/<id>`), each with how many.
+	remotes : Model.State -> List({ name : Str, count : U64 })
+	remotes = |state|
+		state.providers.fold(
+			[],
+			|found, provider|
+				match Str.split_on(provider.id, "/") {
+					[name, _, ..] => if (found.any(|remote| remote.name == name)) found.map(|remote| if (remote.name == name) { ..remote, count: remote.count + 1 } else remote) else found.append({ name, count: 1 })
+					_ => found
+				},
 		)
 
 	## The surface open: the presets to show instead, and its tiles' panes
