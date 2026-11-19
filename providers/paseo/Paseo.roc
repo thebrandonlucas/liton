@@ -429,6 +429,7 @@ Paseo := [].{
 		thinking_option_id : Try(Try(Str, [Null]), [Missing]),
 		effective_thinking_option_id : Try(Try(Str, [Null]), [Missing]),
 		last_usage : Try(Usage, [Missing]),
+		background : Try(Bool, [Missing]),
 	}
 
 	## Asks for as many agents as Paseo lists at once, without archived ones.
@@ -444,14 +445,15 @@ Paseo := [].{
 	## tells its model, workspace, the branch Paseo placed it on, when its
 	## running turn started and when it last changed, its mode and the modes
 	## it has, the thinking level it runs at and what its last turn used, as
-	## far as Paseo does.
+	## far as Paseo does. A background agent, such as one writing a summary
+	## (see `PaseoSummaries`), isn't listed.
 	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
 	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
 	agents_answer = |text, request_id| {
 		answered : Try({ message : { payload : { entries : List({ agent : ListedAgent, project : Try({ checkout : { current_branch : Try(Try(Str, [Null]), [Missing]) } }, [Missing]) }) } } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_agents_response", request_id)?)
 		Ok(
-			answered?.message.payload.entries.sort_with(|left, right| listed_order(left.agent, right.agent)).map(
+			answered?.message.payload.entries.drop_if(|{ agent, .. }| agent.background == Ok(Bool.True)).sort_with(|left, right| listed_order(left.agent, right.agent)).map(
 				|{ agent, project }| {
 					title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
 					optional = |value| value.map_err(|_| Missing)
@@ -557,19 +559,21 @@ Paseo := [].{
 	protocol = |password| "paseo.bearer.${password}"
 
 	## What liton uses of the features a Paseo's `server_info` lists:
-	## whether it applies an agent's config in one request (from 0.3.2).
-	Features : { agent_config_apply : Bool }
+	## whether it applies an agent's config in one request (from 0.3.2), and
+	## whether it runs agents in the background, hidden from lists (from
+	## 0.15.0), as summaries need (see `PaseoSummaries`).
+	Features : { agent_config_apply : Bool, background_agents : Bool }
 
 	## What a message after `hello` says of it: Paseo welcomes a client with
 	## its `server_info` and its features, or refuses it with
 	## `hello.rejected` and a reason.
 	greeting : Str -> [Welcomed(Features), Rejected(Str), NotGreeting]
 	greeting = |text| {
-		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]), background_agents : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
 		parsed = Json.parser_camel()(text)
 		match parsed {
 			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
-			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False })
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False, background_agents: features.map_ok(|listed| listed.background_agents ?? Bool.False) ?? Bool.False })
 			_ => NotGreeting
 		}
 	}
@@ -956,6 +960,7 @@ expect {
 		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"thinkingOptionId\":null,\"effectiveThinkingOptionId\":\"high\",\"currentModeId\":\"plan\",\"availableModes\":[{\"id\":\"default\",\"label\":\"Default\",\"icon\":\"shield\"},{\"id\":\"plan\",\"label\":\"Plan\"}],\"lastUsage\":{\"inputTokens\":1200,\"outputTokens\":300,\"totalCostUsd\":0.0125,\"contextWindowMaxTokens\":200000,\"contextWindowUsedTokens\":41000.0},\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
 		agent("\"id\":\"a3\",\"model\":null,\"currentModeId\":null,\"availableModes\":[],\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
 		agent("\"id\":\"a4\",\"model\":null,\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]", not_git),
+		agent("\"id\":\"a5\",\"model\":\"haiku\",\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"liton summary\",\"status\":\"idle\",\"pendingPermissions\":[],\"background\":true", not_git),
 	]
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
 	listed = |id, title, status, workspace_id, updated| { ..Chat.session({ id, provider: "paseo", agent: "claude", title, status }), workspace: Ok({ id: workspace_id, directory: "/work" }), updated: Ok(updated) }
@@ -1041,14 +1046,14 @@ expect {
 
 expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
 
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False })
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true}}}")) == Welcomed({ agent_config_apply: Bool.True })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False, background_agents: Bool.False })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true,\"backgroundAgents\":true}}}")) == Welcomed({ agent_config_apply: Bool.True, background_agents: Bool.True })
 
 # One request where Paseo applies a config at once, else one for each change.
 expect {
 	changes = { model: Ok("opus"), mode: Err(Missing), thinking: Ok("high") }
-	Paseo.configure_requests({ agent_config_apply: Bool.True }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
-		and Paseo.configure_requests({ agent_config_apply: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
+	Paseo.configure_requests({ agent_config_apply: Bool.True, background_agents: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
+		and Paseo.configure_requests({ agent_config_apply: Bool.False, background_agents: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
 }
 expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting

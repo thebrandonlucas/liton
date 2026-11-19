@@ -35,6 +35,12 @@
 ## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
 ## items that need you, as needs-you.v1.
 ##
+## Paseo's sessions get a Goal / Done / Now summary after their turns,
+## from a background agent Paseo runs (from Paseo 0.15; see
+## `PaseoSummaries`) on the agent's smallest model, or the one
+## LITON_SUMMARY_MODEL names (`model`, or `agent:model`). LITON_SUMMARY=off
+## writes none.
+##
 ## LITON_STT offers voice.v1, dictation, from a speech engine on the machine
 ## (providers/local-speech/, rig/speech/): `sherpa=ws://127.0.0.1:6006` for
 ## sherpa-onnx's offline WebSocket server, or `whisper=http://127.0.0.1:8178`
@@ -79,6 +85,7 @@ import mock.MockTickets
 import paseo.Paseo
 import paseo.PaseoFiles
 import paseo.PaseoGit
+import paseo.PaseoSummaries
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
@@ -90,8 +97,9 @@ import transformers.NeedsYou
 import transformers.Transformer
 
 ## What each request is answered from: the database, the hosts it answers,
-## the providers and transformers configured, and the setup it offers.
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+## the providers and transformers configured, the model Paseo's summaries
+## are written with ("" for the agent's smallest), and the setup it offers.
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -139,7 +147,8 @@ init! = || {
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })].concat(if (docs_built) [Server.static_mount({ at: "/docs", files: docs })] else []), liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
-	context = { db, allowed_hosts, mock, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	summary_model = if (env_or!("LITON_SUMMARY", "on") == "off") Err(Off) else Ok(env_or!("LITON_SUMMARY_MODEL", ""))
+	context = { db, allowed_hosts, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -1308,6 +1317,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_transcripts (utterance_id TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', through INTEGER NOT NULL DEFAULT 0, agent_id TEXT NOT NULL DEFAULT '', asking_through INTEGER NOT NULL DEFAULT 0, asking_at TEXT NOT NULL DEFAULT '', asked_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
@@ -1452,11 +1462,12 @@ sessions! = |context| {
 }
 
 ## The Paseo agents the cycle last listed, as they were listed, or, listed
-## before that was kept, with their last synced status.
+## before that was kept, with their last synced status, each with its
+## summary once one was written.
 registered! : Sqlite.Db => Try(List(Chat.Session), _)
 registered! = |db| {
-	rows : List({ id : Str, agent : Str, title : Str, listed : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, listed FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows : List({ id : Str, agent : Str, title : Str, listed : Str, summary : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS id, s.agent AS agent, s.title AS title, s.listed AS listed, coalesce(m.value, '') AS summary FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id WHERE s.provider = 'paseo' ORDER BY s.position;", params: {}, limits: Sqlite.default_query_limits })?
 	var $sessions = []
 	for row in rows {
 		listed : Try(Chat.Session, _)
@@ -1466,7 +1477,9 @@ registered! = |db| {
 				Ok(known) => known
 				Err(_) => Chat.session({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
 			}
-		$sessions = $sessions.append(session)
+		summary : Try(Chat.Summary, _)
+		summary = Json.parse(row.summary)
+		$sessions = $sessions.append({ ..session, summary: summary.map_err(|_| Missing) })
 	}
 	Ok($sessions)
 }
@@ -1651,12 +1664,13 @@ store! = |db, session_id, stored, { state, events }| {
 ## `newest_timelines` sessions too while a transformer is watched, then each directory's
 ## status and, when due (see `PaseoGit.refresh`), its commits and diffs, then
 ## the commit files not cached yet, then the listings and files fetched
-## `PaseoFiles.lifetime_ms` ago or never. Nothing watched, no connection. A
+## `PaseoFiles.lifetime_ms` ago or never, then the summaries due (see
+## `summarized!`). Nothing watched, no connection. A
 ## question that fails is logged and the next asked; a lost connection ends
 ## the cycle.
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
 paseo_cycle! : Context => Try({}, _)
-paseo_cycle! = |{ db, paseo, .. }|
+paseo_cycle! = |{ db, paseo, summary_model, .. }|
 	match paseo {
 		Err(Disabled) => Ok({})
 		Ok(daemon) =>
@@ -1668,14 +1682,24 @@ paseo_cycle! = |{ db, paseo, .. }|
 				watched : List({ kind : Str, subject : Str })
 				watched = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
 				newest = if (watched.any(|item| item.kind == "newest")) Paseo.newest(registered!(db)?, newest_timelines).map(|session_id| { kind: "timeline", subject: session_id }) else []
-				wanted = watched.concat(newest.drop_if(|item| watched.contains(item)))
+				# Summaries pick their models from the kinds of agent.
+				kinds = if (summary_model.is_ok() and !watched.is_empty()) [{ kind: "agent_kinds", subject: "" }] else []
+				wanted = watched.concat(newest.drop_if(|item| watched.contains(item))).concat(kinds.drop_if(|item| watched.contains(item)))
 				if !wanted.is_empty() {
 					held!(db, now_ms!() + cycle_lease_ms)?
 					match connected!(daemon, "liton-daemon") {
-						Ok({ connection, .. }) => {
+						Ok({ connection, features }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
+							match summary_model {
+								Ok(configured) if features.background_agents =>
+									match summarized!(db, connection, configured) {
+										Ok({}) => {}
+										Err(err) => logged!("Paseo: writing summaries failed: ${Str.inspect(err)}")
+									}
+								_ => {}
+							}
 							_ = connection.write!(WebSocket.close(websocket_mask))
 							{}
 						}
@@ -1765,6 +1789,80 @@ asked! = |db, connection, { kind, subject }, request_id|
 		"file" => explored_by_paseo!(db, connection, kind, subject, request_id)
 		_ => Ok({})
 	}
+
+## Writes the summaries of Paseo's sessions (see `PaseoSummaries`): keeps
+## those their agents finished, gives up on those that failed or took
+## `PaseoSummaries.given_up_ms` (archiving the agent), then starts an
+## agent for each session due one. A session whose summary failed, or
+## whose agent offers no small model, waits for its next turn.
+summarized! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
+summarized! = |db, connection, configured| {
+	now = now_ms!()
+	writing : List({ session_id : Str, agent_id : Str, asking_through : I64, asking_at : Str, asked_at : I64 })
+	writing = Sqlite.query_many!({ db, query: "SELECT session_id, agent_id, asking_through, asking_at, asked_at FROM summaries WHERE agent_id != '';", params: {}, limits: Sqlite.default_query_limits })?
+	for job in writing {
+		request_id = "liton-summary-${job.agent_id}"
+		answered = PaseoSummaries.finished(exchange!(connection, PaseoSummaries.finished_request(job.agent_id, request_id), request_id)?, request_id)
+		done! = |value| Sqlite.execute!({ db, query: "UPDATE summaries SET value = :value, through = asking_through, agent_id = '' WHERE session_id = :session_id;", params: { session_id: job.session_id, value } })
+		given_up! = |why| {
+			logged!("Paseo: no summary of ${job.session_id}: ${why}")
+			archive_id = "${request_id}-archive"
+			_ = exchange!(connection, Paseo.archive_request(job.agent_id, archive_id), archive_id)
+			Sqlite.execute!({ db, query: "UPDATE summaries SET through = asking_through, agent_id = '' WHERE session_id = :session_id;", params: { session_id: job.session_id } })
+		}
+		match answered {
+			Ok(Writing) if now - job.asked_at < PaseoSummaries.given_up_ms => {}
+			Ok(Written({ goal, done, now: next })) => done!(Json.to_str({ goal, done, now: next, at: job.asking_at }))?
+			Ok(Writing) => given_up!("its agent took too long")?
+			Ok(Failed(why)) => given_up!(why)?
+			Err(err) => given_up!(Str.inspect(err))?
+		}
+	}
+	rows : List({ session_id : Str, agent : Str, directory : Str, workspace_id : Str, listed : Str, value : Str, through : I64, agent_id : Str, ended_through : I64, ended_ms : I64, ended_event : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS session_id, s.agent AS agent, s.directory AS directory, s.workspace_id AS workspace_id, s.listed AS listed, coalesce(m.value, '') AS value, coalesce(m.through, 0) AS through, coalesce(m.agent_id, '') AS agent_id, coalesce(t.sequence, 0) AS ended_through, coalesce(t.visible_at, 0) AS ended_ms, coalesce(t.event, '') AS ended_event FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id LEFT JOIN (SELECT session_id, max(sequence) AS sequence, visible_at, event FROM entries WHERE event LIKE '{\"TurnEnded\"%' GROUP BY session_id) t ON t.session_id = s.id WHERE s.provider = 'paseo';", params: {}, limits: Sqlite.default_query_limits })?
+	status_of = |row| {
+		listed : Try(Chat.Session, _)
+		listed = Json.parse(row.listed)
+		listed.map_ok(|session| session.status) ?? Running
+	}
+	candidates = rows.map(|row| { session_id: row.session_id, status: status_of(row), ended_through: row.ended_through.to_u64_wrap(), ended_ms: row.ended_ms, summarized_through: row.through.to_u64_wrap(), writing: row.agent_id != "" })
+	kinds_rows : List({ value : Str })
+	kinds_rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
+	kinds : Try(List(Chat.Agent), _)
+	kinds = Json.parse(kinds_rows.first().map_ok(|row| row.value) ?? "")
+	for session_id in PaseoSummaries.due(candidates, now) {
+		row = rows.find_first(|each| each.session_id == session_id)?
+		ended : Try(Chat.Event, _)
+		ended = Json.parse(row.ended_event)
+		asking_at =
+			match ended {
+				Ok(TurnEnded({ ended: at, .. })) => at
+				_ => ""
+			}
+		started_writing! = |agent_id| Sqlite.execute!({ db, query: "INSERT INTO summaries (session_id, agent_id, asking_through, asking_at, asked_at) VALUES (:session_id, :agent_id, :asking_through, :asking_at, :now) ON CONFLICT (session_id) DO UPDATE SET agent_id = excluded.agent_id, asking_through = excluded.asking_through, asking_at = excluded.asking_at, asked_at = excluded.asked_at;", params: { session_id, agent_id, asking_through: row.ended_through, asking_at, now } })
+		skipped! = || Sqlite.execute!({ db, query: "INSERT INTO summaries (session_id, through) VALUES (:session_id, :through) ON CONFLICT (session_id) DO UPDATE SET through = excluded.through;", params: { session_id, through: row.ended_through } })
+		match PaseoSummaries.model(kinds ?? [], row.agent, configured) {
+			Err(Missing) => skipped!()?
+			Ok(chosen) => {
+				previous : Try(Chat.Summary, _)
+				previous = Json.parse(row.value)
+				since = visible!(db, session_id, row.through.to_u64_wrap())?.keep_if(|entry| entry.sequence.to_i64_wrap() <= row.ended_through)
+				request_id = "liton-summary-create-${session_id}"
+				agent_id = Paseo.uuid("liton-summary ${session_id} ${row.ended_through.to_str()}")
+				workspace_id = if (row.workspace_id == "") Err(Missing) else Ok(row.workspace_id)
+				asked = PaseoSummaries.create_request({ agent_id, session_id, chosen, cwd: row.directory, workspace_id, asked: PaseoSummaries.prompt(previous.map_err(|_| Missing), since), request_id })
+				match Paseo.created(exchange!(connection, asked, request_id)?, request_id) {
+					Ok(made) => started_writing!(made)?
+					Err(err) => {
+						logged!("Paseo: starting the summary of ${session_id} failed: ${Str.inspect(err)}")
+						skipped!()?
+					}
+				}
+			}
+		}
+	}
+	Ok({})
+}
 
 ## Keeps the agents Paseo lists in the registry, in its order, with the
 ## title, status, directory and workspace of each, and drops those it no

@@ -762,6 +762,20 @@ kbd:empty { display: none; }
 .ticket-empty:empty { display: none; }
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* A session's summary over its timeline, as Paseo's inbox shows one: a heading that folds it, then Goal, Done and Now, each beside its icon. */
+.session-summary { flex: none; box-sizing: border-box; width: 100%; max-width: 820px; margin: 0 auto; padding: 6px 12px 8px; border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent); font-size: 13px; }
+.summary-toggle { display: flex; align-items: center; gap: 6px; padding: 2px 0; background: none; border: 0; color: var(--muted); font-weight: 600; }
+.summary-toggle:active { transform: none; }
+.summary-toggle::before { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform var(--fast) ease; }
+.summary-toggle.open::before { transform: rotate(90deg); }
+.summary-lines { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 4px; }
+.summary-line { display: contents; }
+.summary-label { display: flex; align-items: baseline; gap: 5px; color: var(--muted); font: 600 11.5px var(--font-mono); }
+.summary-label::before { content: ""; flex: none; width: 10px; height: 10px; align-self: center; background: currentColor; -webkit-mask: var(--icon-circle-check) center / contain no-repeat; mask: var(--icon-circle-check) center / contain no-repeat; }
+.summary-line.goal .summary-label::before { -webkit-mask: none; mask: none; box-sizing: border-box; border: 1.5px solid currentColor; border-radius: 50%; background: radial-gradient(circle, currentColor 0 1.5px, transparent 2px); }
+.summary-line.now .summary-label { color: var(--ok); }
+.summary-line.now .summary-label::before { -webkit-mask: none; mask: none; border-radius: 50%; width: 7px; height: 7px; margin: 0 1.5px; }
+.summary-text { min-width: 0; line-height: 1.4; }
 .timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
 /* The timeline is a column centred at 820px, at 15px as on a phone. */
 .timeline { list-style: none; box-sizing: border-box; width: 100%; max-width: 820px; margin: 0 auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.4; }

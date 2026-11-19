@@ -129,6 +129,7 @@ All notable changes to liton are documented in this file. The format is based on
 - New agent picks the model, mode and thinking level to start with from those its kind of agent offers, each its default unless you pick another; a kind that tells no models still takes one by name.
 - Shift+Tab in a chat's message box switches the agent to its next mode, as in Paseo; ⌘K offers Set mode…, Set model… and Set thinking… for the chat focused, and each choice by name, such as Set model to Opus 4.1.
 - While an agent works, what you send from its chat steers the turn it is working on instead of interrupting it, as the message box now says ("Steer: add to the turn it is working on"); Stop still interrupts it. chat.v1's `SendMessage` takes `while_running`, `Interrupt` or `Steer`.
+- A chat shows its session's summary over the timeline: its goal, what it has done and what happens now, a sentence each, as Paseo's inbox does. Click Summary to fold it; the chat's Summary option opens, folds or hides it. Workspaces, Sessions and the Inbox title each session by its goal once it has one (their Title option goes back to the first message). Paseo's sessions get one 30 s after each turn, written by a hidden agent Paseo runs on the agent's smallest model, such as Haiku: this needs Paseo 0.15 or later, costs one small-model run per summary, and `LITON_SUMMARY_MODEL` picks another model (`model` or `agent:model`) or `LITON_SUMMARY=off` turns them off. The mock's sessions get one after each turn.
 
 ### Changed
 
