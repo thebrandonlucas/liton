@@ -20,6 +20,7 @@ import Model
 import Keymap
 import Palette
 import Commands
+import Conversation
 import TicketDesk
 import Widgets
 import Dropdown
@@ -1611,79 +1612,57 @@ Liton := [].{
 		chip = shown.map(|{ pane, state }| Liton.model_chip(Model.session(state, Model.session_of(state, pane))))
 		Html.div(
 			"chat",
-			[
-				# Reversed in CSS, so the scroll position stays on the newest entry.
-				Html.div(
-					"timeline-scroll",
-					[
-						# Shown by CSS once scrolled up from the newest entry, where
-						# browsers can (animation-timeline). Jumping builds this pane's
-						# anchor anew, so it is the one `Liton.effects` focuses.
-						Html.div("jump", [Html.button("Jump to latest", [Engine.class("jump-to-latest")], model0.update_by(id, Model.jump_to_latest))]),
-						Engine.remount_on(id.map2(model0.signal(), |pane_id, state| Model.jumps_of(state, pane_id)), || Engine.element("span", [Engine.ref_s(id.map(|pane_id| "latest-${pane_id}")), Engine.attr("tabindex", "-1"), Engine.class("latest-anchor")], [])),
-						Html.ul(
-							[Engine.class("timeline"), Engine.attr("data-part", "timeline")],
-							[
-								Engine.each(
-									shown.map(|{ pane, state }| Model.chat_entries(state, pane)),
-									|entry| entry.fold.map_ok(|fold| fold.key) ?? entry.sequence.to_str(),
-									|row|
-										Html.li(
-											[Engine.class_s(row.field(|entry| if (entry.fold.is_ok()) "entry fold" else Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
-											[
-												Engine.switch(
-													row.field(|entry| if (entry.fold.is_ok()) Fold else if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
-													[Fold, Card, Message, Plain],
-													|kind|
-														match kind {
-															Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
-															Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }), shown.lift_row().map(|{ pane, .. }| Model.option(pane, "collapse") == "Full"))
-															Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
-															Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
-														},
-												),
-											],
-										),
-								),
-								Engine.each(
-									shown.map(|{ pane, state }| Model.unconfirmed(state, Model.session_of(state, pane))),
-									|sent| sent.serial.to_str(),
-									|row|
-										Html.li(
-											[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
-											[
-												Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
-												Html.span_s(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
-												Engine.when(
-													row.field(|sent| !sent.failed.is_empty()),
-													|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
-													|| Engine.text(""),
-												),
-											],
-										),
-								),
-								# While the agent works on a turn: a loader and for how long.
-								Engine.when(
-									shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
-									|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
-									|| Engine.text(""),
-								),
-							],
-						),
-						# Last, so shown first: the timeline is reversed. ui/ports.mjs
-						# presses it as it scrolls into view.
-						Engine.when(
-							shown.map(|{ pane, state }| Model.has_earlier(state, pane)),
-							|| Html.div("earlier", [Html.button("Show earlier", [Engine.class("show-earlier")], model0.update_by(id, Model.show_earlier))]),
-							|| Engine.text(""),
-						),
-					],
-				),
-				Engine.when(
-					shown.map(|{ pane, state }| Model.loading(state, Model.session_of(state, pane))),
-					|| Html.p("Loading…", "missing"),
-					|| Engine.text(""),
-				),
+			Conversation.timeline(
+				model0,
+				id,
+				{ class: "timeline", part: "timeline", jump: Bool.True, earlier: shown.map(|{ pane, state }| Model.has_earlier(state, pane)), loading: shown.map(|{ pane, state }| Model.loading(state, Model.session_of(state, pane))) },
+				[
+					Engine.each(
+						shown.map(|{ pane, state }| Model.chat_entries(state, pane)),
+						|entry| entry.fold.map_ok(|fold| fold.key) ?? entry.sequence.to_str(),
+						|row|
+							Html.li(
+								[Engine.class_s(row.field(|entry| if (entry.fold.is_ok()) "entry fold" else Liton.entry_class(entry.event))), Engine.attr("data-part", "bubble")],
+								[
+									Engine.switch(
+										row.field(|entry| if (entry.fold.is_ok()) Fold else if (entry.card.is_ok()) Card else if (Liton.message(entry.event).is_ok()) Message else Plain),
+										[Fold, Card, Message, Plain],
+										|kind|
+											match kind {
+												Fold => Liton.fold_line(model0.lift_row(), id.lift_row(), row.field(|entry| entry.fold ?? { key: "", summary: "", state: Done, open: Bool.False }))
+												Card => Liton.tool_card(row.field(|entry| entry.card ?? { tool: "", input: "", state: Running, output: "", folded: "" }), shown.lift_row().map(|{ pane, .. }| Model.option(pane, "collapse") == "Full"))
+												Message => Liton.markdown(model0.lift_row(), row.key().map2(id.lift_row(), |sequence, pane_id| "${pane_id}/${sequence}"), row.field(|entry| Markdown.blocks(Liton.message(entry.event) ?? "")))
+												Plain => Html.pre_s(row.field(|entry| Liton.describe(entry.event)), [])
+											},
+									),
+								],
+							),
+					),
+					Engine.each(
+						shown.map(|{ pane, state }| Model.unconfirmed(state, Model.session_of(state, pane))),
+						|sent| sent.serial.to_str(),
+						|row|
+							Html.li(
+								[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
+								[
+									Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
+									Html.span_s(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
+									Engine.when(
+										row.field(|sent| !sent.failed.is_empty()),
+										|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
+										|| Engine.text(""),
+									),
+								],
+							),
+					),
+					# While the agent works on a turn: a loader and for how long.
+					Engine.when(
+						shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
+						|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
+						|| Engine.text(""),
+					),
+				],
+			).concat([
 				Engine.when(
 					pending.map(|waiting| waiting.is_ok()),
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
@@ -1715,7 +1694,7 @@ Liton := [].{
 						),
 					],
 				),
-			],
+			]),
 		)
 	}
 
