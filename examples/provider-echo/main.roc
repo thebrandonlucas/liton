@@ -93,7 +93,7 @@ called! = |db, request| {
 		match call {
 			Ok({ capability: "chat.v1", request: ListSessions, .. }) => Ok(Sessions(sessions))
 			Ok({ capability: "chat.v1", request: WatchSession({ session_id, after }), .. }) if known(session_id) => Ok(Entries(entries!(db, session_id, after)?))
-			Ok({ capability: "chat.v1", request: SendMessage({ session_id: "echo", text }), .. }) => {
+			Ok({ capability: "chat.v1", request: SendMessage({ session_id: "echo", text, .. }), .. }) => {
 				last = entries!(db, "echo", 0)?.last().map_ok(|entry| entry.sequence) ?? 0
 				for (event, offset) in [(UserMessage({ text: text }), 1), (AgentMessage({ text: "You said: ${text}" }), 2)] {
 					Sqlite.execute!({ db, query: "INSERT INTO entries (session_id, sequence, event) VALUES ('echo', :sequence, :event);", params: { sequence: (last + offset).to_i64_wrap(), event: Json.to_str(event) } })?

@@ -31,6 +31,22 @@ Paseo := [].{
 		}
 	}
 
+	## A number Paseo sends, such as a cost, read as a Dec, or none when it
+	## is one a Dec can't hold, so an odd number costs the listing nothing.
+	Number := [Number(Dec), NotNumber].{
+		parser_for = |encoding| {
+			parse_number = Dec.parser_for(encoding)
+			|state|
+				match parse_number(state) {
+					Ok(parsed) => Ok({ value: Number(parsed.value), rest: parsed.rest })
+					Err(_) => Ok({ value: NotNumber, rest: encoding.skip_record_field(state)? })
+				}
+		}
+	}
+
+	## What an agent's last turn used, as Paseo's `lastUsage` tells it.
+	Usage : { input_tokens : Try(Number, [Missing]), cached_input_tokens : Try(Number, [Missing]), output_tokens : Try(Number, [Missing]), total_cost_usd : Try(Number, [Missing]), context_window_max_tokens : Try(Number, [Missing]), context_window_used_tokens : Try(Number, [Missing]) }
+
 	## The object a `Loose` value can be.
 	LooseObject := { message : Try(Str, [Missing]), content : Try(Str, [Missing]) }.{
 		parser_for : _
@@ -109,10 +125,15 @@ Paseo := [].{
 	initial = { epoch: "", cursor: 0, emitted_through: 0, open_calls: [], permissions: [], status: Idle, turn: Err(Missing) }
 
 	## Prompts an agent, interrupting it if it is running, as Paseo's own app
-	## does. Paseo answers once the agent took the prompt (see `sent`).
-	send_request : Str, Str, Str -> Str
-	send_request = |agent_id, text, request_id|
-		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text } })
+	## does, or steering its turn as `while_running` asks (Paseo's
+	## `activeTurnBehavior`, from 0.5). Paseo answers once the agent took the
+	## prompt (see `sent`).
+	send_request : Str, Str, Try([Interrupt, Steer], [Missing]), Str -> Str
+	send_request = |agent_id, text, while_running, request_id| {
+		behavior : Try(Str, [Missing])
+		behavior = while_running.map_ok(|asked| if (asked == Steer) "steer" else "interrupt")
+		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text, activeTurnBehavior: behavior } })
+	}
 
 	## Whether a `send_agent_message_response` says the agent took the prompt.
 	sent : Str, Str -> Try({}, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
@@ -195,11 +216,29 @@ Paseo := [].{
 	## `workspace_id` if any, as `agent_id`: an id liton picks, which makes
 	## the same request sent again start no second agent. Paseo answers once
 	## it made the agent (see `created`).
-	create_request : { agent_id : Str, agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), prompt : Str, request_id : Str } -> Str
-	create_request = |{ agent_id, agent, cwd, workspace_id, model, prompt, request_id }| {
+	create_request : { agent_id : Str, agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str, request_id : Str } -> Str
+	create_request = |{ agent_id, agent, cwd, workspace_id, model, mode, thinking, prompt, request_id }| {
 		initial_prompt : Try(Str, [Missing])
 		initial_prompt = if (prompt.is_empty()) Err(Missing) else Ok(prompt)
-		Json.to_str({ type: "session", message: { type: "agent.create.request", requestId: request_id, agentId: agent_id, idempotencyKey: agent_id, workspaceId: workspace_id, initialPrompt: initial_prompt, config: { provider: agent, cwd, model } } })
+		Json.to_str({ type: "session", message: { type: "agent.create.request", requestId: request_id, agentId: agent_id, idempotencyKey: agent_id, workspaceId: workspace_id, initialPrompt: initial_prompt, config: { provider: agent, cwd, model, modeId: mode, thinkingOptionId: thinking } } })
+	}
+
+	## The requests that switch an agent's model, mode or thinking level,
+	## those named, each with the type Paseo answers it with (see
+	## `accepted`): one `agent.config.apply.request` where Paseo has the
+	## feature, else one single request for each, the model first, since
+	## its thinking levels are the model's.
+	configure_requests : Features, Str, { model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }, Str -> List({ request : Str, answer : Str, request_id : Str })
+	configure_requests = |features, agent_id, { model, mode, thinking }, request_id| {
+		if features.agent_config_apply {
+			[{ request: Json.to_str({ type: "session", message: { type: "agent.config.apply.request", agentId: agent_id, requestId: request_id, config: { modelId: model, modeId: mode, thinkingOptionId: thinking } } }), answer: "agent.config.apply.response", request_id }]
+		} else {
+			single = |chosen, name, build| chosen.map_ok(|id| [{ request: build(id, "${request_id}-${name}"), answer: "set_agent_${name}_response", request_id: "${request_id}-${name}" }]) ?? []
+			[]
+				.concat(single(model, "model", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_model_request", agentId: agent_id, requestId: asked, modelId: id } })))
+				.concat(single(mode, "mode", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_mode_request", agentId: agent_id, requestId: asked, modeId: id } })))
+				.concat(single(thinking, "thinking", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_thinking_request", agentId: agent_id, requestId: asked, thinkingOptionId: id } })))
+		}
 	}
 
 	## The id of the agent an `agent.create.response` says Paseo made.
@@ -223,7 +262,49 @@ Paseo := [].{
 	agent_kinds = |text, request_id| {
 		answered : Try({ message : { payload : { providers : List({ provider : Str, available : Bool }) } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "list_available_providers_response", request_id)?)
-		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| { provider: Paseo.provider.id, agent: listed.provider }))
+		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| Chat.agent_kind({ provider: Paseo.provider.id, agent: listed.provider })))
+	}
+
+	## Paseo's providers with their models and modes, as Paseo knows them
+	## at the time (see `with_choices`).
+	providers_snapshot_request : Str -> Str
+	providers_snapshot_request = |request_id| Json.to_str({ type: "session", message: { type: "get_providers_snapshot_request", requestId: request_id } })
+
+	## A provider as a `get_providers_snapshot_response` lists it.
+	ProviderChoices : { provider : Str, models : Try(List(ProviderModel), [Missing]), modes : Try(List(Chat.Option), [Missing]), default_mode_id : Try(Try(Str, [Null]), [Missing]) }
+
+	ProviderModel : { id : Str, label : Str, is_default : Try(Bool, [Missing]), is_selectable : Try(Bool, [Missing]), context_window_max_tokens : Try(Number, [Missing]), thinking_options : Try(List({ id : Str, label : Str, is_default : Try(Bool, [Missing]) }), [Missing]), default_thinking_option_id : Try(Str, [Missing]) }
+
+	## The kinds of agent `kinds` with the models, thinking levels and modes
+	## of each provider a `get_providers_snapshot_response` lists, those a
+	## user can pick. A level is the default where the model's
+	## `defaultThinkingOptionId` names it, or it says it is.
+	with_choices : List(Chat.Agent), Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	with_choices = |kinds, text, request_id| {
+		answered : Try({ message : { payload : { entries : List(ProviderChoices) } } }, _)
+		answered = Json.parser_camel()(Paseo.write_answer(text, "get_providers_snapshot_response", request_id)?)
+		entries = answered?.message.payload.entries
+		model = |offered| {
+			default_level = offered.default_thinking_option_id ?? ""
+			{
+				id: offered.id,
+				label: offered.label,
+				default: offered.is_default ?? Bool.False,
+				context_max: match offered.context_window_max_tokens {
+					Ok(Number(tokens)) => tokens.round_to_u64_try().map_err(|_| Missing)
+					_ => Err(Missing)
+				},
+				thinking: (offered.thinking_options ?? []).map(|level| { id: level.id, label: level.label, default: level.is_default ?? (level.id == default_level) }),
+			}
+		}
+		Ok(
+			kinds.map(
+				|kind| match entries.find_first(|entry| entry.provider == kind.agent) {
+					Ok(entry) => { ..kind, models: entry.models.map_ok(|models| models.keep_if(|offered| offered.is_selectable ?? Bool.True).map(model)), modes: entry.modes, default_mode: entry.default_mode_id.map_ok(|mode| mode.map_err(|_| Missing)) ?? Err(Missing) }
+					Err(_) => kind
+				},
+			),
+		)
 	}
 
 	## A version 4 UUID, as Paseo takes for an agent's id, from `seed`.
@@ -322,6 +403,11 @@ Paseo := [].{
 		updated_at : Str,
 		last_user_message_at : Try(Str, [Null]),
 		attention_timestamp : Try(Try(Str, [Null]), [Missing]),
+		current_mode_id : Try(Try(Str, [Null]), [Missing]),
+		available_modes : Try(List(Chat.Option), [Missing]),
+		thinking_option_id : Try(Try(Str, [Null]), [Missing]),
+		effective_thinking_option_id : Try(Try(Str, [Null]), [Missing]),
+		last_usage : Try(Usage, [Missing]),
 	}
 
 	## Asks for as many agents as Paseo lists at once, without archived ones.
@@ -335,7 +421,9 @@ Paseo := [].{
 	## wants because it finished, until you look, is finished. An untitled one
 	## goes by its id's first 7 characters, as Paseo's short id. Each session
 	## tells its model, workspace, the branch Paseo placed it on, when its
-	## running turn started and when it last changed, as far as Paseo does.
+	## running turn started and when it last changed, its mode and the modes
+	## it has, the thinking level it runs at and what its last turn used, as
+	## far as Paseo does.
 	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
 	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
 	agents_answer = |text, request_id| {
@@ -353,11 +441,35 @@ Paseo := [].{
 						branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
 						running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
 						updated: Ok(agent.updated_at),
+						mode: optional(agent.current_mode_id ?? Err(Null)),
+						thinking: match (agent.effective_thinking_option_id, agent.thinking_option_id) {
+							(Ok(Ok(effective)), _) => Ok(effective)
+							(_, Ok(Ok(chosen))) => Ok(chosen)
+							_ => Err(Missing)
+						},
+						modes: if ((agent.available_modes ?? []).is_empty()) Err(Missing) else agent.available_modes,
+						usage: agent.last_usage.map_ok(Paseo.usage),
 					}
 					{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
 				},
 			),
 		)
+	}
+
+	## An agent's `lastUsage` as chat.v1's, its token counts whole.
+	usage : Usage -> Chat.Usage
+	usage = |used| {
+		amount = |field|
+			match field {
+				Ok(Number(value)) => Ok(value)
+				_ => Err(Missing)
+			}
+		tokens = |field|
+			match amount(field) {
+				Ok(value) => value.round_to_u64_try().map_err(|_| Missing)
+				Err(Missing) => Err(Missing)
+			}
+		{ context_used: tokens(used.context_window_used_tokens), context_max: tokens(used.context_window_max_tokens), input_tokens: tokens(used.input_tokens), cached_input_tokens: tokens(used.cached_input_tokens), output_tokens: tokens(used.output_tokens), cost_usd: amount(used.total_cost_usd) }
 	}
 
 	## The ids of the `count` sessions that changed last, by `updated`, the
@@ -419,15 +531,20 @@ Paseo := [].{
 	protocol : Str -> Str
 	protocol = |password| "paseo.bearer.${password}"
 
+	## What liton uses of the features a Paseo's `server_info` lists:
+	## whether it applies an agent's config in one request (from 0.3.2).
+	Features : { agent_config_apply : Bool }
+
 	## What a message after `hello` says of it: Paseo welcomes a client with
-	## its `server_info`, or refuses it with `hello.rejected` and a reason.
-	greeting : Str -> [Welcomed, Rejected(Str), NotGreeting]
+	## its `server_info` and its features, or refuses it with
+	## `hello.rejected` and a reason.
+	greeting : Str -> [Welcomed(Features), Rejected(Str), NotGreeting]
 	greeting = |text| {
-		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
 		parsed = Json.parser_camel()(text)
 		match parsed {
 			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
-			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info") }) }), .. }) => Welcomed
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False })
 			_ => NotGreeting
 		}
 	}
@@ -809,10 +926,10 @@ expect !Paseo.answers_request("{\"type\":\"pong\"}", "r1")
 
 expect {
 	not_git = "\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null,\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"
-	agent = |fields, checkout| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"currentModeId\":null,\"availableModes\":[],\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{${checkout}}}}"
+	agent = |fields, checkout| "{\"agent\":{\"provider\":\"claude\",\"cwd\":\"/work\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"lastUserMessageAt\":null,\"capabilities\":{},\"persistence\":null,\"labels\":{},${fields}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{${checkout}}}}"
 	entries = [
-		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
-		agent("\"id\":\"a3\",\"model\":null,\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
+		agent("\"id\":\"a1b2c3d4e5\",\"model\":\"opus\",\"thinkingOptionId\":null,\"effectiveThinkingOptionId\":\"high\",\"currentModeId\":\"plan\",\"availableModes\":[{\"id\":\"default\",\"label\":\"Default\",\"icon\":\"shield\"},{\"id\":\"plan\",\"label\":\"Plan\"}],\"lastUsage\":{\"inputTokens\":1200,\"outputTokens\":300,\"totalCostUsd\":0.0125,\"contextWindowMaxTokens\":200000,\"contextWindowUsedTokens\":41000.0},\"activeTurn\":{\"turnId\":\"t1\",\"startedAt\":\"2026-01-01T00:01:00.000Z\"},\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":null,\"status\":\"running\",\"pendingPermissions\":[]", "\"cwd\":\"/work\",\"isGit\":true,\"currentBranch\":\"fix-login\",\"remoteUrl\":null,\"isPaseoOwnedWorktree\":false,\"mainRepoRoot\":null"),
+		agent("\"id\":\"a3\",\"model\":null,\"currentModeId\":null,\"availableModes\":[],\"activeTurn\":null,\"updatedAt\":\"2026-01-01T00:00:00.000Z\",\"workspaceId\":\"w1\",\"title\":\"Done\",\"status\":\"idle\",\"pendingPermissions\":[],\"requiresAttention\":true,\"attentionReason\":\"finished\"", not_git),
 		agent("\"id\":\"a4\",\"model\":null,\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"title\":\"Asks\",\"status\":\"running\",\"pendingPermissions\":[{\"id\":\"p1\",\"provider\":\"claude\",\"name\":\"Edit\",\"kind\":\"tool\"}]", not_git),
 	]
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
@@ -821,7 +938,7 @@ expect {
 		== Ok([
 			{ session: listed("a3", "Done", Finished, Ok("w1"), "2026-01-01T00:00:00.000Z"), directory: "/work", workspace_id: "w1" },
 			{ session: listed("a4", "Asks", AwaitingPermission, Err(Missing), "2026-01-02T00:00:00.000Z"), directory: "/work", workspace_id: "" },
-			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z") }, directory: "/work", workspace_id: "w1" },
+			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z"), mode: Ok("plan"), thinking: Ok("high"), modes: Ok([{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }]), usage: Ok({ context_used: Ok(41_000), context_max: Ok(200_000), input_tokens: Ok(1_200), cached_input_tokens: Err(Missing), output_tokens: Ok(300), cost_usd: Ok(0.0125) }) }, directory: "/work", workspace_id: "w1" },
 		])
 		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
@@ -842,7 +959,8 @@ request = |message| "{\"message\":${message},\"type\":\"session\"}"
 
 expect Paseo.permission_answer("a1", "p1", Bool.False, Err(Missing)) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
 expect Paseo.permission_answer("a1", "p1", Bool.True, Ok("implement")) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"allow\",\"selectedActionId\":\"implement\"},\"type\":\"agent_permission_response\"}")
-expect Paseo.send_request("a1", "Go on", "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Go on", Err(Missing), "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Also the docs", Ok(Steer), "w1") == request("{\"activeTurnBehavior\":\"steer\",\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Also the docs\",\"type\":\"send_agent_message_request\"}")
 
 expect {
 	answer = |fields| session("{\"type\":\"send_agent_message_response\",\"payload\":{\"requestId\":\"w1\",\"agentId\":\"a1\",${fields}}}")
@@ -898,7 +1016,15 @@ expect {
 
 expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
 
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true}}}")) == Welcomed({ agent_config_apply: Bool.True })
+
+# One request where Paseo applies a config at once, else one for each change.
+expect {
+	changes = { model: Ok("opus"), mode: Err(Missing), thinking: Ok("high") }
+	Paseo.configure_requests({ agent_config_apply: Bool.True }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
+		and Paseo.configure_requests({ agent_config_apply: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
+}
 expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting
 expect Paseo.greeting("{\"type\":\"pong\"}") == NotGreeting
@@ -930,8 +1056,10 @@ expect {
 }
 
 expect
-	Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Ok("wks_1"), model: Err(Missing), prompt: "", request_id: "r1" })
+	Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Ok("wks_1"), model: Err(Missing), mode: Err(Missing), thinking: Err(Missing), prompt: "", request_id: "r1" })
 		== "{\"message\":{\"agentId\":\"a1\",\"config\":{\"cwd\":\"/src/app\",\"provider\":\"claude\"},\"idempotencyKey\":\"a1\",\"requestId\":\"r1\",\"type\":\"agent.create.request\",\"workspaceId\":\"wks_1\"},\"type\":\"session\"}"
+		and Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Err(Missing), model: Ok("opus"), mode: Ok("plan"), thinking: Ok("high"), prompt: "", request_id: "r1" })
+			== "{\"message\":{\"agentId\":\"a1\",\"config\":{\"cwd\":\"/src/app\",\"modeId\":\"plan\",\"model\":\"opus\",\"provider\":\"claude\",\"thinkingOptionId\":\"high\"},\"idempotencyKey\":\"a1\",\"requestId\":\"r1\",\"type\":\"agent.create.request\"},\"type\":\"session\"}"
 
 expect {
 	made = "{\"type\":\"session\",\"message\":{\"type\":\"agent.create.response\",\"payload\":{\"requestId\":\"r1\",\"agent\":{\"id\":\"a1\",\"provider\":\"claude\"},\"error\":null}}}"
@@ -939,4 +1067,12 @@ expect {
 	Paseo.created(made, "r1") == Ok("a1") and Paseo.created(refused, "r1") == Err(Refused("Unknown provider")) and Paseo.created(made, "r2") == Err(OtherMessage)
 }
 
-expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([{ provider: "paseo", agent: "claude" }])
+expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([Chat.agent_kind({ provider: "paseo", agent: "claude" })])
+
+expect {
+	kinds = [Chat.agent_kind({ provider: "paseo", agent: "claude" }), Chat.agent_kind({ provider: "paseo", agent: "codex" })]
+	text = session("{\"type\":\"get_providers_snapshot_response\",\"payload\":{\"requestId\":\"r1\",\"generatedAt\":\"x\",\"entries\":[{\"provider\":\"claude\",\"status\":\"ready\",\"models\":[{\"provider\":\"claude\",\"id\":\"opus\",\"label\":\"Opus\",\"isDefault\":true,\"contextWindowMaxTokens\":200000,\"thinkingOptions\":[{\"id\":\"low\",\"label\":\"Low\"},{\"id\":\"high\",\"label\":\"High\"}],\"defaultThinkingOptionId\":\"high\"},{\"provider\":\"claude\",\"id\":\"old\",\"label\":\"Old\",\"isSelectable\":false}],\"modes\":[{\"id\":\"plan\",\"label\":\"Plan\",\"icon\":\"map\"}],\"defaultModeId\":\"plan\"},{\"provider\":\"pi\",\"status\":\"loading\"}]}}")
+	claude = { ..Chat.agent_kind({ provider: "paseo", agent: "claude" }), models: Ok([{ id: "opus", label: "Opus", default: Bool.True, context_max: Ok(200_000), thinking: [{ id: "low", label: "Low", default: Bool.False }, { id: "high", label: "High", default: Bool.True }] }]), modes: Ok([{ id: "plan", label: "Plan" }]), default_mode: Ok("plan") }
+	Paseo.with_choices(kinds, text, "r1") == Ok([claude, Chat.agent_kind({ provider: "paseo", agent: "codex" })])
+		and Paseo.with_choices(kinds, text, "r2").map_ok(|_| {}) == Err(OtherMessage)
+}

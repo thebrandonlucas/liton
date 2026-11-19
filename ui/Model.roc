@@ -300,16 +300,17 @@ Model := [].{
 	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
 
 	## A Workspaces pane's form: an agent to start in the workspace `place`,
-	## or a workspace to create of the project `place`. `failed` says why the
-	## daemon didn't, "" until it refuses.
-	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
+	## or a workspace to create of the project `place`. An agent's model,
+	## mode and thinking level are "" for its provider's defaults. `failed`
+	## says why the daemon didn't, "" until it refuses.
+	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, mode : Str, thinking : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
 
 	## An agent started or a workspace created, from `form`, until a listing
 	## has it; `id` is "" until the daemon answers with it.
 	Creating : { serial : U64, form : Form, title : Str, id : Str }
 
 	closed_form : Form
-	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
+	closed_form = { pane: "", kind: Closed, place: "", agent: "", model: "", mode: "", thinking: "", prompt: "", worktree: Bool.True, branch: "", failed: "" }
 
 	## A poll of `subjects`, numbered by `serial`, as `topics` after the
 	## cursors the UI had.
@@ -803,6 +804,10 @@ Model := [].{
 		each_workspace = |change_one| { ..state, workspaces: { ..listed, workspaces: listed.workspaces.map(change_one) } }
 		match change {
 			Chat(Rename({ session_id, title })) => { ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, title } else listed_session) }
+			Chat(Configure({ session_id, model, mode, thinking })) => {
+				named = |chosen, kept| if (chosen.is_ok()) chosen else kept
+				{ ..state, sessions: state.sessions.map(|listed_session| if (listed_session.id == session_id) { ..listed_session, model: named(model, listed_session.model), mode: named(mode, listed_session.mode), thinking: named(thinking, listed_session.thinking) } else listed_session) }
+			}
 			Workspaces(Rename({ workspace_id, name })) => each_workspace(|workspace| if (workspace.id == workspace_id) { ..workspace, name } else workspace)
 			Workspaces(RenameProject({ project_id, name })) => { ..state, workspaces: { ..listed, projects: listed.projects.map(|project| if (project.id == project_id) { ..project, name } else project) } }
 			Chat(Archive({ session_id })) => { ..each_workspace(|workspace| { ..workspace, session_ids: workspace.session_ids.drop_if(|id| id == session_id) }), sessions: state.sessions.drop_if(|listed_session| listed_session.id == session_id) }
@@ -814,6 +819,113 @@ Model := [].{
 			_ => state
 		}
 	}
+
+	## What a session's composer chip switches.
+	Setting : [Mode, Model, Thinking]
+
+	## The kind of agent a session runs, as its provider lists it.
+	agent_of : State, Chat.Session -> Try(Chat.Agent, [NotListed])
+	agent_of = |state, shown_session| state.agents.find_first(|kind| kind.provider == shown_session.provider and kind.agent == shown_session.agent).map_err(|_| NotListed)
+
+	## A session's setting and what it can switch to, each a value and its
+	## label: its modes, its agent's models, or the thinking levels of the
+	## model it runs. A value none of them is comes first, by its id.
+	setting : State, Str, Setting -> { value : Str, label : Str, choices : List({ value : Str, label : Str }) }
+	setting = |state, session_id, which| {
+		shown_session = Model.session(state, session_id)
+		models = Model.agent_of(state, shown_session).map_ok(|kind| kind.models ?? []) ?? []
+		(current, offered) =
+			match which {
+				Mode => (shown_session.mode, (shown_session.modes ?? (Model.agent_of(state, shown_session).map_ok(|kind| kind.modes ?? []) ?? [])).map(|mode| { value: mode.id, label: mode.label }))
+				Model => (shown_session.model, models.map(|model| { value: model.id, label: model.label }))
+				Thinking => (shown_session.thinking, (models.find_first(|model| Ok(model.id) == shown_session.model).map_ok(|model| model.thinking) ?? []).map(|level| { value: level.id, label: level.label }))
+			}
+		value = current ?? ""
+		listed_choices = if (value.is_empty() or offered.any(|choice| choice.value == value)) offered else offered.prepend({ value, label: value })
+		{ value, label: listed_choices.find_first(|choice| choice.value == value).map_ok(|choice| choice.label) ?? value, choices: listed_choices }
+	}
+
+	## Switches a session's mode, model or thinking level, shown at once as
+	## pending (`Model.configuring`) until a listing shows it, or undone
+	## with why.
+	configure : State, Str, Setting, Str -> State
+	configure = |state, session_id, which, value| {
+		chosen = if (value.is_empty()) Err(Missing) else Ok(value)
+		if session_id.is_empty() or value.is_empty() or Model.setting(state, session_id, which).value == value {
+			state
+		} else {
+			match which {
+				Mode => Model.edit(state, Chat(Configure({ session_id, model: Err(Missing), mode: chosen, thinking: Err(Missing) })))
+				Model => Model.edit(state, Chat(Configure({ session_id, model: chosen, mode: Err(Missing), thinking: Err(Missing) })))
+				Thinking => Model.edit(state, Chat(Configure({ session_id, model: Err(Missing), mode: Err(Missing), thinking: chosen })))
+			}
+		}
+	}
+
+	## What a session's last turn used, as its composer's meter shows it:
+	## the share of its context window filled, in percent, and each count
+	## its provider told, said for a person. None while it tells none.
+	usage_shown : State, Str -> Try({ percent : U64, context : Str, input : Str, cached : Str, output : Str, cost : Str }, [Untold])
+	usage_shown = |state, session_id|
+		match Model.session(state, session_id).usage {
+			Err(Missing) => Err(Untold)
+			Ok(used) => {
+				said = |count| count.map_ok(Model.tokens_text) ?? ""
+				percent = match (used.context_used, used.context_max) {
+					(Ok(filled), Ok(most)) if most > 0 => U64.min(100, (filled * 100 + most // 2) // most)
+					_ => 0
+				}
+				context = match (used.context_used, used.context_max) {
+					(Ok(filled), Ok(most)) => "${Model.tokens_text(filled)} of ${Model.tokens_text(most)} (${percent.to_str()}%)"
+					(Ok(filled), _) => Model.tokens_text(filled)
+					_ => ""
+				}
+				Ok({ percent, context, input: said(used.input_tokens), cached: said(used.cached_input_tokens), output: said(used.output_tokens), cost: used.cost_usd.map_ok(Model.dollars_text) ?? "" })
+			}
+		}
+
+	## A count of tokens as a person says it: 950, 41.2k, 1.2M.
+	tokens_text : U64 -> Str
+	tokens_text = |count| {
+		tenths = |unit| {
+			scaled = (count * 10 + unit // 2) // unit
+			if (scaled % 10 == 0 or scaled >= 1_000) (scaled // 10).to_str() else "${(scaled // 10).to_str()}.${(scaled % 10).to_str()}"
+		}
+		if (count < 1_000) count.to_str() else if (count < 999_950) "${tenths(1_000)}k" else "${tenths(1_000_000)}M"
+	}
+
+	## US dollars to the cent: $0.42, or under a cent, <$0.01.
+	dollars_text : Dec -> Str
+	dollars_text = |amount| {
+		cents = (amount * 100).round_to_u64_try() ?? 0
+		padding = if (cents % 100 < 10) "0" else ""
+		if (cents == 0 and amount > 0) "<$0.01" else "$${(cents // 100).to_str()}.${padding}${(cents % 100).to_str()}"
+	}
+
+	## Switches the session a chat pane shows to the mode after its own, the
+	## first after the last, as Shift+Tab does in its composer.
+	cycle_mode : State, Str -> State
+	cycle_mode = |state, pane_id| {
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		{ value, choices: modes, .. } = Model.setting(state, session_id, Mode)
+		next = modes.find_first_index(|choice| choice.value == value).map_ok(|at| (at + 1) % modes.len()) ?? 0
+		Model.configure(state, session_id, Mode, modes.get(next).map_ok(|choice| choice.value) ?? "")
+	}
+
+	## Whether a switch of a session's setting is on its way.
+	configuring : State, Str, Setting -> Bool
+	configuring = |state, session_id, which|
+		state.editing.any(
+			|asked| match asked.edit {
+				Chat(Configure(configured)) if configured.session_id == session_id =>
+					match which {
+						Mode => configured.mode.is_ok()
+						Model => configured.model.is_ok()
+						Thinking => configured.thinking.is_ok()
+					}
+				_ => Bool.False
+			},
+		)
 
 	## Copies a code block, shown as copied at once.
 	copy : State, { key : Str, text : Str } -> State
@@ -1838,6 +1950,9 @@ Model := [].{
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
+		# The kinds of agent, with their models and modes, for chat panes'
+		# composers, followed last.
+		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
 		# The rooms, and the messages and members of the room each Room or
@@ -1848,7 +1963,7 @@ Model := [].{
 		}
 		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread", "members"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget != "rooms").join_map(room_topics).prepend(RoomList) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2128,7 +2243,8 @@ Model := [].{
 	set_draft = |state, pane_id, text| { ..state, drafts: state.drafts.drop_if(|found| found.pane == pane_id).append({ pane: pane_id, text }) }
 
 	## Sends a pane's draft to the session the pane shows, and clears its
-	## composer.
+	## composer. While its agent works, the draft steers the turn it works
+	## on; Stop interrupts it.
 	submit : State, Str -> State
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
@@ -2136,7 +2252,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing) }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
@@ -3747,6 +3863,44 @@ Model := [].{
 		state.agents.keep_if(|kind| kind.provider == provider).map(|kind| kind.agent)
 	}
 
+	## What the form's agent offers, each a value and its label: its models,
+	## its modes and the thinking levels of the model picked, or else of its
+	## default one; and what each "" picks, by its label.
+	form_choices : State, Form -> { models : List({ value : Str, label : Str }), modes : List({ value : Str, label : Str }), levels : List({ value : Str, label : Str }), defaults : { model : Str, mode : Str, thinking : Str } }
+	form_choices = |state, form| {
+		provider = state.workspaces.workspaces.find_first(|listed| listed.id == form.place).map_ok(|listed| listed.provider) ?? ""
+		kind = state.agents.find_first(|offered| offered.provider == provider and offered.agent == form.agent)
+		models = kind.map_ok(|offered| offered.models ?? []) ?? []
+		modes = kind.map_ok(|offered| offered.modes ?? []) ?? []
+		default_model = models.find_first(|offered| offered.default)
+		picked = if (form.model.is_empty()) default_model else models.find_first(|offered| offered.id == form.model)
+		levels = picked.map_ok(|offered| offered.thinking) ?? []
+		default_mode = kind.map_ok(|offered| offered.default_mode ?? "") ?? ""
+		said = |label| if (label.is_empty()) "Default" else "${label} (default)"
+		{
+			models: models.map(|offered| { value: offered.id, label: offered.label }),
+			modes: modes.map(|offered| { value: offered.id, label: offered.label }),
+			levels: levels.map(|level| { value: level.id, label: level.label }),
+			defaults: {
+				model: said(default_model.map_ok(|offered| offered.label) ?? ""),
+				mode: said(modes.find_first(|offered| offered.id == default_mode).map_ok(|offered| offered.label) ?? ""),
+				thinking: said(levels.find_first(|level| level.default).map_ok(|level| level.label) ?? ""),
+			},
+		}
+	}
+
+	## The form with another kind of agent picked, its model, mode and
+	## thinking level back to that agent's defaults; or another model, its
+	## thinking level too unless the model has it.
+	pick_agent : Form, Str -> Form
+	pick_agent = |form, agent| if (agent == form.agent) form else { ..form, agent, model: "", mode: "", thinking: "" }
+
+	pick_model : State, Form, Str -> Form
+	pick_model = |state, form, model| {
+		picked = { ..form, model }
+		if (Model.form_choices(state, picked).levels.any(|level| level.value == form.thinking)) picked else { ..picked, thinking: "" }
+	}
+
 	## Starts the agent or creates the workspace the form describes, shown
 	## at once as starting, and closes the form. An agent is focused, so the
 	## chat shows it starting.
@@ -3758,7 +3912,7 @@ Model := [].{
 		prompt = form.prompt.trim()
 		if form.kind == Agent {
 			call : { capability : Str, request : Chat.Request }
-			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), prompt }) }
+			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), mode: optional(form.mode), thinking: optional(form.thinking), prompt }) }
 			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
 			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
 			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))
@@ -4822,3 +4976,6 @@ expect {
 		and Model.focused(Model.open(first, Session("s3")), [Workspace]) == Workspace("w2")
 		and Model.workspace_rows(first, Model.pane(first, "pane-1")).map(|row| row.key) == ["group:p1", "workspace:w1", "s3"]
 }
+
+expect [0, 950, 1_000, 41_234, 200_000, 999_960, 1_250_000].map(Model.tokens_text) == ["0", "950", "1k", "41.2k", "200k", "1M", "1.3M"]
+expect [0.42, 0.004, 0, 12.5].map(Model.dollars_text) == ["$0.42", "<$0.01", "$0.00", "$12.50"]
