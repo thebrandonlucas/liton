@@ -3,7 +3,8 @@
 ## pointer (`pointer`, ui/ports.mjs): where it is, for the ghost following
 ## it, and the tile and tab under it as the layout was when the drag began,
 ## so the layout shown as if dropped there (`previewed`) doesn't move what
-## the pointer is over.
+## the pointer is over. A line between tiles is dragged alike, the tracks
+## beside it resized as it moves.
 import pf.Engine
 import pf.Port
 import Model
@@ -11,20 +12,27 @@ import Model
 Drag := [].{
 
 	## Nothing held; a press on the tab or header of pane `pane`; then the
-	## drag, with the pointer as the page last reported it.
-	Gesture : [Idle, Pressed({ pane : Str, pointer : U32 }), Dragging({ pane : Str, pointer : U32, at : Pointer })]
+	## drag, with the pointer as the page last reported it; or a line between
+	## tiles held, and once moved how far across the two tracks beside it,
+	## in ten thousandths, the pointer is.
+	Gesture : [Idle, Pressed({ pane : Str, pointer : U32 }), Dragging({ pane : Str, pointer : U32, at : Pointer }), Resizing({ pointer : U32, line : Line, share : [Unmoved, At(U64)] })]
+
+	## A column line or a row line of the grid, by its number.
+	Line : [Across(U64), Down(U64)]
 
 	## What the page reports of the pointer pressed: moved, released or
 	## cancelled, where it is on the screen, in pixels, and the tile and tab
 	## under it (their `data-tile` and `data-tab`) as the layout was when the
 	## press began, with how far across and down that tab or tile it is, in
-	## ten thousandths; "" outside them. It reports a release only after a
-	## move.
+	## ten thousandths; "" outside them. While a line is held, `across` or
+	## `down` is instead how far across the two tracks beside it the pointer
+	## is. It reports a release only after a move.
 	Pointer : { phase : [Moved, Released, Cancelled], x : I32, y : I32, tile : Str, tab : Str, across : U16, down : U16 }
 
-	## The pointer pressed on a pane's tab or header, reported until it is
+	## The pointer pressed on a pane's tab or header, or on the column line
+	## `column` or row line `row` (0 for neither), reported until it is
 	## released.
-	pointer : Port.Subscription({ pointer : U32 }, Pointer)
+	pointer : Port.Subscription({ pointer : U32, column : U64, row : U64 }, Pointer)
 	pointer = Port.subscription({ name: "liton/drag/pointer", delivery: Latest })
 
 	idle : Gesture
@@ -39,20 +47,30 @@ Drag := [].{
 			_ => gesture
 		}
 
+	## A main-button press on a line between tiles.
+	pressed_line : Gesture, Line, Engine.Pointer -> Gesture
+	pressed_line = |gesture, line, pressing|
+		match (gesture, pressing.button, pressing.kind) {
+			(Idle, Main, Mouse) | (Idle, Main, Pen) => Resizing({ pointer: pressing.id, line, share: Unmoved })
+			_ => gesture
+		}
+
 	## A press released before it moved, which was a click.
 	released : Gesture, Engine.Pointer -> Gesture
 	released = |gesture, releasing|
 		match gesture {
-			Pressed({ pointer: id, .. }) if id == releasing.id => Idle
+			Pressed({ pointer: id, .. }) | Resizing({ pointer: id, share: Unmoved, .. }) if id == releasing.id => Idle
 			_ => gesture
 		}
 
-	## The pane and pointer pressed, which the page reports on while held.
-	held : Gesture -> [Holding({ pane : Str, pointer : U32 }), NotHolding]
+	## The pointer pressed and what it holds, a pane or a line, which the
+	## page reports on while held.
+	held : Gesture -> [Holding({ pointer : U32, pane : Str, column : U64, row : U64 }), NotHolding]
 	held = |gesture|
 		match gesture {
-			Pressed(holding) => Holding(holding)
-			Dragging({ pane, pointer: id, .. }) => Holding({ pane, pointer: id })
+			Pressed({ pane, pointer: id }) | Dragging({ pane, pointer: id, .. }) => Holding({ pointer: id, pane, column: 0, row: 0 })
+			Resizing({ pointer: id, line: Across(line), .. }) => Holding({ pointer: id, pane: "", column: line, row: 0 })
+			Resizing({ pointer: id, line: Down(line), .. }) => Holding({ pointer: id, pane: "", column: 0, row: line })
 			Idle => NotHolding
 		}
 
@@ -62,13 +80,29 @@ Drag := [].{
 		match (gesture, at.phase) {
 			(Pressed({ pane, pointer: id }), Moved) => Dragging({ pane, pointer: id, at })
 			(Dragging({ pane, pointer: id, .. }), Moved) => Dragging({ pane, pointer: id, at })
+			(Resizing(holding), Moved) => Resizing({ ..holding, share: At(Drag.share(holding.line, at)) })
 			(_, Moved) => gesture
 			_ => Idle
 		}
 
-	## The layout with the pane held put where it is released (`drop_at`).
-	dropped : Model.State, { pane : Str, pointer : U32 }, Pointer -> Model.State
-	dropped = |state, { pane, .. }, at| if (at.phase == Released) Model.place(state, pane, Drag.drop_at(state, pane, at)) else state
+	## How far across the tracks beside `line` the pointer is.
+	share : Line, Pointer -> U64
+	share = |line, at|
+		match line {
+			Across(_) => at.across.to_u64()
+			Down(_) => at.down.to_u64()
+		}
+
+	## The layout with the pane held put where it is released (`drop_at`),
+	## or the line held moved there.
+	dropped : Model.State, { pointer : U32, pane : Str, column : U64, row : U64 }, Pointer -> Model.State
+	dropped = |state, { pane, column, row, .. }, at|
+		match at.phase {
+			Released if column > 0 => Model.resize_line(state, Across(column), at.across.to_u64())
+			Released if row > 0 => Model.resize_line(state, Down(row), at.down.to_u64())
+			Released => Model.place(state, pane, Drag.drop_at(state, pane, at))
+			_ => state
+		}
 
 	## Escape leaves a drag.
 	key_pressed : Gesture, Str -> Gesture
@@ -89,11 +123,13 @@ Drag := [].{
 			_ => Model.nowhere
 		}
 
-	## The layout shown: while a pane is dragged, as if dropped where it is.
+	## The layout shown: while a pane is dragged, as if dropped where it is,
+	## and while a line is, with the line where it is.
 	previewed : Model.State, Gesture -> Model.State
 	previewed = |state, gesture|
 		match gesture {
 			Dragging({ pane, .. }) => Model.place(state, pane, Drag.over(state, gesture))
+			Resizing({ line, share: At(moved_to), .. }) => Model.resize_line(state, line, moved_to)
 			_ => state
 		}
 
@@ -153,15 +189,31 @@ expect {
 	dragged = Drag.heard(pressed, over_chat)
 	below_main = Drag.heard(dragged, pointer_at(Moved, "tile-2", "", 5000, 9500))
 	ids = |shown| shown.grid.tiles.map(|tile| tile.panes.map(|pane| pane.id))
+	holding = { pointer: 1, pane: "pane-4", column: 0, row: 0 }
 	pressed == Pressed({ pane: "pane-4", pointer: 1 })
 		and ids(Drag.previewed(state, dragged)) == [["pane-1"], ["pane-2", "pane-8", "pane-4"], ["pane-3", "pane-5"]]
 		and Drag.previewed(state, below_main).grid.rows == [1, 1]
-		and Drag.dropped(state, { pane: "pane-4", pointer: 1 }, { ..over_chat, phase: Released }) == Drag.previewed(state, dragged)
-		and Drag.dropped(state, { pane: "pane-4", pointer: 1 }, { ..over_chat, phase: Cancelled }) == state
-		and Drag.dropped(state, { pane: "pane-4", pointer: 1 }, pointer_at(Released, "", "", 0, 0)) == state
+		and Drag.dropped(state, holding, { ..over_chat, phase: Released }) == Drag.previewed(state, dragged)
+		and Drag.dropped(state, holding, { ..over_chat, phase: Cancelled }) == state
+		and Drag.dropped(state, holding, pointer_at(Released, "", "", 0, 0)) == state
 		and Drag.previewed(state, Drag.key_pressed(dragged, "Escape")) == state
 		and Drag.heard(dragged, { ..over_chat, phase: Released }) == Idle
 		and Drag.released(pressed, pressing) == Idle
 		and Drag.released(dragged, pressing) == dragged
 		and Drag.pressed(Idle, "pane-4", { ..pressing, kind: Touch }) == Idle
+}
+
+# A line between tiles held moves as the pointer does, resizing the tracks
+# beside it, and stays where it is released.
+expect {
+	tiling = Model.layout(Model.initial(""), Model.tiling)
+	pressing : Engine.Pointer
+	pressing = { id: 1, kind: Mouse, button: Main, buttons: 1, modifiers: { shift: Bool.False, ctrl: Bool.False, alt: Bool.False, meta: Bool.False }, primary: Bool.True, at: Outside }
+	pressed = Drag.pressed_line(Idle, Across(1), pressing)
+	moved = Drag.heard(pressed, pointer_at(Moved, "", "", 2500, 0))
+	Drag.held(pressed) == Holding({ pointer: 1, pane: "", column: 1, row: 0 })
+		and Drag.previewed(tiling, pressed) == tiling
+		and Drag.previewed(tiling, moved).grid.columns == [3, 9, 4]
+		and Drag.dropped(tiling, { pointer: 1, pane: "", column: 1, row: 0 }, pointer_at(Released, "", "", 2500, 0)).grid.columns == [3, 9, 4]
+		and Drag.released(pressed, pressing) == Idle
 }

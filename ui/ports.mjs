@@ -26,18 +26,32 @@ document.addEventListener("scroll", (event) => {
 // that never moved. A move to another part of a tile, and the release or
 // cancel ending a drag, are reported inside a view transition, so the
 // tiles move to the layout previewed rather than jump, unless motion is
-// reduced (the system's setting or the theme's).
+// reduced (the system's setting or the theme's). While a line between
+// tiles is held (`column` or `row` names it), each move instead reports how
+// far across the two tracks beside it the pointer is, the tracks measured
+// from the grid's computed `grid-template-columns` or `-rows` at the press.
 const boxes = (attribute) => [...document.querySelectorAll(`[${attribute}]`)].map((element) => ({ id: element.getAttribute(attribute), box: element.getBoundingClientRect() }));
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches || getComputedStyle(document.querySelector(".liton") ?? document.body).getPropertyValue("--motion").trim() === "0";
 const transition = (change) => {
   if (!document.startViewTransition || reduced()) return change();
   document.startViewTransition(() => new Promise((done) => { change(); requestAnimationFrame(() => requestAnimationFrame(done)); }));
 };
-const drag = ({ pointer }, { emit }) => {
+// How far across the tracks beside `line` the point `at` is, in ten
+// thousandths, by the grid's tracks as the browser laid them out.
+const across_tracks = (axis, line) => {
+  const grid = document.querySelector(".grid"), style = getComputedStyle(grid), box = grid.getBoundingClientRect();
+  const sizes = style[axis === "column" ? "gridTemplateColumns" : "gridTemplateRows"].split(" ").map(parseFloat);
+  const origin = axis === "column" ? box.left + parseFloat(style.paddingLeft) - grid.scrollLeft : box.top + parseFloat(style.paddingTop) - grid.scrollTop;
+  const from = origin + sizes.slice(0, line - 1).reduce((sum, size) => sum + size, 0), both = sizes[line - 1] + sizes[line];
+  return (at) => Math.max(0, Math.min(10000, Math.round((at - from) * 10000 / both)));
+};
+const drag = ({ pointer, column, row }, { emit }) => {
   const tiles = boxes("data-tile"), tabs = boxes("data-tab");
+  const resizing = column > 0 ? across_tracks("column", column) : row > 0 ? across_tracks("row", row) : null;
   let start = null, moved = false, part = "";
   const under = (list, x, y) => list.find(({ box }) => x >= box.left && x < box.right && y >= box.top && y < box.bottom);
   const report = (phase, event) => {
+    if (resizing) return { phase, x: Math.round(event.clientX), y: Math.round(event.clientY), tile: "", tab: "", across: column > 0 ? resizing(event.clientX) : 0, down: row > 0 ? resizing(event.clientY) : 0 };
     const x = event.clientX, y = event.clientY, tab = under(tabs, x, y), tile = tab ? null : under(tiles, x, y), hit = tab ?? tile;
     const share = (at, from, size) => Math.max(0, Math.min(10000, Math.round((at - from) * 10000 / size)));
     return { phase, x: Math.round(x), y: Math.round(y), tile: (tab ? under(tiles, x, y)?.id : tile?.id) ?? "", tab: tab?.id ?? "", across: hit ? share(x, hit.box.left, hit.box.width) : 0, down: hit ? share(y, hit.box.top, hit.box.height) : 0 };
@@ -51,11 +65,11 @@ const drag = ({ pointer }, { emit }) => {
     if (!moved && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
     moved = true;
     const at = report("Moved", event), now = part_of(at);
-    if (now === part) return emit(at);
+    if (resizing || now === part) return emit(at);
     part = now;
     transition(() => emit(at));
   };
-  const up = (event) => event.pointerId === pointer && (moved ? transition(() => emit(report("Released", event))) : emit(report("Cancelled", event)));
+  const up = (event) => event.pointerId === pointer && (moved && !resizing ? transition(() => emit(report("Released", event))) : emit(report(moved ? "Released" : "Cancelled", event)));
   const cancel = (event) => event.pointerId === pointer && transition(() => emit(report("Cancelled", event)));
   const key = (event) => {
     if (event.key !== "Escape" || !moved) return;

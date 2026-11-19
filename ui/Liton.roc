@@ -101,6 +101,7 @@ Liton := [].{
 							[
 								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}")),
 								Engine.attr_s("style", laid.map(Liton.grid_style)),
+								Engine.test_id("grid"),
 							],
 							[Engine.each(laid.map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, laid, row))],
 						),
@@ -128,7 +129,7 @@ Liton := [].{
 			drag.signal().map(Drag.held),
 			|held|
 				match held {
-					Holding({ pointer, .. }) => [Drag.pointer.ask({ pointer: pointer })]
+					Holding({ pointer, column, row, .. }) => [Drag.pointer.ask({ pointer, column, row })]
 					NotHolding => []
 				},
 			model.on_result(
@@ -655,9 +656,33 @@ Liton := [].{
 					],
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
+				# Handles on its right and bottom edges move the lines there.
+				Engine.each(
+					tile.map2(laid, |shown, state| Model.resize_lines(state, shown)),
+					|line| if (Liton.across(line)) "right" else "bottom",
+					|line_row|
+						Html.div_attrs(
+							[
+								Engine.class_s(line_row.key().map(|edge| "resize-line ${edge}")),
+								Engine.attr("role", "separator"),
+								Engine.attr_s("aria-orientation", line_row.key().map(|edge| if (edge == "right") "vertical" else "horizontal")),
+								Engine.test_id_s(line_row.key().map2(id.lift_row(), |edge, tile_id| "resize-${tile_id}-${edge}")),
+								Html.on_pointer_down_capture(drag.lift_row().set_value_by(line_row.field(|line| line), Drag.pressed_line)),
+								Html.on_pointer_up(drag.lift_row().set_value(Drag.released)),
+							],
+							[],
+						),
+				),
 			],
 		)
 	}
+
+	across : [Across(U64), Down(U64)] -> Bool
+	across = |line|
+		match line {
+			Across(_) => Bool.True
+			Down(_) => Bool.False
+		}
 
 	## The grid's tracks as CSS: a Workbench's drawers as wide as a drawer is,
 	## none while collapsed, and the main area's tracks and Tiling's weighed

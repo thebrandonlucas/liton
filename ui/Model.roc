@@ -1063,6 +1063,25 @@ Model := [].{
 		{ ..state, grid: Grid.nudged(state.grid, tile_id, if ((change == Wider) == at_right) Left else Right) }
 	}
 
+	## The tracks beside a column (`Across`) or row (`Down`) line resized so
+	## the line is `share` ten thousandths of the way across them.
+	resize_line : State, [Across(U64), Down(U64)], U64 -> State
+	resize_line = |state, line, share|
+		match line {
+			Across(column) => { ..state, grid: Grid.resized_columns(state.grid, column, share) }
+			Down(row) => { ..state, grid: Grid.resized_rows(state.grid, row, share) }
+		}
+
+	## The lines a tile's handles move: its right edge's, unless that is the
+	## grid's or a Workbench drawer's, and its bottom edge's, unless that is
+	## the grid's.
+	resize_lines : State, Tile -> List([Across(U64), Down(U64)])
+	resize_lines = |state, tile| {
+		columns = state.grid.columns.len()
+		across = tile.right < columns and (state.shell == Tiling or (tile.right >= 2 and tile.right + 2 <= columns))
+		(if (across) [Across(tile.right)] else []).concat(if (tile.bottom < state.grid.rows.len()) [Down(tile.bottom)] else [])
+	}
+
 	## Shows a pane in its tile's tabs.
 	activate_tab : State, Str -> State
 	activate_tab = |state, id| { ..state, grid: { ..state.grid, tiles: state.grid.tiles.map(|tile| if (tile.panes.any(|listed_pane| listed_pane.id == id)) { ..tile, active: id } else tile) } }

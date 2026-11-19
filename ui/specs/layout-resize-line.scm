@@ -1,0 +1,21 @@
+(test "Liton — dragging the line between two tiles resizes the tracks beside it as it moves, and keeps them where it is released"
+  (steps
+    (click (role button :name "Settings"))
+    (click (role button :name "Tiling preset"))
+    (click (role button :name "Settings"))
+    (expect-attr (test-id "grid") style "grid-template-columns: minmax(200px, 1fr) minmax(300px, 2fr) minmax(200px, 1fr); grid-template-rows: minmax(0, 1fr)")
+    (pointer-down (test-id "resize-tile-1-right"))
+    (expect-port-subscription-arg "liton/drag/pointer" 1 "{\"column\":\"1\",\"pointer\":1,\"row\":\"0\"}")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Moved\",\"x\":300,\"y\":400,\"tile\":\"\",\"tab\":\"\",\"across\":2500,\"down\":0}")
+    (expect-attr (test-id "grid") style "grid-template-columns: minmax(200px, 3fr) minmax(300px, 9fr) minmax(200px, 4fr); grid-template-rows: minmax(0, 1fr)")
+    (emit-port "liton/drag/pointer" "{\"phase\":\"Released\",\"x\":300,\"y\":400,\"tile\":\"\",\"tab\":\"\",\"across\":2500,\"down\":0}")
+    (pointer-up (test-id "resize-tile-1-right"))
+    (expect-port-subscriptions "liton/drag/pointer" 0)
+    (expect-attr (test-id "grid") style "grid-template-columns: minmax(200px, 3fr) minmax(300px, 9fr) minmax(200px, 4fr); grid-template-rows: minmax(0, 1fr)")
+    ; A Workbench's drawers keep their width: no handle moves their lines.
+    (click (role button :name "Settings"))
+    (click (role button :name "Developer preset"))
+    (click (role button :name "Settings"))
+    (expect-absent (test-id "resize-tile-1-right"))
+  )
+)
