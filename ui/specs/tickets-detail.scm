@@ -1,4 +1,4 @@
-(test "Liton — a ticket opens from the list at once, then shows its body and comments as Markdown, links out to its source, and goes back to the list"
+(test "Liton — a ticket picked in Tickets opens at once in the Ticket tab, hidden until then, beside the chat, then shows its body and comments as Markdown and links out to its source, the list staying beside it; pinned, it keeps its ticket"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
@@ -9,6 +9,7 @@
     (click (role button :name "Tickets"))
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Tickets\":{\"sources\":[{\"id\":\"gh\",\"provider\":\"mock\",\"name\":\"mock/liton\",\"url\":\"https://example.com/gh\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"}]},{\"id\":\"LIT\",\"provider\":\"mock\",\"name\":\"Liton team\",\"url\":\"https://example.com/LIT\",\"me\":{\"id\":\"ada\",\"name\":\"Ada\"},\"people\":[{\"id\":\"ada\",\"name\":\"Ada\"},{\"id\":\"bo\",\"name\":\"Bo\"}],\"statuses\":[{\"id\":\"todo\",\"name\":\"Todo\",\"kind\":\"Open\"},{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},{\"id\":\"done\",\"name\":\"Done\",\"kind\":\"Done\"}]}],\"tickets\":[{\"id\":\"LIT-12\",\"provider\":\"mock\",\"source\":\"LIT\",\"key\":\"LIT-12\",\"title\":\"Logging in sends you back to /login\",\"url\":\"https://example.com/LIT/LIT-12\",\"status\":{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},\"assignees\":[{\"id\":\"ada\",\"name\":\"Ada\"}],\"labels\":[\"bug\"],\"waiting_on\":[],\"branch\":\"fix-auth\",\"updated\":\"2026-01-01T08:30:00.000Z\"},{\"id\":\"gh#9\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#9\",\"title\":\"Document the review flow\",\"url\":\"https://example.com/gh/9\",\"status\":{\"id\":\"open\",\"name\":\"Open\",\"kind\":\"Open\"},\"assignees\":[],\"labels\":[\"docs\"],\"waiting_on\":[\"ada\"],\"updated\":\"2026-01-01T07:00:00.000Z\"},{\"id\":\"gh#4\",\"provider\":\"mock\",\"source\":\"gh\",\"key\":\"#4\",\"title\":\"Archive sessions from their menu\",\"url\":\"https://example.com/gh/4\",\"status\":{\"id\":\"closed\",\"name\":\"Closed\",\"kind\":\"Done\"},\"assignees\":[{\"id\":\"bo\",\"name\":\"Bo\"}],\"labels\":[],\"waiting_on\":[],\"updated\":\"2025-12-20T09:00:00.000Z\"}]}}]},{\"capability\":\"tickets.v1\",\"topic\":\"links\",\"cursor\":\"k1\",\"events\":[{\"Links\":[]}]}]}")
     (run-effect 4)
+    (expect-absent (role button :name "Ticket"))
     (click (role button :name "LIT-12 Logging in sends you back to /login"))
     (expect-visible (role heading :name "Logging in sends you back to /login"))
     (expect-attr (role link :name "Open in Liton team") href "https://example.com/LIT/LIT-12")
@@ -20,7 +21,13 @@
     (expect-visible (text "/login"))
     (expect-visible (text "every"))
     (expect-visible (text "Cy"))
-    (click (role button :name "Back to the tickets"))
+    (expect-attr (role button :name "Ticket") aria-pressed "true")
     (expect-visible (role button :name "#9 Document the review flow"))
+    (click (role button :name "Ticket menu"))
+    (click (role button :name "Pin"))
+    (click (role button :name "#9 Document the review flow"))
+    (expect-visible (role heading :name "Logging in sends you back to /login"))
+    (click (role button :name "Ticket menu"))
+    (expect-visible (text "pinned to LIT-12 Logging in sends you back to /login"))
   )
 )

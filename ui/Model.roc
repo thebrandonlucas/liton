@@ -63,8 +63,15 @@ Model := [].{
 		editing : List({ serial : U64, edit : Edit, accepted : U64 }),
 		timelines : List(Timeline),
 
-		## What panes that follow the focus show, `Session("")` for nothing.
-		focus : Context.Id,
+		## The contexts focused, the latest first, the last of each kind:
+		## a pane following the focus shows the latest of the kinds it
+		## follows (`Model.focused`), so it keeps its own while another kind
+		## is focused.
+		focus : List(Context.Id),
+
+		## What a view shows within its focused context: the thread open in a
+		## room, by the room and its top-level message.
+		sub_focus : [None, Thread({ room_id : Str, root : Str })],
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
@@ -150,8 +157,7 @@ Model := [].{
 
 		## What polls answered of rooms.v1: the rooms, each room's members, and
 		## the entries of each room's messages (`root` "") and of each thread
-		## (`root` its top-level message); what each Rooms pane shows; and the
-		## requests on their way (sent as `call_outbox`). A request is shown at
+		## (`root` its top-level message); and the requests on their way (sent as `call_outbox`). A request is shown at
 		## once (`rooms_listed`, `sending_lines`) until the daemon refuses it,
 		## or until the poll numbered `accepted` answers, the first sent after
 		## it accepted it (0 while it waits); a message sent until a log posts
@@ -160,7 +166,6 @@ Model := [].{
 		rooms : List(Rooms.Room),
 		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
-		room_panes : List(RoomPane),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
 		## The themes settings offer and the one a snapshot naming none shows:
@@ -258,8 +263,8 @@ Model := [].{
 	## with the lines they add and remove as its `file`'s.
 	ChangedRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File }
 
-	## What a Rooms pane shows: the room opened, "" for the list of rooms,
-	## and the thread opened in it by its root, "" for none.
+	## What a Room pane shows: its room, "" for none, and the thread open
+	## in it by its root, "" for none.
 	RoomPane : { pane : Str, room_id : Str, root : Str }
 
 	## A message as a Rooms pane shows it: its author's name, and whether an
@@ -279,9 +284,25 @@ Model := [].{
 	## or a draft edited. Closed, its pane is "".
 	Composer : { pane : Str, path : Str, scope : Review.Scope, side : Review.Side, start : U32, end : U32, thread : Str, editing : Str, text : Str }
 
-	## The layout of a preset or snapshot.
+	## The layout of a preset or snapshot, its parts split as `split_parts`
+	## does.
 	layout_of : Snapshot -> Layout
-	layout_of = |{ shell, columns, collapsed, hidden, .. }| { shell, columns, collapsed, hidden }
+	layout_of = |{ version, shell, columns, collapsed, hidden, .. }| { shell, columns: Model.split_parts(version, columns), collapsed, hidden }
+
+	## The columns of a snapshot of `version`, with a part split since then
+	## followed by the part split from it: before version 7, a Rooms pane
+	## showed a room too, which a Room pane beside it now does, and a Tickets
+	## pane a ticket, as a Ticket pane now does.
+	split_parts : U32, List(Column) -> List(Column)
+	split_parts = |version, columns| {
+		split = |listed_pane|
+			match listed_pane.widget {
+				"rooms" if version < 7 => [listed_pane, { id: "${listed_pane.id}-room", widget: "room", pinned: "", options: [] }]
+				"tickets" if version < 7 => [listed_pane, { id: "${listed_pane.id}-ticket", widget: "ticket", pinned: "", options: [] }]
+				_ => [listed_pane]
+			}
+		columns.map(|column| { ..column, panes: column.panes.join_map(split) })
+	}
 
 	## liton's own presets (setup/Default.roc): Developer, the default,
 	## Inbox and Tiling.
@@ -306,7 +327,8 @@ Model := [].{
 				listed: { sessions: [], workspaces: { projects: [], workspaces: [] } },
 				editing: [],
 				timelines: [],
-				focus: Session(""),
+				focus: [],
+				sub_focus: None,
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
 				columns: [],
@@ -346,7 +368,6 @@ Model := [].{
 				rooms: [],
 				room_members: [],
 				room_logs: [],
-				room_panes: [],
 				room_asks: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
@@ -396,7 +417,8 @@ Model := [].{
 	with_snapshot_text : State -> State
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
-	## Reads a snapshot. Before version 6, it hides no panes; before version
+	## Reads a snapshot. Before version 7, its parts split as `split_parts`
+	## does; before version 6, it hides no panes; before version
 	## 5, it shows the setup's default theme; before version 4, panes have
 	## their options' defaults and the drawers show. A version 1 or 2 one loads in Tiling, a version 1 one with a
 	## column for each pane, unless it holds just the old default's widgets:
@@ -419,7 +441,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (laid, third, second, first) {
-			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 6 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns, collapsed, hidden: if (version == 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
+			(Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, columns: Model.split_parts(version, columns), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, columns: Model.with_options(columns), collapsed: [], hidden: [] }))
 			(_, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
 			(_, _, _, Ok({ version: 1, panes: listed_panes })) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(listed_panes.map_with_index(|listed_pane, index| { id: "column-${(index + 1).to_str()}", size: 1, tabbed: Bool.False, active: listed_pane.id, panes: [listed_pane] })))))
@@ -570,7 +592,7 @@ Model := [].{
 				match Context.from_str(key) {
 					Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Archive({ workspace_id: workspace_id })))
 					Ok(Session(session_id)) => Model.edit(state, Chat(Archive({ session_id: session_id })))
-					Err(_) => state
+					_ => state
 				}
 		}
 	}
@@ -586,7 +608,7 @@ Model := [].{
 			_ if key.starts_with("group:") => state.workspaces.projects.find_first(|project| "group:${project.id}" == key).map_ok(|project| project.name) ?? ""
 			Ok(Workspace(workspace_id)) => state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.name) ?? ""
 			Ok(Session(session_id)) => Model.session(state, session_id).title
-			Err(_) => ""
+			_ => ""
 		}
 
 	## Renames the row being renamed to the name typed, shown at once, unless
@@ -601,7 +623,7 @@ Model := [].{
 			_ if key.starts_with("group:") => Model.edit(state, Workspaces(RenameProject({ project_id: key.drop_prefix("group:"), name })))
 			Ok(Workspace(workspace_id)) => Model.edit(state, Workspaces(Rename({ workspace_id, name })))
 			Ok(Session(session_id)) => Model.edit(state, Chat(Rename({ session_id, title: name })))
-			Err(_) => state
+			_ => state
 		}
 	}
 
@@ -975,10 +997,11 @@ Model := [].{
 	activate_tab : State, Str -> State
 	activate_tab = |state, id| { ..state, columns: state.columns.map(|column| if (column.panes.any(|listed_pane| listed_pane.id == id)) { ..column, active: id } else column) }
 
-	## Pins a following pane to the focused context, or lets a pinned one follow.
+	## Pins a following pane to the context it shows, or lets a pinned one
+	## follow.
 	toggle_pin : State, Str -> State
 	toggle_pin = |state, id| {
-		pin = |listed_pane| if (listed_pane.id != id) listed_pane else if (listed_pane.pinned.is_empty()) { ..listed_pane, pinned: Context.to_str(state.focus) } else { ..listed_pane, pinned: "" }
+		pin = |listed_pane| if (listed_pane.id != id) listed_pane else if (listed_pane.pinned.is_empty()) { ..listed_pane, pinned: Context.to_str(Model.context_of(state, listed_pane)) } else { ..listed_pane, pinned: "" }
 		{ ..state, columns: state.columns.map(|column| { ..column, panes: column.panes.map(pin) }) }
 	}
 
@@ -986,20 +1009,44 @@ Model := [].{
 	pane = |state, id| Model.panes(state).find_first(|candidate| candidate.id == id) ?? { id, widget: "", pinned: "", options: [] }
 
 	## The context a pane shows: the one it is pinned to, as `Context.to_str`
-	## names it, or else the focus.
+	## names it, or else the latest focused of the kinds its widget follows.
 	context_of : State, Pane -> Context.Id
-	context_of = |state, shown| if (shown.pinned.is_empty()) state.focus else Context.from_str(shown.pinned) ?? state.focus
+	context_of = |state, shown| {
+		following = Model.focused(state, Widgets.find(shown.widget).follows)
+		if (shown.pinned.is_empty()) following else Context.from_str(shown.pinned) ?? following
+	}
 
-	## The session a pane shows: its context's, or its workspace's that needs
-	## you most (see `Attention.ranks`), "" for none.
+	## The latest context focused of `kinds`, `Session("")` for none.
+	focused : State, List(Context.Kind) -> Context.Id
+	focused = |state, kinds| state.focus.find_first(|context| kinds.contains(Context.kind(context))) ?? Session("")
+
+	## The focus with `context` the latest, in place of the last of its kind.
+	focus_on : State, Context.Id -> State
+	focus_on = |state, context| { ..state, focus: state.focus.drop_if(|kept| Context.kind(kept) == Context.kind(context)).prepend(context) }
+
+	## The focus with `now` in place of `was`, if it holds it.
+	refocused : State, Context.Id, Context.Id -> List(Context.Id)
+	refocused = |state, was, now| if (state.focus.contains(was)) state.focus.map(|kept| if (kept == was) now else kept).drop_if(|kept| kept != now and Context.kind(kept) == Context.kind(now)) else state.focus
+
+	## The session a pane shows (`session_in`).
 	session_of : State, Pane -> Str
-	session_of = |state, shown|
-		match Model.context_of(state, shown) {
+	session_of = |state, shown| Model.session_in(state, Model.context_of(state, shown))
+
+	## The session the focus shows, as a chat following it does.
+	focused_session : State -> Str
+	focused_session = |state| Model.session_in(state, Model.focused(state, [Session, Workspace]))
+
+	## A context's session, or its workspace's that needs you most (see
+	## `Attention.ranks`), "" for none.
+	session_in : State, Context.Id -> Str
+	session_in = |state, context|
+		match context {
 			Session(session_id) => session_id
 			Workspace(workspace_id) => {
 				placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
 				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
 			}
+			Room(_) | Ticket(_) => ""
 		}
 
 	## The sessions that work in a workspace, as they say or its listing does.
@@ -1009,13 +1056,15 @@ Model := [].{
 		state.sessions.keep_if(|listed_session| listed.contains(listed_session.id) or (listed_session.workspace.map_ok(|placed| placed.id == Ok(workspace_id)) ?? Bool.False))
 	}
 
-	## What a pane's context is called: its session's title, or its
-	## workspace's name.
+	## What a pane's context is called: its session's title, its
+	## workspace's or room's name, or its ticket's key and title.
 	context_title : State, Pane -> Str
 	context_title = |state, shown|
 		match Model.context_of(state, shown) {
 			Session(session_id) => Model.session(state, session_id).title
 			Workspace(workspace_id) => state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| listed.name) ?? workspace_id
+			Room(room_id) => "#${Model.room_of(state, room_id).name}"
+			Ticket(ticket_id) => TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| "${ticket.summary.key} ${ticket.summary.title}") ?? ticket_id
 		}
 
 	entries : State, Str -> List(Chat.Entry)
@@ -1243,21 +1292,22 @@ Model := [].{
 			folders.prepend(".").map(|path| Tree({ context, path })).concat(if (file.is_empty()) [] else [Contents({ context, path: file })])
 		}
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
-		# A ticket list's, its sessions' links, and the ticket each shows.
-		ticket_views = laid_out.keep_if(|shown| shown.widget == "tickets" and Model.pane_visible(state, shown.id)).map(|shown| TicketDesk.view(state.tickets, shown.id))
-		tickets = if (offered(Capability.tickets_v1) and !ticket_views.is_empty()) [TicketList, TicketLinks].concat(ticket_views.map(|view| view.ticket).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
+		# The tickets and their sessions' links, and the ticket each Ticket
+		# pane shows.
+		desks = laid_out.keep_if(|shown| (shown.widget == "tickets" or shown.widget == "ticket") and Model.pane_visible(state, shown.id))
+		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
-		# The rooms, and the messages and members of the room each Rooms pane
-		# opened, and of the thread opened in it.
+		# The rooms, and the messages and members of the room each Room pane
+		# shows, and of the thread open in it.
 		room_topics = |shown| {
 			{ room_id, root, .. } = Model.room_pane(state, shown.id)
 			(if (room_id.is_empty()) [] else [RoomMessages(room_id), RoomMembers(room_id)]).concat(if (root.is_empty()) [] else [RoomThread({ room_id, root })])
 		}
-		rooms_shown = laid_out.keep_if(|shown| shown.widget == "rooms" and Model.pane_visible(state, shown.id))
-		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.join_map(room_topics).prepend(RoomList) else []
+		rooms_shown = laid_out.keep_if(|shown| (shown.widget == "rooms" or shown.widget == "room") and Model.pane_visible(state, shown.id))
+		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget == "room").join_map(room_topics).prepend(RoomList) else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
@@ -1311,7 +1361,8 @@ Model := [].{
 		)
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
-		focus = if (applied.focus == Session("")) Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "") else applied.focus
+		most_recent_session = Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "")
+		focus = if (Model.focused(applied, [Session, Workspace]) == Session("")) applied.focus.drop_if(|kept| Context.kind(kept) == Session).append(most_recent_session) else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -1680,15 +1731,17 @@ Model := [].{
 		permissions.drop_if(|asked| answering.contains(asked.request_id)).last().map_err(|_| NoneWaiting)
 	}
 
-	## Focuses a context, so panes that follow the focus show it, and shows
-	## the first chat's column, which on a narrow screen is a jump to it. A
-	## session opened is seen.
+	## Focuses a context, so panes that follow its kind show it, and shows
+	## a view following it: one on screen, else the first not hidden, else
+	## the first, its tab brought forward, and its column, which on a narrow
+	## screen is a jump to it. A session opened is seen.
 	open : State, Context.Id -> State
 	open = |state, context| {
-		focused = Model.mark_seen({ ..state, focus: context }, [Context.to_str(context)], Bool.True)
-		match state.columns.find_first(|column| column.panes.any(|shown| shown.widget == "chat")) {
-			Ok(column) => Model.jump_to(focused, column.id, Push)
-			Err(NotFound) => focused
+		seen = Model.mark_seen(Model.focus_on(state, context), [Context.to_str(context)], Bool.True)
+		views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Context.kind(context)))
+		match views.find_first(|shown| Model.pane_visible(state, shown.id)).on_err(|_| views.find_first(|shown| !state.hidden.contains(shown.id))).on_err(|_| views.first()).map_ok(|view| view.id) {
+			Ok(view_id) => state.columns.find_first(|column| column.panes.any(|shown| shown.id == view_id)).map_ok(|column| Model.jump_to(Model.activate_tab({ ..seen, hidden: seen.hidden.drop_if(|hidden_id| hidden_id == view_id) }, view_id), column.id, Push)) ?? seen
+			Err(_) => seen
 		}
 	}
 
@@ -1902,7 +1955,7 @@ Model := [].{
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(workspace.state)} unread" else attention_dot(workspace.state)
 			newest_age = Model.ordered(sessions, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|latest_session| Model.age(state, latest_session)) ?? ""
-			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: state.focus == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
+			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: branch, counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: Model.focused(state, [Session, Workspace]) == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
 			match sessions.first() {
 				Ok(lone) if sessions.len() == 1 => {
 					lone_row = Model.session_row(state, lone)
@@ -1924,7 +1977,7 @@ Model := [].{
 	session_row = |state, listed_session| {
 		rank = Attention.item(listed_session, []).state
 		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: state.focus == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -1997,6 +2050,7 @@ Model := [].{
 		workspace_id = match Model.context_of(state, shown) {
 			Workspace(id) => id
 			Session(session_id) => state.workspaces.workspaces.find_first(|listed| listed.session_ids.contains(session_id)).map_ok(|listed| listed.id) ?? (Model.session(state, session_id).workspace.map_ok(|placed| placed.id ?? "") ?? "")
+			Room(_) | Ticket(_) => ""
 		}
 		state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| Model.change_counts(state, listed)) ?? Model.no_counts
 	}
@@ -2262,9 +2316,13 @@ Model := [].{
 		if (text.is_empty()) state else Model.ask_review({ ..state, composer: Model.closed_composer }, request)
 	}
 
-	## Shows a ticket in a Tickets pane, or its list again for "".
-	open_ticket : State, { pane_id : Str, ticket_id : Str } -> State
-	open_ticket = |state, { pane_id, ticket_id }| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, ticket: ticket_id }) }
+	## The ticket a Ticket pane shows, "" for none.
+	ticket_of : State, Str -> Str
+	ticket_of = |state, pane_id|
+		match Model.context_of(state, Model.pane(state, pane_id)) {
+			Ticket(ticket_id) => ticket_id
+			_ => ""
+		}
 
 	## Changes the filter of a Tickets pane's list.
 	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
@@ -2317,16 +2375,16 @@ Model := [].{
 	## focused, or the focused workspace's that needs you most.
 	link_ticket : State, Str -> State
 	link_ticket = |state, ticket_id| {
-		session_id = Model.session_of(state, Model.pane(state, ""))
+		session_id = Model.focused_session(state)
 		if (session_id.is_empty() or Model.starting(state, session_id)) state else Model.ask_tickets(state, Link({ session_id, ticket_id }))
 	}
 
-	## Comments a Tickets pane's draft on the ticket it shows.
+	## Comments a Ticket pane's draft on the ticket it shows.
 	comment_ticket : State, Str -> State
 	comment_ticket = |state, pane_id| {
 		key = "${pane_id}/ticket"
 		text = Model.draft(state, key).trim()
-		ticket_id = TicketDesk.view(state.tickets, pane_id).ticket
+		ticket_id = Model.ticket_of(state, pane_id)
 		if (text.is_empty() or ticket_id.is_empty()) state else Model.ask_tickets(Model.set_draft(state, key, ""), Comment({ ticket_id, body: text }))
 	}
 
@@ -2506,8 +2564,8 @@ Model := [].{
 		}
 		was = Session(Model.starting_key(serial))
 		match (made, state.creating.find_first(|creating| creating.serial == serial)) {
-			(Ok(id), _) => Model.poll({ ..state, creating: state.creating.map(|creating| if (creating.serial == serial) { ..creating, id } else creating), focus: if (state.focus == was) Session(id) else state.focus })
-			(Err(reason), Ok(undone)) => { ..state, creating: state.creating.drop_if(|creating| creating.serial == serial), form: { ..undone.form, failed: reason }, notice: reason, focus: if (state.focus == was) Workspace(undone.form.place) else state.focus }
+			(Ok(id), _) => Model.poll({ ..state, creating: state.creating.map(|creating| if (creating.serial == serial) { ..creating, id } else creating), focus: Model.refocused(state, was, Session(id)) })
+			(Err(reason), Ok(undone)) => { ..state, creating: state.creating.drop_if(|creating| creating.serial == serial), form: { ..undone.form, failed: reason }, notice: reason, focus: Model.refocused(state, was, Workspace(undone.form.place)) }
 			(Err(_), Err(_)) => state
 		}
 	}
@@ -2541,16 +2599,24 @@ Model := [].{
 		}
 
 	room_pane : State, Str -> RoomPane
-	room_pane = |state, pane_id| state.room_panes.find_first(|shown| shown.pane == pane_id) ?? { pane: pane_id, room_id: "", root: "" }
-
-	## Opens a room in a Rooms pane, or with "" the list of rooms again.
-	open_room : State, { pane_id : Str, room_id : Str } -> State
-	open_room = |state, { pane_id, room_id }| { ..state, room_panes: state.room_panes.drop_if(|shown| shown.pane == pane_id).append({ pane: pane_id, room_id, root: "" }) }
+	room_pane = |state, pane_id| {
+		room_id =
+			match Model.context_of(state, Model.pane(state, pane_id)) {
+				Room(shown) => shown
+				_ => ""
+			}
+		root =
+			match state.sub_focus {
+				Thread(thread) if thread.room_id == room_id and !room_id.is_empty() => thread.root
+				_ => ""
+			}
+		{ pane: pane_id, room_id, root }
+	}
 
 	## Opens a thread beside the room a Rooms pane shows, by its root, or
 	## closes it with "".
 	open_thread : State, { pane_id : Str, root : Str } -> State
-	open_thread = |state, { pane_id, root }| { ..state, room_panes: state.room_panes.map(|shown| if (shown.pane == pane_id) { ..shown, root } else shown) }
+	open_thread = |state, { pane_id, root }| { ..state, sub_focus: if (root.is_empty()) None else Thread({ room_id: Model.room_pane(state, pane_id).room_id, root }) }
 
 	## A room as listed, or as its id alone tells.
 	room_of : State, Str -> Rooms.Room
@@ -2785,7 +2851,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Rooms, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -2809,7 +2875,9 @@ Model := [].{
 				"changes" => Changes
 				"files" => Files
 				"tickets" => Tickets
+				"ticket" => Ticket
 				"rooms" => Rooms
+				"room" => Room
 				"capabilities" => Capabilities
 				_ => NoView
 			}
@@ -2818,13 +2886,13 @@ Model := [].{
 
 # A Changes pane's git and review are followed only while it is on screen.
 expect {
-	state = { ..Model.initial(""), focus: Session("a") }
+	state = { ..Model.initial(""), focus: [Session("a")] }
 	Model.subjects(state) == [Sessions, Timeline("a"), Items, Changes({ context: Session("a"), scope: Uncommitted }), WorkspaceList, Agents, Threads(Session("a"))] and Model.subjects(Model.toggle_drawer(state, Right)) == [Sessions, Timeline("a"), Items, WorkspaceList, Agents]
 }
 
 # A poll follows each topic after its cursor, and takes an entry it has once.
 expect {
-	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
+	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
 	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
 	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
 	answered = Model.polled(sent, sent.poll, answer)
@@ -2841,16 +2909,16 @@ expect {
 
 # One poll at a time: what is asked meanwhile is sent once it answers.
 expect {
-	sent = Model.poll({ ..Model.initial(""), focus: Session("a") })
-	meanwhile = Model.follow({ ..sent, focus: Session("b") })
+	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
+	meanwhile = Model.follow({ ..sent, focus: [Session("b")] })
 	answered = Model.polled(meanwhile, sent.poll, [])
 	Model.tick(sent, 0).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
 }
 
 expect {
-	state = { ..Model.initial(""), focus: Session("a") }
+	state = { ..Model.initial(""), focus: [Session("a")] }
 	pinned = Model.toggle_pin(state, "pane-2")
-	Model.session_of({ ..pinned, focus: Session("b") }, Model.pane(pinned, "pane-2")) == "a"
+	Model.session_of({ ..pinned, focus: [Session("b")] }, Model.pane(pinned, "pane-2")) == "a"
 }
 
 expect {
@@ -2896,7 +2964,7 @@ expect {
 	old_columns_of = |layout| layout.columns.map(|{ id, size, tabbed, active, panes }| { id, size, tabbed, active, panes: panes.map(|pane| { id: pane.id, widget: pane.widget, pinned: pane.pinned }) })
 	version_3 : { version : U32, shell : Model.Shell, columns : List(Model.OldColumn) }
 	version_3 = { version: 3, shell: Workbench, columns: old_columns_of(Model.developer) }
-	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of(Model.developer))
+	Model.restore(Json.to_str(version_3)) == Ok(Model.snapshot_of({ ..Model.developer, hidden: [] }))
 }
 
 expect {
@@ -2908,7 +2976,7 @@ expect {
 
 expect {
 	moved = Model.move_to_slot(Model.toggle_drawer(Model.initial(""), Left), "pane-3", Left)
-	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
+	moved.columns.map(|column| column.panes.map(|pane| pane.id)) == [["pane-1", "pane-3"], ["pane-2", "pane-8"], ["pane-4", "pane-5"]] and moved.columns.map(|column| column.active) == ["pane-3", "pane-2", "pane-4"] and moved.collapsed == []
 }
 
 expect {
@@ -2925,9 +2993,9 @@ expect {
 	reordered = Model.place(state, "pane-4", { column: "column-3", at: Before("pane-3") })
 	tiling = Model.layout(state, Model.tiling)
 	beside = Model.place(tiling, "pane-3", { column: "column-1", at: NewLeft })
-	ids(reordered) == [["pane-1"], ["pane-2"], ["pane-4", "pane-3", "pane-5"]]
+	ids(reordered) == [["pane-1"], ["pane-2", "pane-8"], ["pane-4", "pane-3", "pane-5"]]
 		and reordered.columns.map(|column| column.active) == ["pane-1", "pane-2", "pane-4"]
-		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4"], ["pane-3", "pane-5"]]
+		and ids(Model.place(state, "pane-4", { column: "column-2", at: After("pane-2") })) == [["pane-1"], ["pane-2", "pane-4", "pane-8"], ["pane-3", "pane-5"]]
 		and ids(beside) == [["pane-3"], ["pane-1"], ["pane-2"]]
 		and beside.active_column == beside.columns.first().map_ok(|column| column.id) ?? ""
 		and ids(Model.place(tiling, "pane-1", { column: "column-2", at: End })) == [["pane-2", "pane-1"], ["pane-3"]]
@@ -2956,7 +3024,7 @@ expect {
 
 expect {
 	state = Model.add_pane(Model.close_pane(Model.initial(""), "pane-1"), "ci")
-	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
+	state.columns.map(|column| column.panes.map(|pane| pane.widget)) == [[], ["chat", "ticket", "ci"], ["changes", "files", "tickets"]] and state.active_column == "column-2"
 }
 
 expect {
@@ -2988,9 +3056,9 @@ expect {
 # that needs you most; a pane pinned then stays on the workspace.
 expect {
 	placed = |id, status| { ..Chat.session({ id, provider: "mock", agent: "claude", title: id, status }), workspace: Ok({ id: Ok("w1"), directory: "/w" }) }
-	state = { ..Model.initial(""), focus: Workspace("w1"), sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
+	state = { ..Model.initial(""), focus: [Workspace("w1")], sessions: [placed("a", Idle), placed("b", AwaitingPermission)] }
 	pinned = Model.toggle_pin(state, "pane-3")
-	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList, Agents, Threads(Workspace("w1"))] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: Session("a") }, Model.pane(pinned, "pane-3")) == Workspace("w1")
+	Model.subjects(state) == [Sessions, Timeline("b"), Items, Changes({ context: Workspace("w1"), scope: Uncommitted }), WorkspaceList, Agents, Threads(Workspace("w1"))] and Model.pane(pinned, "pane-3").pinned == "workspace:w1" and Model.context_of({ ..pinned, focus: [Session("a")] }, Model.pane(pinned, "pane-3")) == Workspace("w1")
 }
 
 ## What a workspace or a session in `rank` is doing, as a row of the
@@ -3032,7 +3100,7 @@ expect {
 		and keys(by_status) == ["group:waiting for you", "workspace:w2", "group:idle", "s1"]
 		and keys({ ..state, sessions: state.sessions.append(Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Docs", status: Idle })), workspaces: { ..listed, workspaces: [workspace("w1", Idle, ["s1", "s2"])] } }) == ["group:p1", "workspace:w1", "s1", "s2"]
 		and keys(Model.set_option(state, "pane-4", "show_idle", "false")) == ["group:p1", "workspace:w2"]
-		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == Workspace("w1")
+		and Model.pick_row(state, { pane_id: "pane-4", key: "workspace:w1" }).focus == [Workspace("w1")]
 		and Model.workspace_rows(state, Model.pane(state, "pane-4")).map(|row| row.counts) == [{ ..Model.no_counts, members: "2" }, { members: "", added: "+2", removed: "−1" }, { members: "", added: "+2", removed: "−1" }]
 		and Model.subjects(state).contains(WorkspaceList)
 }
@@ -3109,7 +3177,7 @@ mention_typed = |text| {
 # "@sc" offers Scout, who replaces it, and the message sent mentions Scout.
 expect {
 	scout = { id: "scout", provider: "mock", name: "Scout", picture: Err(Missing), kind: Agent({ owner: Err(Missing) }), role: Member, presence: Online }
-	state = { ..Model.initial(""), room_panes: [{ pane: "p", room_id: "general", root: "" }], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
+	state = { ..Model.initial(""), columns: [{ id: "c", size: 1, tabbed: Bool.False, active: "p", panes: [{ id: "p", widget: "room", pinned: "", options: [] }] }], focus: [Room("general")], room_members: [{ room_id: "general", members: [scout] }], drafts: [{ pane: "p", text: "thanks\n@sc" }] }
 	chosen = Model.mention(state, { key: "p", name: "Scout" })
 	Model.mention_choices(state, "p") == ["Scout"] and Model.draft(chosen, "p") == "thanks\n@Scout " and Model.send_to_room(chosen, "p").room_asks.map(|asked| asked.request) == [Send({ room_id: "general", text: "thanks\n@Scout", place: TopLevel, mentions: ["scout"] })]
 }

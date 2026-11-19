@@ -1,0 +1,32 @@
+(test "Liton — picking a room in Rooms brings the Room tab forward with it at once, a Room pinned keeps its room, and picking a session brings Chat back"
+  (setup
+    (local-storage "liton.snapshot" "{\"version\":7,\"shell\":\"Workbench\",\"columns\":[{\"id\":\"column-1\",\"size\":1,\"tabbed\":false,\"active\":\"pane-1\",\"panes\":[{\"id\":\"pane-1\",\"widget\":\"sessions\",\"pinned\":\"\",\"options\":[]},{\"id\":\"pane-6\",\"widget\":\"rooms\",\"pinned\":\"\",\"options\":[]}]},{\"id\":\"column-2\",\"size\":1,\"tabbed\":true,\"active\":\"pane-2\",\"panes\":[{\"id\":\"pane-2\",\"widget\":\"chat\",\"pinned\":\"\",\"options\":[]},{\"id\":\"pane-7\",\"widget\":\"room\",\"pinned\":\"\",\"options\":[]}]},{\"id\":\"column-3\",\"size\":1,\"tabbed\":true,\"active\":\"pane-3\",\"panes\":[{\"id\":\"pane-3\",\"widget\":\"changes\",\"pinned\":\"\",\"options\":[]}]}],\"collapsed\":[\"Right\"],\"hidden\":[],\"theme\":\"\"}"))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"rooms\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"general\",\"provider\":\"mock\",\"name\":\"general\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"},{\"id\":\"ideas\",\"provider\":\"mock\",\"name\":\"ideas\",\"kind\":\"Forum\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"me\":\"you\"}]}]}]}")
+    (run-effect 3)
+    (expect-text (test-id "session-title") "Fix tests")
+    (expect-attr (role button :name "Chat") aria-pressed "true")
+    (expect-attr (role button :name "Room") aria-pressed "false")
+    (click (role button :name "#general"))
+    ; At once: the Room tab comes forward showing the room, its messages loading.
+    (expect-attr (role button :name "Room") aria-pressed "true")
+    (expect-text (test-id "room-title") "#general")
+    (expect-visible (text "Loading…"))
+    (click (role button :name "Room menu"))
+    (expect-visible (text "following #general"))
+    (click (role button :name "Pin"))
+    (click (role button :name "#ideas"))
+    (expect-text (test-id "room-title") "#general")
+    (click (role button :name "Room menu"))
+    (expect-visible (text "pinned to #general"))
+    (click (role button :name "Room menu"))
+    ; A session picked brings Chat back, the Room keeping its room behind it.
+    (click (role button :name "Fix tests"))
+    (expect-attr (role button :name "Chat") aria-pressed "true")
+    (expect-attr (role button :name "Room") aria-pressed "false")
+  )
+)
