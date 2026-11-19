@@ -91,6 +91,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A Thread widget shows the thread opened in a room beside it: its first message, its replies and its own composer. Opening a thread from a message's replies shows it there at once, opening its drawer; × closes it and hides the drawer again. Without a Thread pane, a thread still opens beside the room in the Room pane.
 - A Members widget lists the people and agents in the room shown, each with an avatar (an agent's square, with a robot's badge), whether they are online or away, their role and whose agent each is. Where the layout has one, the room's header counts its members; click the count to show or hide them.
 - The Sky theme, in Settings: light and soft, white tiles with grey edges over a pale sky, for talking in rooms.
+- The Rooms preset, in Settings, for talking in rooms as in Buzz: the rooms on the left, the room picked in the middle, and its thread or members on the right, hidden until you open them, in the Sky theme.
 
 ### Changed
 

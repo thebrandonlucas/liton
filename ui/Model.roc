@@ -2777,7 +2777,7 @@ Model := [].{
 		threaded = { ..state, sub_focus: if (root.is_empty()) None else Thread({ room_id: Model.room_pane(state, pane_id).room_id, root }) }
 		back_to_room = |closed| Model.tiles_in_order(closed).find_first(|tile| tile.panes.any(|shown| shown.widget == "room")).map_ok(|tile| Model.jump_to(closed, tile.id, Replace)) ?? closed
 		match Model.panes(state).find_first(|shown| shown.widget == "thread") {
-			Ok(inspector) if root.is_empty() => if (Model.pane_visible(state, inspector.id)) back_to_room(Model.hide_pane(threaded, inspector.id)) else threaded
+			Ok(inspector) if root.is_empty() => if (Model.pane_visible(state, inspector.id)) back_to_room(Model.put_away(threaded, inspector.id)) else threaded
 			Ok(inspector) => Model.reveal(threaded, inspector.id)
 			Err(NotFound) => threaded
 		}
@@ -2786,6 +2786,14 @@ Model := [].{
 	## Whether the layout has a Thread pane, where a room's thread opens.
 	threads_apart : State -> Bool
 	threads_apart = |state| Model.panes(state).any(|shown| shown.widget == "thread")
+
+	## Hides a pane until `reveal` shows it again, and its drawer while it
+	## shows no other.
+	put_away : State, Str -> State
+	put_away = |state, pane_id| {
+		hid = Model.hide_pane(state, pane_id)
+		{ ..hid, hidden: hid.hidden.drop_if(|hidden_id| hidden_id == pane_id).append(pane_id) }
+	}
 
 	## Shows a pane: not hidden, its tab forward and its drawer open, and on
 	## a narrow screen, its panel.
@@ -2865,7 +2873,7 @@ Model := [].{
 	toggle_members : State -> State
 	toggle_members = |state|
 		match Model.panes(state).find_first(|shown| shown.widget == "members") {
-			Ok(members) => if (Model.pane_visible(state, members.id)) Model.hide_pane(state, members.id) else Model.reveal(state, members.id)
+			Ok(members) => if (Model.pane_visible(state, members.id)) Model.put_away(state, members.id) else Model.reveal(state, members.id)
 			Err(NotFound) => state
 		}
 

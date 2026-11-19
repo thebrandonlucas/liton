@@ -1,6 +1,6 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
-## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling
-## and Chat presets, Developer first, and the Pastoral, Hypr, Plain and Sky themes,
+## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling,
+## Chat and Rooms presets, Developer first, and the Pastoral, Hypr, Plain and Sky themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
@@ -61,6 +61,30 @@ Default := [].{
 	chat = {
 		name: "Chat",
 		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right] },
+	}
+
+	## Talking in rooms, as Buzz does: the rooms, the room picked large, and
+	## its thread or members in the right drawer, hidden until opened, in
+	## the Sky theme.
+	rooms : Setup.Preset
+	rooms = {
+		name: "Rooms",
+		snapshot: {
+			version: Setup.snapshot_version,
+			shell: Workbench,
+			grid: {
+				columns: [1, 1, 1],
+				rows: [1],
+				tiles: [
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "rooms", pinned: "", options: [] }] },
+					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "room", pinned: "", options: [] }] },
+					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-3", panes: [{ id: "pane-3", widget: "thread", pinned: "", options: [] }, { id: "pane-4", widget: "members", pinned: "", options: [] }] },
+				],
+			},
+			collapsed: [Right],
+			hidden: ["pane-3", "pane-4"],
+			theme: "Sky",
+		},
 	}
 
 	with_tiles : Grid.Layout, (Grid.Tile -> Grid.Tile) -> Grid.Layout
@@ -177,5 +201,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.sky], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.sky], default_theme: "Pastoral" }
 }

@@ -1,0 +1,15 @@
+(test "Liton — the Rooms preset lists the rooms beside the room picked, its thread and members hidden in the right drawer until opened, in the Sky theme"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (click (role button :name "Settings"))
+    (click (role button :name "Rooms preset"))
+    (expect-attr (role button :name "Rooms preset") aria-pressed "true")
+    (expect-attr (role button :name "Sky theme") aria-pressed "true")
+    (click (role button :name "Settings"))
+    (expect-visible (role region :name "Rooms"))
+    (expect-visible (role region :name "Room"))
+    (expect-visible (text "Pick a room in Rooms to show it here."))
+    (expect-attr (test-id "slot-right") class "tile slot slot-right collapsed")
+  )
+)
