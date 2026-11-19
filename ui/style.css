@@ -163,6 +163,14 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 @keyframes deck-in-previous-1 { from { transform: translateX(-12%); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .grid[class*="deck-in-"] { animation: none; } }
 
+/* Settings' Deck: a row for each surface, its name, then its moves. */
+.settings-row.deck-row { display: flex; align-items: center; gap: 10px; }
+.deck-row .settings-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .settings-row.deck-row { flex-wrap: wrap; } }
+.deck-row .deck-shown { flex: none; }
+.deck-move { flex: none; padding: 3px 9px; }
+.deck-move:disabled { opacity: .35; }
+
 /* Settings: a page over the surface, Paseo's: a rail of sections on the
    left, and the section picked in a column beside it, of cards of rows. */
 .settings { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 280px minmax(0, 1fr);

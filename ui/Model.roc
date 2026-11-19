@@ -550,6 +550,53 @@ Model := [].{
 		{ ..stepped, deck_slide: { ..stepped.deck_slide, toward } }
 	}
 
+	## Adds a surface the daemon offers, by its preset's name, at the
+	## deck's end.
+	add_surface : State, Str -> State
+	add_surface = |state, name|
+		match state.presets.find_first(|preset| preset.name == name) {
+			Ok(preset) => { ..state, deck: Model.deck(state).append({ name, snapshot: preset.snapshot, focus: [] }) }
+			Err(NotFound) => state
+		}
+
+	## Moves the deck's surface at `index` a place toward its start or its
+	## end, the surface shown staying shown.
+	move_surface : State, U64, [Up, Down] -> State
+	move_surface = |state, index, way| {
+		other = if (way == Up) U64.max(index, 1) - 1 else index + 1
+		kept = Model.deck(state)
+		match (kept.get(index), kept.get(other)) {
+			(Ok(moved), Ok(passed)) if other != index => {
+				swapped = kept.map_with_index(|surface, at| if (at == index) passed else if (at == other) moved else surface)
+				shown = if (state.deck_shown == index) other else if (state.deck_shown == other) index else state.deck_shown
+				Model.with_deck_hash({ ..state, deck: swapped, deck_shown: shown })
+			}
+			_ => state
+		}
+	}
+
+	## Removes the deck's surface at `index`, showing the one before it,
+	## else after it, if it was shown. The deck keeps one.
+	remove_surface : State, U64 -> State
+	remove_surface = |state0, index| {
+		state = if (index == state0.deck_shown) Model.show_surface(state0, if (index > 0) index - 1 else 1) else state0
+		kept = Model.deck(state)
+		if kept.len() < 2 or index >= kept.len() {
+			state0
+		} else {
+			Model.with_deck_hash({ ..state, deck: kept.drop_at(index), deck_shown: if (state.deck_shown > index) state.deck_shown - 1 else state.deck_shown })
+		}
+	}
+
+	## Names the surface shown in the URL again once its place changed,
+	## with the panel the URL names.
+	with_deck_hash : State -> State
+	with_deck_hash = |state| {
+		panel = Str.split_on(state.url_hash.drop_prefix("#"), "&").drop_if(|part| part.is_empty() or part.starts_with("deck=")).map(|part| "#${part}")
+		hash = Model.hash_of(state, panel.first() ?? "")
+		if (hash == state.url_hash) state else { ..state, url_hash: hash, jump: { serial: state.jump.serial + 1, panel: "", replace: hash, push: "" } }
+	}
+
 	## A press lifted off the deck's strip: a swipe a fifth of its width or
 	## more toward its start goes to the next surface, toward its end to
 	## the previous, as a page is turned.
@@ -4952,4 +4999,15 @@ expect {
 	moved = { ..there, deck: [there.deck.get(1) ?? { name: "", snapshot: Default.rooms.snapshot, focus: [] }, there.deck.get(0) ?? { name: "", snapshot: Default.developer.snapshot, focus: [] }], deck_shown: 0 }
 	followed = Model.deck_changed(here, Json.to_str(Model.deck_snapshot(moved)))
 	followed.deck.map(|surface| surface.name) == ["Rooms", "Developer"] and followed.deck_shown == 0 and followed.surface == "Rooms" and followed.focus == [Room("r")] and Model.deck_changed(here, "nonsense") == here and Json.to_str(Model.deck_snapshot(Model.deck_changed(here, Json.to_str(Model.deck_snapshot(here))))) == Json.to_str(Model.deck_snapshot(here))
+}
+
+# The deck's surfaces move, the one shown staying shown, and go, the one
+# before it shown if it was; the deck keeps one, and adds what is offered.
+expect {
+	state = Model.show_surface(Model.initial(""), 1)
+	moved = Model.move_surface(state, 1, Up)
+	names = |shown| Model.deck(shown).map(|surface| surface.name)
+	removed = Model.remove_surface(moved, 0)
+	alone = [1, 1, 1].fold(removed, |so_far, _| Model.remove_surface(so_far, 0))
+	names(moved) == ["Rooms", "Developer", "Review", "Board"] and moved.deck_shown == 0 and moved.url_hash == "#deck=1" and Model.move_surface(moved, 0, Up) == moved and names(removed) == ["Developer", "Review", "Board"] and removed.surface == "Developer" and names(alone) == ["Board"] and names(Model.add_surface(alone, "Inbox")) == ["Board", "Inbox"] and Model.add_surface(alone, "Gone") == alone
 }

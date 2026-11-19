@@ -637,7 +637,7 @@ Liton := [].{
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
 								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))])
-								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
+								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
 							"settings-detail",
@@ -654,6 +654,7 @@ Liton := [].{
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
+								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
 							],
@@ -669,7 +670,7 @@ Liton := [].{
 	settings_sections = [("appearance", "Appearance"), ("keys", "Keys"), ("voice", "Voice"), ("about", "About")]
 
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -803,6 +804,52 @@ Liton := [].{
 					_ => found
 				},
 		)
+
+	## The deck: its surfaces in order, each to move toward its start or
+	## end or to remove, and the surfaces the daemon offers to add.
+	deck_section : State(Ctx, Model.State) -> Elem(Ctx)
+	deck_section = |model| {
+		button = |named, text, disabled, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class("deck-move"), Html.aria_label_s(named), Engine.attr_s("title", named), Html.boolean("disabled", disabled), Engine.on_click(handler)], [Engine.text(text)])
+		Html.div(
+			"settings-section",
+			[
+				Html.p("The surfaces you switch between, in this order. Each window shows one, which its URL names, so a window on another monitor can show another.", "help"),
+				Liton.settings_card(
+					"Surfaces",
+					[
+						Engine.each(
+							model.signal().map(Model.deck_titles),
+							|surface| surface.index.to_str(),
+							|row| {
+								rows = model.lift_row()
+								title = row.field(|surface| surface.title)
+								index = row.field(|surface| surface.index)
+								Html.div_attrs(
+									[Engine.class("settings-row deck-row"), Engine.attr_s("data-surface", title)],
+									[
+										Html.span_s(title, [Engine.class("settings-row-title")]),
+										Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
+										button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
+										button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),
+										button(title.map(|name| "Remove ${name}"), "Remove", rows.signal().map(|state| state.deck.len() < 2), rows.update_by(index, Model.remove_surface)),
+									],
+								)
+							},
+						),
+					],
+				),
+				Liton.settings_card(
+					"Add a surface",
+					[
+						Html.div(
+							"choices settings-row",
+							[Engine.each(model.signal().map(Model.surfaces), |preset| preset.name, |row| Html.button_s(row.key().map(|name| "Add ${name}"), [], model.lift_row().update_by(row.key(), Model.add_surface)))],
+						),
+					],
+				),
+			],
+		)
+	}
 
 	## The surface open: the surfaces to open instead, those the daemon
 	## offers what they need; its tiles' panes to swap, move, remove or set

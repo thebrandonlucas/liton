@@ -117,6 +117,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Switch between the deck's surfaces: a strip under the tiles names them, and a click, D then ] or [, D then 1 to 9, or the palette's Go to surface… goes to one, which slides in (not where motion is reduced). Each keeps its layout, theme and focus. The URL names the surface (`#deck=2`), so another window, or one on another monitor, can show another, and back returns.
 - The deck is the browser's, not a window's: a surface added, removed, moved or changed in one window shows in the others at once, each still showing its own surface.
 - Swipe between the deck's surfaces: across a trackpad with two fingers (not over something that scrolls sideways), or across the deck's strip on a phone, which still swipes between a surface's panels above it. A three-finger swipe belongs to the system and switches its desktops instead.
+- Settings' Deck lists the deck's surfaces in order: move one up or down, remove one, or add a surface the daemon offers what it needs for.
 
 ### Changed
 
