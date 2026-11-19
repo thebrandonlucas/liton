@@ -35,9 +35,9 @@ Exec := [].{
 			Windows(_) => return Err(Unsupported("the rigs run on Linux and macOS"))
 		}
 		inherited = Env.dict!().keep_oks(|(name, value)| Ok((OsStr.display(name), OsStr.display(value))))
-		environment = Exec.environment(inherited, dropped, settings)
+		environment_arguments = Exec.environment(inherited, dropped, settings)
 		Env.set_cwd!(Path.utf8(directory))?
-		Cmd.exec!(unix, Path.utf8("/usr/bin/env"), ["-i"].concat(environment).append(program).concat(arguments).map(OsStr.from_str))
+		Cmd.exec!(unix, Path.utf8("/usr/bin/env"), ["-i"].concat(environment_arguments).append(program).concat(arguments).map(OsStr.from_str))
 	}
 
 	## env(1)'s NAME=VALUE arguments for `inherited` without `dropped` or a

@@ -42,7 +42,7 @@ app [Context, program] {
 	http: "https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
 	mock: "../providers/mock/main.roc",
 	paseo: "../providers/paseo/main.roc",
-	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.21.0/4viZsnWjdYsyH4Q87ESFAwM5c55Hnc15nAGW1UwzWpFU.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.22.0/BM2BUXA8mwbcoKPUfRV8cLtsUdnsSBPwjNLPRUJQAQ7Q.tar.zst",
 	remote: "../providers/remote/main.roc",
 	setup: "../setup/main.roc",
 	speech: "../providers/local-speech/main.roc",
@@ -605,7 +605,7 @@ chat_call! = |context, provider, asked| {
 						outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed, choice), request_id, Paseo.resolved)
 						if outcome.is_ok() {
 							known = state_of!(db, session_id)?
-							store!(db, session_id, known.stored, { state: Paseo.answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed, choice })] })?
+							store!(db, session_id, known.stored, { state: Paseo.forget_answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed, choice })] })?
 						}
 						forget_check!(db, "cycle")?
 						Ok(paseo_answer(outcome))
