@@ -411,7 +411,6 @@ kbd:empty { display: none; }
 .room-typing { margin: 0 12px 4px; color: var(--muted); font-size: 12px; }
 .room-message.pending { opacity: .6; }
 .room-message.failed .sent-status { color: var(--fail); }
-.room-retry { display: flex; gap: 6px; }
 .mention-choices { display: flex; flex-wrap: wrap; gap: 4px; }
 .mention-choices:empty { display: none; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
@@ -535,6 +534,7 @@ kbd:empty { display: none; }
 .entry.user.failed { outline: 1px solid var(--fail); }
 .sent-status { display: block; color: var(--muted); font-size: 12px; }
 .sent-status:empty { display: none; }
+.sent-actions { display: flex; gap: 6px; }
 .entry.failed .sent-status { color: var(--fail); }
 .permission { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; background: var(--warn-tint); border-top: 1px solid var(--edge); }
 .permission > .permission-title { flex: 1 1 12em; }

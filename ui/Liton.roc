@@ -1646,12 +1646,7 @@ Liton := [].{
 								[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
 								[
 									Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
-									Html.span_s(row.field(|sent| Liton.sent_status(sent)), [Engine.class("sent-status"), Engine.test_id("sent-status")]),
-									Engine.when(
-										row.field(|sent| !sent.failed.is_empty()),
-										|| Html.button("Retry", [], model0.lift_row().update_by(row.key(), Model.retry)),
-										|| Engine.text(""),
-									),
+									Conversation.sent_state({ status: row.field(|sent| Liton.sent_status(sent)), failed: row.field(|sent| !sent.failed.is_empty()), test_id: "sent-status" }, [{ label: "Retry", handler: model0.lift_row().update_by(row.key(), Model.retry) }]),
 								],
 							),
 					),
@@ -2314,18 +2309,12 @@ Liton := [].{
 						),
 					],
 				),
-				Engine.when(row.field(|line| !line.status.is_empty()), || Html.span_s(row.field(|line| line.status), [Engine.class("sent-status"), Engine.test_id("room-sent-status")]), || Engine.text("")),
-				Engine.when(
-					row.field(|line| line.failed),
-					||
-						Html.div(
-							"room-retry",
-							[
-								Html.button("Retry", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.True }), Model.resend)),
-								Html.button("Discard", [], model.update_by(row.field(|line| { serial: line.serial, again: Bool.False }), Model.resend)),
-							],
-						),
-					|| Engine.text(""),
+				Conversation.sent_state(
+					{ status: row.field(|line| line.status), failed: row.field(|line| line.failed), test_id: "room-sent-status" },
+					[
+						{ label: "Retry", handler: model.update_by(row.field(|line| { serial: line.serial, again: Bool.True }), Model.resend) },
+						{ label: "Discard", handler: model.update_by(row.field(|line| { serial: line.serial, again: Bool.False }), Model.resend) },
+					],
 				),
 				Engine.when(
 					row.field(|line| line.threaded and line.status.is_empty()),

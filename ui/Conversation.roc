@@ -1,7 +1,7 @@
 ## A conversation, as chat and rooms show one: a timeline of entries, the
 ## newest at the bottom, over a composer. Each caller draws its own kinds of
 ## entry; this draws what they share.
-import pf.Engine exposing [Elem, Signal, State]
+import pf.Engine exposing [Elem, Handler, Signal, State]
 import pf.Html
 import Model
 
@@ -78,5 +78,18 @@ Conversation := [].{
 		enter = Engine.Chord.plain("Enter")
 		sends = model.signal().map(|state| Engine.Keymap.prevent(if (state.coarse_pointer) [] else [enter].concat(enter.primary())))
 		Html.textarea(Engine.const(name), key.map2(model.signal(), |draft_key, state| Model.draft(state, draft_key)), [Engine.attr("rows", "1"), Engine.attr_s("placeholder", placeholder), Engine.ref_s(key.map(|draft_key| "composer-${draft_key}")), Engine.on_key({ keymap: sends }, model.update_by(key, send))], model.set_value_by(key, Model.set_draft))
+	}
+
+	## How an entry sent but not yet in the timeline stands, `status` being
+	## "Sending…" or why it wasn't sent, or "" for nothing to say; and while
+	## it `failed`, a button for each of `actions`, such as Retry.
+	sent_state : { status : Signal(ctx, Str), failed : Signal(ctx, Bool), test_id : Str }, List({ label : Str, handler : Handler(ctx) }) -> Elem(ctx)
+	sent_state = |{ status, failed, test_id }, actions| {
+		buttons = actions.map(|action| Html.button(action.label, [], action.handler))
+		Engine.when(
+			status.map(|said| !said.is_empty()),
+			|| Html.div("sent-state", [Html.span_s(status, [Engine.class("sent-status"), Engine.test_id(test_id)]), Engine.when(failed, || Html.div("sent-actions", buttons), || Engine.text(""))]),
+			|| Engine.text(""),
+		)
 	}
 }
