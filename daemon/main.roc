@@ -668,7 +668,7 @@ chat_call! = |context, provider, asked| {
 		Archive({ session_id }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
-					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 1 WHERE id = :session_id;", params: { session_id } })?
+					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = :now WHERE id = :session_id;", params: { session_id, now: now_ms!() } })?
 					Ok(Ok(Accepted))
 				}
 				PaseoSession(daemon) => {
@@ -680,6 +680,15 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 		Create(asked_create) => started!(context, provider, asked_create)
+		ListHistory(asked_history) => Ok(Ok(History(history!(context, provider, asked_history)?)))
+		Unarchive({ session_id }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 0 WHERE id = :session_id;", params: { session_id } })?
+					Ok(Ok(Accepted))
+				}
+				_ => Ok(no_session(session_id))
+			}
 		Configure({ session_id, model, mode, thinking }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
@@ -701,6 +710,47 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 	}
+}
+
+## Where each provider's history goes on from, as a ListHistory cursor
+## holds it: those it leaves out have no more.
+HistoryCursor : List({ provider : Str, cursor : Str })
+
+## A page of history (see `Chat.Request`): of each provider the call
+## reaches, or that `cursor` goes on with, its next `limit` sessions, the
+## latest first, archived ones too, and where each goes on from.
+history! : Context, Try(Str, [Missing]), { search : Str, cursor : Try(Str, [Missing]), limit : U64 } => Try({ sessions : List(Chat.Session), next : Try(Str, [Missing]) }, _)
+history! = |context, provider, { search, cursor, limit }| {
+	db = context.db
+	from_cursor : Try(HistoryCursor, _)
+	from_cursor = Json.parse(cursor ?? "")
+	# A provider's cursor, or "" to start it, or Err when it has no more.
+	start = |id| match cursor {
+		Err(Missing) => if (Protocol.serves(provider, id)) Ok("") else Err(Done)
+		Ok(_) => (from_cursor ?? []).find_first(|kept| kept.provider == id).map_ok(|kept| kept.cursor).map_err(|_| Done)
+	}
+	var $sessions = []
+	var $next = []
+	match start(Mock.provider.id) {
+		Ok(at) if context.mock.agents => {
+			rows : List({ id : Str, agent : Str, title : Str, model : Str, mode : Str, thinking : Str, archived : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, model, mode, thinking, archived FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+			listed = mock_workspaces!(db)?
+			var $mock = []
+			for row in rows {
+				shown = Mock.session({ id: row.id, agent: row.agent, title: row.title, settings: { model: row.model, mode: row.mode, thinking: row.thinking } }, listed, timed!(db, row.id, now_ms!())?)
+				$mock = $mock.append({ ..shown, archived: if (row.archived > 0) Ok(Chat.timestamp(row.archived)) else Err(Missing) })
+			}
+			offset = U64.from_str(at) ?? 0
+			page = Mock.history($mock, { search, offset, limit })
+			$sessions = $sessions.concat(page.sessions)
+			$next = if (page.more) $next.append({ provider: Mock.provider.id, cursor: (offset + limit).to_str() }) else $next
+		}
+		_ => {}
+	}
+	next : HistoryCursor
+	next = $next
+	Ok({ sessions: $sessions, next: if (next.is_empty()) Err(Missing) else Ok(Json.to_str(next)) })
 }
 
 ## Starts an agent in a workspace of the provider that has it, or in a
@@ -1242,7 +1292,7 @@ mock_workspaces! = |db| {
 	made : List({ id : Str, value : Str })
 	made = Sqlite.query_many!({ db, query: "SELECT id, value FROM mock_workspaces ORDER BY rowid;", params: {}, limits: Sqlite.default_query_limits })?
 	archived : List({ id : Str })
-	archived = Sqlite.query_many!({ db, query: "SELECT id FROM sessions WHERE provider = 'mock' AND archived = 1;", params: {}, limits: Sqlite.default_query_limits })?
+	archived = Sqlite.query_many!({ db, query: "SELECT id FROM sessions WHERE provider = 'mock' AND archived > 0;", params: {}, limits: Sqlite.default_query_limits })?
 	started : List({ id : Str, workspace_id : Str })
 	started = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'mock' AND workspace_id != '' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	stored = made.map(
@@ -1331,6 +1381,11 @@ seed! = |db| {
 		for (seed, position) in Mock.seeds.map_with_index(|seed, position| (seed, position)) {
 			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'mock', :agent, :title, :position);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap() } })?
 			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!(), seed.events.map(|event| { delay_ms: 0, event })), now_ms!())?
+		}
+		# Archived a day ago, after a day's work.
+		for (seed, position) in Mock.archived_seeds.map_with_index(|seed, position| (seed, position + Mock.seeds.len())) {
+			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, archived) VALUES (:id, 'mock', :agent, :title, :position, :archived);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap(), archived: now_ms!() - 86_400_000 } })?
+			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!() - 2 * 86_400_000, seed.events.map(|event| { delay_ms: 0, event })), now_ms!() - 2 * 86_400_000)?
 		}
 	}
 	Ok({})

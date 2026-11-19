@@ -12,8 +12,8 @@ Chat := [].{
 	## workspace's id when the provider has one) and the branch checked out
 	## there, when its running turn started and when it last changed, as times
 	## such as 2026-01-01T09:00:00.000Z. Then the mode it works in and its
-	## thinking level, by their ids, the modes it can switch to, and what its
-	## last turn used.
+	## thinking level, by their ids, the modes it can switch to, what its
+	## last turn used, and when it was archived, if it was.
 	Session : {
 		id : Str,
 		provider : Str,
@@ -29,6 +29,7 @@ Chat := [].{
 		thinking : Try(Str, [Missing]),
 		modes : Try(List(Option), [Missing]),
 		usage : Try(Usage, [Missing]),
+		archived : Try(Str, [Missing]),
 	}
 
 	## A mode an agent works in, such as Claude's plan mode, or another
@@ -91,6 +92,9 @@ Chat := [].{
 	## `Configure` switches a session's model, mode or thinking level, those
 	## it names, at once. A message sent while the agent works on a turn
 	## interrupts it, or with `while_running` `Steer` joins it.
+	## `ListHistory` lists sessions, archived ones too, the latest first: those
+	## whose title, agent or directory holds `search`, at most `limit` of them
+	## from `cursor` on (left out for the first); `Unarchive` lists one again.
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
@@ -101,6 +105,8 @@ Chat := [].{
 		Rename({ session_id : Str, title : Str }),
 		Archive({ session_id : Str }),
 		Configure({ session_id : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }),
+		ListHistory({ search : Str, cursor : Try(Str, [Missing]), limit : U64 }),
+		Unarchive({ session_id : Str }),
 	]
 
 	## A session to start: where it works (a workspace, or a directory), the
@@ -109,8 +115,9 @@ Chat := [].{
 	Create : { place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str }
 
 	## What a request answers: sessions, a timeline's entries, whether the
-	## provider took it, or the id of a session started.
-	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str), Started({ session_id : Str })]
+	## provider took it, the id of a session started, or a page of history
+	## with the cursor of the next, left out after the last.
+	Response : [Sessions(List(Session)), Entries(List(Entry)), Accepted, Rejected(Str), Started({ session_id : Str }), History({ sessions : List(Session), next : Try(Str, [Missing]) })]
 
 	## A kind of agent a provider can start, such as `claude`, and, when its
 	## provider tells, the models and modes it offers and the mode it starts
@@ -127,7 +134,7 @@ Chat := [].{
 
 	## A session the provider tells nothing more of.
 	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
-	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing), mode: Err(Missing), thinking: Err(Missing), modes: Err(Missing), usage: Err(Missing) }
+	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing), mode: Err(Missing), thinking: Err(Missing), modes: Err(Missing), usage: Err(Missing), archived: Err(Missing) }
 
 	## A permission request the provider tells no more of.
 	permission : { request_id : Str, tool : Str, description : Str } -> Permission

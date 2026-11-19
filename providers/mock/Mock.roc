@@ -63,6 +63,36 @@ Mock := [].{
 		{ id: "notes", agent: "claude", title: "Scratch", events: [StatusChanged(Idle)] },
 	]
 
+	## The sessions a fresh daemon starts with archived, for its history.
+	archived_seeds : List(Seed)
+	archived_seeds = [
+		{
+			id: "old-readme",
+			agent: "claude",
+			title: "Tidy the README",
+			events: [
+				UserMessage({ text: "The README repeats itself. Tidy it." }),
+				StatusChanged(Running),
+				AgentMessage({ text: "I merged the two install sections and cut the repeated usage notes." }),
+				StatusChanged(Idle),
+			],
+		},
+	]
+
+	## A page of `sessions`, the history `ListHistory` asks for: those whose
+	## title, agent or directory holds `search`, whatever its case, the
+	## latest first, `limit` of them from the `offset`th on, and whether more
+	## follow.
+	history : List(Chat.Session), { search : Str, offset : U64, limit : U64 } -> { sessions : List(Chat.Session), more : Bool }
+	history = |sessions, { search, offset, limit }| {
+		wanted = search.trim().with_ascii_lowercased()
+		held = |shown| "${shown.title} ${shown.agent} ${shown.workspace.map_ok(|placed| placed.directory) ?? ""}".with_ascii_lowercased().contains(wanted)
+		# A time as its digits, which order as it does.
+		moment = |shown| (shown.updated ?? "").to_utf8().keep_if(|byte| byte >= '0' and byte <= '9').fold(0, |number, digit| number * 10 + (digit - '0').to_u64())
+		latest = sessions.keep_if(held).sort_with(|left, right| if (moment(left) > moment(right)) Before else if (moment(left) < moment(right)) After else Same)
+		{ sessions: latest.drop_first(offset).take_first(limit), more: latest.len() > offset + limit }
+	}
+
 	## The plan a message asking for one gets, and its choices, as Claude's
 	## in Paseo.
 	plan : Str
@@ -473,6 +503,14 @@ expect Mock.git("fix-auth", Commit("4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f"), 
 # Each seed session works in one workspace, of a listed project.
 expect Mock.seeds.all(|seed| Mock.workspaces.keep_if(|shown| shown.session_ids.contains(seed.id)).len() == 1)
 expect Mock.workspaces.all(|shown| Mock.projects.any(|project| project.id == shown.project_id))
+
+expect {
+	at = |id, title, updated| { ..Chat.session({ id, provider: "mock", agent: "claude", title, status: Idle }), updated: Ok(updated) }
+	sessions = [at("a", "Fix the login", "2026-01-01T09:00:00.000Z"), at("b", "Tidy the README", "2026-01-02T09:00:00.000Z"), at("c", "Log in faster", "2026-01-03T09:00:00.000Z")]
+	first = Mock.history(sessions, { search: "", offset: 0, limit: 2 })
+	found = Mock.history(sessions, { search: "LOG", offset: 1, limit: 2 })
+	first.sessions.map(|shown| shown.id) == ["c", "b"] and first.more and found.sessions.map(|shown| shown.id) == ["a"] and !found.more
+}
 
 expect {
 	names = |listing|

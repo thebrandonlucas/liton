@@ -105,7 +105,8 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission`, `Cancel`, `Create`, `Rename`, `Archive` and `Configure`;
+`AnswerPermission`, `Cancel`, `Create`, `Rename`, `Archive`, `Configure`,
+`ListHistory` and `Unarchive`;
 `attention.v1`'s `ListItems`, `Settle`, `Snooze`, `Unsettle` and `Seen`;
 `workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
 `RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
@@ -178,6 +179,25 @@ its `set_agent_model_request`, `set_agent_mode_request` and
 two models of three thinking levels each and a few modes, and refuse others;
 Paseo can't unarchive an agent or a workspace
 over its protocol, and neither can liton. The mock keeps its own changes.
+
+`ListHistory` pages through every session a provider keeps, archived ones
+too, the latest first: those whose title, agent or directory holds `search`
+(`""` for all), `limit` at a time. An archived session tells when it was
+`archived`. The answer's `next` is the cursor of the next page, left out
+after the last; a client sends it back as `cursor`, opaque, which holds where
+each provider goes on from, so the pages of several providers go on
+together. `Unarchive` lists an archived session again:
+
+```json
+{ "capability": "chat.v1", "request": { "ListHistory": { "search": "login", "limit": 50 } } }
+{ "Ok": { "History": { "sessions": [{ "id": "old-readme", "provider": "mock", "agent": "claude", "title": "Tidy the README", "status": "Idle", "archived": "2026-01-01T09:00:00.000Z" }], "next": "[{\"cursor\":\"50\",\"provider\":\"mock\"}]" } } }
+{ "capability": "chat.v1", "request": { "Unarchive": { "session_id": "old-readme" } } }
+{ "Ok": "Accepted" }
+```
+
+An archived session's timeline still follows (`timeline/<session_id>`), for
+a client to show it read only. The mock keeps the sessions it archives, and
+starts with one archived a day ago.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is

@@ -22,6 +22,9 @@ Fixtures := [].{
 		Archive({ session_id: "s1" }),
 		Configure({ session_id: "s1", model: Ok("claude-opus-4"), mode: Err(Missing), thinking: Ok("high") }),
 		Create({ place: Workspace("main"), agent: "claude", model: Err(Missing), mode: Ok("plan"), thinking: Ok("low"), prompt: "" }),
+		ListHistory({ search: "", cursor: Err(Missing), limit: 50 }),
+		ListHistory({ search: "login", cursor: Ok("c2"), limit: 50 }),
+		Unarchive({ session_id: "s1" }),
 	]
 
 	responses : List(Chat.Response)
@@ -29,6 +32,8 @@ Fixtures := [].{
 		Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission }), Fixtures.configured]),
 		Accepted,
 		Rejected("no session s2"),
+		History({ sessions: [{ ..Chat.session({ id: "s3", provider: "mock", agent: "claude", title: "Fix the login", status: Finished }), archived: Ok("2026-01-01T09:00:00.000Z") }], next: Ok("c2") }),
+		History({ sessions: [], next: Err(Missing) }),
 	]
 
 	## A session telling its mode, thinking level, modes and usage.
