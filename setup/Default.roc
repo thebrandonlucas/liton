@@ -1,6 +1,6 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
-## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling
-## and Chat presets, Developer first, and the Pastoral, Hypr and Plain themes,
+## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling,
+## Chat and Board presets, Developer first, and the Pastoral, Hypr and Plain themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
@@ -61,6 +61,28 @@ Default := [].{
 	chat = {
 		name: "Chat",
 		snapshot: { ..Default.developer.snapshot, grid: Default.with_tiles(Default.developer.snapshot.grid, |tile| if (tile.id == "tile-1") { ..tile, panes: [{ id: "pane-1", widget: "sessions", pinned: "", options: [{ key: "show_agent", value: "false" }] }] } else tile), collapsed: [Right] },
+	}
+
+	## Tickets, as Linear lays them out: the scopes to pick from, the tickets
+	## of the scope picked, and the properties of the one under the cursor,
+	## with a chat hidden beside the tickets until a session is opened.
+	board : Setup.Preset
+	board = {
+		name: "Board",
+		snapshot: {
+			..Default.developer.snapshot,
+			grid: Default.with_tiles(
+				Default.developer.snapshot.grid,
+				|tile|
+					if (tile.id == "tile-1")
+						{ ..tile, panes: [{ id: "pane-1", widget: "ticket-scopes", pinned: "", options: [] }] }
+					else if (tile.id == "tile-2")
+						{ ..tile, panes: [{ id: "pane-2", widget: "board", pinned: "", options: [] }, { id: "pane-3", widget: "chat", pinned: "", options: [] }] }
+					else
+						{ ..tile, active: "pane-4", panes: [{ id: "pane-4", widget: "ticket-properties", pinned: "", options: [] }] },
+			),
+			hidden: ["pane-3"],
+		},
 	}
 
 	with_tiles : Grid.Layout, (Grid.Tile -> Grid.Tile) -> Grid.Layout
@@ -157,5 +179,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
 }

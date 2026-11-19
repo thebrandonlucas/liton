@@ -141,6 +141,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Dragging a pane by its tab or header shows the layout as if you dropped it where the pointer is, the other tiles making room, with its title following the pointer; the tiles slide to their new places where the browser can animate it, unless motion is reduced. Escape, or letting go outside the tiles, puts everything back.
 - Keys for the layout, also in the ⌘K palette and the `?` list: outside a text box, Ctrl+Shift or ⌘⇧ with an arrow focuses the tile that way, as does W then H, J, K or L; W then M, X, T or R and one of those letters moves the pane, swaps the tiles, joins the tile into the other's tabs or moves the tile's edge that way; W then V or B splits the pane off into a new tile to the right or below.
 - Drag the line between two tiles to resize the columns or rows beside it; in the Developer, Inbox and Chat presets the drawers keep their width, and the main area's tiles and rows resize.
+- The Board preset, in Settings or with 5, lays tickets out as Linear does: Scopes on the left picks all tickets, yours, those unassigned or a source's, each with how many it has; the middle lists them grouped by what their status means (started, open, done, canceled), each group counted, every row with its key, title, labels, the session working on it and its assignees, and a search; and Properties on the right shows the status, assignees, labels and sessions of the ticket you click, to change at once as in a Ticket pane.
 
 ### Fixed
 

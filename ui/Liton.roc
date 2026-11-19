@@ -9,6 +9,7 @@ import cap.Manifest
 import cap.Protocol
 import cap.Review
 import cap.Rooms
+import cap.Tickets
 import cap.WorkspaceGit
 import setup.Setup
 import Highlight
@@ -868,7 +869,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -879,6 +880,9 @@ Liton := [].{
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
 							Ticket => Liton.ticket_view(model, id)
+							Scopes => Liton.scopes(model)
+							Board => Liton.board(model, id)
+							Properties => Liton.properties(model, id)
 							Rooms => Liton.rooms(model)
 							Room => Liton.room_view(model, id)
 							Capabilities => Liton.capabilities(model)
@@ -1313,12 +1317,10 @@ Liton := [].{
 		Engine.when(ticket_id.map(Str.is_empty), || Html.p("Pick a ticket in Tickets to show it here.", "missing"), || Liton.ticket_detail(model, id, ticket_id))
 	}
 
-	## A ticket shown: its key, a link to it where its source keeps it, its title, status, assignees, source and
-	## labels, the sessions working on it, each to open or unlink, and to
-	## link the session focused; its body and comments as Markdown; and its
-	## status, its
-	## assignees, of its source's people, and a comment to add, each shown
-	## at once, saving until the daemon has it.
+	## A ticket shown: its key, a link to it where its source keeps it, its
+	## title, status, assignees and labels, its fields and sessions
+	## (`ticket_fields`, `ticket_sessions`), and its body and comments
+	## (`ticket_discussion`).
 	ticket_detail : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	ticket_detail = |model, id, opened_ticket| {
 		shown = opened_ticket.map2(model.signal(), |opened_id, state| TicketDesk.ticket_shown(state.tickets, opened_id) ?? TicketDesk.missing)
@@ -1326,13 +1328,7 @@ Liton := [].{
 		Html.div_attrs(
 			[Engine.class("ticket"), Engine.attr("data-part", "ticket")],
 			[
-				Html.div(
-					"ticket-bar",
-					[
-						Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
-						Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]),
-					],
-				),
+				Liton.ticket_bar(model, summary),
 				Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
 				Html.div(
 					"ticket-meta",
@@ -1342,84 +1338,249 @@ Liton := [].{
 						Html.span_s(summary.map(|listed| Str.join_with(listed.labels, " · ")), [Engine.class("labels")]),
 					],
 				),
-				Html.div_attrs(
-					[Engine.class("ticket-fields"), Engine.attr("data-part", "fields")],
+				Liton.ticket_fields(model, summary),
+				Liton.ticket_sessions(model, summary),
+			].concat(Liton.ticket_discussion(model, id, opened_ticket)),
+		)
+	}
+
+	## A ticket's key and a link to it where its source keeps it.
+	ticket_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
+	ticket_bar = |model, summary|
+		Html.div(
+			"ticket-bar",
+			[
+				Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
+				Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]),
+			],
+		)
+
+	## A ticket's status and its assignees, of its source's people, each
+	## changed at once, saving until the daemon has it.
+	ticket_fields : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
+	ticket_fields = |model, summary|
+		Html.div_attrs(
+			[Engine.class("ticket-fields"), Engine.attr("data-part", "fields")],
+			[
+				Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
+				Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
+				Engine.element(
+					"fieldset",
+					[Engine.class("ticket-people")],
 					[
-						Dropdown.select(Engine.const("Set status"), summary.map(|listed| listed.status.id), [], Liton.choices(summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.statuses) ?? []).map(|status| { value: status.id, label: status.name }))), model.set_value_by(summary.map(|listed| listed.id), |state, ticket_id, status_id| Model.ask_tickets(state, SetStatus({ ticket_id, status_id })))),
-						Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
-						Engine.element(
-							"fieldset",
-							[Engine.class("ticket-people")],
-							[
-								Engine.element("legend", [], [Engine.text("Assignees")]),
-								Engine.each(
-									summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.people) ?? []).map(|person| { ticket_id: listed.id, person, assigned: listed.assignees.contains(person) })),
-									|choice| choice.person.id,
-									|row| Engine.element("label", [], [Html.checkbox(row.field(|choice| choice.person.name), row.field(|choice| choice.assigned), [], model.lift_row().set_value_by(row.field(|choice| { ticket_id: choice.ticket_id, person_id: choice.person.id }), Model.assign)), Engine.text_s(row.field(|choice| choice.person.name))]),
-								),
-							],
-						),
-					],
-				),
-				Html.div_attrs(
-					[Engine.class("ticket-sessions"), Engine.attr("data-part", "sessions")],
-					[
+						Engine.element("legend", [], [Engine.text("Assignees")]),
 						Engine.each(
-							summary.map2(model.signal(), |listed, state| TicketDesk.links_shown(state.tickets).keep_if(|link| link.ticket_id == listed.id)),
-							|link| link.session_id,
-							|row| {
-								title = row.key().map2(model.signal().lift_row(), |session_id, state| Model.session(state, session_id).title)
-								Html.div(
-									"ticket-session",
-									[
-										Html.button_s(title, [Engine.class("session-title"), Html.aria_label_s(title.map(|name| "Open ${name}"))], model.lift_row().update_by(row.key(), |state, session_id| Model.open(state, Session(session_id)))),
-										Html.span_s(row.field(|link| if (link.inferred) "by its branch" else "linked"), [Engine.class("link-kind")]),
-										Html.button("Unlink", [Html.aria_label_s(title.map(|name| "Unlink ${name}"))], model.lift_row().update_by(row.key(), |state, unlinked| Model.ask_tickets(state, Unlink({ session_id: unlinked })))),
-									],
-								)
-							},
+							summary.map2(model.signal(), |listed, state| (state.tickets.listing.sources.find_first(|source| source.id == listed.source).map_ok(|source| source.people) ?? []).map(|person| { ticket_id: listed.id, person, assigned: listed.assignees.contains(person) })),
+							|choice| choice.person.id,
+							|row| Engine.element("label", [], [Html.checkbox(row.field(|choice| choice.person.name), row.field(|choice| choice.assigned), [], model.lift_row().set_value_by(row.field(|choice| { ticket_id: choice.ticket_id, person_id: choice.person.id }), Model.assign)), Engine.text_s(row.field(|choice| choice.person.name))]),
 						),
-						Engine.when(
-							summary.map2(model.signal(), |listed, state| Liton.linkable(state, listed.id)),
-							|| Html.button_s(model.signal().map(|state| "Link to ${Model.session(state, Model.focused_session(state)).title}"), [Engine.class("link-session")], model.update_by(summary.map(|listed| listed.id), Model.link_ticket)),
-							|| Engine.text(""),
-						),
-					],
-				),
-				Html.p_s(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
-				Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
-				Html.ul(
-					[Engine.class("ticket-comments")],
-					[
-						Engine.each(
-							shown.map(|opened| opened.comments),
-							|posted| posted.id,
-							|row|
-								Html.li(
-									[Engine.class_s(row.key().map(|comment_id| if (comment_id.starts_with("pending-")) "ticket-comment pending" else "ticket-comment")), Engine.attr("data-part", "comment")],
-									[
-										Html.div(
-											"comment-header",
-											[
-												Html.span_s(row.field(|posted| posted.author.name), [Engine.class("comment-author")]),
-												Html.span_s(row.field(|posted| posted.created).map2(model.signal().lift_row(), |created, state| Model.ago(state, created)), [Engine.class("age")]),
-											],
-										),
-										Liton.markdown(model.lift_row(), row.key().map(|comment_id| "comment/${comment_id}"), row.field(|posted| Markdown.blocks(posted.body))),
-									],
-								),
-						),
-					],
-				),
-				Html.form(
-					"New comment",
-					[Engine.class("ticket-composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(id, Model.comment_ticket))],
-					[
-						Html.textarea(Engine.const("Comment on this ticket"), id.map2(model.signal(), |pane_id, state| Model.draft(state, "${pane_id}/ticket")), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown")], model.set_value_by(id.map(|pane_id| "${pane_id}/ticket"), Model.set_draft)),
-						Html.div("comment-actions", [Html.submit_button("Comment", [])]),
 					],
 				),
 			],
+		)
+
+	## The sessions working on a ticket, each with its status, to open in a
+	## chat or unlink, and to link the session focused.
+	ticket_sessions : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
+	ticket_sessions = |model, summary|
+		Html.div_attrs(
+			[Engine.class("ticket-sessions"), Engine.attr("data-part", "sessions")],
+			[
+				Engine.each(
+					summary.map2(model.signal(), |listed, state| TicketDesk.links_shown(state.tickets).keep_if(|link| link.ticket_id == listed.id)),
+					|link| link.session_id,
+					|row| {
+						session = row.key().map2(model.signal().lift_row(), |session_id, state| Model.session(state, session_id))
+						title = session.map(|shown| shown.title)
+						Html.div(
+							"ticket-session",
+							[
+								Html.span_s(Engine.const(""), [Engine.class_s(session.map(|shown| "status-dot ${Liton.status_dot(shown.status)}")), Engine.attr("aria-hidden", "true")]),
+								Html.button_s(title, [Engine.class("session-title"), Html.aria_label_s(title.map(|name| "Open ${name}"))], model.lift_row().update_by(row.key(), |state, session_id| Model.open(state, Session(session_id)))),
+								Html.span_s(session.map(|shown| Liton.status_text(shown.status)), [Engine.class("status-word")]),
+								Html.span_s(row.field(|link| if (link.inferred) "by its branch" else "linked"), [Engine.class("link-kind")]),
+								Html.button("Unlink", [Html.aria_label_s(title.map(|name| "Unlink ${name}"))], model.lift_row().update_by(row.key(), |state, unlinked| Model.ask_tickets(state, Unlink({ session_id: unlinked })))),
+							],
+						)
+					},
+				),
+				Engine.when(
+					summary.map2(model.signal(), |listed, state| Liton.linkable(state, listed.id)),
+					|| Html.button_s(model.signal().map(|state| "Link to ${Model.session(state, Model.focused_session(state)).title}"), [Engine.class("link-session")], model.update_by(summary.map(|listed| listed.id), Model.link_ticket)),
+					|| Engine.text(""),
+				),
+			],
+		)
+
+	## A ticket's body and comments as Markdown, once loaded, and a comment
+	## to add, shown at once, saving until the daemon has it.
+	ticket_discussion : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str) -> List(Elem(PaneCtx))
+	ticket_discussion = |model, id, opened_ticket| {
+		shown = opened_ticket.map2(model.signal(), |opened_id, state| TicketDesk.ticket_shown(state.tickets, opened_id) ?? TicketDesk.missing)
+		[
+			Html.p_s(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
+			Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
+			Html.ul(
+				[Engine.class("ticket-comments")],
+				[
+					Engine.each(
+						shown.map(|opened| opened.comments),
+						|posted| posted.id,
+						|row|
+							Html.li(
+								[Engine.class_s(row.key().map(|comment_id| if (comment_id.starts_with("pending-")) "ticket-comment pending" else "ticket-comment")), Engine.attr("data-part", "comment")],
+								[
+									Html.div(
+										"comment-header",
+										[
+											Html.span_s(row.field(|posted| posted.author.name), [Engine.class("comment-author")]),
+											Html.span_s(row.field(|posted| posted.created).map2(model.signal().lift_row(), |created, state| Model.ago(state, created)), [Engine.class("age")]),
+										],
+									),
+									Liton.markdown(model.lift_row(), row.key().map(|comment_id| "comment/${comment_id}"), row.field(|posted| Markdown.blocks(posted.body))),
+								],
+							),
+					),
+				],
+			),
+			Html.form(
+				"New comment",
+				[Engine.class("ticket-composer"), Engine.attr("data-part", "composer"), Engine.on("submit", model.update_by(id, Model.comment_ticket))],
+				[
+					Html.textarea(Engine.const("Comment on this ticket"), id.map2(model.signal(), |pane_id, state| Model.draft(state, "${pane_id}/ticket")), [Engine.attr("rows", "3"), Engine.attr("placeholder", "Comment, in Markdown")], model.set_value_by(id.map(|pane_id| "${pane_id}/ticket"), Model.set_draft)),
+					Html.div("comment-actions", [Html.submit_button("Comment", [])]),
+				],
+			),
+		]
+	}
+
+	## A Scopes pane: every ticket, yours, those assigned to nobody and each
+	## source's, each with how many tickets it has, the one Board panes show
+	## marked.
+	scopes : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	scopes = |model|
+		Html.ul(
+			[Engine.class("scopes"), Engine.attr("data-part", "scope")],
+			[
+				Engine.each(
+					model.signal().map(|state| TicketDesk.scopes(state.tickets)),
+					|listed| listed.key,
+					|row|
+						Html.li(
+							[],
+							[
+								Engine.element(
+									"button",
+									[Engine.attr("type", "button"), Engine.class("scope"), Html.aria_label_s(row.field(|listed| listed.name)), Html.flag("aria-pressed", row.field(|listed| listed.scope).map2(model.signal().lift_row(), |scope, state| state.tickets.scope == scope)), Engine.on_click(model.lift_row().update_by(row.field(|listed| listed.scope), Model.pick_scope))],
+									[Html.span_s(row.field(|listed| listed.name), [Engine.class("scope-name")]), Html.span_s(row.field(|listed| listed.count.to_str()), [Engine.class("count")])],
+								),
+							],
+						),
+				),
+			],
+		)
+
+	## A Board pane: the tickets of the scope picked, those its search
+	## matches, in groups by the kind of their status, each with how many it
+	## has (`TicketDesk.groups`).
+	board : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	board = |model, id| {
+		groups = id.map2(model.signal(), |pane_id, state| TicketDesk.groups(state.tickets, pane_id, List))
+		Html.div(
+			"board",
+			[
+				Html.div(
+					"board-bar",
+					[
+						Html.span_s(model.signal().map(|state| TicketDesk.scope_name(state.tickets, state.tickets.scope)), [Engine.class("board-scope")]),
+						Html.text_input(Engine.const("Search tickets"), "search", id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter.text), [Engine.attr("placeholder", "Search")], model.set_value_by(id, |state, pane_id, text| Model.filter_board(state, pane_id, |filter| { ..filter, text }))),
+					],
+				),
+				Engine.each(
+					groups,
+					|group| group.key,
+					|group_row|
+						Engine.element(
+							"section",
+							[Engine.class("board-group"), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title))],
+							[
+								Html.div("board-group-header", [Html.span_s(group_row.field(|group| group.title), [Engine.class("group-title")]), Html.span_s(group_row.field(|group| group.tickets.len().to_str()), [Engine.class("count"), Engine.test_id_s(group_row.key().map(|key| "group-${key}"))])]),
+								Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), row))]),
+							],
+						),
+				),
+				Html.p_s(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+			],
+		)
+	}
+
+	## A ticket of a Board: its key and title, which put the cursor on it,
+	## its labels, the session working on it with its status, and its
+	## assignees, marked while under the cursor.
+	board_ticket : State(ctx, Model.State), RowRef(ctx, Tickets.Summary) -> Elem(Row(ctx, Tickets.Summary))
+	board_ticket = |model, row| {
+		state = model.signal().lift_row()
+		session = row.key().map2(state, |ticket_id, shown| Liton.ticket_session(shown, ticket_id))
+		Html.li(
+			[Engine.class_s(row.key().map2(state, |ticket_id, shown| if (Model.focused(shown, [Ticket]) == Ticket(ticket_id)) "board-ticket focused" else "board-ticket")), Engine.attr("data-part", "ticket"), Engine.test_id_s(row.key().map(|ticket_id| "ticket-${ticket_id}"))],
+			[
+				Engine.element(
+					"button",
+					[Engine.attr("type", "button"), Engine.class("ticket-title"), Html.aria_label_s(row.field(|ticket| "${ticket.key} ${ticket.title}")), Engine.on_click(model.lift_row().update_by(row.key(), |shown, ticket_id| Model.focus_on(shown, Ticket(ticket_id))))],
+					[Html.span_s(row.field(|ticket| ticket.key), [Engine.class("ticket-key")]), Engine.text_s(row.field(|ticket| ticket.title))],
+				),
+				Html.span_s(row.field(|ticket| Str.join_with(ticket.labels, " · ")), [Engine.class("labels")]),
+				Html.span_s(Engine.const(""), [Engine.class_s(session.map(|linked| if (linked.title.is_empty()) "" else "status-dot ${linked.dot}")), Engine.attr("aria-hidden", "true")]),
+				Html.span_s(session.map(|linked| linked.title), [Engine.class("session"), Engine.attr_s("title", session.map(|linked| linked.status))]),
+				Html.span_s(row.field(|ticket| Str.join_with(ticket.assignees.map(|person| person.name), ", ")), [Engine.class("assignees")]),
+			],
+		)
+	}
+
+	## The first session working on a ticket: its title, status and dot, ""
+	## for none.
+	ticket_session : Model.State, Str -> { title : Str, status : Str, dot : Str }
+	ticket_session = |state, ticket_id|
+		match TicketDesk.links_shown(state.tickets).find_first(|link| link.ticket_id == ticket_id) {
+			Ok(link) => {
+				session = Model.session(state, link.session_id)
+				{ title: session.title, status: Liton.status_text(session.status), dot: Liton.status_dot(session.status) }
+			}
+			Err(_) => { title: "", status: "", dot: "" }
+		}
+
+	## A session's status as its dot shows it.
+	status_dot : Chat.Status -> Str
+	status_dot = |status|
+		match status {
+			Running => "running"
+			AwaitingPermission => "waiting"
+			Failed(_) => "failed"
+			Finished => "done"
+			Idle => "idle"
+		}
+
+	## A Properties pane: the key, title, status, assignees and labels of the
+	## ticket under the cursor, a link to where its source keeps it, and the
+	## sessions working on it.
+	properties : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	properties = |model, id| {
+		ticket_id = id.map2(model.signal(), |pane_id, state| Model.ticket_of(state, pane_id))
+		summary = ticket_id.map2(model.signal(), |shown_id, state| (TicketDesk.ticket_shown(state.tickets, shown_id) ?? TicketDesk.missing).summary)
+		Engine.when(
+			ticket_id.map(Str.is_empty),
+			|| Html.p("Pick a ticket to see its properties.", "missing"),
+			||
+				Html.div(
+					"ticket properties",
+					[
+						Liton.ticket_bar(model, summary),
+						Html.p_s(summary.map(|listed| listed.title), [Engine.class("properties-title")]),
+						Liton.ticket_fields(model, summary),
+						Html.div("ticket-labels", [Html.span_s(Engine.const("Labels"), [Engine.class("field-name")]), Html.span_s(summary.map(|listed| if (listed.labels.is_empty()) "None" else Str.join_with(listed.labels, " · ")), [Engine.class("labels")])]),
+						Liton.ticket_sessions(model, summary),
+					],
+				),
 		)
 	}
 

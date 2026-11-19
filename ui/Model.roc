@@ -1450,8 +1450,8 @@ Model := [].{
 		explored = if (offered(Capability.files_v1)) showing("files").join_map(files) else []
 		# The tickets and their sessions' links, and the ticket each Ticket
 		# pane shows.
-		desks = laid_out.keep_if(|shown| (shown.widget == "tickets" or shown.widget == "ticket") and Model.pane_visible(state, shown.id))
-		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
+		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
+		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket").map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
@@ -2483,6 +2483,14 @@ Model := [].{
 	filter_tickets : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
 	filter_tickets = |state, pane_id, change| { ..state, tickets: TicketDesk.with_view(state.tickets, pane_id, |view| { ..view, filter: change(view.filter) }) }
 
+	## Shows a scope's tickets in Board panes.
+	pick_scope : State, TicketDesk.Scope -> State
+	pick_scope = |state, scope| { ..state, tickets: { ..state.tickets, scope } }
+
+	## Changes the filter of a Board pane, over its scope's.
+	filter_board : State, Str, (Tickets.Filter -> Tickets.Filter) -> State
+	filter_board = |state, pane_id, change| { ..state, tickets: TicketDesk.with_board(state.tickets, pane_id, |board| { ..board, filter: change(board.filter) }) }
+
 	## Sends a review.v1 request, shown at once by applying it to the review
 	## the UI has (`review_of`) until the daemon answers.
 	ask_review : State, Review.Request -> State
@@ -3006,7 +3014,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3031,6 +3039,9 @@ Model := [].{
 				"files" => Files
 				"tickets" => Tickets
 				"ticket" => Ticket
+				"ticket-scopes" => Scopes
+				"board" => Board
+				"ticket-properties" => Properties
 				"rooms" => Rooms
 				"room" => Room
 				"capabilities" => Capabilities

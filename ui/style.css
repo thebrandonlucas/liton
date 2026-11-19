@@ -476,6 +476,33 @@ kbd:empty { display: none; }
 .ticket-fields { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12.5px; }
 .ticket-fields select { padding: 2px 4px; }
 .ticket-saving { font: 11px var(--font-mono); color: var(--muted); }
+/* The Board preset: scopes, the tickets in dense single-line rows grouped
+   by status, and the properties of the one under the cursor. */
+.scopes { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+.scope { display: flex; width: 100%; gap: 8px; padding: 4px 8px; border: none; border-radius: var(--small-radius); background: none; font-size: 13px; text-align: left; }
+.scope:hover { background: var(--tool); }
+.scope[aria-pressed="true"] { background: var(--selected); }
+.scope .count { margin-left: auto; font: 11px var(--font-mono); color: var(--muted); }
+.board { flex: 1; min-height: 0; overflow-y: auto; font-size: 13px; }
+.board-bar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--edge); background: var(--glass-deep); }
+.board-scope { font-weight: 600; }
+.board-bar input { margin-left: auto; width: 16ch; padding: 3px 8px; font-size: 12px; }
+.board-group-header { display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; background: var(--tool); font-weight: 600; }
+.board-group-header .count, .board-ticket .labels, .board-ticket .assignees, .board-ticket .session { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
+.board-rows { list-style: none; margin: 0; padding: 0; }
+.board-ticket { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 5px 12px; transition: background-color var(--fast) ease; }
+.board-ticket:hover { background: var(--tool); }
+.board-ticket.focused { background: var(--selected); box-shadow: inset 2px 0 var(--accent); }
+.board-ticket .ticket-title { flex: 1; min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-ticket .ticket-title:active { transform: none; }
+.board-ticket .session { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+.board-ticket span:empty { display: none; }
+.properties { padding: 8px 10px; }
+.properties-title { margin: 0; font-weight: 600; }
+.properties .ticket-fields { flex-direction: column; align-items: stretch; }
+.ticket-labels { display: flex; gap: 8px; font-size: 12.5px; }
+.field-name { color: var(--muted); }
+.ticket-session .status-word { font: 11px var(--font-mono); color: var(--muted); }
 .ticket-saving:empty { display: none; }
 .ticket-people { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 0; border: none; flex-basis: 100%; }
 .ticket-people legend { float: left; margin-right: 4px; padding: 0; color: var(--muted); }
