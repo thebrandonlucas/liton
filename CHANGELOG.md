@@ -213,6 +213,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Inbox preset lays out like Paseo's agent inbox, in the Neutral theme: the inbox fills the main area, and the session you open shows in a wider right drawer as its status, latest activity and composer, whose model, mode and thinking chips and steering work as in a chat. A row's Open in the whole chat shows all of it. The rooms are in the left drawer, collapsed. On a phone, opening a session goes from the list to its panel, and back returns to the list. A surface is offered once the daemon offers what it shows as it opens, no longer counting a collapsed drawer's panes.
 - The browser keeps a deck of surfaces, each as you left it with its own theme and focus, as snapshot version 9. A layout saved before loads as a deck of it alone; a new browser starts with its setup's deck.
 - Every drop-down, from the composer's mode, model and thinking to the inbox's and tickets' filters and Settings, is one compact pill as wide as what it shows, with a small chevron and a ring when focused, in place of the system's look.
+- The tiles, the deck's strip and the window's edges keep the theme's gap between them, at least 8 pixels (6 on a phone, beside its safe areas), even in a theme without gaps, so nothing meets the window's edge.
 
 ### Fixed
 

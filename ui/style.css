@@ -99,6 +99,9 @@ html, body { margin: 0; height: 100%; background: Canvas; overscroll-behavior-x:
   --small-radius: max(4px, calc(var(--radius) - 4px));
   --fast: calc(var(--motion) * 140ms);
   --slow: calc(var(--motion) * 200ms);
+  /* The room between the tiles, the deck's strip and the window's edges:
+     the theme's gap, but never so little that a tile meets an edge. */
+  --room: max(var(--gap), 8px);
   height: 100%; display: flex; flex-direction: column; outline: none;
   background: var(--background); color: var(--text); accent-color: var(--accent);
   font: 14px/1.45 var(--font-ui);
@@ -127,7 +130,7 @@ select:disabled { opacity: .5; cursor: default; }
 select option { background: var(--glass-tint); color: var(--text); }
 
 /* Tiling's bar: liton, and status modules on the right. */
-.bar { display: flex; flex: 0 0 2.4rem; align-items: center; gap: .75rem; margin: var(--gap) var(--gap) 0; padding: 0 .4rem;
+.bar { display: flex; flex: 0 0 2.4rem; align-items: center; gap: .75rem; margin: var(--room) var(--room) 0; padding: 0 .4rem;
   border: 1px solid var(--edge); border-radius: var(--radius); background: var(--glass-deep);
   backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
   font: 500 12.5px/1 var(--font-mono); color: var(--muted); box-shadow: var(--shadow); }
@@ -163,7 +166,7 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 /* The deck: a slim strip of its surfaces under the tiles, the one shown
    lit. A surface switched to slides in from the side it lies on, a new
    animation (-0, -1) for each switch; not where motion is reduced. */
-.deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--gap) calc(var(--gap) / 2); }
+.deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--room) calc(var(--room) + env(safe-area-inset-bottom)); }
 .deck-surface { padding: 1px 10px; border: 1px solid transparent; border-radius: 999px; background: none;
   color: var(--muted); font: 11px var(--font-mono); letter-spacing: .02em; opacity: .7; }
 .deck-surface:hover { opacity: 1; color: var(--text); border-color: var(--edge); }
@@ -271,7 +274,7 @@ kbd:empty { display: none; }
    the tile; half a gap around each tile makes the gaps even, and none
    around a collapsed drawer's. */
 .tile-tabs { display: none; }
-.grid { flex: 1; min-height: 0; display: grid; padding: calc(var(--gap) / 2); overflow: auto; }
+.grid { flex: 1; min-height: 0; display: grid; padding: calc(var(--room) - var(--gap) / 2); overflow: auto; }
 .tile { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(var(--gap) / 2); }
 .panel-anchor { position: absolute; inset: 0; pointer-events: none; outline: none; }
 .workbench .collapsed { display: none; }
@@ -1225,7 +1228,7 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 
 /* Phones: one panel at a time, in the reach of a thumb. */
 @media (max-width: 640px) {
-  .liton { --gap: 6px; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  .liton { --gap: 6px; --room: max(var(--gap), 6px); height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   input, select, textarea { font-size: 16px; }
   /* No blur behind the panes, which fill a phone's screen: its GPU would blur
      that much on every frame that scrolls or changes, and lag. */
@@ -1240,7 +1243,7 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
   .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .bar button { min-width: 44px; min-height: 44px; }
   .bar .icon { --icon-size: 20px; }
-  .tile-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }
+  .tile-tabs { display: flex; gap: 6px; padding: var(--room) var(--room) 0; overflow-x: auto; }
   .tile { overflow-y: auto; }
   .grid.tiling { display: flex; flex-direction: column; }
   .tiling .tile { display: none; }
@@ -1250,9 +1253,9 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
   /* A Workbench's slots are full-width panels, swiped between or picked
      from a tab bar at the bottom. */
   .workbench { display: flex; padding: 0; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
-  .workbench .tile, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: var(--gap); scroll-snap-align: start; scroll-snap-stop: always; }
+  .workbench .tile, .workbench .collapsed { display: flex; flex: 0 0 100%; min-width: 0; padding: var(--room); scroll-snap-align: start; scroll-snap-stop: always; }
   .tile-tabs:has(+ .workbench) { order: 1; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; overflow: visible;
-    margin: 0 var(--gap) max(var(--gap), env(safe-area-inset-bottom)); padding: 4px;
+    margin: 0 var(--room) max(var(--room), env(safe-area-inset-bottom)); padding: 4px;
     border: 1px solid var(--edge); border-radius: calc(var(--radius) + 10px); background: var(--glass-deep);
     backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar); box-shadow: var(--shadow); }
   .tile-tabs:has(+ .workbench) button { --tab-on: 0; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
@@ -1268,7 +1271,7 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
   /* The deck sits over a Workbench's tab bar, where a swipe across it
      goes to the next or previous surface. */
-  .deck { order: 1; padding: 2px var(--gap) 4px; overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
+  .deck { order: 1; padding: 2px var(--room) var(--room); overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
   .tile-tabs:has(+ .workbench) { order: 2; }
   /* Settings: its rail is a list, and a section picked covers it. */
   .settings { grid-template-columns: minmax(0, 1fr); }
