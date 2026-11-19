@@ -74,8 +74,9 @@ Model := [].{
 		focus : List(Context.Id),
 
 		## What a view shows within its focused context: the thread open in a
-		## room, by the room and its top-level message.
-		sub_focus : [None, Thread({ room_id : Str, root : Str })],
+		## room, by the room and its top-level message, or the file of the
+		## Review surface in view.
+		sub_focus : [None, Thread({ room_id : Str, root : Str }), File(Str)],
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
@@ -1446,7 +1447,7 @@ Model := [].{
 		}
 		# The panes of a widget on screen that show a context.
 		showing = |widget| laid_out.keep_if(|shown| shown.widget == widget and (Model.pane_visible(state, shown.id) or Model.main_diff(state) == shown.id) and Model.context_of(state, shown) != Session("") and !Context.to_str(Model.context_of(state, shown)).starts_with("starting:"))
-		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git).concat(showing("review").join_map(|shown| Model.review_subjects(state, shown))) else []
+		changes = if (offered(Capability.workspace_git_v1)) showing("changes").join_map(git).concat(showing("review").concat(showing("review-files")).join_map(|shown| Model.review_subjects(state, shown))) else []
 		files = |shown| {
 			context = Model.context_of(state, shown)
 			{ folders, file, .. } = Model.file_pane(state, shown.id)
@@ -1457,7 +1458,7 @@ Model := [].{
 		# pane shows.
 		desks = laid_out.keep_if(|shown| (shown.widget == "tickets" or shown.widget == "ticket") and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
-		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).map(|shown| Threads(Model.context_of(state, shown))) else []
+		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).map(|shown| Threads(Model.context_of(state, shown))) else []
 		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
 		# The speech engine's, for the mic in chat panes' composers, once offered.
 		voice = if (state.capabilities.contains(Capability.voice_v1) and laid_out.any(|shown| shown.widget == "chat")) [VoiceStatus] else []
@@ -2671,15 +2672,60 @@ Model := [].{
 		}
 	}
 
-	## A Review pane's topics: its scope's changes, and the hunks of each of
-	## its files with text.
+	## A Review surface's part's topics: its scope's changes, and for its
+	## view, the hunks of each of their files with text.
 	review_subjects : State, Pane -> List(Protocol.Subject)
 	review_subjects = |state, shown| {
 		context = Model.context_of(state, shown)
 		scope = state.review_desk.scope
-		files = Model.git_changes_of(state, context, scope).map_ok(|changes| changes.files) ?? []
+		files = if (shown.widget == "review") Model.git_changes_of(state, context, scope).map_ok(|changes| changes.files) ?? [] else []
 		files.keep_if(|file| file.body == Text).map(|file| File({ context, scope, path: file.path })).prepend(Changes({ context, scope }))
 	}
+
+	## A Review surface's changed files, in the order its navigator's tree
+	## lists them, once its poll answers.
+	review_files : State, Pane -> [Files(List(WorkspaceGit.File)), Loading]
+	review_files = |state, shown| {
+		in_tree = |files| changed_rows(files, [], "", 0).keep_if(|row| !row.folder).keep_oks(|row| files.find_first(|file| file.path == row.path))
+		Model.git_changes_of(state, Model.context_of(state, shown), state.review_desk.scope).map_ok(|changes| Files(in_tree(changes.files))) ?? Loading
+	}
+
+	## The file the Review surface has in view, "" for none.
+	review_focus : State -> Str
+	review_focus = |state|
+		match state.sub_focus {
+			File(path) => path
+			_ => ""
+		}
+
+	## A row of a Review navigator's tree, as Changes' are, with how many
+	## threads are open on its lines and whether the view has it in view.
+	ReviewRow : { path : Str, folder : Bool, folded : Bool, depth : U64, file : WorkspaceGit.File, threads : U64, focused : Bool }
+
+	review_tree : State, Pane -> List(ReviewRow)
+	review_tree = |state, shown| {
+		threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| !thread.resolved)
+		scope = Model.review_scope(state.review_desk.scope)
+		focus = Model.review_focus(state)
+		row = |listed| { path: listed.path, folder: listed.folder, folded: listed.folded, depth: listed.depth, file: listed.file, threads: if (listed.folder) 0 else threads.keep_if(|thread| Review.shows(thread.anchor, listed.path, scope)).len(), focused: !listed.folder and listed.path == focus }
+		match Model.review_files(state, shown) {
+			Files(files) => changed_rows(files, state.review_desk.folded, "", 0).map(row)
+			Loading => []
+		}
+	}
+
+	## Picks a row of a Review navigator: a folder folds or unfolds, and a
+	## file is focused, its card scrolled to in each Review view, which a
+	## phone shows.
+	pick_review_file : State, { pane_id : Str, path : Str, folder : Bool } -> State
+	pick_review_file = |state, { path, folder, .. }|
+		if folder {
+			{ ..state, review_desk: ReviewDesk.toggle_folder(state.review_desk, path) }
+		} else {
+			views = Model.panes(state).keep_if(|shown| shown.widget == "review" and !state.hidden.contains(shown.id))
+			shown = views.first().map_ok(|view| Model.jump_to(Model.activate_tab(state, view.id), Model.tile_of(state, view.id).map_ok(|tile| tile.id) ?? "", Push)) ?? state
+			{ ..shown, sub_focus: File(path), review_desk: ReviewDesk.scrolled_to(state.review_desk, views.map(|view| ReviewDesk.card_ref(view.id, path))) }
+		}
 
 	## A file of a Review pane as a card: its diff's rows, annotated, or why
 	## it shows none (`note`).
@@ -2703,7 +2749,10 @@ Model := [].{
 				}
 			{ path: file.path, file, rows, note }
 		}
-		Model.git_changes_of(state, context, scope).map_ok(|changes| Cards(changes.files.map(card))) ?? Loading
+		match Model.review_files(state, shown) {
+			Files(files) => Cards(files.map(card))
+			Loading => Loading
+		}
 	}
 
 	## Opens a Workspaces pane's form: from a workspace's row, or a session's
@@ -3067,7 +3116,7 @@ Model := [].{
 	## a placeholder naming what is missing, or in the main area, a diff
 	## opened there from Changes.
 	## `NoView` is a widget's that liton has no view of yet.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
+	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -3091,6 +3140,7 @@ Model := [].{
 				"changes" => Changes
 				"files" => Files
 				"review" => Review
+				"review-files" => ReviewFiles
 				"tickets" => Tickets
 				"ticket" => Ticket
 				"rooms" => Rooms

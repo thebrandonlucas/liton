@@ -88,6 +88,7 @@ All notable changes to liton are documented in this file. The format is based on
 - ? outside a text box lists the keys and what each runs; ? again or Escape hides the list. The palette's Show or hide the keys shows it too.
 - On a Mac, the palette, the list of keys, Settings and the buttons' tooltips write keys as ⌘B and ⌥1; elsewhere as Ctrl+B and Alt+1.
 - The Review preset, in Settings or with 5, reviews a session's changes as crit.md does: every changed file is a card in the middle, one under another, its diff with the review's threads under their lines. Click a line's number, or two for the lines between, to comment on them; the comment shows at once as a draft.
+- The Review preset's left drawer lists the changed files as a tree, each with how it changed, its lines added and removed, and how many threads are open on it. Pick one to scroll the view to its card; it stays marked as the file in view.
 
 ### Changed
 

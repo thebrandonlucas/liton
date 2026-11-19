@@ -102,6 +102,18 @@ Widgets := [].{
 			parts: ["header", "status", "files", "file", "hunk", "line", "commits"],
 		},
 		{
+			id: "review-files",
+			title: "Changed files",
+			role: Navigator,
+			needs: [Capability.workspace_git_v1, Capability.review_v1],
+			slots: [Left, Right],
+			minimum_width: 220,
+			sets: [],
+			follows: [Session, Workspace],
+			options: [],
+			parts: ["header", "files", "file"],
+		},
+		{
 			id: "review",
 			title: "Review",
 			role: View,

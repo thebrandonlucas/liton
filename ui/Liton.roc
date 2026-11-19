@@ -21,6 +21,7 @@ import Keymap
 import Palette
 import Commands
 import TicketDesk
+import ReviewDesk
 import Widgets
 import Dropdown
 import Drag
@@ -222,6 +223,8 @@ Liton := [].{
 		),
 		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, at| Model.tick(state, at ?? state.now))),
 		Engine.watch_changes(model.signal().map(|state| state.palette.picked), |_| [Engine.command(Engine.scroll_into_view("palette-picked", {}))], Engine.ignore({})),
+		# A file picked in the Review surface's navigator scrolls its view to it.
+		Engine.watch_changes(model.signal().map(|state| state.review_desk.scroll), |scroll| scroll.refs.map(|ref| Engine.command(Engine.scroll_into_view(ref, { block: Start }))), Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
@@ -868,7 +871,7 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
+					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, Tickets, Ticket, Rooms, Room, Capabilities, Connecting, Missing, MainDiff, NoView],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
@@ -878,6 +881,7 @@ Liton := [].{
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
 							Files => Liton.files_pane(model, id, row.field(|pane| pane))
 							Review => Liton.review_view(model, id, row.field(|pane| pane))
+							ReviewFiles => Liton.review_files(model, id, row.field(|pane| pane))
 							Tickets => Liton.tickets(model, id)
 							Ticket => Liton.ticket_view(model, id)
 							Rooms => Liton.rooms(model)
@@ -1811,6 +1815,15 @@ Liton := [].{
 		Dropdown.select(Engine.const("Scope"), value, [Engine.class("scope")], [Dropdown.option("Uncommitted", "Uncommitted"), Dropdown.option("AgainstBase", "Against base"), commit], model.set_value_by(id, pick))
 	}
 
+	## How many files a scope changes, as "3 files".
+	file_count : [Files(List(WorkspaceGit.File)), Loading] -> Str
+	file_count = |listed|
+		match listed {
+			Files([_]) => "1 file"
+			Files(files) => "${files.len().to_str()} files"
+			Loading => ""
+		}
+
 	## The lines a scope's files add and remove, as "+14" and "−3".
 	total_lines : [Files(List(WorkspaceGit.File)), Loading] -> { added : Str, removed : Str }
 	total_lines = |listed|
@@ -1896,6 +1909,56 @@ Liton := [].{
 		)
 	}
 
+	## The Review surface's navigator: its changed files as a tree, as
+	## Changes lists them, each with how many threads are open on it; the
+	## file the view has in view is marked, and picking one scrolls the view
+	## to it.
+	review_files : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
+	review_files = |model, id, pane| {
+		files = pane.map2(model.signal(), |shown, state| Model.review_files(state, shown))
+		Html.div(
+			"review-files",
+			[
+				Html.div(
+					"choices",
+					[
+						Html.span_s(files.map(Liton.file_count), [Engine.class("file-count")]),
+						Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]),
+						Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")]),
+					],
+				),
+				Html.p_s(files.map(|listed| if (listed == Loading) "Loading…" else if (listed == Files([])) "No changes." else ""), [Engine.class("missing")]),
+				Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(pane.map2(model.signal(), |shown, state| Model.review_tree(state, shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.review_file_row(model, id, row))]),
+			],
+		)
+	}
+
+	## A row of the Review surface's navigator, as `changed_row` draws
+	## Changes', with how many threads are open on the file. Top-level for
+	## the reason `scope_picker` is.
+	review_file_row : State(PaneCtx, Model.State), Signal(PaneCtx, Str), RowRef(PaneCtx, Model.ReviewRow) -> Elem(Row(PaneCtx, Model.ReviewRow))
+	review_file_row = |model, id, row| {
+		shown = row.field(|listed| listed)
+		asked = shown.map2(id.lift_row(), |listed, pane_id| { pane_id, path: listed.path, folder: listed.folder })
+		Html.li(
+			[Engine.class_s(shown.map(|listed| if (!listed.folder) "git-file" else if (listed.folded) "git-file git-folder folded" else "git-file git-folder")), Engine.attr("data-part", "file"), Engine.attr_s("style", shown.map(|listed| "--depth: ${listed.depth.to_str()}"))],
+			[
+				Html.button_s(
+					shown.map(|listed| listed.path.split_last("/").map_ok(|parts| parts.after) ?? listed.path),
+					[
+						Html.aria_label_s(shown.map(|listed| if (listed.folder) listed.path else Liton.file_label(listed.file))),
+						Engine.attr_presence("aria-current", shown.map(|listed| if (listed.focused) Present("true") else Absent)),
+						Engine.attr_presence("aria-expanded", shown.map(|listed| if (listed.folder) Present(if (listed.folded) "false" else "true") else Absent)),
+					],
+					model.lift_row().update_by(asked, Model.pick_review_file),
+				),
+				Html.span_s(shown.map(|listed| if (listed.folder) "" else Liton.change_text(listed.file.change)), [Engine.class_s(shown.map(|listed| "change ${Liton.change_text(listed.file.change)}"))]),
+				Html.span_s(shown.map(|listed| if (listed.threads == 0) "" else listed.threads.to_str()), [Engine.class("thread-count"), Engine.attr("title", "Open threads"), Engine.test_id("thread-count")]),
+				Html.span_s(shown.map(|listed| Liton.file_lines(listed.file)), [Engine.class("lines")]),
+			],
+		)
+	}
+
 	## A file of a Review pane as a card: its path, how it changed and by
 	## how many lines, over its diff. Top-level for the reason
 	## `scope_picker` is.
@@ -1903,7 +1966,7 @@ Liton := [].{
 	review_card = |model, id, pane, card| {
 		file = card.field(|shown| shown.file)
 		Html.div_attrs(
-			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key())],
+			[Engine.class("review-card"), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path)))],
 			[
 				Html.div(
 					"review-card-header",
