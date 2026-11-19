@@ -989,15 +989,22 @@ Model := [].{
 	show_pane : State, Str -> State
 	show_pane = |state, id| Model.activate_tab({ ..state, hidden: state.hidden.drop_if(|hidden_id| hidden_id == id), focused_pane: id }, id)
 
-	## Closes tile `tile_id` if it holds no panes, the tiles beside it growing
+	## Closes tile `tile_id` if it shows no panes, the tiles beside it growing
 	## over it (`Grid.close`), unless it is the last of its Workbench slot,
-	## which stays, empty. A Workbench's tiles grow only within their slot.
+	## which stays. A Workbench's tiles grow only within their slot, and the
+	## panes it hid go to the slot's first tile left, still hidden.
 	closed_if_empty : State, Str -> State
 	closed_if_empty = |state, tile_id| {
 		slot = Model.slot_of(state, tile_id)
-		empty = state.grid.tiles.any(|tile| tile.id == tile_id and tile.panes.is_empty())
-		kept = state.shell == Workbench and state.grid.tiles.keep_if(|tile| Model.slot_of(state, tile.id) == slot).len() == 1
-		if (empty and !kept) { ..state, grid: Grid.close(state.grid, tile_id, |grows, closed| Model.slot_of(state, grows) == Model.slot_of(state, closed)) } else state
+		slot_tiles = Model.tiles_in_order(state).keep_if(|tile| Model.slot_of(state, tile.id) == slot and tile.id != tile_id)
+		match (state.grid.tiles.find_first(|tile| tile.id == tile_id), slot_tiles.first()) {
+			(Ok(closing), Ok(heir)) if Model.shown_panes(state, closing).is_empty() and (state.shell == Tiling or !slot_tiles.is_empty()) => {
+				kept = Model.change_tile(state.grid, heir.id, |tile| { ..tile, panes: tile.panes.concat(closing.panes) })
+				{ ..state, grid: Grid.close(kept, tile_id, |grows, closed| Model.slot_of(state, grows) == Model.slot_of(state, closed)) }
+			}
+			(Ok(closing), Err(_)) if closing.panes.is_empty() and state.shell == Tiling => { ..state, grid: Grid.close(state.grid, tile_id, |_, _| Bool.True) }
+			_ => state
+		}
 	}
 
 	## Points a tile whose active pane is gone at the first it shows, and the
@@ -3208,6 +3215,7 @@ expect {
 		and Model.close_pane(down, "pane-4").grid.rows == [1]
 		and slot_of_pane(across, "pane-8") == Main
 		and Model.close_pane(across, "pane-8").grid == Model.change_tile(state.grid, "tile-2", |tile| { ..tile, panes: tile.panes.drop_if(|pane| pane.id == "pane-8") })
+		and laid(Model.place(state, "pane-2", Beside({ tile: "tile-2", side: Left }))) == [["pane-1"], ["pane-2", "pane-8"], ["pane-3", "pane-4", "pane-5"]]
 }
 
 expect {
