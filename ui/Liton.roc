@@ -17,6 +17,9 @@ import Microphone
 import Ports
 import Themes
 import Model
+import Keymap
+import Palette
+import Commands
 import TicketDesk
 import Widgets
 import Dropdown
@@ -41,19 +44,23 @@ Liton := [].{
 	glass_key : Str
 	glass_key = "liton.glass"
 
+	## "mac" on a Mac, whose keys are written ⌘B: ui/ports.mjs writes it as
+	## the page loads, as roc-signals's boot doesn't tell the platform.
+	platform_key : Str
+	platform_key = "liton.platform"
+
 	coarse_pointer_query : Str
 	coarse_pointer_query = "(pointer: coarse)"
 
 	program : Engine.Program
 	program = Engine.program_boot(
-		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		{ storage_keys: [Liton.snapshot_key, Liton.glass_key, Wallpaper.url_key, Wallpaper.dim_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
+		|boot| Engine.state(Wallpaper.restored(Model.went({ ..Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The theme is custom properties on the root (`Themes.style`), which the
-	## stylesheet alone uses. The shortcuts (`Liton.shortcuts`) with Cmd
-	## anywhere, and with Ctrl or other keys outside a text field, whose
-	## Ctrl+B and Ctrl+E move the cursor on a Mac, reach `Model.pressed`.
+	## stylesheet alone uses. Keys run commands as `Keymap.defaults` binds
+	## them, and a sequence begun ends after a pause.
 	page : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> Elem(Ctx)
 	page = |model, drag| {
 		# The layout shown: while a pane is dragged, as if dropped where it is.
@@ -63,7 +70,7 @@ Liton := [].{
 			[
 				Engine.class("liton"),
 				Engine.attr_s("style", model.signal().map(|state| Themes.style(Wallpaper.over(Model.theme_shown(state), state), state.glass))),
-				Engine.on_document_key({ keymap: Engine.const(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_meta())).concat(Engine.Keymap.prevent(Liton.shortcuts.map(|(chord, _)| chord.with_ctrl())).outside_text()).concat(Engine.Keymap.keep([Engine.Chord.plain("Escape")])).concat(Engine.Keymap.every.outside_text())) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Model.pressed(state, Liton.shortcuts.find_first(|(chord, _)| chord.primary().any(|alternative| alternative == key.heard)).map_ok(|(_, name)| name) ?? key.key)).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
+				Engine.on_document_key({ keymap: Engine.const(Keymap.heard(Keymap.defaults)) }, model.set_value_by(drag.signal(), |state, gesture, key| if (Drag.dragging(gesture) and key.key == "Escape") state else Keymap.pressed(Keymap.defaults, state, Keymap.name(key))).also(drag.set_value(|gesture, key| Drag.key_pressed(gesture, key.key)))),
 			],
 			[
 				# A Workbench has no bar: its drawers' buttons are in the main
@@ -117,6 +124,8 @@ Liton := [].{
 					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
+				Liton.palette(model),
+				Liton.shortcuts(model),
 			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
@@ -212,6 +221,8 @@ Liton := [].{
 			),
 		),
 		Engine.watch(Engine.const({}), |_| [Engine.interval(1000)], model.on_result(|state, _, at| Model.tick(state, at ?? state.now))),
+		Engine.watch_changes(model.signal().map(|state| state.palette.picked), |_| [Engine.command(Engine.scroll_into_view("palette-picked", {}))], Engine.ignore({})),
+		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
 		Engine.watch_changes(
 			model.signal().map(|state| state.poll),
@@ -302,11 +313,6 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
 	]
 
-	## The keys heard with Ctrl or Cmd, by the names `Model.pressed` takes:
-	## B and E show or hide the drawers, as in Paseo, and comma Settings.
-	shortcuts : List((Engine.Chord, Str))
-	shortcuts = [(Engine.Chord.plain("b"), "Ctrl+B"), (Engine.Chord.plain("e"), "Ctrl+E"), (Engine.Chord.plain(","), "Ctrl+,")]
-
 	## A call, its JSON `body` naming the capability and holding the request.
 	call : Str -> Engine.Ask(Str, Engine.HttpError)
 	call = |body| Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body, timeout: Ms(5000) })
@@ -334,7 +340,105 @@ Liton := [].{
 
 	## Opens or closes Settings.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr("title", "Settings (Ctrl+, or ⌘,)"), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+
+	## The palette over everything, which a click outside closes: a box to
+	## type in, and the entries what is typed matches, each with its group
+	## and keys. The arrows, or Ctrl+N and Ctrl+P, pick one, and Enter or a
+	## click runs it. Ctrl+K, heard here though a text box, closes it.
+	palette : State(Ctx, Model.State) -> Elem(Ctx)
+	palette = |model| {
+		moves = [Engine.Chord.plain("ArrowDown"), Engine.Chord.plain("ArrowUp"), Engine.Chord.plain("Enter"), Engine.Chord.plain("n").with_ctrl(), Engine.Chord.plain("p").with_ctrl(), Engine.Chord.plain("k").with_ctrl()]
+		moved = |state, key|
+			match key.key {
+				"Enter" => Palette.run_picked(state)
+				"k" => Commands.close(state)
+				"ArrowUp" | "p" => Palette.move(state, Up)
+				_ => Palette.move(state, Down)
+			}
+		shown = model.signal().map(Palette.shown)
+		Engine.when(
+			model.signal().map(|state| state.palette.open),
+			||
+				Html.div(
+					"palette-layer",
+					[
+						Html.div_attrs([Engine.class("palette-backdrop"), Engine.on_click(model.update(Commands.close))], []),
+						Html.section_attrs(
+							"Palette",
+							[Engine.class("palette"), Engine.attr("role", "dialog")],
+							[
+								# Password managers fill any text box that looks like a login unless
+								# told not to, each by its own attribute (Bitwarden, 1Password,
+								# LastPass, Dashlane); a search combobox reads as no login.
+								Html.text_input(Engine.const("Command or place"), "search", model.signal().map(|state| state.palette.query), [Engine.ref("palette"), Engine.attr("placeholder", "Type a command, session or workspace"), Engine.attr("autocomplete", "off"), Engine.attr("role", "combobox"), Engine.attr("aria-autocomplete", "list"), Engine.attr("spellcheck", "false"), Engine.attr("data-bwignore", "true"), Engine.attr("data-1p-ignore", "true"), Engine.attr("data-lpignore", "true"), Engine.attr("data-form-type", "other"), Engine.on_key({ keymap: Engine.const(Engine.Keymap.prevent(moves)) }, model.set_value(moved))], model.set_value(Palette.typed)),
+								Engine.when(shown.map(List.is_empty), || Html.p("Nothing matches.", "palette-empty"), || Engine.text("")),
+								Html.ul(
+									[Engine.class("palette-entries"), Engine.attr("role", "listbox"), Html.aria_label("Commands and places")],
+									[
+										Engine.each(
+											shown,
+											|entry| entry.key,
+											|row|
+												Html.li(
+													[],
+													[
+														Engine.element(
+															"button",
+															[
+																Engine.attr("type", "button"),
+																Engine.attr("role", "option"),
+																Engine.class("palette-entry"),
+																Html.aria_label_s(row.field(|entry| entry.title)),
+																Html.flag("aria-selected", row.field(|entry| entry.picked)),
+																Engine.ref_s(row.field(|entry| if (entry.picked) "palette-picked" else "")),
+																Engine.on_click(model.lift_row().update_by(row.key(), Palette.run)),
+															],
+															[
+																Html.span_s(row.field(|entry| entry.title), [Engine.class("palette-title")]),
+																Html.span_s(row.field(|entry| entry.group), [Engine.class("palette-group")]),
+																Engine.element("kbd", [], [Engine.text_s(row.field(|entry| entry.keys))]),
+															],
+														),
+													],
+												),
+										),
+									],
+								),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
+
+	## The keys and what each runs, as `Keymap.defaults` binds them, which
+	## Escape or a click outside closes.
+	shortcuts : State(Ctx, Model.State) -> Elem(Ctx)
+	shortcuts = |model|
+		Engine.when(
+			model.signal().map(|state| state.show_shortcuts),
+			||
+				Html.div(
+					"palette-layer",
+					[
+						Html.div_attrs([Engine.class("palette-backdrop"), Engine.on_click(model.update(Commands.close))], []),
+						Html.section_attrs(
+							"Keys",
+							[Engine.class("palette shortcuts"), Engine.attr("role", "dialog")],
+							[
+								Html.h2("Keys", ""),
+								Html.ul(
+									[Engine.class("palette-entries")],
+									[Engine.each(model.signal().map(|state| Keymap.listed(Keymap.defaults, state)), |bound| bound.title, |row| Html.li([Engine.class("shortcut")], [Html.span_s(row.field(|bound| bound.title), [Engine.class("palette-title")]), Engine.element("kbd", [], [Engine.text_s(row.field(|bound| bound.keys))])]))],
+								),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
 
 	## What went wrong last, over the tiles until dismissed or replaced.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
@@ -359,15 +463,15 @@ Liton := [].{
 	## stylesheet's, as are those of every button of class `icon`.
 	drawer_toggle : State(ctx, Model.State), Model.Slot, Signal(ctx, Model.Counts) -> Elem(ctx)
 	drawer_toggle = |model, drawer, workspace_changes| {
-		key = if (drawer == Left) "Ctrl+B or ⌘B" else "Ctrl+E or ⌘E"
-		panes = model.signal().map(|state| Str.join_with(state.grid.tiles.keep_if(|tile| Model.slot_of(state, tile.id) == drawer).join_map(|tile| Model.shown_panes(state, tile).map(|pane| Liton.label(state, pane))), " · "))
+		command = if (drawer == Left) "drawer.left" else "drawer.right"
+		panes = model.signal().map(|state| "${Str.join_with(state.grid.tiles.keep_if(|tile| Model.slot_of(state, tile.id) == drawer).join_map(|tile| Model.shown_panes(state, tile).map(|pane| Liton.label(state, pane))), " · ")} (${Keymap.text_of(state.operating_system, Keymap.defaults, command)})")
 		Engine.element(
 			"button",
 			[
 				Engine.attr("type", "button"),
 				Engine.class("icon drawer-toggle drawer-${Model.slot_name(drawer)}"),
 				Html.aria_label(if (drawer == Left) "Left drawer" else "Right drawer"),
-				Engine.attr_s("title", panes.map(|names| "${names} (${key})")),
+				Engine.attr_s("title", panes),
 				Html.flag("aria-expanded", model.signal().map(|state| !state.collapsed.contains(drawer))),
 				Engine.on_click(model.update(|state| Model.toggle_drawer(state, drawer))),
 			],
@@ -389,6 +493,14 @@ Liton := [].{
 			Left => LeftTab
 			_ => Elsewhere
 		}
+	}
+
+	## What Settings says the keys do, written as the platform writes them.
+	keys_help : Model.Platform -> Str
+	keys_help = |system| {
+		key = |command| Keymap.text_of(system, Keymap.defaults, command)
+		heard = if (system == Mac) "in a text box too" else "outside a text box"
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## A side sheet that picks the preset, lists each slot's or tile's panes
@@ -420,7 +532,7 @@ Liton := [].{
 								),
 							],
 						),
-						Html.p("Alt+1 to Alt+9 show them too, in this order, outside a text box. Ctrl+B and Ctrl+E (or ⌘B and ⌘E, in a text box too) show or hide the drawers, Ctrl+, (or ⌘,) opens Settings, and Escape closes a menu or Settings, or else stops the chat's agent.", "help"),
+						Html.p_s(model.signal().map(|state| Liton.keys_help(state.operating_system)), [Engine.class("help")]),
 						Html.h3("Theme", ""),
 						Html.div(
 							"choices",

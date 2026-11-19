@@ -9,6 +9,14 @@ document.addEventListener("scroll", (event) => {
   if (earlier && earlier.getBoundingClientRect().bottom > box.getBoundingClientRect().top - box.clientHeight) earlier.click();
 }, { capture: true, passive: true });
 
+// FIXME: roc-signals's boot doesn't tell the platform, so the page writes
+// whether it is a Mac, whose keys liton writes as ⌘B, for the app to read
+// at boot (`Liton.platform_key`). Drop this once the boot carries it.
+try {
+  const platform = navigator.userAgentData?.platform ?? navigator.platform ?? "";
+  sessionStorage.setItem("liton.platform", /^(mac|iphone|ipad|ipod)/i.test(platform) ? "mac" : "other");
+} catch {}
+
 // FIXME: a JavaScript stopgap for two things roc-signals does not offer.
 // Once it does, this becomes Roc in ui/Drag.roc and ui/Liton.roc:
 // - Pointer positions during a drag: a pointer's moves and release in page

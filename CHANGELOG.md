@@ -83,6 +83,10 @@ All notable changes to liton are documented in this file. The format is based on
 - Change a ticket from its Tickets pane: set its status to one of its source's, assign it to its source's people or take them off, and comment on it in Markdown. Each change shows at once, marked Saving… until the daemon has it, and goes back, with why, if the tracker refuses it.
 - A ticket shows the sessions working on it, linked by hand or by their branch: open one to focus it, as the chat shows it, or unlink it. Link to links the session in focus to the ticket. Each shows at once, and goes back, with why, if the daemon refuses it.
 - The Developer preset has Tickets as the right drawer's third tab, after Changes and Files.
+- Outside a text box, G then 1 to 9 goes to that workspace, in the order the Workspaces pane lists them. Escape, or a pause of a second and a half, cancels the G.
+- Ctrl+K, or ⌘K in a text box too, opens a palette of the commands that apply now and the sessions, workspaces, rooms and tickets to go to, each with its keys. Type to filter it, pick with the arrows or Ctrl+N and Ctrl+P, and run with Enter or a click; what you ran lists first next time, and Escape or Ctrl+K again closes it.
+- ? outside a text box lists the keys and what each runs; ? again or Escape hides the list. The palette's Show or hide the keys shows it too.
+- On a Mac, the palette, the list of keys, Settings and the buttons' tooltips write keys as ⌘B and ⌥1; elsewhere as Ctrl+B and Alt+1.
 
 ### Changed
 
@@ -139,6 +143,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Password managers such as Bitwarden, 1Password and LastPass no longer offer to fill the ⌘K palette's search box.
 - On a phone, a tool call that is still running shows its card again, not an empty box.
 - The page title's count of what needs you now leaves out sessions you settled or snoozed, and is the same whatever the layout, not only when an Inbox pane is open.
 - Sending a message by pressing Enter clears the message box, so the next message no longer starts with the text of the last.
