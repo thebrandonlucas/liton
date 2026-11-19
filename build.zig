@@ -391,13 +391,14 @@ pub fn build(b: *std.Build) void {
     const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
     example_step.dependOn(&install_example.step);
 
-    // Serves the UI and the API at http://127.0.0.1:8095 (LITON_HOST and
-    // LITON_PORT to change it).
+    // Serves the UI, its API docs and the API at http://127.0.0.1:8095
+    // (LITON_HOST and LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
     const run_daemon = b.addSystemCommand(&.{"zig-out/bin/liton-daemon"});
     run_daemon.has_side_effects = true;
     run_daemon.step.dependOn(&install_ui.step);
     run_daemon.step.dependOn(&install_daemon.step);
+    run_daemon.step.dependOn(&install_docs.step);
     run_step.dependOn(&run_daemon.step);
 
     // Drives the UI in headless Chrome (CHROME, or chromium on PATH) against

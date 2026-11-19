@@ -5,7 +5,9 @@
 ## and serves the UI.
 ##
 ## LITON_PORT (default 8095), LITON_HOST (default 127.0.0.1), LITON_DB
-## (default liton.db) and LITON_UI (default zig-out/www) configure it.
+## (default liton.db), LITON_UI (default zig-out/www) and LITON_DOCS
+## (default zig-out/docs, `zig build docs`, served at /docs/index.html when
+## it is there) configure it.
 ## It answers only requests to LITON_HOST, localhost or a name
 ## LITON_ALLOWED_HOSTS lists, comma-separated, such as a proxy's domain.
 ## LITON_MOCK=off leaves out the mock provider, and a comma-separated list
@@ -119,11 +121,15 @@ init! = || {
 	remotes = checked!(Remote.declared(setup.remotes, env_or!("LITON_PROVIDERS", "")))?
 	remote_interval_ms = I64.from_str(env_or!("LITON_PROVIDERS_INTERVAL_MS", "1000")) ?? 1_000
 	ui = Server.file_root({ id: "ui", path: Path.utf8(env_or!("LITON_UI", "zig-out/www")) })
+	docs_path = env_or!("LITON_DOCS", "zig-out/docs")
+	docs = Server.file_root({ id: "docs", path: Path.utf8(docs_path) })
+	# Without the docs built, no /docs, as the platform refuses a missing root.
+	docs_built = Path.is_dir!(Path.utf8(docs_path)) ?? Bool.False
 	config =
 		Server.default_config
 			.with_listen({ host, port })
-			.with_file_roots([ui])
-			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })], liveness: [], readiness: [] })
+			.with_file_roots(if (docs_built) [ui, docs] else [ui])
+			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })].concat(if (docs_built) [Server.static_mount({ at: "/docs", files: docs })] else []), liveness: [], readiness: [] })
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	context = { db, allowed_hosts, mock, paseo, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }

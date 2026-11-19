@@ -113,6 +113,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Review preset's right drawer lists the review's threads, those open, resolved or all, in the order of the files and lines, outdated ones too. Pick one to focus its lines in the view; reply to it, resolve it or reopen it right there. Below them, the review conversation holds the comments on the whole review, and takes another.
 - The Review surface has crit.md's keys, outside a text box: J and K focus the next and previous hunk, ] and [ the next and previous thread, C comments on the hunk or thread focused, A marks the file in view viewed and Shift+F finishes the review. In a comment, Ctrl+Enter or ⌘Enter keeps it and Escape cancels it. The palette and the list of keys offer them too.
 - Since round, in the Review view's bar once a round is sent, shows only the files the agent changed since the round you sent from this browser, in the view and the navigator. Without that round's files (another browser sent it, or the page reloaded since) it says it can't tell: the daemon doesn't keep the code each round was sent against yet.
+- Docs in Settings → About opens liton's API docs at /docs/index.html, built from its packages' and apps' comments by `zig build docs` (which `zig build run` runs). `LITON_DOCS` (default `zig-out/docs`) is where the daemon serves them from.
 
 ### Changed
 

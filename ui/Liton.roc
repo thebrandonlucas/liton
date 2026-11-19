@@ -668,7 +668,7 @@ Liton := [].{
 			],
 		)
 
-	## The versions of what this UI speaks.
+	## The versions of what this UI speaks, and its API docs.
 	about : Elem(Ctx)
 	about =
 		Liton.settings_card(
@@ -676,6 +676,7 @@ Liton := [].{
 			[
 				Html.div("settings-row", [Html.p("Protocol", ""), Html.p("liton/v1, version ${Manifest.protocol.to_str()}", "help")]),
 				Html.div("settings-row", [Html.p("Snapshots", ""), Html.p("version ${Setup.snapshot_version.to_str()}", "help")]),
+				Html.div("settings-row", [Html.p("Docs", ""), Engine.element("a", [Engine.attr("href", "/docs/index.html"), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("help")], [Engine.text("The API, from the code's comments")])]),
 			],
 		)
 
