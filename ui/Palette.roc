@@ -37,7 +37,7 @@ Palette := [].{
 	other_places = |state| {
 		entry = |key, title, group| { key, title, group, keys: "", picked: Bool.False }
 		viewed = |kind| Model.panes(state).any(|pane| Widgets.shows(Widgets.find(pane.widget), View, kind))
-		rooms = if (viewed(Room)) Model.rooms_listed(state).map(|room| entry(Context.to_str(Room(room.id)), room.name, "Room")) else []
+		rooms = if (viewed(Room)) Model.rooms_listed(state).map(|room| entry(Context.to_str(Room(room.id)), "#${room.name}", "Room")) else []
 		tickets = if (viewed(Ticket)) TicketDesk.listing_shown(state.tickets).tickets.map(|ticket| entry(Context.to_str(Ticket(ticket.id)), "${ticket.key} ${ticket.title}", "Ticket")) else []
 		rooms.concat(tickets)
 	}
