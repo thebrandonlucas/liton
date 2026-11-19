@@ -130,6 +130,7 @@ try {
     const made = await (await ask("devices/code", { method: "POST", body: {}, headers: { Cookie: cookie } })).json();
     assert.match(made.code, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
     assert.ok(made.expires_at > Date.now());
+    assert.equal(made.link, `${daemon}/ui/index.html#pair=${made.code}`);
     const revoked = await ask("devices/revoke", { method: "POST", body: { id: devices[1].id }, headers: { Cookie: cookie } });
     assert.equal(revoked.status, 200);
     assert.equal(revoked.headers.get("set-cookie"), null);

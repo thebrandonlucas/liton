@@ -274,7 +274,7 @@ routed! = |context, request, headers| {
 		(_, POST, "/liton/v1/poll") => polled_topics!(context, request)
 		(_, POST, "/liton/v1/pair") => paired!(context, request, headers)
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
-		(_, POST, "/liton/v1/devices/code") => pairing_code!(context)
+		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
 		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
 		(_, POST, _) if path.starts_with(audio_route) => audio_chunk!(context, request, path.drop_prefix(audio_route))
 		_ => Ok(text(404, "Not found"))
@@ -361,9 +361,10 @@ devices! = |{ db, .. }, asking| {
 }
 
 ## Answers /liton/v1/devices/code: a new pairing code, for
-## `pairing_code_ms`, and when it expires.
-pairing_code! : Context => Try(Response, _)
-pairing_code! = |{ db, .. }| {
+## `pairing_code_ms`, when it expires, and the link to the UI that pairs a
+## browser with it, at the address the request came to.
+pairing_code! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+pairing_code! = |{ db, .. }, request, headers| {
 	now = now_ms!()
 	Sqlite.execute!({ db, query: "DELETE FROM pairing_codes WHERE expires_at <= :now;", params: { now } })?
 	random : { bytes : Sqlite.Blob }
@@ -371,7 +372,17 @@ pairing_code! = |{ db, .. }| {
 	code = Auth.code(random.bytes.to_bytes())
 	expires_at = now + pairing_code_ms
 	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at) VALUES (:code, :expires_at);", params: { code, expires_at } })?
-	Ok(json(Json.to_str({ code, expires_at })))
+	served =
+		match request.authority() {
+			Present(named) =>
+				match named.port() {
+					Present(port) => "${named.host()}:${port.to_str()}"
+					Absent => named.host()
+				}
+			Absent => "localhost"
+		}
+	link = "${if (Auth.secure(headers)) "https" else "http"}://${served}/ui/index.html#pair=${code}"
+	Ok(json(Json.to_str({ code, expires_at, link })))
 }
 
 ## Answers /liton/v1/devices/revoke: forgets the device `id` names, so its

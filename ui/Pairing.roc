@@ -8,13 +8,13 @@ import Model
 
 Pairing := [].{
 
-	## The state with the page's address and the code its URL's `#pair=`
-	## gives, tried once the daemon says this browser isn't paired.
+	## The state with the code the URL's `#pair=` gives, tried once the
+	## daemon says this browser isn't paired.
 	restored : Model.State, Str -> Model.State
 	restored = |state, url| {
-		{ before: page, after: hash } = url.split_first("#") ?? { before: url, after: "" }
+		hash = url.split_first("#").map_ok(|{ after, .. }| after) ?? ""
 		code = hash.split_on("&").find_first(|part| part.starts_with("pair=")).map_ok(|part| part.drop_prefix("pair=")) ?? ""
-		{ ..state, pairing: { ..state.pairing, page, code, from_url: !code.is_empty() } }
+		{ ..state, pairing: { ..state.pairing, code, from_url: !code.is_empty() } }
 	}
 
 	## The daemon refused a request as this browser isn't paired: the pair
@@ -74,17 +74,17 @@ Pairing := [].{
 
 	## Asks for a code for another device, shown as being made at once.
 	make_code : Model.State -> Model.State
-	make_code = |state| { ..state, pairing: { ..state.pairing, offer: { serial: state.pairing.offer.serial + 1, asking: Bool.True, code: "" } } }
+	make_code = |state| { ..state, pairing: { ..state.pairing, offer: { serial: state.pairing.offer.serial + 1, asking: Bool.True, code: "", link: "" } } }
 
 	## The code the daemon made for another device.
 	code_made : Model.State, U64, Try(Str, Engine.HttpError) -> Model.State
 	code_made = |state, serial, res| {
-		decoded : Try({ code : Str }, _)
+		decoded : Try({ code : Str, link : Str }, _)
 		decoded = Json.parse(res ?? "")
 		offer = state.pairing.offer
 		match decoded {
 			_ if serial != offer.serial => state
-			Ok({ code }) => { ..state, pairing: { ..state.pairing, offer: { ..offer, asking: Bool.False, code } } }
+			Ok({ code, link }) => { ..state, pairing: { ..state.pairing, offer: { ..offer, asking: Bool.False, code, link } } }
 			Err(_) => { ..state, pairing: { ..state.pairing, offer: { ..offer, asking: Bool.False } }, notice: "The daemon didn't make a pairing code." }
 		}
 	}
@@ -170,7 +170,7 @@ Pairing := [].{
 											"settings-row pair-offer",
 											[
 												Html.span_s(offer.map(|asked| asked.code), [Engine.class("pair-offered-code"), Engine.test_id("pair-offered-code")]),
-												Html.p_s(model.signal().map(|state| Pairing.link(state)), [Engine.class("help pair-link"), Engine.test_id("pair-link")]),
+												Html.p_s(offer.map(|asked| asked.link), [Engine.class("help pair-link"), Engine.test_id("pair-link")]),
 											],
 										),
 									|| Engine.text(""),
@@ -217,10 +217,6 @@ Pairing := [].{
 			],
 		)
 	}
-
-	## The link that pairs a device with the code made, on this page.
-	link : Model.State -> Str
-	link = |state| "${state.pairing.page}#pair=${state.pairing.offer.code}"
 
 	## The requests: the pairing sent, the devices while Settings shows
 	## them, a code for another device, and each revocation.

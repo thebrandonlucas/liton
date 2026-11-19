@@ -46,7 +46,8 @@ secrets and are served to anyone.
 - **Pairing.** A device pairs once, with a pairing code: 8 symbols such as
   `K7QM-4XWP`, used once, for 10 minutes. `liton pair`, run on the daemon's
   machine, makes one (The CLI), and so does a paired device's
-  `POST /liton/v1/devices/code`, which answers `{"code", "expires_at"}`.
+  `POST /liton/v1/devices/code`, which answers `{"code", "expires_at",
+  "link"}`, the link opening the UI at the address asked with the code.
   `POST /liton/v1/pair` with `{"code", "name"}` then answers
   `{"device": {"id", "name"}}` and sets the device's token as a cookie,
   `liton_token`, `HttpOnly` and `SameSite=Strict`, and `Secure` when a proxy
