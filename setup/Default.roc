@@ -1,6 +1,6 @@
 ## liton's own setup, which Litonfile.roc evaluates and another setup builds
 ## on: no remotes, attention derived from chat, the Developer, Inbox, Tiling
-## and Chat presets, Developer first, and the Pastoral, Hypr and Plain themes,
+## and Chat presets, Developer first, and the Pastoral, Hypr, Plain and Sky themes,
 ## Pastoral first. The UI offers these presets and themes when its daemon
 ## offers none.
 import Grid
@@ -148,6 +148,26 @@ Default := [].{
 		motion: Reduced,
 	}
 
+	## Light and soft, for talking in rooms: white tiles with neutral grey
+	## edges on a pale sky, the focused edge fading to violet.
+	sky : Setup.Theme
+	sky = {
+		name: "Sky",
+		scheme: Light,
+		accent: "#1a1a1a",
+		accent_to: "#8b5cf6",
+		text: "#1a1a1a",
+		muted: "#6b6b6b",
+		edge: 10,
+		edge_active: 45,
+		glass: { tint: "#ffffff", opacity: 94, blur: 12 },
+		background: Gradient({ base: "#f5f6fa", from: "#d9e6fb", to: "#f3e3f3", glow: "#b9d3ff" }),
+		gap: 10,
+		radius: 16,
+		fonts: { ui: Default.system_font, mono: Default.mono_font, display: Default.system_font },
+		motion: Normal,
+	}
+
 	## The platform's own faces, so no font is downloaded; JetBrains Mono where
 	## it is installed.
 	system_font : Str
@@ -157,5 +177,5 @@ Default := [].{
 	mono_font = "\"JetBrains Mono\", \"Iosevka\", ui-monospace, \"SF Mono\", Menlo, Consolas, monospace"
 
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain], default_theme: "Pastoral" }
+	setup = { remotes: [], transformers: ["attention"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.sky], default_theme: "Pastoral" }
 }

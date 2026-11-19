@@ -90,6 +90,7 @@ All notable changes to liton are documented in this file. The format is based on
 - On a Mac, the palette, the list of keys, Settings and the buttons' tooltips write keys as ⌘B and ⌥1; elsewhere as Ctrl+B and Alt+1.
 - A Thread widget shows the thread opened in a room beside it: its first message, its replies and its own composer. Opening a thread from a message's replies shows it there at once, opening its drawer; × closes it and hides the drawer again. Without a Thread pane, a thread still opens beside the room in the Room pane.
 - A Members widget lists the people and agents in the room shown, each with an avatar (an agent's square, with a robot's badge), whether they are online or away, their role and whose agent each is. Where the layout has one, the room's header counts its members; click the count to show or hide them.
+- The Sky theme, in Settings: light and soft, white tiles with grey edges over a pale sky, for talking in rooms.
 
 ### Changed
 
