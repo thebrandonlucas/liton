@@ -1912,6 +1912,7 @@ Liton := [].{
 	}
 
 	## The Review view's bar: the branch, how many files are marked viewed,
+	## how many comments its threads have, with the previous and next thread,
 	## and the scope its parts show,
 	## uncommitted or against the base, or one of the branch's commits;
 	## another shows its files at once.
@@ -1924,6 +1925,14 @@ Liton := [].{
 			[
 				Html.span_s(git.map(|known| Liton.branch_text(known.status)), [Engine.class("branch")]),
 				Html.span_s(pane.map2(model.signal(), |shown, state| Model.viewed_count(state, shown)), [Engine.class("viewed-count"), Engine.test_id("viewed-count")]),
+				Html.div(
+					"comment-steps",
+					[
+						Html.button("‹", [Html.aria_label("Previous comment"), Engine.attr("title", "Previous comment")], model.update_by(pane.map(|shown| shown.id), |state, pane_id| Model.step_thread(state, pane_id, Previous))),
+						Html.span_s(pane.map2(model.signal(), |shown, state| Model.comment_count(state, shown)), [Engine.class("comment-count"), Engine.test_id("comment-count")]),
+						Html.button("›", [Html.aria_label("Next comment"), Engine.attr("title", "Next comment")], model.update_by(pane.map(|shown| shown.id), |state, pane_id| Model.step_thread(state, pane_id, Next))),
+					],
+				),
 				Engine.element(
 					"select",
 					[Engine.attr("aria-label", "Scope"), Engine.class("scope"), Engine.prop_s(Engine.Prop.value, model.signal().map(Model.review_scope_name)), Engine.on("change", model.set_value(Model.pick_review_scope))],
@@ -2111,11 +2120,12 @@ Liton := [].{
 	comment : State(ctx, Model.State), Signal(ctx, { pane_id : Str, note : Model.Note }) -> Elem(ctx)
 	comment = |model, noted| {
 		note = noted.map(|{ note: shown, .. }| shown)
+		named = noted.map(|{ pane_id, note: shown }| Model.comment_ref(pane_id, shown.comment))
 		# One handler for every button, to keep the module small.
 		acting = |action| noted.map(|{ pane_id, note: shown }| { pane_id, note: shown, action })
-		flags = |shown| Str.join_with(["comment", if (shown.draft) "draft" else "", if (shown.last) "last" else "", if (shown.resolved) "resolved" else ""].drop_if(Str.is_empty), " ")
+		flags = |shown| Str.join_with(["comment", if (shown.draft) "draft" else "", if (shown.last) "last" else "", if (shown.resolved) "resolved" else "", if (shown.focused) "focused" else ""].drop_if(Str.is_empty), " ")
 		Html.div_attrs(
-			[Engine.class_s(note.map(flags)), Engine.attr("data-part", "comment")],
+			[Engine.class_s(note.map(flags)), Engine.attr("data-part", "comment"), Engine.ref_s(named), Engine.test_id_s(note.map(|shown| "comment-${shown.comment}"))],
 			[
 				Html.div(
 					"comment-header",

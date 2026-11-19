@@ -785,6 +785,11 @@ kbd:empty { display: none; }
 .review-card-header .lines { font: 11px var(--font-mono); color: var(--muted); }
 .review-card > .missing { margin: 0; padding: 6px 12px; }
 .review-bar .viewed-count { font: 11.5px var(--font-mono); color: var(--muted); }
+.comment-steps { display: inline-flex; align-items: center; gap: 2px; }
+.comment-steps button { min-width: 24px; padding: 0 6px; background: none; color: var(--muted); }
+.comment-steps button:hover { color: var(--text); }
+.comment-count { font: 11.5px var(--font-mono); color: var(--muted); }
+.comment.focused { border-color: var(--edge-active); box-shadow: 0 0 0 1px var(--edge-active); }
 .viewed-toggle { flex: none; padding: 0 8px; font-size: 12px; color: var(--muted); background: none; }
 .viewed-toggle::before { content: "☐ " / ""; }
 .viewed-toggle[aria-pressed="true"] { color: var(--ok); border-color: var(--ok); }

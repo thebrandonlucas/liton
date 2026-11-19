@@ -75,8 +75,8 @@ Model := [].{
 
 		## What a view shows within its focused context: the thread open in a
 		## room, by the room and its top-level message, or the file of the
-		## Review surface in view.
-		sub_focus : [None, Thread({ room_id : Str, root : Str }), File(Str)],
+		## Review surface in view, or its thread focused, by its id.
+		sub_focus : [None, Thread({ room_id : Str, root : Str }), File(Str), ReviewThread(Str)],
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
@@ -2324,11 +2324,11 @@ Model := [].{
 
 	## A comment as a row shows it: its thread's and its own id, who said it
 	## and its state, and whether it is the thread's last, as a resolved
-	## thread folded into one is.
-	Note : { thread : Str, comment : Str, author : Str, state : Str, text : Str, last : Bool, resolved : Bool, draft : Bool }
+	## thread folded into one is, and whether its thread is focused.
+	Note : { thread : Str, comment : Str, author : Str, state : Str, text : Str, last : Bool, resolved : Bool, draft : Bool, focused : Bool }
 
 	code_row : CodeRow
-	code_row = { key: "", kind: Code, path: "", old: "", new: "", old_pick: { side: New, line: 0 }, new_pick: { side: New, line: 0 }, left: [], right: [], left_class: "", right_class: "", class: "", note: { thread: "", comment: "", author: "", state: "", text: "", last: Bool.False, resolved: Bool.False, draft: Bool.False } }
+	code_row = { key: "", kind: Code, path: "", old: "", new: "", old_pick: { side: New, line: 0 }, new_pick: { side: New, line: 0 }, left: [], right: [], left_class: "", right_class: "", class: "", note: { thread: "", comment: "", author: "", state: "", text: "", last: Bool.False, resolved: Bool.False, draft: Bool.False, focused: Bool.False } }
 
 	## The file a Files pane shows, as rows of the code view.
 	file_code : State, Pane -> List(CodeRow)
@@ -2389,7 +2389,7 @@ Model := [].{
 			listed = if (thread.resolved) thread.comments.take_first(1) else thread.comments
 			shown_notes = listed.map_with_index(
 				|comment, index| {
-					note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft }
+					note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft, focused: state.sub_focus == ReviewThread(thread.id) }
 					if (composing_here and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
 				},
 			)
@@ -2695,8 +2695,63 @@ Model := [].{
 	review_focus = |state|
 		match state.sub_focus {
 			File(path) => path
+			ReviewThread(thread_id) => Model.review_of(state, Model.focused(state, [Session, Workspace])).threads.find_first(|thread| thread.id == thread_id).map_ok(|thread| thread.anchor.path) ?? ""
 			_ => ""
 		}
+
+	## The threads a Review view shows, in the order of its files and their
+	## lines.
+	review_threads : State, Pane -> List(Review.Thread)
+	review_threads = |state, shown| {
+		threads = Model.review_of(state, Model.context_of(state, shown)).threads.drop_if(|thread| thread.outdated)
+		scope = Model.review_scope(state.review_desk.scope)
+		by_line = |a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same
+		match Model.review_files(state, shown) {
+			Files(files) => files.join_map(|file| threads.keep_if(|thread| Review.shows(thread.anchor, file.path, scope)).sort_with(by_line))
+			Loading => []
+		}
+	}
+
+	## How many comments the threads a Review view shows have, as "3
+	## comments".
+	comment_count : State, Pane -> Str
+	comment_count = |state, shown| {
+		count = Model.review_threads(state, shown).map(|thread| thread.comments.len()).sum()
+		if (count == 1) "1 comment" else "${count.to_str()} comments"
+	}
+
+	## Focuses the next thread a Review view shows after the one focused,
+	## or the one before it, round from the last to the first, and scrolls
+	## to it.
+	step_thread : State, Str, [Next, Previous] -> State
+	step_thread = |state, pane_id, way| {
+		threads = Model.review_threads(state, Model.pane(state, pane_id))
+		at = threads.find_first_index(|thread| state.sub_focus == ReviewThread(thread.id))
+		count = threads.len()
+		index =
+			match (at, way) {
+				(Ok(found), Next) => (found + 1) % count
+				(Ok(found), Previous) => (found + count - 1) % count
+				(Err(_), Next) => 0
+				(Err(_), Previous) => count - 1
+			}
+		match threads.get(index) {
+			Ok(thread) => Model.focus_thread(state, pane_id, thread)
+			Err(_) => state
+		}
+	}
+
+	## Focuses a thread of a Review view, its file in view, and scrolls the
+	## view to its first comment.
+	focus_thread : State, Str, Review.Thread -> State
+	focus_thread = |state, pane_id, thread| {
+		refs = thread.comments.first().map_ok(|comment| [Model.comment_ref(pane_id, comment.id)]) ?? []
+		{ ..state, sub_focus: ReviewThread(thread.id), review_desk: ReviewDesk.scrolled_to(state.review_desk, thread.anchor.path, refs) }
+	}
+
+	## The reference of a comment as a pane shows it.
+	comment_ref : Str, Str -> Str
+	comment_ref = |pane_id, comment_id| "${pane_id}/comment/${comment_id}"
 
 	## A row of a Review navigator's tree, as Changes' are, with how many
 	## threads are open on its lines and whether the view has it in view.

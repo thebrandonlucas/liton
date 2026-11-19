@@ -92,6 +92,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Scrolling the Review view marks the file at its top in the navigator, as crit.md does.
 - The Review view's bar names the branch and picks what to review: the uncommitted changes, the changes against the base, or one of the branch's commits. The view and its navigator show the files picked at once.
 - Mark a file of the Review view Viewed to fold it to its header and tick it in the navigator; the bar counts the files viewed, as in "1 / 3 files viewed". A file whose diff changes since is no longer viewed. The browser keeps what you viewed.
+- The Review view's bar counts the comments on the files reviewed; its ‹ and › focus the previous or next thread, in the order of the files and their lines, and scroll to it.
 
 ### Changed
 
