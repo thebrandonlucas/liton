@@ -377,6 +377,19 @@ Liton := [].{
 		Engine.watch(model.signal().map(|state| state.surface), |surface| [Engine.command(StorageSet(Liton.surface_key, surface))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.review_desk.viewed), |viewed| [Engine.command(StorageSet(ReviewDesk.viewed_key, Json.to_str(viewed)))], Engine.ignore({})),
 		Engine.watch_changes(model.signal().map(|state| state.glass), |glass| [Engine.command(StorageSet(Liton.glass_key, if (glass) "on" else "off"))], Engine.ignore({})),
+		# Another window's change to the deck, such as a surface added there,
+		# shows here too.
+		Engine.watch(
+			Engine.const({}),
+			|_| [Engine.storage_changes(Liton.snapshot_key)],
+			model.on_result(
+				|state, _, res|
+					match res {
+						Ok(Set(text)) => Model.deck_changed(state, text)
+						_ => state
+					},
+			),
+		),
 	]
 
 	## A call, its JSON `body` naming the capability and holding the request.

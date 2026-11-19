@@ -567,6 +567,28 @@ Model := [].{
 			_ => Err(NotFound)
 		}
 
+	## Takes the deck another window of this browser kept, whose surfaces
+	## were added, removed, moved or changed there. This window keeps
+	## showing its surface, at its place, else where it moved, else the
+	## nearest, as that window left it if it changed; each surface keeps
+	## this window's focus.
+	deck_changed : State, Str -> State
+	deck_changed = |state, text|
+		match Model.restore_deck(text) {
+			Ok(read) => {
+				own = Model.deck(state)
+				followed = read.map_with_index(|surface, at| { ..surface, focus: own.get(at).map_ok(|old| if (old.name == surface.name) old.focus else []) ?? [] })
+				named = |at| followed.get(at).map_ok(|surface| surface.name == state.surface) ?? Bool.False
+				index = if (named(state.deck_shown)) state.deck_shown else followed.find_first_index(|surface| surface.name == state.surface) ?? U64.min(state.deck_shown, followed.len() - 1)
+				moved = { ..state, deck: followed, deck_shown: index }
+				match followed.get(index) {
+					Ok(shown) if shown.name != state.surface or Json.to_str(shown.snapshot) != Json.to_str(Model.snapshot(state)) => { ..Model.layout(moved, Model.layout_of(shown.snapshot)), theme: shown.snapshot.theme, surface: shown.name, focus: shown.focus }
+					_ => moved
+				}
+			}
+			Err(Invalid) => state
+		}
+
 	## Reads the deck a browser kept, or a snapshot of one surface as a deck
 	## of it (`restore`), its name "". A surface that doesn't read is left out.
 	restore_deck : Str -> Try(List(Surface), [Invalid])
@@ -4901,4 +4923,14 @@ expect {
 	restored = Model.initial(saved)
 	single = Model.initial(Json.to_str(Model.snapshot(state)))
 	rooms.surface == "Rooms" and rooms.focus == [Room("r")] and rooms.theme == "Sky" and back.focus == [Session("a")] and back.surface == "Developer" and Model.show_surface(back, 1).theme == "Hypr" and Model.show_surface(back, 1).focus == [Room("r")] and Json.to_str(Model.deck_snapshot(restored)) == saved and restored.deck.len() == 4 and single.deck.len() == 1 and Model.restore_deck("nonsense") == Err(Invalid)
+}
+
+# Another window's change to the deck shows here: this window keeps its
+# surface where it moved, as that window left it, and its own focus.
+expect {
+	here = { ..Model.show_surface(Model.initial(""), 1), focus: [Room("r")] }
+	there = Model.show_surface(Model.close_pane(Model.initial(""), "pane-3"), 1)
+	moved = { ..there, deck: [there.deck.get(1) ?? { name: "", snapshot: Default.rooms.snapshot, focus: [] }, there.deck.get(0) ?? { name: "", snapshot: Default.developer.snapshot, focus: [] }], deck_shown: 0 }
+	followed = Model.deck_changed(here, Json.to_str(Model.deck_snapshot(moved)))
+	followed.deck.map(|surface| surface.name) == ["Rooms", "Developer"] and followed.deck_shown == 0 and followed.surface == "Rooms" and followed.focus == [Room("r")] and Model.deck_changed(here, "nonsense") == here and Json.to_str(Model.deck_snapshot(Model.deck_changed(here, Json.to_str(Model.deck_snapshot(here))))) == Json.to_str(Model.deck_snapshot(here))
 }

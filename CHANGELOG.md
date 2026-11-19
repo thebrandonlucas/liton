@@ -115,6 +115,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Since round, in the Review view's bar once a round is sent, shows only the files the agent changed since the round you sent from this browser, in the view and the navigator. Without that round's files (another browser sent it, or the page reloaded since) it says it can't tell: the daemon doesn't keep the code each round was sent against yet.
 - A setup declares a deck, the surfaces a new browser starts with, by their presets' names (`Setup.with_deck`); liton's own is Developer, Rooms, Review and Board.
 - Switch between the deck's surfaces: a strip under the tiles names them, and a click, D then ] or [, D then 1 to 9, or the palette's Go to surface… goes to one, which slides in (not where motion is reduced). Each keeps its layout, theme and focus. The URL names the surface (`#deck=2`), so another window, or one on another monitor, can show another, and back returns.
+- The deck is the browser's, not a window's: a surface added, removed, moved or changed in one window shows in the others at once, each still showing its own surface.
 
 ### Changed
 
