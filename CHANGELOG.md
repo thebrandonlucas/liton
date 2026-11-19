@@ -93,6 +93,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Sky theme, in Settings: light and soft, white tiles with grey edges over a pale sky, for talking in rooms.
 - The Rooms preset, in Settings, for talking in rooms as in Buzz: the rooms on the left, the room picked in the middle, and its thread or members on the right, hidden until you open them, in the Sky theme.
 - On a screen under 1000px wide, a room's thread or members open over the room's right side rather than squeezing it; on a phone they fill the screen as their own panel.
+- While unread rooms are scrolled out of view in Rooms, a pill at its foot counts them, as "2 unread"; click it to scroll to the first.
 
 ### Changed
 

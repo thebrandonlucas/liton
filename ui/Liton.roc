@@ -2170,7 +2170,8 @@ Liton := [].{
 	## rooms the daemon lists under a heading of their kind
 	## (`Model.room_rows`), the one focused marked, each one's name, which
 	## focuses it, a dot while it has unread messages, how many mention you,
-	## and Join or Leave.
+	## and Join or Leave; and while unread rooms are scrolled out of view, a
+	## pill counting them, which scrolls to the first.
 	rooms : State(PaneCtx, Model.State) -> Elem(PaneCtx)
 	rooms = |model0|
 		Html.div(
@@ -2179,6 +2180,12 @@ Liton := [].{
 				Html.text_input(Engine.const("Search rooms"), "search", model0.signal().map(|state| state.room_search), [Engine.class("room-search"), Engine.attr("placeholder", "Search rooms"), Engine.attr("autocomplete", "off")], model0.set_value(|state, typed| { ..state, room_search: typed })),
 				Html.ul([Engine.class("room-list"), Engine.attr("data-part", "list")], [Engine.each(model0.signal().map(Model.room_rows), |row| row.key, |row| Liton.room_row(model0, row))]),
 				Engine.when(model0.signal().map(|state| Model.room_rows(state).is_empty() and !state.rooms.is_empty()), || Html.p("No rooms match.", "missing"), || Engine.text("")),
+				# The unread rooms scrolled out of view, which it scrolls to.
+				Engine.when(
+					model0.signal().map(|state| !Model.unread_out_of_view(state).is_empty()),
+					|| Html.button_s(model0.signal().map(|state| "${Model.unread_out_of_view(state).len().to_str()} unread"), [Engine.class("unread-pill"), Html.aria_label("Show the unread rooms")], model0.update(Model.show_unread)),
+					|| Engine.text(""),
+				),
 			],
 		)
 
@@ -2199,7 +2206,7 @@ Liton := [].{
 						Html.div(
 							"room-line",
 							[
-								Html.button_s(room.map(Liton.room_name), [Engine.class("room-name")], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
+								Html.button_s(room.map(Liton.room_name), [Engine.class("room-name"), Engine.ref_s(row.key().map(|room_id| "room-${room_id}")), Engine.on_seen({}, model.set_value_by(row.key(), |state, room_id, seen| Model.room_seen(state, room_id, seen.intersecting)))], model.update_by(row.key(), |state, room_id| Model.open(state, Room(room_id)))),
 								Html.span_s(room.map(|shown| Liton.room_unread(shown.kind, shown.unread)), [Engine.class("room-unread"), Engine.test_id("room-unread")]),
 								Liton.join_controls(model, room),
 							],

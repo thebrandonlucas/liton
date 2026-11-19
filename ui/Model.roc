@@ -177,6 +177,10 @@ Model := [].{
 		## What is typed in Rooms panes' search, which narrows their rooms.
 		room_search : Str,
 
+		## The rooms whose rows Rooms panes have scrolled out of view, as the
+		## browser last told, by their ids.
+		rooms_out_of_view : List(Str),
+
 		## The themes settings offer and the one a snapshot naming none shows:
 		## the daemon's setup's, or liton's own until it offers some. `theme`
 		## is the one picked, or "" for the default. `glass` is whether tiles
@@ -404,6 +408,7 @@ Model := [].{
 				room_logs: [],
 				room_asks: [],
 				room_search: "",
+				rooms_out_of_view: [],
 				themes: Default.setup.themes,
 				default_theme: Default.setup.default_theme,
 				theme: restored.map_ok(|loaded| loaded.theme) ?? "",
@@ -2766,6 +2771,32 @@ Model := [].{
 				},
 		)
 	}
+
+	## Takes whether a room's row is in view.
+	room_seen : State, Str, Bool -> State
+	room_seen = |state, room_id, in_view| {
+		others = state.rooms_out_of_view.drop_if(|out| out == room_id)
+		{ ..state, rooms_out_of_view: if (in_view) others else others.append(room_id) }
+	}
+
+	## The unread rooms whose rows are out of view, as Rooms lists them.
+	unread_out_of_view : State -> List(Str)
+	unread_out_of_view = |state| {
+		has_unread = |room|
+			match room.unread {
+				Counted({ messages, mentions }) => messages > 0 or mentions > 0
+				Unknown => Bool.False
+			}
+		Model.room_rows(state).keep_if(|row| row.heading.is_empty() and has_unread(row.room) and state.rooms_out_of_view.contains(row.key)).map(|row| row.key)
+	}
+
+	## Scrolls the first unread room out of view into it, focusing its row.
+	show_unread : State -> State
+	show_unread = |state|
+		match Model.unread_out_of_view(state) {
+			[first, ..] => { ..state, jump: { serial: state.jump.serial + 1, panel: "room-${first}", replace: "", push: "" } }
+			[] => state
+		}
 
 	## Whether a join or leave of a room is on its way.
 	joining : State, Str -> Bool
