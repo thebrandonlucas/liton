@@ -779,11 +779,11 @@ kbd:empty { display: none; }
 .composer .chip:hover, .composer .chip:focus-visible { border-color: var(--edge); color: inherit; }
 .context-meter { position: relative; flex: none; display: flex; }
 .composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
-  background: radial-gradient(closest-side, var(--field) 62%, transparent 64%), conic-gradient(var(--accent) calc(var(--used) * 1%), var(--edge) 0); }
+  background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--accent) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
 .context-meter .usage { position: absolute; right: 0; bottom: calc(100% + 8px); top: auto; min-width: 200px; padding: 8px 10px; font-size: 12px; }
 .usage-title { margin: 0 0 4px; color: var(--muted); }
 .usage-row { display: flex; justify-content: space-between; gap: 16px; padding: 2px 0; }
-.usage-row span:last-child { font-variant-numeric: tabular-nums; }
+.usage-row span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-row.hidden { display: none; }
 .composer .chip.pending { border-style: dashed; border-color: var(--edge); font-style: italic; }
 .composer button { color: var(--accent); }
