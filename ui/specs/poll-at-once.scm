@@ -7,11 +7,11 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
     (run-effect 3)
     (expect-pending-effects 0)
-    (click (role button :name "Fix tests"))
+    (click (role tab :name "Fix tests"))
     ; At once, not on the next tick.
     (expect-pending-effects 1)
     ; Another change while it is on its way waits for it, as does the tick.
-    (click (role button :name "Write docs"))
+    (click (role tab :name "Write docs"))
     (tick-interval 1000)
     (expect-pending-effects 1)
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s2\",\"cursor\":\"\",\"events\":[]}]}")
