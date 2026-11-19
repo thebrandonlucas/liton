@@ -836,6 +836,46 @@ Model := [].{
 		}
 	}
 
+	## What a session's last turn used, as its composer's meter shows it:
+	## the share of its context window filled, in percent, and each count
+	## its provider told, said for a person. None while it tells none.
+	usage_shown : State, Str -> Try({ percent : U64, context : Str, input : Str, cached : Str, output : Str, cost : Str }, [Untold])
+	usage_shown = |state, session_id|
+		match Model.session(state, session_id).usage {
+			Err(Missing) => Err(Untold)
+			Ok(used) => {
+				said = |count| count.map_ok(Model.tokens_text) ?? ""
+				percent = match (used.context_used, used.context_max) {
+					(Ok(filled), Ok(most)) if most > 0 => U64.min(100, (filled * 100 + most // 2) // most)
+					_ => 0
+				}
+				context = match (used.context_used, used.context_max) {
+					(Ok(filled), Ok(most)) => "${Model.tokens_text(filled)} of ${Model.tokens_text(most)} (${percent.to_str()}%)"
+					(Ok(filled), _) => Model.tokens_text(filled)
+					_ => ""
+				}
+				Ok({ percent, context, input: said(used.input_tokens), cached: said(used.cached_input_tokens), output: said(used.output_tokens), cost: used.cost_usd.map_ok(Model.dollars_text) ?? "" })
+			}
+		}
+
+	## A count of tokens as a person says it: 950, 41.2k, 1.2M.
+	tokens_text : U64 -> Str
+	tokens_text = |count| {
+		tenths = |unit| {
+			scaled = (count * 10 + unit // 2) // unit
+			if (scaled % 10 == 0 or scaled >= 1_000) (scaled // 10).to_str() else "${(scaled // 10).to_str()}.${(scaled % 10).to_str()}"
+		}
+		if (count < 1_000) count.to_str() else if (count < 999_950) "${tenths(1_000)}k" else "${tenths(1_000_000)}M"
+	}
+
+	## US dollars to the cent: $0.42, or under a cent, <$0.01.
+	dollars_text : Dec -> Str
+	dollars_text = |amount| {
+		cents = (amount * 100).round_to_u64_try() ?? 0
+		padding = if (cents % 100 < 10) "0" else ""
+		if (cents == 0 and amount > 0) "<$0.01" else "$${(cents // 100).to_str()}.${padding}${(cents % 100).to_str()}"
+	}
+
 	## Whether a switch of a session's setting is on its way.
 	configuring : State, Str, Setting -> Bool
 	configuring = |state, session_id, which|
@@ -4839,3 +4879,6 @@ expect {
 		and Model.focused(Model.open(first, Session("s3")), [Workspace]) == Workspace("w2")
 		and Model.workspace_rows(first, Model.pane(first, "pane-1")).map(|row| row.key) == ["group:p1", "workspace:w1", "s3"]
 }
+
+expect [0, 950, 1_000, 41_234, 200_000, 999_960, 1_250_000].map(Model.tokens_text) == ["0", "950", "1k", "41.2k", "200k", "1M", "1.3M"]
+expect [0.42, 0.004, 0, 12.5].map(Model.dollars_text) == ["$0.42", "<$0.01", "$0.00", "$12.50"]

@@ -762,6 +762,14 @@ kbd:empty { display: none; }
 .composer .chip { min-width: 0; max-width: 16ch; padding: 2px 18px 2px 8px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); font-size: 12px; text-overflow: ellipsis; appearance: none; -webkit-appearance: none; cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: right 9px center, right 5px center; background-size: 4px 4px; background-repeat: no-repeat; }
 .composer .chip:hover, .composer .chip:focus-visible { border-color: var(--edge); color: inherit; }
+.context-meter { position: relative; flex: none; display: flex; }
+.composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
+  background: radial-gradient(closest-side, var(--field) 62%, transparent 64%), conic-gradient(var(--accent) calc(var(--used) * 1%), var(--edge) 0); }
+.context-meter .usage { position: absolute; right: 0; bottom: calc(100% + 8px); top: auto; min-width: 200px; padding: 8px 10px; font-size: 12px; }
+.usage-title { margin: 0 0 4px; color: var(--muted); }
+.usage-row { display: flex; justify-content: space-between; gap: 16px; padding: 2px 0; }
+.usage-row span:last-child { font-variant-numeric: tabular-nums; }
+.usage-row.hidden { display: none; }
 .composer .chip.pending { border-style: dashed; border-color: var(--edge); font-style: italic; }
 .composer button { color: var(--accent); }
 /* Send, the main action, and Stop in its place: one round button. */

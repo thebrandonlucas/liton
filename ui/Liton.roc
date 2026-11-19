@@ -2303,6 +2303,7 @@ Liton := [].{
 								Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
 							],
 						),
+						Liton.context_meter(model0, id),
 						Microphone.controls(model0, id),
 						# One round button: Send, or Stop while the agent works and
 						# nothing is typed, then a ring until it stops.
@@ -2345,6 +2346,59 @@ Liton := [].{
 			shown.map(|chip| !chip.setting.choices.is_empty()),
 			|| Dropdown.select(Engine.const(name), shown.map(|chip| chip.setting.value), [Engine.class_s(shown.map(|chip| if (chip.pending) "chip pending" else "chip")), Engine.attr_s("title", shown.map(|chip| if (chip.pending) "${name}: switching to ${chip.setting.label}…" else "${name}: ${chip.setting.label}"))], Liton.choices(shown.map(|chip| chip.setting.choices)), model.set_value_by(session_id, |state, session, value| Model.configure(state, session, which, value))),
 			|| otherwise,
+		)
+	}
+
+	## A ring in a chat pane's composer of how much of its session's context
+	## window the last turn filled, while its provider tells what it used,
+	## that opens a list of the tokens it read and wrote and what it cost.
+	context_meter : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	context_meter = |model, id| {
+		key = id.map(|pane_id| "${pane_id} context")
+		used = id.map2(model.signal(), |pane_id, state| Model.usage_shown(state, Model.session_of(state, Model.pane(state, pane_id))))
+		shown = used.map(|told| told ?? { percent: 0, context: "", input: "", cached: "", output: "", cost: "" })
+		open = key.map2(model.signal(), |menu_key, state| state.menu == menu_key)
+		row = |named, value| Html.div_s(value.map(|said| if (said.is_empty()) "usage-row hidden" else "usage-row"), [Html.span_s(Engine.const(named), []), Html.span_s(value, [])])
+		Engine.when(
+			used.map(|told| told.is_ok()),
+			||
+				Html.div(
+					"context-meter",
+					[
+						Engine.element(
+							"button",
+							[
+								Engine.attr("type", "button"),
+								Engine.class("context-ring"),
+								Engine.attr_s("style", shown.map(|told| "--used: ${told.percent.to_str()}")),
+								Html.aria_label_s(shown.map(|told| "Context: ${told.percent.to_str()}% used")),
+								Engine.attr_s("title", shown.map(|told| if (told.context.is_empty()) "What the last turn used" else "Context: ${told.context}")),
+								Engine.attr("aria-haspopup", "true"),
+								Html.flag("aria-expanded", open),
+								Engine.on_click(model.update_by(key, Model.toggle_menu)),
+							],
+							[],
+						),
+						Engine.when(
+							open,
+							||
+								Engine.element(
+									"div",
+									[Engine.class("menu usage"), Engine.test_id("context-usage")],
+									[
+										Html.p_s(Engine.const("Last turn"), [Engine.class("usage-title")]),
+										row("Context", shown.map(|told| told.context)),
+										row("Input", shown.map(|told| told.input)),
+										row("Cached input", shown.map(|told| told.cached)),
+										row("Output", shown.map(|told| told.output)),
+										row("Cost", shown.map(|told| told.cost)),
+									],
+								),
+							|| Engine.text(""),
+						),
+					],
+				),
+			|| Engine.text(""),
 		)
 	}
 
