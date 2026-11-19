@@ -165,6 +165,10 @@ Model := [].{
 		deck : List(Surface),
 		deck_shown : U64,
 
+		## How the deck last switched surfaces, toward the next or the
+		## previous, each switch counted: the surface shown slides in.
+		deck_slide : { serial : U64, toward : [Next, Previous] },
+
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
 		## file shown.
@@ -440,6 +444,7 @@ Model := [].{
 				surface: kept.map_ok(|surfaces_kept| surfaces_kept.first().map_ok(|surface| surface.name) ?? "") ?? Default.setup.default_preset,
 				deck: kept ?? Model.deck_of(Default.setup.presets, Default.developer, Default.setup.deck),
 				deck_shown: 0,
+				deck_slide: { serial: 0, toward: Next },
 				git: [],
 				git_changes: [],
 				git_hunks: [],
@@ -519,11 +524,48 @@ Model := [].{
 		match kept.get(index) {
 			Ok(surface) if index != state.deck_shown => {
 				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
-				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "" }
+				panel = Model.slot_of(laid, laid.active_tile)
+				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
+				jump = if (hash == state.url_hash) laid.jump else { ..laid.jump, replace: hash }
+				deck_slide = { serial: state.deck_slide.serial + 1, toward: if (index > state.deck_shown) Next else Previous }
+				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
 			}
 			_ => state
 		}
 	}
+
+	## Shows the deck's next or previous surface, round from its end to its
+	## start.
+	step_surface : State, [Next, Previous] -> State
+	step_surface = |state, toward| {
+		count = state.deck.len()
+		index = if (toward == Next) (state.deck_shown + 1) % count else (state.deck_shown + count - 1) % count
+		stepped = if (count < 2) state else Model.show_surface(state, index)
+		{ ..stepped, deck_slide: { ..stepped.deck_slide, toward } }
+	}
+
+	## The deck's surfaces by their places, titled by their names, else
+	## by their places.
+	deck_titles : State -> List({ index : U64, title : Str, shown : Bool })
+	deck_titles = |state| Model.deck(state).map_with_index(|surface, index| { index, title: if (surface.name.is_empty()) "Surface ${(index + 1).to_str()}" else surface.name, shown: index == state.deck_shown })
+
+	## The URL hash naming a Workbench's panel (`slot_hash`) on the deck's
+	## surface shown, which it names once the deck has switched:
+	## `#deck=2&left` is the left drawer of the second.
+	hash_of : State, Str -> Str
+	hash_of = |state, panel_hash| {
+		deck_part = if (state.deck_shown > 0 or state.url_hash.contains("deck=")) ["deck=${(state.deck_shown + 1).to_str()}"] else []
+		parts = deck_part.concat(if (panel_hash.is_empty()) [] else [panel_hash.drop_prefix("#")])
+		if (parts.is_empty()) "" else "#${Str.join_with(parts, "&")}"
+	}
+
+	## The surface a URL hash names by its place in the deck.
+	deck_hashed : Str -> Try(U64, [NotFound])
+	deck_hashed = |hash|
+		match Str.split_on(hash.drop_prefix("#"), "&").keep_oks(|part| if (part.starts_with("deck=")) U64.from_str(part.drop_prefix("deck=")) else Err(NotFound)) {
+			[number, ..] if number >= 1 => Ok(number - 1)
+			_ => Err(NotFound)
+		}
 
 	## Reads the deck a browser kept, or a snapshot of one surface as a deck
 	## of it (`restore`), its name "". A surface that doesn't read is left out.
@@ -1089,14 +1131,15 @@ Model := [].{
 	## unless the URL names the panel shown already.
 	jump_to : State, Str, [Replace, Push] -> State
 	jump_to = |state, tile_id, how| {
-		(from, to) = (Model.slot_hash(Model.slot_of(state, state.active_tile)), Model.slot_hash(Model.slot_of(state, tile_id)))
+		panel = Model.slot_hash(Model.slot_of(state, tile_id))
+		(from, to) = (Model.hash_of(state, Model.slot_hash(Model.slot_of(state, state.active_tile))), Model.hash_of(state, panel))
 		(replace, push) = match how {
 			Replace if to != state.url_hash => (to, "")
 			Push if to != state.url_hash and from != to => (from, to)
 			_ => ("", "")
 		}
 		jump = { serial: state.jump.serial + 1, panel: Model.panel_ref(Model.slot_of(state, tile_id)), replace, push }
-		if (to.is_empty()) { ..state, active_tile: tile_id } else { ..state, active_tile: tile_id, jump, url_hash: to }
+		if (panel.is_empty()) { ..state, active_tile: tile_id } else { ..state, active_tile: tile_id, jump, url_hash: to }
 	}
 
 	## The URL hash naming a Workbench slot's panel, and the slot a hash
@@ -1105,13 +1148,18 @@ Model := [].{
 	slot_hash = |slot| if (slot == Free) "" else "#${Model.slot_name(slot)}"
 
 	slot_hashed : Str -> Slot
-	slot_hashed = |hash| [Left, Right].find_first(|slot| Model.slot_hash(slot) == hash) ?? Main
+	slot_hashed = |hash| [Left, Right].find_first(|slot| Str.split_on(hash.drop_prefix("#"), "&").contains(Model.slot_name(slot))) ?? Main
 
 	## Follows the browser to `url`, by its back or forward or on loading the
-	## page: a Workbench shows the panel its hash names.
+	## page: the deck shows the surface its hash names, without sliding,
+	## and a Workbench the panel.
 	went : State, Str -> State
 	went = |state0, url| {
-		state = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
+		hashed = { ..state0, url_hash: url.split_last("#").map_ok(|parts| "#${parts.after}") ?? "" }
+		state = match Model.deck_hashed(hashed.url_hash) {
+			Ok(index) if index != hashed.deck_shown and index < hashed.deck.len() => { ..Model.show_surface(hashed, index), url_hash: hashed.url_hash, jump: hashed.jump, deck_slide: hashed.deck_slide }
+			_ => hashed
+		}
 		if (state.shell == Workbench) Model.layout(state, { shell: Workbench, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden }) else state
 	}
 

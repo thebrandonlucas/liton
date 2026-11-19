@@ -114,6 +114,7 @@ All notable changes to liton are documented in this file. The format is based on
 - The Review surface has crit.md's keys, outside a text box: J and K focus the next and previous hunk, ] and [ the next and previous thread, C comments on the hunk or thread focused, A marks the file in view viewed and Shift+F finishes the review. In a comment, Ctrl+Enter or ⌘Enter keeps it and Escape cancels it. The palette and the list of keys offer them too.
 - Since round, in the Review view's bar once a round is sent, shows only the files the agent changed since the round you sent from this browser, in the view and the navigator. Without that round's files (another browser sent it, or the page reloaded since) it says it can't tell: the daemon doesn't keep the code each round was sent against yet.
 - A setup declares a deck, the surfaces a new browser starts with, by their presets' names (`Setup.with_deck`); liton's own is Developer, Rooms, Review and Board.
+- Switch between the deck's surfaces: a strip under the tiles names them, and a click, D then ] or [, D then 1 to 9, or the palette's Go to surface… goes to one, which slides in (not where motion is reduced). Each keeps its layout, theme and focus. The URL names the surface (`#deck=2`), so another window, or one on another monitor, can show another, and back returns.
 
 ### Changed
 

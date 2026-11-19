@@ -19,6 +19,6 @@
     (expect-visible (role region :name "Settings"))
     (click (role button :name "Keys"))
     (expect-attr (role button :name "Keys") aria-pressed "true")
-    (expect-visible (text "⌥1 to ⌥9 show them too, in this order, outside a text box, and ⌘1 to ⌘9, or G then 1 to 9, go to that workspace. ⌘B and ⌘E show or hide the drawers, ⌘, opens Settings and ⌘K the palette of commands and places, in a text box too; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."))
+    (expect-visible (text "⌥1 to ⌥9 show them too, in this order, outside a text box, and ⌘1 to ⌘9, or G then 1 to 9, go to that workspace. D then ] or [ goes to the deck's next or previous surface, and D then 1 to 9 to that one. ⌘B and ⌘E show or hide the drawers, ⌘, opens Settings and ⌘K the palette of commands and places, in a text box too; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."))
   )
 )

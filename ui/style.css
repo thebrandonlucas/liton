@@ -144,6 +144,24 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   border: 1px solid var(--fail); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
 .toast .dismiss { flex: none; padding: 3px; border-color: transparent; background: none; color: var(--muted); }
 
+/* The deck: a slim strip of its surfaces under the tiles, the one shown
+   lit. A surface switched to slides in from the side it lies on, a new
+   animation (-0, -1) for each switch; not where motion is reduced. */
+.deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--gap) calc(var(--gap) / 2); }
+.deck-surface { padding: 1px 10px; border: 1px solid transparent; border-radius: 999px; background: none;
+  color: var(--muted); font: 11px var(--font-mono); letter-spacing: .02em; opacity: .7; }
+.deck-surface:hover { opacity: 1; color: var(--text); border-color: var(--edge); }
+.deck-surface[aria-pressed="true"] { opacity: 1; color: var(--accent); border-color: var(--edge-active); background: var(--glass); }
+.grid.deck-in-next-0 { animation: deck-in-next-0 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-next-1 { animation: deck-in-next-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-previous-0 { animation: deck-in-previous-0 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+.grid.deck-in-previous-1 { animation: deck-in-previous-1 calc(var(--slow) * 1.6) cubic-bezier(.2, .8, .2, 1); }
+@keyframes deck-in-next-0 { from { transform: translateX(12%); opacity: 0; } }
+@keyframes deck-in-next-1 { from { transform: translateX(12%); opacity: 0; } }
+@keyframes deck-in-previous-0 { from { transform: translateX(-12%); opacity: 0; } }
+@keyframes deck-in-previous-1 { from { transform: translateX(-12%); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .grid[class*="deck-in-"] { animation: none; } }
+
 /* Settings: a page over the surface, Paseo's: a rail of sections on the
    left, and the section picked in a column beside it, of cards of rows. */
 .settings { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 280px minmax(0, 1fr);
@@ -1105,6 +1123,10 @@ kbd:empty { display: none; }
   .tile-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--warn); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
+  /* The deck sits over a Workbench's tab bar, where a swipe across it
+     goes to the next or previous surface. */
+  .deck { order: 1; padding: 2px var(--gap) 4px; overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
+  .tile-tabs:has(+ .workbench) { order: 2; }
   /* Settings: its rail is a list, and a section picked covers it. */
   .settings { grid-template-columns: minmax(0, 1fr); }
   .settings .settings-detail, .settings.pushed .settings-rail { display: none; }

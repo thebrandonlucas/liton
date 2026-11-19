@@ -131,12 +131,13 @@ Liton := [].{
 						# a narrower screen, as a thread opened from it shows there.
 						Html.div_attrs(
 							[
-								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}")),
+								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}${Liton.slide_class(state)}")),
 								Engine.attr_s("style", laid.map(Liton.grid_style)),
 								Engine.test_id("grid"),
 							],
 							[Engine.each(laid.map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, laid, row))],
 						),
+						Liton.deck_indicator(model),
 						Liton.ghost(model, drag),
 						Liton.settings(model),
 						Liton.toast(model),
@@ -153,6 +154,44 @@ Liton := [].{
 			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
+
+	## The class sliding the surface the deck switched to in from the side
+	## it lies on, a new animation for each switch (style.css).
+	slide_class : Model.State -> Str
+	slide_class = |state|
+		if (state.deck_slide.serial == 0) "" else " deck-in-${if (state.deck_slide.toward == Next) "next" else "previous"}-${(state.deck_slide.serial % 2).to_str()}"
+
+	## The deck's surfaces, by name, the one shown pressed, while it holds
+	## more than one: a click goes to one.
+	deck_indicator : State(Ctx, Model.State) -> Elem(Ctx)
+	deck_indicator = |model|
+		Engine.when(
+			model.signal().map(|state| state.deck.len() > 1),
+			||
+				Engine.element(
+					"nav",
+					[Engine.class("deck"), Html.aria_label("Deck"), Engine.test_id("deck")],
+					[
+						Engine.each(
+							model.signal().map(Model.deck_titles),
+							|surface| surface.index.to_str(),
+							|row|
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.class("deck-surface"),
+										Html.aria_label_s(row.field(|surface| "Surface ${(surface.index + 1).to_str()}: ${surface.title}")),
+										Html.flag("aria-pressed", row.field(|surface| surface.shown)),
+										Engine.on_click(model.lift_row().update_by(row.field(|surface| surface.index), Model.show_surface)),
+									],
+									[Engine.text_s(row.field(|surface| surface.title))],
+								),
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
 
 	## While a pane is held, the page reports the pointer (`Drag.pointer`):
 	## its moves drag the pane, and its release drops it.
@@ -525,7 +564,7 @@ Liton := [].{
 	keys_help = |system| {
 		key = |command| Keymap.text_of(system, Keymap.defaults, command)
 		heard = if (system == Mac) "in a text box too" else "outside a text box"
-		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
+		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and ${Keymap.text(system, ["Mod+1"])} to ${Keymap.text(system, ["Mod+9"])}, or G then 1 to 9, go to that workspace. D then ] or [ goes to the deck's next or previous surface, and D then 1 to 9 to that one. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
 	## Settings, a page of its own: a rail of its sections, App's, the
