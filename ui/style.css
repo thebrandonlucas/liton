@@ -231,9 +231,10 @@ kbd:empty { display: none; }
 .resize-line.bottom { left: 0; right: 0; bottom: -4px; height: 8px; cursor: row-resize; }
 .resize-line:hover { background: color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 4px; }
 @media (max-width: 640px) { .resize-line { display: none; } }
-/* The title of the pane dragged follows the pointer, a little below it. */
+/* The title of the pane dragged follows the pointer, a little below it,
+   moved on the compositor (ui/ports.mjs). */
 .drag-ghost { position: fixed; left: 12px; top: 14px; z-index: 10; pointer-events: none; padding: 4px 10px; border: 1px solid var(--edge-active); border-radius: var(--small-radius);
-  background: var(--sheet); box-shadow: var(--shadow); color: var(--accent); font: 12px var(--font-mono); white-space: nowrap; view-transition-name: drag-ghost; }
+  background: var(--sheet); box-shadow: var(--shadow); color: var(--accent); font: 12px var(--font-mono); white-space: nowrap; view-transition-name: drag-ghost; will-change: transform; }
 /* The tiles move to the layout a drag previews (ui/ports.mjs). */
 ::view-transition-group(*) { animation-duration: 180ms; animation-timing-function: ease-out; }
 ::view-transition { pointer-events: none; }
