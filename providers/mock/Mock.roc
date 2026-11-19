@@ -6,6 +6,8 @@ import cap.WorkspaceGit
 import cap.Workspaces
 
 Mock := [].{
+
+	## The mock provider, with every capability it can offer.
 	provider : Manifest.Provider
 	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1] }
 
@@ -26,6 +28,7 @@ Mock := [].{
 	## An event and how long after the request that caused it it happens.
 	Scheduled : { delay_ms : U64, event : Chat.Event }
 
+	## A session a fresh daemon starts with: its id, agent, title and timeline.
 	Seed : { id : Str, agent : Str, title : Str, events : List(Chat.Event) }
 
 	## The sessions a fresh daemon starts with.
@@ -70,6 +73,8 @@ Mock := [].{
 		\\2. Return **an empty result** there instead of crashing.
 		\\3. Add a test for the empty case, and run `zig build test`.
 
+	## The choices the plan's permission request offers: Reject, Implement, and
+	## Implement with Auto.
 	plan_choices : List(Chat.Choice)
 	plan_choices = [
 		{ id: "reject", label: "Reject", allows: Bool.False, style: Danger },

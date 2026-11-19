@@ -6,6 +6,8 @@ import Paseo
 ## read into workspace.git.v1's types. Only reads: liton calls none of
 ## Paseo's git writes (commit, discard, merge, push...).
 PaseoGit := [].{
+
+	## Why Paseo couldn't read a checkout: its code and a message.
 	Failure : { code : Str, message : Str }
 
 	## Paseo's checkout status: not a repository, a checkout or a worktree.
@@ -26,14 +28,21 @@ PaseoGit := [].{
 		error : Try(Failure, [Null]),
 	}
 
+	## A line of Paseo's diff: its `type`, add, remove or context, and its text.
 	DiffLine : { type : Str, content : Str }
 
+	## A hunk of Paseo's diff: where it starts and how many lines it spans in
+	## the old file and the new, and its lines.
 	DiffHunk : { old_start : U32, old_count : U32, new_start : U32, new_count : U32, lines : List(DiffLine) }
 
+	## A file of Paseo's diff: its path, the one it was renamed from, whether it
+	## is new or deleted, its lines added and removed, and its hunks.
 	DiffFile : { path : Str, old_path : Try(Str, [Missing]), is_new : Bool, is_deleted : Bool, additions : U32, deletions : U32, status : Try(Str, [Missing]), hunks : List(DiffHunk) }
 
+	## A file a commit changed, with its lines added and removed.
 	CommitFile : { path : Str, additions : U32, deletions : U32, status : Try(Str, [Missing]) }
 
+	## A commit Paseo lists of a branch, and whether it is pushed or on the base.
 	Commit : { sha : Str, short_sha : Str, subject : Str, author_name : Str, author_date : Str, is_on_remote : Bool, is_on_base : Try(Bool, [Missing]), files : List(CommitFile) }
 
 	## How old a diff gets before it is fetched again, since a file edited in
@@ -55,16 +64,23 @@ PaseoGit := [].{
 			(Commits, Ok(known)) => known.status.branch != status.branch or known.status.ahead != status.ahead
 		}
 
+	## Asks for the checkout status of `directory` (see `status_answer`).
 	status_request : Str, Str -> Str
 	status_request = |directory, request_id| Json.to_str({ type: "session", message: { type: "checkout_status_request", cwd: directory, requestId: request_id } })
 
+	## Asks for the diff of `directory`, uncommitted or against its base (see
+	## `diff_answer`).
 	diff_request : Str, WorkspaceGit.Scope, Str -> Str
 	diff_request = |directory, scope, request_id|
 		Json.to_str({ type: "session", message: { type: "checkout.diff.get.request", cwd: directory, compare: { mode: if (scope == Uncommitted) "uncommitted" else "base" }, requestId: request_id } })
 
+	## Asks for the commits of the branch checked out in `directory` (see
+	## `commits_answer`).
 	commits_request : Str, Str -> Str
 	commits_request = |directory, request_id| Json.to_str({ type: "session", message: { type: "checkout.commits.list.request", cwd: directory, requestId: request_id } })
 
+	## Asks for the diff of the file at `path` in the commit `sha` (see
+	## `commit_file_answer`).
 	commit_file_request : Str, Str, Str, Str -> Str
 	commit_file_request = |directory, sha, path, request_id| Json.to_str({ type: "session", message: { type: "checkout.commits.file_diff.request", cwd: directory, sha, path, requestId: request_id } })
 
@@ -110,6 +126,8 @@ PaseoGit := [].{
 		}
 	}
 
+	## The commits a `checkout.commits.list.response` answering `request_id`
+	## lists, or why git failed.
 	commits_answer : Str, Str -> Try(List(WorkspaceGit.Commit), [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
 	commits_answer = |text, request_id| {
 		answered : Try({ message : { payload : { commits : List(Commit), error : Try(Failure, [Null]) } } }, _)
