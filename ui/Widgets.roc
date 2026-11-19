@@ -158,7 +158,7 @@ Widgets := [].{
 			minimum_width: 360,
 			sets: [Ticket],
 			follows: [Ticket],
-			options: [],
+			options: [{ key: "layout", label: "Layout", help: "List the tickets grouped by what their status means, or lay them out as a board, a column for each status.", kind: Choice({ default: "List", choices: ["List", "Board"] }) }],
 			parts: ["header", "group", "ticket"],
 		},
 		{

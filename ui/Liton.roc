@@ -1510,35 +1510,45 @@ Liton := [].{
 	}
 
 	## A Board pane's list: the tickets of the scope picked, those its search
-	## matches, in groups by the kind of their status, each with how many it
-	## has (`TicketDesk.groups`).
+	## matches, in groups by the kind of their status, or on a board in
+	## columns by status, each with how many it has (`TicketDesk.groups`).
 	board_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	board_list = |model, id| {
-		groups = id.map2(model.signal(), |pane_id, state| TicketDesk.groups(state.tickets, pane_id, List))
-		Html.div(
-			"board",
+		layout = id.map2(model.signal(), |pane_id, state| Model.board_layout(state, pane_id))
+		groups = id.map2(model.signal(), |pane_id, state| TicketDesk.groups(state.tickets, pane_id, Model.board_layout(state, pane_id)))
+		laid_out = |name, value| Html.button(name, [Engine.class("layout"), Html.aria_label("Show as a ${name.with_ascii_lowercased()}"), Html.flag("aria-pressed", layout.map(|shown| shown == value))], model.update_by(id, |state, pane_id| Model.set_option(state, pane_id, "layout", name)))
+		Engine.element(
+			"div",
+			[Engine.class_s(layout.map(|shown| if (shown == Board) "board columns" else "board"))],
 			[
 				Html.div(
 					"board-bar",
 					[
 						Html.span_s(model.signal().map(|state| TicketDesk.scope_name(state.tickets, state.tickets.scope)), [Engine.class("board-scope")]),
 						Html.text_input(Engine.const("Search tickets"), "search", id.map2(model.signal(), |pane_id, state| TicketDesk.board(state.tickets, pane_id).filter.text), [Engine.attr("placeholder", "Search")], model.set_value_by(id, |state, pane_id, text| Model.filter_board(state, pane_id, |filter| { ..filter, text }))),
+						laid_out("List", List),
+						laid_out("Board", Board),
 					],
 				),
-				Engine.each(
-					groups,
-					|group| group.key,
-					|group_row|
-						Engine.element(
-							"section",
-							[Engine.class("board-group"), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title))],
-							[
-								Html.div("board-group-header", [Html.span_s(group_row.field(|group| group.title), [Engine.class("group-title")]), Html.span_s(group_row.field(|group| group.tickets.len().to_str()), [Engine.class("count"), Engine.test_id_s(group_row.key().map(|key| "group-${key}"))])]),
-								Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), id.lift_row(), row))]),
-							],
+				Html.div(
+					"board-groups",
+					[
+						Engine.each(
+							groups,
+							|group| group.key,
+							|group_row|
+								Engine.element(
+									"section",
+									[Engine.class("board-group"), Engine.attr("data-part", "group"), Html.aria_label_s(group_row.field(|group| group.title))],
+									[
+										Html.div("board-group-header", [Html.span_s(group_row.field(|group| group.title), [Engine.class("group-title")]), Html.span_s(group_row.field(|group| group.tickets.len().to_str()), [Engine.class("count"), Engine.test_id_s(group_row.key().map(|key| "group-${key}"))])]),
+										Html.ul([Engine.class("board-rows")], [Engine.each(group_row.field(|group| group.tickets), |ticket| ticket.id, |row| Liton.board_ticket(model.lift_row(), id.lift_row(), row))]),
+									],
+								),
 						),
+					],
 				),
-				Html.p_s(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+				Html.p_s(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.all(|group| group.tickets.is_empty())) "No tickets match." else ""), [Engine.class("ticket-empty")]),
 			],
 		)
 	}

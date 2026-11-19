@@ -2510,7 +2510,12 @@ Model := [].{
 
 	## A Board pane's tickets, in the order it shows them.
 	board_order : State, Str -> List(Str)
-	board_order = |state, pane_id| TicketDesk.groups(state.tickets, pane_id, List).join_map(|group| group.tickets.map(|ticket| ticket.id))
+	board_order = |state, pane_id| TicketDesk.groups(state.tickets, pane_id, Model.board_layout(state, pane_id)).join_map(|group| group.tickets.map(|ticket| ticket.id))
+
+	## Whether a Board pane lists its tickets or lays them out as a board,
+	## as its option says.
+	board_layout : State, Str -> [List, Board]
+	board_layout = |state, pane_id| if (Model.option(Model.pane(state, pane_id), "layout") == "Board") Board else List
 
 	## Where the ticket under the cursor is among a Board pane's, as "2 / 5".
 	ticket_place : State, Str -> Str

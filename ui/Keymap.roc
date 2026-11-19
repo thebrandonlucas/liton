@@ -10,7 +10,8 @@ Keymap := [].{
 
 	Binding : { keys : List(Str), command : Str }
 
-	## Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
+	## Cmd or Ctrl with B switches a Board on screen between its list and its
+	## board, else shows or hides the left drawer. Cmd with a letter is heard anywhere, Ctrl with one, as other keys,
 	## only outside a text field, as Ctrl+B and Ctrl+E move the caret on a
 	## Mac. 1 to 9, with or without Alt, show a preset, and `g` then 1 to 9
 	## goes to a workspace. Escape closes what is open, else goes back
@@ -19,6 +20,7 @@ Keymap := [].{
 	defaults = {
 		digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 		[
+			{ keys: ["Mod+b"], command: "board.layout" },
 			{ keys: ["Mod+b"], command: "drawer.left" },
 			{ keys: ["Mod+e"], command: "drawer.right" },
 			{ keys: ["Mod+,"], command: "settings" },
