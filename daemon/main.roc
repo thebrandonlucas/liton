@@ -672,7 +672,11 @@ chat_call! = |context, provider, asked| {
 						Err(reason) => Ok(Ok(Rejected(reason)))
 					}
 				}
-				PaseoSession(_) => Ok(Ok(Rejected("Paseo's sessions can't switch their model, mode or thinking from liton yet")))
+				PaseoSession(daemon) => {
+					outcome = configured!(daemon, session_id, { model, mode, thinking }, "liton-configure-${now_ms!().to_str()}")
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
 				NoSession => Ok(no_session(session_id))
 			}
 	}
@@ -702,9 +706,9 @@ started! = |context, provider, { place, agent, model, mode, thinking, prompt }| 
 			}
 		(Workspace(workspace_id), Ok(daemon)) if paseo_listed.any(|shown| shown.id == workspace_id) => {
 			cwd = paseo_listed.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? ""
-			paseo_started!(context, daemon, { agent, cwd, workspace_id: Ok(workspace_id), model, prompt })
+			paseo_started!(context, daemon, { agent, cwd, workspace_id: Ok(workspace_id), model, mode, thinking, prompt })
 		}
-		(Directory(directory), Ok(daemon)) if provider == Ok(Paseo.provider.id) => paseo_started!(context, daemon, { agent, cwd: directory, workspace_id: Err(Missing), model, prompt })
+		(Directory(directory), Ok(daemon)) if provider == Ok(Paseo.provider.id) => paseo_started!(context, daemon, { agent, cwd: directory, workspace_id: Err(Missing), model, mode, thinking, prompt })
 		(Workspace(workspace_id), _) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
 		(Directory(_), _) => Ok(Err({ code: NotFound, message: "name a provider that starts agents in a directory, such as paseo" }))
 	}
@@ -712,11 +716,11 @@ started! = |context, provider, { place, agent, model, mode, thinking, prompt }| 
 
 ## Starts a Paseo agent, as an id the daemon picks (see `Paseo.create_request`),
 ## over a connection of its own, and lets the next poll list it at once.
-paseo_started! : Context, PaseoDaemon, { agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), prompt : Str } => Try(Protocol.Answer(Chat.Response), _)
-paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, prompt }| {
+paseo_started! : Context, PaseoDaemon, { agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str } => Try(Protocol.Answer(Chat.Response), _)
+paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, mode, thinking, prompt }| {
 	request_id = "liton-create-${now_ms!().to_str()}"
 	agent_id = Paseo.uuid("${request_id} ${cwd} ${agent} ${prompt}")
-	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id, model, prompt, request_id }), request_id, Paseo.created)
+	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id, model, mode, thinking, prompt, request_id }), request_id, Paseo.created)
 	forget_check!(context.db, "cycle")?
 	match outcome {
 		Ok(session_id) => Ok(Ok(Started({ session_id: session_id })))
@@ -1512,11 +1516,35 @@ logged! = |line| {
 ## Paseo's answer to it with `answer`.
 written! : PaseoDaemon, Str, Str, (Str, Str -> Try(answer, _)) => Try(answer, _)
 written! = |daemon, request, request_id, answer| {
-	connection = connected!(daemon, "liton-daemon-writes")?
+	{ connection, .. } = connected!(daemon, "liton-daemon-writes")?
 	answered = exchange!(connection, request, request_id)
 	_ = connection.write!(WebSocket.close(websocket_mask))
 	answer(answered?, request_id)
 }
+
+## Switches a Paseo agent's model, mode or thinking level over a connection
+## of its own, in one request where Paseo can (see
+## `Paseo.configure_requests`), else one after the other until Paseo
+## refuses one.
+configured! : PaseoDaemon, Str, { model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }, Str => Try({}, _)
+configured! = |daemon, agent_id, changes, request_id| {
+	{ connection, features } = connected!(daemon, "liton-daemon-writes")?
+	outcome = applied!(connection, Paseo.configure_requests(features, agent_id, changes, request_id))
+	_ = connection.write!(WebSocket.close(websocket_mask))
+	outcome
+}
+
+## Sends each of `requests` in turn, until Paseo refuses one.
+applied! : Tcp.Connection, List({ request : Str, answer : Str, request_id : Str }) => Try({}, _)
+applied! = |connection, requests|
+	match requests.first() {
+		Err(_) => Ok({})
+		Ok(asked) =>
+			match Paseo.accepted(exchange!(connection, asked.request, asked.request_id)?, asked.answer, asked.request_id) {
+				Ok({}) => applied!(connection, requests.drop_first(1))
+				Err(refused) => Err(refused)
+			}
+	}
 
 ## Paseo refusing a request or liton's password is `Refused`; any other
 ## failure, such as not reaching Paseo, `Unavailable`.
@@ -1614,7 +1642,7 @@ paseo_cycle! = |{ db, paseo, .. }|
 				if !wanted.is_empty() {
 					held!(db, now_ms!() + cycle_lease_ms)?
 					match connected!(daemon, "liton-daemon") {
-						Ok(connection) => {
+						Ok({ connection, .. }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
@@ -1640,8 +1668,9 @@ held! = |db, until| Sqlite.execute!({ db, query: "UPDATE paseo_checks SET checke
 
 ## A WebSocket connection to Paseo as `client_id`, once Paseo welcomed its
 ## hello. The password goes both in the WebSocket protocol and in the hello
-## (see `Paseo.hello`). Paseo refusing it is `HelloRejected`.
-connected! : PaseoDaemon, Str => Try(Tcp.Connection, _)
+## (see `Paseo.hello`), with the features Paseo lists. Paseo refusing it is
+## `HelloRejected`.
+connected! : PaseoDaemon, Str => Try({ connection : Tcp.Connection, features : Paseo.Features }, _)
 connected! = |daemon, client_id| {
 	connection = Tcp.connect!(daemon.host, daemon.port)?
 	connection.write_utf8!(WebSocket.handshake({ host: daemon.host, port: daemon.port, path: "/ws", protocol: Paseo.protocol(daemon.password), key: "bGl0b24tZGFlbW9uLWtleQ==" }))?
@@ -1651,18 +1680,18 @@ connected! = |daemon, client_id| {
 	}
 	skip_headers!(connection)?
 	connection.write!(WebSocket.text(Paseo.hello(client_id, daemon.password), websocket_mask))?
-	greeted!(connection)?
-	Ok(connection)
+	features = greeted!(connection)?
+	Ok({ connection, features })
 }
 
 ## Waits for Paseo's welcome. Paseo 0.9, and 0.15 given a wrong password in
 ## the WebSocket protocol, close with 4401 instead of rejecting the hello.
-greeted! : Tcp.Connection => Try({}, _)
+greeted! : Tcp.Connection => Try(Paseo.Features, _)
 greeted! = |connection|
 	match message!(connection, []) {
 		Ok(received) =>
 			match Paseo.greeting(received) {
-				Welcomed => Ok({})
+				Welcomed(features) => Ok(features)
 				Rejected(reason) => Err(HelloRejected(reason))
 				NotGreeting => greeted!(connection)
 			}

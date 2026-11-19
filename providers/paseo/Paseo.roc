@@ -211,11 +211,29 @@ Paseo := [].{
 	## `workspace_id` if any, as `agent_id`: an id liton picks, which makes
 	## the same request sent again start no second agent. Paseo answers once
 	## it made the agent (see `created`).
-	create_request : { agent_id : Str, agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), prompt : Str, request_id : Str } -> Str
-	create_request = |{ agent_id, agent, cwd, workspace_id, model, prompt, request_id }| {
+	create_request : { agent_id : Str, agent : Str, cwd : Str, workspace_id : Try(Str, [Missing]), model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), prompt : Str, request_id : Str } -> Str
+	create_request = |{ agent_id, agent, cwd, workspace_id, model, mode, thinking, prompt, request_id }| {
 		initial_prompt : Try(Str, [Missing])
 		initial_prompt = if (prompt.is_empty()) Err(Missing) else Ok(prompt)
-		Json.to_str({ type: "session", message: { type: "agent.create.request", requestId: request_id, agentId: agent_id, idempotencyKey: agent_id, workspaceId: workspace_id, initialPrompt: initial_prompt, config: { provider: agent, cwd, model } } })
+		Json.to_str({ type: "session", message: { type: "agent.create.request", requestId: request_id, agentId: agent_id, idempotencyKey: agent_id, workspaceId: workspace_id, initialPrompt: initial_prompt, config: { provider: agent, cwd, model, modeId: mode, thinkingOptionId: thinking } } })
+	}
+
+	## The requests that switch an agent's model, mode or thinking level,
+	## those named, each with the type Paseo answers it with (see
+	## `accepted`): one `agent.config.apply.request` where Paseo has the
+	## feature, else one single request for each, the model first, since
+	## its thinking levels are the model's.
+	configure_requests : Features, Str, { model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]) }, Str -> List({ request : Str, answer : Str, request_id : Str })
+	configure_requests = |features, agent_id, { model, mode, thinking }, request_id| {
+		if features.agent_config_apply {
+			[{ request: Json.to_str({ type: "session", message: { type: "agent.config.apply.request", agentId: agent_id, requestId: request_id, config: { modelId: model, modeId: mode, thinkingOptionId: thinking } } }), answer: "agent.config.apply.response", request_id }]
+		} else {
+			single = |chosen, name, build| chosen.map_ok(|id| [{ request: build(id, "${request_id}-${name}"), answer: "set_agent_${name}_response", request_id: "${request_id}-${name}" }]) ?? []
+			[]
+				.concat(single(model, "model", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_model_request", agentId: agent_id, requestId: asked, modelId: id } })))
+				.concat(single(mode, "mode", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_mode_request", agentId: agent_id, requestId: asked, modeId: id } })))
+				.concat(single(thinking, "thinking", |id, asked| Json.to_str({ type: "session", message: { type: "set_agent_thinking_request", agentId: agent_id, requestId: asked, thinkingOptionId: id } })))
+		}
 	}
 
 	## The id of the agent an `agent.create.response` says Paseo made.
@@ -466,15 +484,20 @@ Paseo := [].{
 	protocol : Str -> Str
 	protocol = |password| "paseo.bearer.${password}"
 
+	## What liton uses of the features a Paseo's `server_info` lists:
+	## whether it applies an agent's config in one request (from 0.3.2).
+	Features : { agent_config_apply : Bool }
+
 	## What a message after `hello` says of it: Paseo welcomes a client with
-	## its `server_info`, or refuses it with `hello.rejected` and a reason.
-	greeting : Str -> [Welcomed, Rejected(Str), NotGreeting]
+	## its `server_info` and its features, or refuses it with
+	## `hello.rejected` and a reason.
+	greeting : Str -> [Welcomed(Features), Rejected(Str), NotGreeting]
 	greeting = |text| {
-		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
 		parsed = Json.parser_camel()(text)
 		match parsed {
 			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
-			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info") }) }), .. }) => Welcomed
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False })
 			_ => NotGreeting
 		}
 	}
@@ -945,7 +968,15 @@ expect {
 
 expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
 
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true}}}")) == Welcomed({ agent_config_apply: Bool.True })
+
+# One request where Paseo applies a config at once, else one for each change.
+expect {
+	changes = { model: Ok("opus"), mode: Err(Missing), thinking: Ok("high") }
+	Paseo.configure_requests({ agent_config_apply: Bool.True }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
+		and Paseo.configure_requests({ agent_config_apply: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
+}
 expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting
 expect Paseo.greeting("{\"type\":\"pong\"}") == NotGreeting
@@ -977,8 +1008,10 @@ expect {
 }
 
 expect
-	Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Ok("wks_1"), model: Err(Missing), prompt: "", request_id: "r1" })
+	Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Ok("wks_1"), model: Err(Missing), mode: Err(Missing), thinking: Err(Missing), prompt: "", request_id: "r1" })
 		== "{\"message\":{\"agentId\":\"a1\",\"config\":{\"cwd\":\"/src/app\",\"provider\":\"claude\"},\"idempotencyKey\":\"a1\",\"requestId\":\"r1\",\"type\":\"agent.create.request\",\"workspaceId\":\"wks_1\"},\"type\":\"session\"}"
+		and Paseo.create_request({ agent_id: "a1", agent: "claude", cwd: "/src/app", workspace_id: Err(Missing), model: Ok("opus"), mode: Ok("plan"), thinking: Ok("high"), prompt: "", request_id: "r1" })
+			== "{\"message\":{\"agentId\":\"a1\",\"config\":{\"cwd\":\"/src/app\",\"modeId\":\"plan\",\"model\":\"opus\",\"provider\":\"claude\",\"thinkingOptionId\":\"high\"},\"idempotencyKey\":\"a1\",\"requestId\":\"r1\",\"type\":\"agent.create.request\"},\"type\":\"session\"}"
 
 expect {
 	made = "{\"type\":\"session\",\"message\":{\"type\":\"agent.create.response\",\"payload\":{\"requestId\":\"r1\",\"agent\":{\"id\":\"a1\",\"provider\":\"claude\"},\"error\":null}}}"
