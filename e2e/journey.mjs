@@ -129,8 +129,9 @@ try {
     await click("Settings", "button", "Developer preset");
     await page.click(".settings-toggle");
   });
-  await step("clicking a workspace shows its session that needs you in Chat, and its git in Changes", async () => {
+  await step("clicking a workspace, then its tab of the session that needs you, shows it in Chat, and the workspace's git in Changes", async () => {
     await click("Workspaces", ".tree-workspace button", "main");
+    await pick_tab("Find the flaky CI test");
     await see("Chat", ".pane-header .pane-title", "Find the flaky CI test");
     await see("Changes", ".git-status", "main");
     await see("Changes", ".missing", "Working tree clean");
