@@ -221,6 +221,21 @@ kbd:empty { display: none; }
 .tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
 @media (hover: none) { .tile-header .tab-close { opacity: 1; } }
+/* The tabs of the workspace a Workbench shows: its sessions' chats, each
+   with its status, its views and +. */
+.workspace-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.workspace-tab { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; border-radius: var(--small-radius); color: var(--muted); }
+.workspace-tab:hover { background: var(--tool); }
+.workspace-tab.shown { background: var(--selected); color: var(--text); }
+.workspace-tab .tab-select { min-width: 0; max-width: 220px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border: none; background: none; color: inherit; font-size: 13px; }
+.workspace-tab .tab-select::before { flex: none; }
+.workspace-tab .with-status::before, .workspace-tab .tab-select:not(.with-status) .status-dot { display: none; }
+.workspace-tab .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tab .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 2px 4px; margin-right: 4px; border-color: transparent; background: none; color: inherit; opacity: 0; }
+.workspace-tab:hover .tab-close, .workspace-tab.shown .tab-close, .workspace-tab .tab-close:focus-visible { opacity: 1; }
+.workspace-tabs .new-tab { --icon: var(--icon-plus); --icon-size: 14px; flex: none; padding: 4px 6px; border-color: transparent; background: none; color: var(--muted); }
+.workspace-tabs .new-tab:hover { color: var(--text); }
+@media (hover: none) { .workspace-tab .tab-close { opacity: 1; } }
 /* Dragging a pane by its tab or header: the tile it drops into or the side
    of it a new tile opens on, the bar where it lands, and the pane dragged,
    faded. */

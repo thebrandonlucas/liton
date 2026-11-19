@@ -733,39 +733,10 @@ Liton := [].{
 					[Left, Main, Right, Free],
 					|shown| if (shown == Free) Engine.text("") else Engine.element("span", [Engine.ref(Model.panel_ref(shown)), Engine.attr("tabindex", "-1"), Engine.class("panel-anchor")], []),
 				),
-				Html.div(
-					"tile-header",
-					[
-						Engine.each(
-							tile.map2(laid, |shown, state| Model.shown_panes(state, shown)),
-							|pane| pane.id,
-							|tab|
-								Engine.element(
-									"span",
-									[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture)))), Engine.attr_s("data-tab", tab.key())],
-									[
-										Html.button_s(
-											tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
-											[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(drag.lift_row(), tab.key())),
-											model.lift_row().update_by(tab.key(), Model.activate_tab),
-										),
-										Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
-									],
-								),
-						),
-						Engine.when(
-							tiling,
-							||
-								Html.div(
-									"tile-controls",
-									[
-										Html.icon_button("−", Engine.const("Make tile narrower"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Narrower))),
-										Html.icon_button("+", Engine.const("Make tile wider"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Wider))),
-									],
-								),
-							|| Engine.text(""),
-						),
-					],
+				Engine.when(
+					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
+					|| Liton.workspace_tabs(model, tile),
+					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
 				# Handles on its right and bottom edges move the lines there.
@@ -788,6 +759,84 @@ Liton := [].{
 			],
 		)
 	}
+
+	## A tile's bar of its tabs, each with a × that hides it in a Workbench
+	## and closes it in Tiling, and in Tiling its controls.
+	tile_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.State), Signal(TileCtx, Str), Signal(TileCtx, Model.Tile), Signal(TileCtx, Bool) -> Elem(TileCtx)
+	tile_tabs = |model, drag, laid, id, tile, tiling|
+		Html.div(
+			"tile-header",
+			[
+				Engine.each(
+					tile.map2(laid, |shown, state| Model.shown_panes(state, shown)),
+					|pane| pane.id,
+					|tab|
+						Engine.element(
+							"span",
+							[Engine.class_s(tab.key().map2(drag.signal().lift_row(), |pane_id, gesture| Liton.joined_classes("tab", Liton.pane_drag_class(pane_id, gesture)))), Engine.attr_s("data-tab", tab.key())],
+							[
+								Html.button_s(
+									tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| Liton.label(state, pane)),
+									[Engine.class_s(tab.field(|pane| "tab-select widget-${pane.widget}")), Html.flag("aria-pressed", tab.key().map2(tile.lift_row(), |key, shown| key == shown.active))].concat(Liton.grip(drag.lift_row(), tab.key())),
+									model.lift_row().update_by(tab.key(), Model.activate_tab),
+								),
+								Liton.icon_button(tab.field(|pane| pane).map2(model.signal().lift_row(), |pane, state| "${if (state.shell == Workbench) "Hide" else "Close"} the ${Widgets.find(pane.widget).title} tab"), "icon tab-close", model.lift_row().update_by(tab.key(), Model.close_tab)),
+							],
+						),
+				),
+				Engine.when(
+					tiling,
+					||
+						Html.div(
+							"tile-controls",
+							[
+								Html.icon_button("−", Engine.const("Make tile narrower"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Narrower))),
+								Html.icon_button("+", Engine.const("Make tile wider"), "resize", model.update_by(id, |state, tile_id| Model.resize(state, tile_id, Wider))),
+							],
+						),
+					|| Engine.text(""),
+				),
+			],
+		)
+
+	## The workspace tile's tabs (`Model.tab_rows`): a chat of each of the
+	## focused workspace's sessions with its status, then the views it
+	## opened and the tile's other panes, each with a × that closes it, and
+	## + to start an agent in the workspace.
+	workspace_tabs : State(TileCtx, Model.State), Signal(TileCtx, Model.Tile) -> Elem(TileCtx)
+	workspace_tabs = |model, tile|
+		Html.div_attrs(
+			[Engine.class("workspace-tabs"), Engine.attr("role", "tablist"), Html.aria_label_s(Engine.const("Tabs"))],
+			[
+				Engine.each(
+					tile.map2(model.signal(), |shown, state| Model.tab_rows(state, shown)),
+					|tab| tab.key,
+					|tab|
+						Engine.element(
+							"span",
+							[Engine.class_s(tab.field(|shown| if (shown.shown) "workspace-tab shown" else "workspace-tab"))],
+							[
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.attr("role", "tab"),
+										Engine.class_s(tab.field(|shown| "tab-select widget-${shown.widget}${if (shown.dot.is_empty() or shown.dot == "idle") "" else " with-status"}")),
+										Html.flag("aria-selected", tab.field(|shown| shown.shown)),
+										Engine.on_click(model.lift_row().update_by(tab.field(|shown| shown.tab), Model.pick_tab)),
+									],
+									[
+										Html.span_s(Engine.const(""), [Engine.class_s(tab.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true")]),
+										Html.span_s(tab.field(|shown| shown.title), [Engine.class("tab-title")]),
+									],
+								),
+								Engine.when(tab.field(|shown| shown.closes), || Liton.icon_button(tab.field(|shown| "Close ${shown.title}"), "icon tab-close", model.lift_row().update_by(tab.field(|shown| shown.tab), Model.close_picked_tab)), || Engine.text("")),
+							],
+						),
+				),
+				Liton.icon_button(Engine.const("New agent in this workspace"), "icon new-tab", model.update(Model.new_agent_tab)),
+			],
+		)
 
 	across : [Across(U64), Down(U64)] -> Bool
 	across = |line|

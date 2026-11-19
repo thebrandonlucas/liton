@@ -76,6 +76,12 @@ Model := [].{
 		## room, by the room and its top-level message.
 		sub_focus : [None, Thread({ room_id : Str, root : Str })],
 
+		## The views each workspace opened beside its sessions' chats, the
+		## tab it showed and the session whose chat it showed last, as a
+		## Workbench showing workspaces as tabs (`Model.workspace_tabbed`)
+		## left them.
+		workspace_views : List(Views),
+
 		workspaces : Workspaces.Listed,
 		shell : Shell,
 		grid : Grid.Layout,
@@ -258,6 +264,12 @@ Model := [].{
 
 	Platform : [Mac, Other]
 
+	## A tab of a workspace's view: a session's chat, the diff Changes shows
+	## in the main area, or a ticket.
+	Tab : [Session(Str), Diff, Ticket(Str)]
+
+	Views : { workspace_id : Str, opened : List(Tab), shown : Tab, session : Str }
+
 	## A rename, pin or archive of chat.v1's or of workspaces.v1's.
 	Edit : [Chat(Chat.Request), Workspaces(Workspaces.Request)]
 
@@ -351,6 +363,7 @@ Model := [].{
 				timelines: [],
 				focus: [],
 				sub_focus: None,
+				workspace_views: [],
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
 				grid: Grid.empty,
@@ -1192,20 +1205,193 @@ Model := [].{
 	focused_session : State -> Str
 	focused_session = |state| Model.session_in(state, Model.focused(state, [Session, Workspace]))
 
-	## A context's session, or its workspace's that needs you most (see
-	## `Attention.ranks`), "" for none.
+	## A context's session, or its workspace's whose chat it showed last,
+	## else its session that needs you most (see `Attention.ranks`), "" for none.
 	session_in : State, Context.Id -> Str
 	session_in = |state, context|
 		match context {
 			Session(session_id) => session_id
 			Workspace(workspace_id) => {
-				placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
-				Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
+				last = Model.views_of(state, workspace_id).session
+				if (Model.workspace_tabs(state, workspace_id).contains(Session(last))) last else Model.urgent_session(state, workspace_id)
 			}
 			Room(_) | Ticket(_) => ""
 		}
 
-	## The sessions that work in a workspace, as they say or its listing does.
+	## A workspace's session that needs you most, "" for none.
+	urgent_session : State, Str -> Str
+	urgent_session = |state, workspace_id| {
+		placed = Model.workspace_sessions(state, workspace_id).map(|listed_session| (listed_session.id, Attention.item(listed_session, []).state))
+		Attention.ranks.keep_oks(|rank| placed.find_first(|(_, state_of)| state_of == rank)).first().map_ok(|(session_id, _)| session_id) ?? ""
+	}
+
+	## Whether a Workbench shows each workspace as a view of tabs, as a
+	## Workspaces pane listing its sessions as tabs asks.
+	workspace_tabbed : State -> Bool
+	workspace_tabbed = |state| state.shell == Workbench and Model.panes(state).any(|shown| shown.widget == "workspaces" and Model.option(shown, "sessions") == "Tabs")
+
+	## The workspace a session works in, or an agent starting will.
+	workspace_of : State, Str -> Try(Str, [NotFound])
+	workspace_of = |state, session_id| {
+		listed = state.workspaces.workspaces.find_first(|workspace| workspace.session_ids.contains(session_id)).map_ok(|workspace| workspace.id)
+		said = state.sessions.find_first(|listed_session| listed_session.id == session_id).map_ok(|listed_session| listed_session.workspace.map_ok(|placed| placed.id ?? "") ?? "")
+		to_start = state.creating.find_first(|creating| creating.form.kind == Agent and Model.created_id(creating) == session_id).map_ok(|creating| creating.form.place)
+		match listed.on_err(|_| said).on_err(|_| to_start) {
+			Ok(workspace_id) if !workspace_id.is_empty() => Ok(workspace_id)
+			_ => Err(NotFound)
+		}
+	}
+
+	## A workspace's tabs: a chat of each of its sessions, those starting
+	## after, then the views it opened.
+	workspace_tabs : State, Str -> List(Tab)
+	workspace_tabs = |state, workspace_id| {
+		listed = Model.workspace_sessions(state, workspace_id).map(|listed_session| listed_session.id)
+		started = state.creating.keep_if(|creating| creating.form.kind == Agent and creating.form.place == workspace_id).map(Model.created_id).drop_if(|session_id| listed.contains(session_id))
+		listed.concat(started).map(|session_id| Session(session_id)).concat(Model.views_of(state, workspace_id).opened)
+	}
+
+	views_of : State, Str -> Views
+	views_of = |state, workspace_id| state.workspace_views.find_first(|views| views.workspace_id == workspace_id) ?? { workspace_id, opened: [], shown: Session(""), session: "" }
+
+	## The tab a workspace shows: the one picked while it is still a tab,
+	## else the chat `Model.session_in` it shows.
+	shown_tab : State, Str -> Tab
+	shown_tab = |state, workspace_id| {
+		picked = Model.views_of(state, workspace_id).shown
+		if (Model.workspace_tabs(state, workspace_id).contains(picked)) picked else Session(Model.session_in(state, Workspace(workspace_id)))
+	}
+
+	## The tile that shows the focused workspace's tabs, where a Workbench
+	## shows workspaces as tabs: its chat's following the focus.
+	workspace_tile : State -> Try(Str, [NotTabbed])
+	workspace_tile = |state| {
+		chats = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Workspace))
+		match chats.first() {
+			Ok(chat) if Model.workspace_tabbed(state) => Model.tile_of(state, chat.id).map_ok(|tile| tile.id).map_err(|_| NotTabbed)
+			_ => Err(NotTabbed)
+		}
+	}
+
+	## A tab of the workspace tile, as its row shows it: its title, its
+	## widget's icon, a session's status, whether it is shown and whether ×
+	## closes it. It shows a tab of the workspace, or another pane of the
+	## tile.
+	TabRow : { key : Str, title : Str, widget : Str, dot : Str, shown : Bool, closes : Bool, tab : [Tab(Tab), Pane(Str)] }
+
+	## The workspace tile's tabs: the focused workspace's, then the other
+	## panes the tile shows.
+	tab_rows : State, Model.Tile -> List(TabRow)
+	tab_rows = |state, tile| {
+		workspace_id = match Model.focused(state, [Workspace]) {
+			Workspace(id) => id
+			_ => ""
+		}
+		views = Model.panes(state).keep_if(|shown| [Workspace, Ticket].any(|kind| Widgets.shows(Widgets.find(shown.widget), View, kind))).map(|shown| shown.id)
+		others = Model.shown_panes(state, tile).drop_if(|shown| views.contains(shown.id))
+		in_view = !others.any(|shown| shown.id == tile.active)
+		picked_tab = Model.shown_tab(state, workspace_id)
+		row = |tab| {
+			(key, title, widget, dot) = match tab {
+				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_row(state, Model.session(state, session_id)).dot)
+				Diff => ("diff", "Diff", "changes", "")
+				Ticket(ticket_id) => (Context.to_str(Ticket(ticket_id)), TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| ticket.summary.key) ?? ticket_id, "tickets", "")
+			}
+			{ key, title, widget, dot: if (Model.starting(state, key)) "starting" else dot, shown: in_view and tab == picked_tab, closes: widget != "chat", tab: Tab(tab) }
+		}
+		tabs = if (workspace_id.is_empty()) [] else Model.workspace_tabs(state, workspace_id).map(row)
+		tabs.concat(others.map(|shown| { key: "pane:${shown.id}", title: Widgets.find(shown.widget).title, widget: shown.widget, dot: "", shown: shown.id == tile.active, closes: Bool.True, tab: Pane(shown.id) }))
+	}
+
+	## Shows a tab of the workspace tile.
+	pick_tab : State, [Tab(Tab), Pane(Str)] -> State
+	pick_tab = |state, picked|
+		match picked {
+			Tab(tab) => Model.show_tab(state, tab)
+			Pane(pane_id) => Model.activate_tab(state, pane_id)
+		}
+
+	## Closes a tab of the workspace tile: a view, or another pane.
+	close_picked_tab : State, [Tab(Tab), Pane(Str)] -> State
+	close_picked_tab = |state, picked|
+		match picked {
+			Tab(tab) => Model.close_workspace_tab(state, tab)
+			Pane(pane_id) => Model.close_tab(state, pane_id)
+		}
+
+	## Opens the form to start an agent in the workspace focused, in the
+	## first Workspaces pane, its drawer shown.
+	new_agent_tab : State -> State
+	new_agent_tab = |state|
+		match (Model.focused(state, [Workspace]), Model.panes(state).find_first(|shown| shown.widget == "workspaces")) {
+			(Workspace(workspace_id), Ok(listing)) => {
+				opened = Model.open_form({ ..state, collapsed: state.collapsed.drop_if(|slot| slot == Model.slot_of(state, Model.tile_of(state, listing.id).map_ok(|tile| tile.id) ?? "")) }, { pane_id: listing.id, key: Context.to_str(Workspace(workspace_id)) })
+				Model.tile_of(state, listing.id).map_ok(|tile| Model.jump_to(opened, tile.id, Push)) ?? opened
+			}
+			_ => state
+		}
+
+	## Shows a tab of the workspace focused.
+	show_tab : State, Tab -> State
+	show_tab = |state, tab|
+		match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => Model.show_workspace(Model.remember_tab(state, workspace_id, tab), workspace_id)
+			_ => state
+		}
+
+	## A workspace's views with `tab` shown, and opened unless a chat.
+	remember_tab : State, Str, Tab -> State
+	remember_tab = |state, workspace_id, tab| {
+		views = Model.views_of(state, workspace_id)
+		remembered = match tab {
+			Session(session_id) => { ..views, shown: tab, session: session_id }
+			_ => { ..views, shown: tab, opened: if (views.opened.contains(tab)) views.opened else views.opened.drop_if(|kept| Model.same_kind(kept, tab)).append(tab) }
+		}
+		{ ..state, workspace_views: state.workspace_views.drop_if(|kept| kept.workspace_id == workspace_id).append(remembered) }
+	}
+
+	## Whether two tabs show the same view: a ticket is in place of another.
+	same_kind : Tab, Tab -> Bool
+	same_kind = |left, right|
+		match (left, right) {
+			(Ticket(_), Ticket(_)) => Bool.True
+			_ => left == right
+		}
+
+	## Closes a view the workspace focused opened, showing its chat if it
+	## was shown. A session's chat stays a tab while the session is.
+	close_workspace_tab : State, Tab -> State
+	close_workspace_tab = |state, tab|
+		match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) => {
+				views = Model.views_of(state, workspace_id)
+				kept = { ..views, opened: views.opened.drop_if(|opened| opened == tab), shown: if (views.shown == tab) Session("") else views.shown }
+				Model.show_workspace({ ..state, workspace_views: state.workspace_views.drop_if(|old| old.workspace_id == workspace_id).append(kept) }, workspace_id)
+			}
+			_ => state
+		}
+
+	## Focuses a workspace and shows the tab it shows: its session's chat,
+	## seen, the diff in the main area, or its ticket; a ticket's view hidden
+	## while it has none open.
+	show_workspace : State, Str -> State
+	show_workspace = |state, workspace_id| {
+		tab = Model.shown_tab(state, workspace_id)
+		session_id = Model.session_in(state, Workspace(workspace_id))
+		ticket_views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Ticket)).map(|shown| shown.id)
+		has_ticket = Model.views_of(state, workspace_id).opened.any(|opened| Model.same_kind(opened, Ticket("")))
+		laid = {
+			..state,
+			git_panes: state.git_panes.map(|followed| { ..followed, in_main: tab == Diff }),
+			hidden: if (has_ticket) state.hidden.drop_if(|hidden_id| ticket_views.contains(hidden_id)) else state.hidden.concat(ticket_views.drop_if(|view_id| state.hidden.contains(view_id))),
+		}
+		seen = if (session_id.is_empty()) laid else Model.mark_seen(Model.focus_on(laid, Session(session_id)), [session_id], Bool.True)
+		match tab {
+			Ticket(ticket_id) => Model.open_view(Model.focus_on(seen, Workspace(workspace_id)), Ticket(ticket_id))
+			_ => Model.open_view(seen, Workspace(workspace_id))
+		}
+	}
+
 	workspace_sessions : State, Str -> List(Chat.Session)
 	workspace_sessions = |state, workspace_id| {
 		listed = state.workspaces.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.session_ids) ?? []
@@ -1518,7 +1704,9 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		most_recent_session = Session(Model.ordered(applied.sessions, "Latest", |listed_session| Model.changed(applied, listed_session), |listed_session| listed_session.title).first().map_ok(|most_recent| most_recent.id) ?? "")
-		focus = if (Model.focused(applied, [Session, Workspace]) == Session("")) applied.focus.drop_if(|kept| Context.kind(kept) == Session).append(most_recent_session) else applied.focus
+		# Where workspaces are tabs, the most recent session's workspace.
+		most_recent_workspace = Model.workspace_of(applied, Model.session_in(applied, most_recent_session)).map_ok(|workspace_id| if (Model.workspace_tabbed(applied)) [Workspace(workspace_id)] else []) ?? []
+		focus = if (Model.focused(applied, [Session, Workspace]) == Session("")) applied.focus.drop_if(|kept| Context.kind(kept) == Session).concat(most_recent_workspace).append(most_recent_session) else applied.focus
 		settled = { ..applied, focus, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
@@ -1891,8 +2079,32 @@ Model := [].{
 	## a view following it: one on screen, else the first not hidden, else
 	## the first, its tab brought forward, and its column, which on a narrow
 	## screen is a jump to it. A session opened is seen.
+	## Where a Workbench shows workspaces as tabs (`Model.workspace_tabbed`), a session
+	## opened is its workspace's tab, and a ticket a tab of the workspace
+	## focused.
 	open : State, Context.Id -> State
 	open = |state, context| {
+		focused_workspace = Model.focused(state, [Workspace])
+		match context {
+			_ if !Model.workspace_tabbed(state) => Model.open_view(state, context)
+			Workspace(workspace_id) => Model.show_workspace(state, workspace_id)
+			Session(session_id) =>
+				match Model.workspace_of(state, session_id) {
+					Ok(workspace_id) => Model.show_workspace(Model.remember_tab(state, workspace_id, Session(session_id)), workspace_id)
+					Err(NotFound) => Model.open_view(state, context)
+				}
+			Ticket(ticket_id) =>
+				match focused_workspace {
+					Workspace(workspace_id) => Model.show_workspace(Model.remember_tab(state, workspace_id, Ticket(ticket_id)), workspace_id)
+					_ => Model.open_view(state, context)
+				}
+			Room(_) => Model.open_view(state, context)
+		}
+	}
+
+	## Focuses a context and shows a view of it, as `Model.open` does.
+	open_view : State, Context.Id -> State
+	open_view = |state, context| {
 		seen = Model.mark_seen(Model.focus_on(state, context), [Context.to_str(context)], Bool.True)
 		views = Model.panes(state).keep_if(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, Context.kind(context)))
 		match views.find_first(|shown| Model.pane_visible(state, shown.id)).on_err(|_| views.find_first(|shown| !state.hidden.contains(shown.id))).on_err(|_| views.first()).map_ok(|view| view.id) {
@@ -1949,7 +2161,16 @@ Model := [].{
 	## Shows a Changes pane's diffs in the main area, its panel on a phone, or
 	## in the pane again, at once.
 	show_in_main : State, Str, Bool -> State
-	show_in_main = |state, pane_id, in_main| {
+	show_in_main = |state, pane_id, in_main|
+		match Model.focused(state, [Workspace]) {
+			Workspace(workspace_id) if Model.workspace_tabbed(state) => Model.show_tab(Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main }), if (in_main) Diff else Session(Model.session_in(state, Workspace(workspace_id))))
+			_ => Model.show_in_place(state, pane_id, in_main)
+		}
+
+	## Shows a Changes pane's diffs in the main area or in the pane, as
+	## `Model.show_in_main` does where workspaces aren't tabs.
+	show_in_place : State, Str, Bool -> State
+	show_in_place = |state, pane_id, in_main| {
 		shown = Model.set_git_pane(state, { ..Model.git_pane(state, pane_id), in_main })
 		if (in_main) Model.show_tile(shown, Model.slot_tile(state, Main)) else shown
 	}
@@ -2077,7 +2298,8 @@ Model := [].{
 	## A Workspaces pane's rows, as its options group, filter and order them:
 	## a workspace's one session in its place, with its branch if it is a
 	## worktree and its changes, or a workspace of none or several, marked as
-	## urgent as its most urgent session and unread while one is, over them.
+	## urgent as its most urgent session and unread while one is, over them
+	## unless they are tabs of its view.
 	workspace_rows : State, Pane -> List(Row)
 	workspace_rows = |state, shown| {
 		folded = Model.option(shown, "folded").split_on("\n")
@@ -2116,6 +2338,7 @@ Model := [].{
 					lone_row = Model.session_row(state, lone)
 					[mark({ ..lone_row, detail: if (workspace.kind == Worktree) branch_name(workspace.branch) else "", counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True, pinned: workspace.pinned })]
 				}
+				_ if Model.option(shown, "sessions") == "Tabs" => [row]
 				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
 			}
 		}
@@ -2731,7 +2954,7 @@ Model := [].{
 		}
 		was = Session(Model.starting_key(serial))
 		match (made, state.creating.find_first(|creating| creating.serial == serial)) {
-			(Ok(id), _) => Model.poll({ ..state, creating: state.creating.map(|creating| if (creating.serial == serial) { ..creating, id } else creating), focus: Model.refocused(state, was, Session(id)) })
+			(Ok(id), _) => Model.poll({ ..state, creating: state.creating.map(|creating| if (creating.serial == serial) { ..creating, id } else creating), focus: Model.refocused(state, was, Session(id)), workspace_views: state.workspace_views.map(|views| if (views.session == Model.starting_key(serial)) { ..views, shown: if (views.shown == Session(views.session)) Session(id) else views.shown, session: id } else views) })
 			(Err(reason), Ok(undone)) => { ..state, creating: state.creating.drop_if(|creating| creating.serial == serial), form: { ..undone.form, failed: reason }, notice: reason, focus: Model.refocused(state, was, Workspace(undone.form.place)) }
 			(Err(_), Err(_)) => state
 		}
@@ -3488,3 +3711,33 @@ bytes_order = |left, right|
 		(Ok(_), Err(_)) => After
 		_ => Same
 	}
+
+# Where Workspaces lists sessions as tabs, a workspace opened shows the tab
+# it last showed, its session that needs you most at first; a ticket opened
+# is a tab of the workspace focused, and a session opened a tab of its own.
+expect {
+	project = { id: "p1", provider: "mock", name: "app", directory: "/app" }
+	workspace = |id, session_ids| { id, provider: "mock", project_id: "p1", name: id, directory: "/app", kind: Worktree, branch: Branch(id), state: Idle, dirty: Bool.False, changes: Uncounted, pinned: Bool.False, labels: [], session_ids }
+	session = |id, status| Chat.session({ id, provider: "mock", agent: "claude", title: id, status })
+	listed = { ..Model.set_option(Model.initial(""), "pane-1", "sessions", "Tabs"), workspaces: { projects: [project], workspaces: [workspace("w1", ["s1", "s2"]), workspace("w2", ["s3"])] }, sessions: [session("s1", Idle), session("s2", AwaitingPermission), session("s3", Idle)] }
+	chat = |state| Model.session_of(state, Model.pane(state, "pane-2"))
+	first = Model.open(listed, Workspace("w1"))
+	picked = Model.show_tab(first, Session("s1"))
+	back = Model.open(Model.open(picked, Workspace("w2")), Workspace("w1"))
+	ticketed = Model.open(back, Ticket("t1"))
+	elsewhere = Model.open(ticketed, Workspace("w2"))
+	chat(first) == "s2"
+		and Model.workspace_tabs(first, "w1") == [Session("s1"), Session("s2")]
+		and chat(picked) == "s1"
+		and chat(back) == "s1"
+		and Model.focused(back, [Session, Workspace]) == Workspace("w1")
+		and Model.workspace_tabs(ticketed, "w1") == [Session("s1"), Session("s2"), Ticket("t1")]
+		and Model.pane_visible(ticketed, "pane-8")
+		and !Model.pane_visible(elsewhere, "pane-8")
+		and Model.pane_visible(Model.open(elsewhere, Workspace("w1")), "pane-8")
+		and Model.focused(Model.open(elsewhere, Workspace("w1")), [Ticket]) == Ticket("t1")
+		and chat(Model.close_workspace_tab(ticketed, Ticket("t1"))) == "s1"
+		and !Model.pane_visible(Model.close_workspace_tab(ticketed, Ticket("t1")), "pane-8")
+		and Model.focused(Model.open(first, Session("s3")), [Workspace]) == Workspace("w2")
+		and Model.workspace_rows(first, Model.pane(first, "pane-1")).map(|row| row.key) == ["group:p1", "workspace:w1", "s3"]
+}
