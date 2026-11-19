@@ -28,6 +28,7 @@ import Widgets
 import Dropdown
 import Drag
 import Wallpaper
+import Spinner
 
 Liton := [].{
 
@@ -1652,7 +1653,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.p_s(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.is_empty()) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+				Spinner.or_text(listed.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) Loading else Said(if (shown.is_empty()) "No tickets match." else "")), Pane, [Engine.class("ticket-empty")]),
 			],
 		)
 	}
@@ -1765,7 +1766,7 @@ Liton := [].{
 	ticket_discussion = |model, id, opened_ticket| {
 		shown = opened_ticket.map2(model.signal(), |opened_id, state| TicketDesk.ticket_shown(state.tickets, opened_id) ?? TicketDesk.missing)
 		[
-			Html.p_s(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) "" else "Loading…"), [Engine.class("ticket-empty")]),
+			Spinner.or_text(opened_ticket.map2(model.signal(), |opened_id, state| if (TicketDesk.loaded(state.tickets, opened_id)) Said("") else Loading), Pane, [Engine.class("ticket-empty")]),
 			Liton.markdown(model, id.map(|pane_id| "${pane_id}/ticket"), shown.map(|opened| Markdown.blocks(opened.body))),
 			Html.ul(
 				[Engine.class("ticket-comments")],
@@ -1915,7 +1916,7 @@ Liton := [].{
 						),
 					],
 				),
-				Html.p_s(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) "Loading tickets…" else if (shown.all(|group| group.tickets.is_empty())) "No tickets match." else ""), [Engine.class("ticket-empty")]),
+				Spinner.or_text(groups.map2(model.signal(), |shown, state| if (state.tickets.listing.sources.is_empty()) Loading else Said(if (shown.all(|group| group.tickets.is_empty())) "No tickets match." else "")), Pane, [Engine.class("ticket-empty")]),
 			],
 		)
 	}
@@ -2354,7 +2355,7 @@ Liton := [].{
 					|showing|
 						match showing {
 							NoSession => Html.p("Pick a session to see its changes.", "missing")
-							Loading => Html.p("Loading…", "missing")
+							Loading => Spinner.spinner("Loading", Pane)
 							Unreadable => Html.p("Can't read this workspace right now.", "missing")
 							NotGit => Html.p("Not a git workspace.", "missing")
 							Shown =>
@@ -2371,7 +2372,7 @@ Liton := [].{
 											],
 										),
 										Html.div("choices", [Liton.scope_picker(model, id, scope, git), Html.span_s(files.map(|listed| Liton.total_lines(listed).added), [Engine.class("added")]), Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")])]),
-										Engine.when(files.map(|listed| listed == Loading), || Html.p("Loading…", "missing"), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
+										Engine.when(files.map(|listed| listed == Loading), || Spinner.spinner("Loading", Pane), || Html.p_s(files.map2(scope, Liton.no_files_text), [Engine.class("missing")])),
 										Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(shown.map(|{ pane: pane_shown, state }| Model.changed_tree(state, pane_shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.changed_row(model, id, row))]),
 										Engine.when(id.map2(model.signal(), |pane_id, state| Model.main_diff(state) != pane_id), || Liton.file_diff(model, id, pane), || Engine.text("")),
 										Engine.when(shown.map(|{ pane: pane_shown, state }| Model.option(pane_shown, "show_commits") == "true" and !Model.git_of(state, pane_shown).commits.is_empty()), || Liton.git_commits(model, id, git), || Engine.text("")),
@@ -2462,7 +2463,7 @@ Liton := [].{
 					|showing|
 						match showing {
 							NoSession => Html.p("Pick a session to review its changes.", "missing")
-							Loading => Html.p("Loading…", "missing")
+							Loading => Spinner.spinner("Loading", Pane)
 							Unreadable => Html.p("Can't read this workspace right now.", "missing")
 							NotGit => Html.p("Not a git workspace.", "missing")
 							Shown =>
@@ -2471,7 +2472,7 @@ Liton := [].{
 									[
 										Liton.review_bar(model, pane),
 										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
-										Html.p_s(cards.map(|listed| if (listed == Loading) "Loading…" else if (listed == Cards([])) "No changes to review." else ""), [Engine.class("missing")]),
+										Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
 										Engine.each(
 											cards.map(
 												|listed|
@@ -2620,7 +2621,7 @@ Liton := [].{
 						Html.span_s(files.map(|listed| Liton.total_lines(listed).removed), [Engine.class("removed")]),
 					],
 				),
-				Html.p_s(files.map(|listed| if (listed == Loading) "Loading…" else if (listed == Files([])) "No changes." else ""), [Engine.class("missing")]),
+				Spinner.or_text(files.map(|listed| if (listed == Loading) Loading else Said(if (listed == Files([])) "No changes." else "")), Pane, [Engine.class("missing")]),
 				Html.ul([Engine.class("git-files git-tree"), Engine.attr("data-part", "files")], [Engine.each(pane.map2(model.signal(), |shown, state| Model.review_tree(state, shown)), |row| if (row.folder) "folder:${row.path}" else row.path, |row| Liton.review_file_row(model, id, row))]),
 			],
 		)
@@ -2673,7 +2674,7 @@ Liton := [].{
 						Html.button("Viewed", [Engine.class("viewed-toggle"), Html.aria_label_s(card.key().map(|path| "Viewed ${path}")), Html.flag("aria-pressed", card.field(|shown| shown.viewed)), Engine.attr("title", "Mark the file viewed, which folds it")], model.lift_row().update_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), Model.toggle_viewed)),
 					],
 				),
-				Html.p_s(card.field(|shown| shown.note), [Engine.class("missing")]),
+				Spinner.or_text(card.field(|shown| shown.note), Inline, [Engine.class("missing")]),
 				Html.div("review-diff", [Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows))]),
 			],
 		)
@@ -2689,13 +2690,13 @@ Liton := [].{
 			"files",
 			[
 				Liton.review_panel(model, id, pane),
-				Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), [Engine.class("missing")]),
+				Spinner.or_text(shown.map(|{ pane: pane_shown, state }| Model.tree_status(state, pane_shown)), Pane, [Engine.class("missing")]),
 				Liton.tree(model, id, shown.map(|{ pane: pane_shown, state }| Model.file_rows(state, pane_shown)), NoMenus),
 				Html.div_attrs(
 					[Engine.class("file-view"), Engine.attr("data-part", "file")],
 					[
 						Html.p_s(id.map2(model.signal(), |pane_id, state| Model.file_pane(state, pane_id).file), [Engine.class("file-path")]),
-						Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), [Engine.class("missing"), Engine.test_id("file-status")]),
+						Spinner.or_text(shown.map(|{ pane: pane_shown, state }| Model.file_status(state, pane_shown)), Inline, [Engine.class("missing"), Engine.test_id("file-status")]),
 						Liton.code_view(model, id, Engine.const("code-view file"), shown.map(|{ pane: pane_shown, state }| Model.file_code(state, pane_shown))),
 					],
 				),
@@ -2875,7 +2876,7 @@ Liton := [].{
 			|hunks_shown|
 				match hunks_shown {
 					NoFile => Engine.text("")
-					Loading => Html.p("Loading…", "missing")
+					Loading => Spinner.spinner("Loading", Pane)
 					Shown => Liton.git_diff(model, id, pane)
 				},
 		)

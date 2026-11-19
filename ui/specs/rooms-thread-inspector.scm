@@ -16,7 +16,7 @@
     ; At once: the drawer opens on the thread, its replies loading.
     (expect-attr (test-id "slot-right") class "tile slot slot-right shown")
     (expect-visible (role region :name "Thread messages"))
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[]},{\"capability\":\"rooms.v1\",\"topic\":\"messages/general\",\"cursor\":\"2\",\"events\":[]},{\"capability\":\"rooms.v1\",\"topic\":\"members/general\",\"cursor\":\"m1\",\"events\":[]},{\"capability\":\"rooms.v1\",\"topic\":\"thread/general/general-1\",\"cursor\":\"5\",\"events\":[{\"RoomEntry\":{\"sequence\":4,\"event\":{\"Posted\":{\"id\":\"general-2\",\"room_id\":\"general\",\"author\":\"scout\",\"text\":\"Found it in `src/Auth.roc`\",\"time\":\"2026-01-01T09:01:00.000Z\",\"place\":{\"Reply\":{\"root\":\"general-1\",\"parent\":\"general-1\"}},\"mentions\":[],\"reactions\":[],\"edited\":false,\"deleted\":false}}}},{\"RoomEntry\":{\"sequence\":5,\"event\":{\"Typing\":{\"member\":\"ada\",\"place\":{\"Reply\":{\"root\":\"general-1\",\"parent\":\"general-2\"}}}}}}]}]}")
     (run-effect 5)
     (expect-visible (text "src/Auth.roc"))

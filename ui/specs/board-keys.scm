@@ -29,10 +29,10 @@
     (press "Enter")
     (expect-text (test-id "ticket-place") "1 / 4")
     (expect-absent (test-id "ticket-LIT-12"))
-    (expect-visible (text "Loading…"))
+    (expect-visible (role status :name "Loading"))
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/docs\",\"cursor\":\"t1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"links\",\"cursor\":\"k1\",\"events\":[]},{\"capability\":\"tickets.v1\",\"topic\":\"ticket/LIT-12\",\"cursor\":\"t1\",\"events\":[{\"Ticket\":{\"summary\":{\"id\":\"LIT-12\",\"provider\":\"mock\",\"source\":\"LIT\",\"key\":\"LIT-12\",\"title\":\"Logging in sends you back to /login\",\"url\":\"https://example.com/LIT-12\",\"status\":{\"id\":\"in_progress\",\"name\":\"In Progress\",\"kind\":\"Started\"},\"assignees\":[{\"id\":\"ada\",\"name\":\"Ada\"}],\"labels\":[\"bug\"],\"waiting_on\":[],\"updated\":\"2026-01-01T08:30:00.000Z\",\"branch\":\"fix-auth\"},\"body\":\"After logging in, the app redirects to `/login`.\",\"comments\":[]}}]}]}")
     (run-effect 5)
-    (expect-absent (text "Loading…"))
+    (expect-absent (role status :name "Loading"))
     (expect-visible (text "/login"))
     ; J and K step through the list, as do the arrows beside the key.
     (press "j")
