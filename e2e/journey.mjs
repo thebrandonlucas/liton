@@ -118,7 +118,8 @@ try {
     // And still, once the daemon took it and a poll or two followed.
     await new Promise((r) => setTimeout(r, 2500));
     assert.ok(await read(), `${title} read after polls`);
-    await page.click(".settings-toggle");
+    // The left drawer, the rooms', is collapsed: Settings is in the main area's header.
+    await page.click(".slot-main .settings-toggle");
     await click("Settings", "button", "Developer preset");
     await click("Settings", ".settings-close", "Back");
   });
