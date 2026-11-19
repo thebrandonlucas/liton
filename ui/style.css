@@ -380,6 +380,7 @@ kbd:empty { display: none; }
 .group-pinned { --group-icon: var(--icon-pin); --group-color: var(--muted); }
 /* A row's second line, muted: a workspace's project, and its host. */
 .tree-row:has(> .second-line:not(:empty)) { flex-wrap: wrap; row-gap: 0; }
+.tree-row:has(> .second-line:not(:empty)) > .row-title { flex: 1 1 0; }
 .tree-row .second-line { order: 1; flex-basis: 100%; padding-left: 21px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-group .row-title { font: 600 12px var(--font-ui); color: var(--muted); }
 .tree-group .row-title::before { content: "▾ " / ""; }

@@ -96,7 +96,7 @@ try {
     await see("Workspaces", ".tree-group button", "Needs input");
     // fix-auth holds one session, which stands in its place with its branch.
     await see("Workspaces", ".tree-workspace button", "main");
-    await see("Workspaces", ".tree-session .branch", "fix-auth");
+    await see("Workspaces", ".tree-session .second-line", "fix-auth");
     await see("Workspaces", ".tree-session button", "Fix the login redirect");
     await click("Workspaces", ".tree-workspace button", "main");
     for (const title of ["Find the flaky CI test", "Scratch"]) await tab(title);
