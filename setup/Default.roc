@@ -33,26 +33,27 @@ Default := [].{
 		},
 	}
 
-	## A Workbench of what needs you, with the rooms as a tab beside it, the
-	## chat following the item opened with the room opened as a tab beside
-	## it, and the Developer preset's right drawer, collapsed.
+	## A Workbench of agents' sessions as Paseo's agent inbox shows them:
+	## the inbox in the main area, the session opened in the right drawer,
+	## its status and latest activity over its composer, with the room
+	## opened as a tab beside it, and the rooms in the left drawer,
+	## collapsed, in the Neutral theme.
 	inbox : Setup.Preset
 	inbox = {
 		name: "Inbox",
 		snapshot: {
 			..Default.developer.snapshot,
-			grid: Default.with_tiles(
-				Default.developer.snapshot.grid,
-				|tile|
-					if (tile.id == "tile-1")
-						{ ..tile, panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }, { id: "pane-6", widget: "rooms", pinned: "", options: [] }] }
-					else if (tile.id == "tile-2")
-						{ ..tile, panes: tile.panes.append({ id: "pane-7", widget: "room", pinned: "", options: [] }) }
-					else
-						tile,
-			),
-			collapsed: [Right],
-			theme: "",
+			grid: {
+				columns: [1, 3, 2],
+				rows: [1],
+				tiles: [
+					{ id: "tile-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-6", panes: [{ id: "pane-6", widget: "rooms", pinned: "", options: [] }] },
+					{ id: "tile-2", left: 1, top: 0, right: 2, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget: "inbox", pinned: "", options: [] }] },
+					{ id: "tile-3", left: 2, top: 0, right: 3, bottom: 1, active: "pane-2", panes: [{ id: "pane-2", widget: "chat", pinned: "", options: [{ key: "show", value: "Latest" }] }, { id: "pane-7", widget: "room", pinned: "", options: [] }] },
+				],
+			},
+			collapsed: [Left],
+			hidden: [],
 		},
 	}
 

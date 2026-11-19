@@ -651,9 +651,13 @@ kbd:empty { display: none; }
 .inbox-actions .icon:hover { color: var(--text); }
 .inbox-actions .snooze { --icon: var(--icon-clock); }
 .inbox-actions .pin { --icon: var(--icon-pin); }
+.inbox-actions .open-chat { --icon: var(--icon-message-square); }
 .inbox-actions .mark { --icon: var(--icon-circle-dot); }
 .inbox-actions .settle { --icon: var(--icon-check); }
 .inbox-item.working .mark { display: none; }
+/* A Workbench with the inbox in its main area gives the session opened a
+   wider right drawer, as Paseo's agent inbox does. */
+.grid.workbench:has(> .slot-main .inbox) { --right-drawer: minmax(340px, 2fr); }
 /* A chat showing the latest: its session's status, where it works and how
    long it has worked over its actions, then its latest activity. */
 .session-overview { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 10px; border-bottom: 1px solid var(--edge); }

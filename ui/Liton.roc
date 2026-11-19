@@ -102,7 +102,7 @@ Liton := [].{
 					[
 						# Shown by CSS on narrow screens: Tiling shows the tile picked here,
 						# and a Workbench, which is swiped through, scrolls to it. Its left
-						# drawer's tab counts what needs you, unless an inbox there does.
+						# drawer's tab counts what needs you, unless an inbox does.
 						Html.div(
 							"tile-tabs",
 							[
@@ -117,7 +117,7 @@ Liton := [].{
 												Engine.class_s(row.field(|tile| tile.panes.find_first(|pane| pane.id == tile.active).map_ok(|pane| "widget-${pane.widget}") ?? "")),
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_tile)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.tile_test_name(state, key)}")),
-												Engine.attr_presence("data-badge", row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| if (Model.slot_of(state, tile.id) != Left or tile.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
+												Engine.attr_presence("data-badge", row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| if (Model.slot_of(state, tile.id) != Left or Model.panes(state).any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
 											],
 											model.lift_row().update_by(row.key(), Model.show_tile),
 										),
@@ -1565,7 +1565,8 @@ Liton := [].{
 	## selects it; its title, which opens it, as a click anywhere in it does;
 	## its status word, short id, agent and why it is listed; its provider,
 	## model and thinking level; the permission it asks for; how long ago it
-	## changed; and its actions as icons, shown while hovered: Snooze, Pin its
+	## changed; and its actions as icons, shown while hovered: Snooze, Open in
+	## the whole chat (while a chat shows only the latest), Pin its
 	## workspace (where workspaces.v1 lists it), Mark read or unread (not
 	## while working) and Settle, or Bring back once set aside.
 	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
@@ -1641,6 +1642,11 @@ Liton := [].{
 															[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
 															[
 																icon(title.map2(snooze_length, |name, length| "Snooze ${name} for ${length}"), "snooze", model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes)))),
+																Engine.when(
+																	model.signal().map(Model.shows_latest),
+																	|| icon(title.map(|name| "Open ${name} in the whole chat"), "open-chat", model.update_by(id, Model.open_whole)),
+																	|| Engine.text(""),
+																),
 																Engine.when(
 																	workspace.map(|found| found.is_ok()),
 																	|| icon(title.map2(workspace, |name, found| if (found.map_ok(|listed| listed.pinned) ?? Bool.False) "Unpin the workspace of ${name}" else "Pin the workspace of ${name}"), "pin", model.update_by(workspace, |state, found| found.map_ok(|listed| Model.edit(state, Workspaces(Pin({ workspace_id: listed.id, pinned: !listed.pinned })))) ?? state)),

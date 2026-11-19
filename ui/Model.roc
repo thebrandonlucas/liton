@@ -593,13 +593,16 @@ Model := [].{
 	}
 
 	## Whether the daemon offers what a preset's navigators and views need,
-	## those it shows as it opens (each tile's active pane), or its manifest
-	## is still to be read, as liton's own presets show until the setup's
-	## arrive. An inspector without its capability shows what it needs.
+	## those it shows as it opens (each tile's active pane, but for those of
+	## a collapsed drawer), or its manifest is still to be read, as liton's
+	## own presets show until the setup's arrive. An inspector without its
+	## capability shows what it needs, as a pane opened from a collapsed
+	## drawer does.
 	offers : State, Setup.Preset -> Bool
 	offers = |state, preset| {
 		needed = |shown| Widgets.find(shown.widget).role != Inspector
-		opened = preset.snapshot.grid.tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
+		shown_tiles = preset.snapshot.grid.tiles.drop_if(|tile| preset.snapshot.collapsed.contains(Model.slot_in(preset.snapshot.shell, preset.snapshot.grid, tile.id)))
+		opened = shown_tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
 		state.daemon.id.is_empty() or opened.all(|shown| Widgets.missing(Widgets.find(shown.widget), state.capabilities).is_empty())
 	}
 
@@ -2437,6 +2440,19 @@ Model := [].{
 			Room(_) => Model.open_view(state, context)
 		}
 	}
+
+	## Opens a session as `Model.open` does, the chat showing it showing the
+	## whole of it rather than only the latest.
+	open_whole : State, Str -> State
+	open_whole = |state, session_id| {
+		opened = Model.open(state, Session(session_id))
+		showing = Model.panes(opened).find_first(|shown| shown.widget == "chat" and Model.pane_visible(opened, shown.id) and Model.session_of(opened, shown) == session_id)
+		showing.map_ok(|shown| Model.with_snapshot_text(Model.set_option(opened, shown.id, "show", "Whole chat"))) ?? opened
+	}
+
+	## Whether a chat pane shows only the latest of its session.
+	shows_latest : State -> Bool
+	shows_latest = |state| Model.panes(state).any(|shown| shown.widget == "chat" and Model.option(shown, "show") == "Latest")
 
 	## Focuses a context and shows a view of it, as `Model.open` does.
 	open_view : State, Context.Id -> State
