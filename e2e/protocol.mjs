@@ -243,6 +243,44 @@ try {
     assert.deepEqual(await links(), [{ session_id: "notes", ticket_id: "mock/liton#9", inferred: false }]);
     assert.equal((await call("tickets.v1", { Link: { session_id: "notes", ticket_id: "nope" } })).Err.code, "NotFound");
   });
+  await step("chat.v1's ListHistory pages through the mock's sessions, archived ones too, and Unarchive lists one again", async () => {
+    const history = async (request) => (await call("chat.v1", { ListHistory: request })).Ok.History;
+    const listed = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions.map((s) => s.id);
+    const found = await history({ search: "README", limit: 50 });
+    assert.deepEqual(found.sessions.map((s) => [s.id, typeof s.archived]), [["old-readme", "string"]]);
+    assert.equal(found.next, undefined);
+    const first = await history({ search: "", limit: 1 });
+    const second = await history({ search: "", cursor: first.next, limit: 1 });
+    assert.equal(first.sessions.length + second.sessions.length, 2);
+    assert.notEqual(first.sessions[0].id, second.sessions[0].id);
+    assert.ok(!(await listed()).includes("old-readme"));
+    assert.deepEqual(await call("chat.v1", { Unarchive: { session_id: "old-readme" } }), { Ok: "Accepted" });
+    assert.ok((await listed()).includes("old-readme"));
+    assert.equal((await history({ search: "README", limit: 50 })).sessions[0].archived, undefined);
+    assert.deepEqual(await call("chat.v1", { Archive: { session_id: "old-readme" } }), { Ok: "Accepted" });
+    assert.ok(!(await listed()).includes("old-readme"));
+  });
+  await step("schedules.v1 runs the mock's schedules by the daemon's clock, pauses, resumes, runs at once and deletes them", async () => {
+    const schedules = async () => (await post("poll", { topics: [{ capability: "schedules.v1", topic: "schedules", after: "" }] })).topics[0].events[0].Schedules;
+    const runs = async (id) => (await post("poll", { topics: [{ capability: "schedules.v1", topic: `runs/${id}`, after: "" }] })).topics[0].events[0].Runs;
+    assert.deepEqual((await schedules()).map((s) => [s.id, s.status]), [["nightly", "Active"]]);
+    const draft = { name: "Once", prompt: "Say hi", cadence: { Every: 1000 }, target: { NewSession: { place: { Workspace: "main" }, agent: "claude", isolation: "Local", archive_on_finish: false } }, max_runs: 1 };
+    const made = (await call("schedules.v1", { Create: draft })).Ok.Created.schedule_id;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal((await schedules()).find((s) => s.id === made).status, "Completed");
+    const [ran] = await runs(made);
+    assert.equal(ran.status, "Succeeded");
+    assert.ok((await call("chat.v1", "ListSessions")).Ok.Sessions.some((s) => s.id === ran.session_id));
+    assert.deepEqual(await call("schedules.v1", { Pause: { schedule_id: "nightly" } }), { Ok: "Accepted" });
+    assert.equal((await schedules()).find((s) => s.id === "nightly").next_run, undefined);
+    assert.deepEqual(await call("schedules.v1", { Resume: { schedule_id: "nightly" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("schedules.v1", { RunOnce: { schedule_id: "nightly" } }), { Ok: "Accepted" });
+    assert.equal((await call("schedules.v1", { Inspect: { schedule_id: "nightly" } })).Ok.Inspected.runs.length, 1);
+    assert.equal((await call("schedules.v1", { Create: { ...draft, cadence: { Cron: { expression: "0 9 * * 1-5" } } } })).Ok.Rejected.length > 0, true);
+    assert.deepEqual(await call("schedules.v1", { Delete: { schedule_id: made } }), { Ok: "Accepted" });
+    assert.deepEqual((await schedules()).map((s) => s.id), ["nightly"]);
+    assert.equal((await call("schedules.v1", { Pause: { schedule_id: "nope" } })).Err.code, "NotFound");
+  });
   await step("Create makes a workspace of the mock's project and starts an agent in it, which its listing has", async () => {
     const made = (await call("workspaces.v1", { Create: { project_id: "liton", kind: "Worktree", branch: "docs" } })).Ok.Created.workspace_id;
     const started = (await call("chat.v1", { Create: { place: { Workspace: made }, agent: "codex", prompt: "Write the docs" } })).Ok.Started.session_id;
