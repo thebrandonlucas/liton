@@ -129,6 +129,10 @@ Model := [].{
 		show_settings : Bool,
 		snapshot_text : Str,
 
+		## The section Settings shows (`Model.show_section`), and whether a
+		## phone shows it rather than the list of sections.
+		settings_page : { section : Str, pushed : Bool },
+
 		## The presets settings offer: the daemon's setup's, or liton's own until
 		## it offers some. `kept_layout` is whether the layout shown is the one
 		## the browser kept, which a setup's starting preset doesn't replace.
@@ -375,6 +379,7 @@ Model := [].{
 				cursors: [],
 				notice: "",
 				show_settings: Bool.False,
+				settings_page: { section: "surface", pushed: Bool.False },
 				keys_typed: { keys: [], serial: 0 },
 				palette: { open: Bool.False, query: "", picked: 0 },
 				ran: [],
@@ -440,6 +445,14 @@ Model := [].{
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
 	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
+
+	## Opens Settings, a phone's at its list of sections, or closes it.
+	toggle_settings : State -> State
+	toggle_settings = |state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+
+	## Shows a section of Settings, over its list on a phone.
+	show_section : State, Str -> State
+	show_section = |state, section| { ..state, settings_page: { section, pushed: Bool.True } }
 
 	## The snapshot settings show, of the layout as it is now.
 	with_snapshot_text : State -> State

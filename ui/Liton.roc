@@ -117,11 +117,10 @@ Liton := [].{
 						Liton.toast(model),
 					],
 				),
-				# Under an open ⋯ menu's pane, or a phone's Settings sheet: a click
-				# anywhere else closes it.
+				# Under an open ⋯ menu's pane: a click anywhere else closes it.
 				Engine.when(
-					model.signal().map(|state| !state.menu.is_empty() or state.show_settings),
-					|| Html.div_attrs([Engine.class_s(model.signal().map(|state| if (state.menu.is_empty()) "sheet-backdrop" else "menu-backdrop")), Engine.on_click(model.update(|state| if (state.menu.is_empty()) { ..state, show_settings: Bool.False } else { ..state, menu: "" }))], []),
+					model.signal().map(|state| !state.menu.is_empty()),
+					|| Html.div_attrs([Engine.class("menu-backdrop"), Engine.on_click(model.update(|state| { ..state, menu: "" }))], []),
 					|| Engine.text(""),
 				),
 				Liton.palette(model),
@@ -340,7 +339,7 @@ Liton := [].{
 
 	## Opens or closes Settings.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(|state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings })))
+	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings))
 
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
@@ -429,10 +428,7 @@ Liton := [].{
 							[Engine.class("palette shortcuts"), Engine.attr("role", "dialog")],
 							[
 								Html.h2("Keys", ""),
-								Html.ul(
-									[Engine.class("palette-entries")],
-									[Engine.each(model.signal().map(|state| Keymap.listed(Keymap.defaults, state)), |bound| bound.title, |row| Html.li([Engine.class("shortcut")], [Html.span_s(row.field(|bound| bound.title), [Engine.class("palette-title")]), Engine.element("kbd", [], [Engine.text_s(row.field(|bound| bound.keys))])]))],
-								),
+								Liton.key_list(model),
 							],
 						),
 					],
@@ -503,39 +499,81 @@ Liton := [].{
 		"${Keymap.text(system, ["Alt+1"])} to ${Keymap.text(system, ["Alt+9"])} show them too, in this order, outside a text box, and G then 1 to 9 goes to that workspace. ${key("drawer.left")} and ${key("drawer.right")} show or hide the drawers, ${key("settings")} opens Settings and ${key("palette")} the palette of commands and places, ${heard}; ? outside a text box lists every key, and Escape closes the palette, the keys, a menu or Settings, or else stops the chat's agent."
 	}
 
-	## A side sheet that picks the preset, lists each slot's or tile's panes
-	## to move, remove or set the options of, adds widgets, and shows the
-	## layout as a snapshot. Every change shows at once.
+	## Settings, a page of its own: a rail of its sections, App's, the
+	## surface's and the snapshot, beside the section picked, which opens at
+	## the surface's. On a phone the rail is a list, and a section picked
+	## covers it until its ← goes back.
 	settings : State(Ctx, Model.State) -> Elem(Ctx)
-	settings = |model|
+	settings = |model| {
+		picked = model.signal().map(|state| state.settings_page.section)
+		shown = |section, view| Engine.when(picked.map(|id| id == section), view, || Engine.text(""))
 		Engine.when(
 			model.signal().map(|state| state.show_settings),
 			||
-				Html.section(
+				Html.section_attrs(
 					"Settings",
-					"settings",
+					[Engine.class_s(model.signal().map(|state| if (state.settings_page.pushed) "settings pushed" else "settings"))],
 					[
-						Html.div("settings-header", [Html.h2("Settings", ""), Html.button("×", [Html.aria_label("Close settings"), Engine.class("close")], model.update(|state| { ..state, show_settings: Bool.False }))]),
-						Html.h3("Preset", ""),
-						Html.div(
-							"choices",
+						Engine.element(
+							"nav",
+							[Engine.class("settings-rail"), Html.aria_label("Sections")],
 							[
-								Engine.each(
-									model.signal().map(|state| state.presets),
-									|preset| preset.name,
-									|row|
-										Html.button_s(
-											row.key().map(|name| "${name} preset"),
-											[Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |name, state| Model.preset_shown(state, name)))],
-											model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name))),
-										),
+								Html.button("← Back", [Engine.class("settings-close"), Html.aria_label("Close settings")], model.update(Model.toggle_settings)),
+								Html.h3("App", "settings-group"),
+							]
+								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
+								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
+						),
+						Html.div(
+							"settings-detail",
+							[
+								Html.div(
+									"settings-header",
+									[
+										Html.button("←", [Engine.class("back-to-sections"), Html.aria_label("Back to the sections")], model.update(|state| { ..state, settings_page: { ..state.settings_page, pushed: Bool.False } })),
+										Html.h2_s(picked.map(Liton.section_title), []),
+									],
 								),
+								shown("appearance", || Liton.appearance(model)),
+								shown("keys", || Liton.keys_section(model)),
+								shown("voice", || Liton.voice_section(model)),
+								shown("about", || Liton.about),
+								shown("surface", || Liton.surface_section(model)),
+								shown("snapshot", || Liton.snapshot_section(model)),
 							],
 						),
-						Html.p_s(model.signal().map(|state| Liton.keys_help(state.operating_system)), [Engine.class("help")]),
-						Html.h3("Theme", ""),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
+
+	## App's sections in Settings' rail, by id and title.
+	settings_sections : List((Str, Str))
+	settings_sections = [("appearance", "Appearance"), ("keys", "Keys"), ("voice", "Voice"), ("about", "About")]
+
+	section_title : Str -> Str
+	section_title = |section| Liton.settings_sections.concat([("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+
+	## A section in Settings' rail, pressed while shown.
+	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
+	section_button = |model, section, title| Html.button(title, [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == section))], model.update(|state| Model.show_section(state, section)))
+
+	## A card of settings under its title, as Paseo's: rows that touch.
+	settings_card : Str, List(Elem(ctx)) -> Elem(ctx)
+	settings_card = |title, rows| Html.div("settings-card-group", [Html.h3(title, ""), Html.div("settings-card", rows)])
+
+	## The theme, the glass and the background.
+	appearance : State(Ctx, Model.State) -> Elem(Ctx)
+	appearance = |model|
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Theme",
+					[
 						Html.div(
-							"choices",
+							"choices settings-row",
 							[
 								Engine.each(
 									model.signal().map(|state| state.themes),
@@ -555,16 +593,93 @@ Liton := [].{
 								),
 							],
 						),
-						Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked })), Engine.text("Glass")]),
-						Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
-						Html.h3("Background", ""),
-						Wallpaper.settings(model),
-						Microphone.settings(model, Liton.choices),
-						Html.h3("Layout", ""),
-						Engine.each(model.signal().map(Model.tiles_in_order), |tile| tile.id, |row| Liton.settings_tile(model, row)),
-						Html.h3("Add a widget", ""),
 						Html.div(
-							"choices",
+							"settings-row",
+							[
+								Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Glass"), model.signal().map(|state| state.glass), [], model.set_value(|state, checked| { ..state, glass: checked })), Engine.text("Glass")]),
+								Html.p("Blurs what is behind the tiles. Blurring is work for the graphics card: turn it off on a slow device.", "help"),
+							],
+						),
+					],
+				),
+				Liton.settings_card("Background", [Html.div("settings-row", [Wallpaper.settings(model)])]),
+			],
+		)
+
+	## The keys and the commands they run, as `⇧?` lists them.
+	keys_section : State(Ctx, Model.State) -> Elem(Ctx)
+	keys_section = |model|
+		Html.div(
+			"settings-section",
+			[
+				Html.p_s(model.signal().map(|state| Liton.keys_help(state.operating_system)), [Engine.class("help")]),
+				Liton.settings_card("Bound", [Liton.key_list(model)]),
+			],
+		)
+
+	## Each command bound, by its title, with its keys.
+	key_list : State(Ctx, Model.State) -> Elem(Ctx)
+	key_list = |model|
+		Html.ul(
+			[Engine.class("palette-entries")],
+			[Engine.each(model.signal().map(|state| Keymap.listed(Keymap.defaults, state)), |bound| bound.title, |row| Html.li([Engine.class("shortcut")], [Html.span_s(row.field(|bound| bound.title), [Engine.class("palette-title")]), Engine.element("kbd", [], [Engine.text_s(row.field(|bound| bound.keys))])]))],
+		)
+
+	## The voice that speaks replies, while the daemon offers voice.v1.
+	voice_section : State(Ctx, Model.State) -> Elem(Ctx)
+	voice_section = |model|
+		Html.div(
+			"settings-section",
+			[
+				Microphone.settings(model, Liton.choices),
+				Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.voice_v1)), || Engine.text(""), || Html.p("No provider of this daemon offers voice.v1.", "help")),
+			],
+		)
+
+	## The versions of what this UI speaks.
+	about : Elem(Ctx)
+	about =
+		Liton.settings_card(
+			"liton",
+			[
+				Html.div("settings-row", [Html.p("Protocol", ""), Html.p("liton/v1, version ${Manifest.protocol.to_str()}", "help")]),
+				Html.div("settings-row", [Html.p("Snapshots", ""), Html.p("version ${Setup.snapshot_version.to_str()}", "help")]),
+			],
+		)
+
+	## The surface open: the presets to show instead, and its tiles' panes
+	## to move, remove or set the options of.
+	surface_section : State(Ctx, Model.State) -> Elem(Ctx)
+	surface_section = |model|
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Preset",
+					[
+						Html.div(
+							"choices settings-row",
+							[
+								Engine.each(
+									model.signal().map(|state| state.presets),
+									|preset| preset.name,
+									|row|
+										Html.button_s(
+											row.key().map(|name| "${name} preset"),
+											[Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |name, state| Model.preset_shown(state, name)))],
+											model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name))),
+										),
+								),
+							],
+						),
+					],
+				),
+				Liton.settings_card("Layout", [Engine.each(model.signal().map(Model.tiles_in_order), |tile| tile.id, |row| Liton.settings_tile(model, row))]),
+				Liton.settings_card(
+					"Add a widget",
+					[
+						Html.div(
+							"choices settings-row",
 							[
 								# A Workbench adds to its main area; Tiling takes any widget.
 								Engine.each(
@@ -582,13 +697,21 @@ Liton := [].{
 								),
 							],
 						),
-						Html.h3("Snapshot", ""),
-						Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", ""),
-						Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
-						Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
 					],
 				),
-			|| Engine.text(""),
+			],
+		)
+
+	## The layout as a snapshot, to copy and share, or to paste and load.
+	snapshot_section : State(Ctx, Model.State) -> Elem(Ctx)
+	snapshot_section = |model|
+		Html.div(
+			"settings-section",
+			[
+				Html.p("This layout as a snapshot. Copy it to share it, or paste one and load it.", "help"),
+				Html.textarea(Engine.const("Snapshot"), model.signal().map(|state| state.snapshot_text), [], model.set_value(|state, text| { ..state, snapshot_text: text })),
+				Html.div("choices", [Html.button("Load snapshot", [], model.update(Model.load_snapshot))]),
+			],
 		)
 
 	## How Settings offers a widget to add: unavailable while no provider

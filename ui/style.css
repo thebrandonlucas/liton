@@ -136,16 +136,26 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
   border: 1px solid var(--fail); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
 .toast .dismiss { flex: none; padding: 3px; border-color: transparent; background: none; color: var(--muted); }
 
-/* Settings: a glass sheet over the tiles, from the right. */
-.settings { position: absolute; top: var(--gap); right: var(--gap); bottom: var(--gap); z-index: 10; width: min(400px, calc(100% - 2 * var(--gap)));
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto;
-  background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
-  border: 1px solid var(--edge-active); border-radius: var(--radius); box-shadow: var(--shadow);
-  animation: sheet-in var(--slow) ease-out backwards; }
-.settings-header { display: flex; align-items: center; justify-content: space-between; }
+/* Settings: a page over the surface, Paseo's: a rail of sections on the
+   left, and the section picked in a column beside it, of cards of rows. */
+.settings { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 280px minmax(0, 1fr);
+  background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar); animation: fade-in var(--fast) ease-out backwards; }
+.settings-rail { display: flex; flex-direction: column; gap: 1px; padding: 8px; overflow-y: auto; border-right: 1px solid var(--edge); }
+.settings-rail button { justify-content: flex-start; text-align: left; padding: 7px 10px; border-color: transparent; background: none; color: var(--muted); }
+.settings-rail button[aria-pressed="true"] { background: var(--selected); color: var(--text); }
+.settings-rail .settings-close { color: var(--muted); margin-bottom: 6px; }
+.settings-group { margin: 12px 10px 4px; font: 500 12px var(--font-ui); color: var(--muted); }
+.settings-detail { overflow-y: auto; padding: 28px 24px; }
+.settings-detail > * { width: 100%; max-width: 720px; margin-inline: auto; }
+.settings-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.settings-header .back-to-sections { display: none; border-color: transparent; background: none; font-size: 18px; padding: 0 6px; }
 .settings h2 { margin: 0; font: italic 500 20px/1.2 var(--font-display); color: var(--accent); }
-.settings-header .close { border-color: transparent; background: none; font-size: 18px; padding: 0 6px; }
-.settings-tile { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
+.settings-section { display: grid; gap: 20px; }
+.settings-card-group { display: grid; gap: 6px; }
+.settings-card { border: 1px solid var(--edge); border-radius: var(--small-radius); background: var(--field); }
+.settings-row { padding: 10px 14px; display: grid; gap: 4px; }
+.settings-row + .settings-row, .settings-card > .settings-tile + .settings-tile { border-top: 1px solid var(--edge); }
+.settings-tile { display: grid; gap: 2px; padding: 8px 14px; }
 .settings-slot { font: 11px var(--font-mono); color: var(--muted); }
 .settings-pane summary { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 2px 0; }
 .settings-pane-title { flex: 1; }
@@ -155,8 +165,9 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 .settings-option { padding: 2px 0 4px 18px; }
 .settings-option label, .toggle { display: flex; gap: 6px; align-items: center; }
 .settings .help { font-size: 12px; }
-.settings h3 { margin: 8px 0 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.settings h3 { margin: 0; font: 500 12px var(--font-ui); color: var(--muted); }
 .settings p { margin: 0; color: var(--muted); }
+.settings .palette-entries { margin: 0; padding: 4px 6px; max-height: none; }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .choices [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .choices .added { color: var(--muted); }
@@ -766,13 +777,11 @@ kbd:empty { display: none; }
 .review-overall textarea { flex: 1; min-width: 0; padding: 4px 8px; resize: vertical; field-sizing: content; max-height: 8em; font: 12.5px/1.4 var(--font-ui); }
 
 @keyframes pane-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
-@keyframes sheet-in { from { opacity: 0; transform: translateX(14px); } }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes spin { to { transform: rotate(1turn); } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 /* Phones: one panel at a time, in the reach of a thumb. */
-.sheet-backdrop { display: none; }
 @media (max-width: 640px) {
   .liton { --gap: 6px; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   input, select, textarea { font-size: 16px; }
@@ -818,14 +827,13 @@ kbd:empty { display: none; }
   .tile-tabs:has(+ .workbench) button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 7px);
     min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--warn); color: var(--on-accent);
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
-  /* Settings: a sheet from the bottom, over a dimmed screen that closes it. */
-  .sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 4; background: rgb(0 0 0 / 38%); animation: fade-in var(--slow) ease-out backwards; }
-  .settings { top: auto; left: 0; right: 0; bottom: 0; width: 100%; max-height: 86%; gap: 8px;
-    padding: 6px 16px calc(16px + env(safe-area-inset-bottom)); border-bottom: none;
-    border-radius: calc(var(--radius) + 12px) calc(var(--radius) + 12px) 0 0; animation-name: sheet-up; }
-  .settings::before { content: ""; flex: none; align-self: center; width: 38px; height: 5px; margin-bottom: 2px; border-radius: 3px; background: var(--muted); opacity: .5; }
+  /* Settings: its rail is a list, and a section picked covers it. */
+  .settings { grid-template-columns: minmax(0, 1fr); }
+  .settings .settings-detail, .settings.pushed .settings-rail { display: none; }
+  .settings.pushed .settings-detail { display: block; padding: 12px 16px; }
+  .settings-rail { border-right: none; }
+  .settings-header .back-to-sections { display: inline-flex; min-width: 44px; }
   .settings button, .settings select, .settings summary { min-height: 44px; }
-  .settings-header .close { min-width: 44px; font-size: 24px; }
   .settings .toggle input { width: 22px; height: 22px; }
   /* Panes: bigger targets, no hover-only parts. */
   .pane-header { min-height: 50px; padding: 3px 2px 3px 14px; font-size: 13px; }
@@ -876,5 +884,4 @@ kbd:empty { display: none; }
 @keyframes panel-left { 0%, 25% { --tab-on: 1; color: var(--accent); } 26%, 100% { --tab-on: 0; color: var(--muted); } }
 @keyframes panel-main { 0%, 24% { --tab-on: 0; color: var(--muted); } 25%, 75% { --tab-on: 1; color: var(--accent); } 76%, 100% { --tab-on: 0; color: var(--muted); } }
 @keyframes panel-right { 0%, 74% { --tab-on: 0; color: var(--muted); } 75%, 100% { --tab-on: 1; color: var(--accent); } }
-@keyframes sheet-up { from { transform: translateY(40%); opacity: 0; } }
 @keyframes fade-in { from { opacity: 0; } }
