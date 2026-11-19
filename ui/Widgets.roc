@@ -75,6 +75,18 @@ Widgets := [].{
 			parts: ["header", "search", "list", "session"],
 		},
 		{
+			id: "schedules",
+			title: "Schedules",
+			role: Navigator,
+			needs: [Capability.schedules_v1],
+			slots: [Left, Main],
+			minimum_width: 260,
+			sets: [Session],
+			follows: [],
+			options: [],
+			parts: ["header", "editor", "list", "schedule", "runs"],
+		},
+		{
 			id: "chat",
 			title: "Chat",
 			role: View,
