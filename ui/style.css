@@ -198,6 +198,12 @@ kbd:empty { display: none; }
 .panel-anchor { position: absolute; inset: 0; pointer-events: none; outline: none; }
 .workbench .collapsed { display: none; }
 .workbench .tile:not(.tabbed) > .tile-header { display: none; }
+/* Below 1000px, a Workbench whose threads open in the right drawer lays it
+   over the main area's right, as a dock, rather than narrowing the room. */
+@media (min-width: 641px) and (max-width: 1000px) {
+  .workbench.threads-apart { --right-drawer: 0px; }
+  .workbench.threads-apart > .slot-right { grid-column: 2 / -1 !important; justify-self: end; z-index: 3; width: min(100%, 420px); border-radius: var(--radius); box-shadow: var(--shadow); }
+}
 .tile-header { display: flex; gap: 4px; align-items: center; }
 .tile-controls { display: flex; gap: 4px; margin-left: auto; }
 .moves { display: flex; }

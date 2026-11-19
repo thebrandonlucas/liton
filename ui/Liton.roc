@@ -105,9 +105,11 @@ Liton := [].{
 						# The tiles laid out on the grid's tracks (`Liton.grid_style`).
 						# `focusing` dims the panes not focused (style.css): a class, as
 						# a :has() selector there restyled every pane on each change.
+						# `threads-apart` lays the right drawer over the main area on
+						# a narrower screen, as a thread opened from it shows there.
 						Html.div_attrs(
 							[
-								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}")),
+								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}")),
 								Engine.attr_s("style", laid.map(Liton.grid_style)),
 								Engine.test_id("grid"),
 							],
@@ -797,7 +799,8 @@ Liton := [].{
 			Down(_) => Bool.False
 		}
 
-	## The grid's tracks as CSS: a Workbench's drawers as wide as a drawer is,
+	## The grid's tracks as CSS: a Workbench's drawers as wide as a drawer is
+	## (the right one's `--right-drawer` where the stylesheet narrows it),
 	## none while collapsed, and the main area's tracks and Tiling's weighed
 	## by their sizes, none narrower than the widest pane of a tile over it
 	## alone needs.
@@ -808,7 +811,7 @@ Liton := [].{
 		column = |size, track|
 			match state.shell {
 				Workbench if track == 0 => if (state.collapsed.contains(Left)) "0px" else "minmax(200px, 280px)"
-				Workbench if track + 1 == tracks => if (state.collapsed.contains(Right)) "0px" else "minmax(240px, 380px)"
+				Workbench if track + 1 == tracks => if (state.collapsed.contains(Right)) "0px" else "var(--right-drawer, minmax(240px, 380px))"
 				_ => "minmax(${widest(track).to_str()}px, ${size.to_str()}fr)"
 			}
 		"grid-template-columns: ${Str.join_with(state.grid.columns.map_with_index(column), " ")}; grid-template-rows: ${Str.join_with(state.grid.rows.map(|size| "minmax(0, ${size.to_str()}fr)"), " ")}"
