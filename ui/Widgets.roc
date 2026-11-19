@@ -82,7 +82,11 @@ Widgets := [].{
 			sets: [Session],
 			follows: [],
 			options: [
-				{ key: "show_idle", label: "Show idle sessions", help: "List sessions whose agents sit idle, with the rest.", kind: Bool(Bool.True) },
+				{ key: "list", label: "List", help: "List what is in the inbox, everything, or what is snoozed or settled.", kind: Choice({ default: "Inbox", choices: ["Inbox", "All", "Snoozed"] }) },
+				{ key: "focus", label: "Focus", help: "List only what waits on you.", kind: Bool(Bool.False) },
+				{ key: "group", label: "Group", help: "Group sessions by status, project or provider, or not at all.", kind: Choice({ default: "Status", choices: ["Status", "Project", "Provider", "None"] }) },
+				{ key: "sort", label: "Sort", help: "Sort sessions in each group by when they last changed, project, status or title.", kind: Choice({ default: "Updated", choices: ["Updated", "Project", "Status", "Title"] }) },
+				{ key: "direction", label: "Direction", help: "Sort descending, the latest first, or ascending.", kind: Choice({ default: "Descending", choices: ["Descending", "Ascending"] }) },
 				{ key: "snooze_length", label: "Snooze length", help: "How long Snooze sets an item aside.", kind: Choice({ default: "1 hour", choices: ["1 hour", "1 day", "1 week"] }) },
 			],
 			parts: ["header", "section", "item", "actions"],

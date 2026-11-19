@@ -2312,14 +2312,6 @@ Model := [].{
 	waiting : State, Attention.State -> List(Attention.Item)
 	waiting = |state, attention_state| Model.inbox_items(state).keep_if(|item| item.state == attention_state and item.set_aside == No)
 
-	## The items an inbox pane lists under what needs you, the latest first:
-	## those not set aside, idle ones if it shows them.
-	latest : State, Pane -> List(Attention.Item)
-	latest = |state, shown| Model.inbox_items(state).keep_if(|item| item.set_aside == No and item.state != NeedsYou and (item.state != Idle or Model.option(shown, "show_idle") == "true"))
-
-	later : State -> List(Attention.Item)
-	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
-
 	## How many items need you, as the document title and the inbox's tab
 	## show.
 	needs_you : State -> U64
@@ -2749,6 +2741,13 @@ Model := [].{
 			}
 			_ => ""
 		}
+
+	## Two texts in order, as a dictionary orders words, whatever their case.
+	text_order : Str, Str -> [Before, After, Same]
+	text_order = |left, right| {
+		lower = |text| text.to_utf8().map(|byte| if (byte >= 'A' and byte <= 'Z') byte + 32 else byte)
+		bytes_order(lower(left), lower(right))
+	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64

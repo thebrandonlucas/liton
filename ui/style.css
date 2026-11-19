@@ -588,8 +588,26 @@ kbd:empty { display: none; }
 .inbox h3, .inbox-later summary { margin: 8px 8px 2px; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .inbox-items { list-style: none; margin: 0; padding: 0; }
 .inbox-item { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--small-radius); }
-.inbox-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 8px 2px 10px; font: 11px var(--font-mono); color: var(--muted); }
-.inbox-toolbar button { font-size: 12px; padding: 1px 8px; }
+/* The inbox's top: its tabs with their counts, Focus, Jump to and New agent;
+   then a counter for each state, each a filter, and Mark read. */
+.inbox-top, .inbox-counters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 6px 6px; }
+.inbox-top .spacer { flex: 1; }
+.inbox-tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge); border-radius: var(--small-radius); }
+.inbox-tab { display: inline-flex; gap: 6px; border: none; background: none; color: var(--muted); }
+.inbox-tab[aria-pressed="true"], .inbox-focus[aria-pressed="true"] { background: var(--selected); color: var(--text); }
+.inbox-tab .count, .jump-to kbd { color: var(--accent-count, #6aa6ff); }
+.inbox-tab .count:empty { display: none; }
+.jump-to { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.jump-to kbd { font: 11px var(--font-mono); color: var(--muted); }
+.new-agent-button { background: var(--text); color: var(--glass-tint); font-weight: 600; }
+.inbox-counters .inbox-counter { flex: 1 1 110px; display: flex; align-items: baseline; gap: 8px; padding: 6px 12px; background: none; color: var(--muted); text-align: left; }
+.inbox-counter .count { font-size: 20px; font-weight: 600; color: var(--text); }
+.inbox-counter.waiting .count { color: var(--warn); }
+.inbox-counter.running .count { color: var(--ok); }
+.inbox-counter.failed .count { color: var(--fail); }
+.inbox-counter[aria-pressed="true"] { background: var(--selected); border-color: var(--text); }
+.inbox-empty { margin: 16px; color: var(--muted); font-size: 13px; }
+.inbox-empty:empty { display: none; }
 .inbox-item > button { border: none; padding: 0; text-align: left; background: none; font-weight: 400; }
 /* Unread: a dot before the title, which is bolder; in a tree, a bolder title. */
 .inbox-item > button::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%; vertical-align: middle; }

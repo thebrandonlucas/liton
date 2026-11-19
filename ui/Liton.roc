@@ -29,6 +29,7 @@ import Dropdown
 import Drag
 import Wallpaper
 import Spinner
+import InboxDesk
 
 Liton := [].{
 
@@ -1430,42 +1431,71 @@ Liton := [].{
 		)
 	}
 
-	## An inbox: what needs you, then the rest the latest first, each marked
-	## while unread, then what you set aside, folded away.
+	## An Inbox surface's list: its tabs and Focus, which pick what it
+	## lists (`InboxDesk.counted`), Jump to and New agent; counters by state,
+	## each of which shows only that state, and Mark read for those shown
+	## unread; then the items.
 	inbox : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
-	inbox = |model, pane|
+	inbox = |model, pane| {
+		id = pane.map(|shown| shown.id)
+		set_option = |state, pane_id, key, value| Model.with_snapshot_text(Model.set_option(state, pane_id, key, value))
+		rows = pane.map2(model.signal(), |shown, state| InboxDesk.rows(state, shown))
+		unread = rows.map(|listed| listed.keep_if(|row| row.item.unread).map(|row| row.item.session_id))
+		tab = |name|
+			Engine.element(
+				"button",
+				[Engine.attr("type", "button"), Engine.class("inbox-tab"), Html.aria_label(name), Html.flag("aria-pressed", pane.map(|shown| Model.option(shown, "list") == name)), Engine.on_click(model.update_by(id, |state, pane_id| set_option(state, pane_id, "list", name)))],
+				[Engine.text(name), Html.span_s(model.signal().map(|state| InboxDesk.tab_count(state, name)).map(|count| if (count == 0) "" else count.to_str()), [Engine.class("count"), Engine.test_id("tab-count-${name}")])],
+			)
 		Html.div(
 			"inbox",
 			[
 				Html.div(
-					"inbox-toolbar",
+					"inbox-top",
 					[
-						Html.span_s(model.signal().map(|state| Liton.unread_text(Model.inbox_items(state).keep_if(|item| item.unread and item.set_aside == No).len())), [Engine.class("unread-count"), Engine.test_id("unread-count")]),
-						Html.button("Mark all read", [], model.update(|state| Model.mark_seen(state, state.attention.map(|item| item.session_id), Bool.True))),
+						Html.div_attrs([Engine.class("inbox-tabs"), Engine.attr("role", "group"), Html.aria_label("List")], [tab("Inbox"), tab("All"), tab("Snoozed")]),
+						Html.button("Focus", [Engine.class("inbox-focus"), Engine.attr("title", "Only what waits on you"), Html.flag("aria-pressed", pane.map(|shown| Model.option(shown, "focus") == "true"))], model.update_by(pane, |state, shown| set_option(state, shown.id, "focus", if (Model.option(shown, "focus") == "true") "false" else "true"))),
+						Html.span_s(Engine.const(""), [Engine.class("spacer")]),
+						Engine.element("button", [Engine.attr("type", "button"), Engine.class("jump-to"), Html.aria_label("Jump to"), Engine.on_click(model.update(Commands.open_palette))], [Engine.text("Jump to"), Engine.element("kbd", [], [Engine.text_s(model.signal().map(|state| Keymap.text_of(state.operating_system, Keymap.defaults, "palette")))])]),
+						Engine.when(
+							model.signal().map(|state| InboxDesk.new_agent_key(state).is_ok()),
+							|| Html.button("New agent", [Engine.class("new-agent-button")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: InboxDesk.new_agent_key(state) ?? "" }))),
+							|| Engine.text(""),
+						),
 					],
 				),
-				Liton.inbox_section(model, pane, "Needs you", model.signal().map(|state| Model.waiting(state, NeedsYou))),
-				Liton.inbox_section(model, pane, "Latest", pane.map2(model.signal(), |shown, state| Model.latest(state, shown))),
-				Engine.when(
-					model.signal().map(|state| !Model.later(state).is_empty()),
-					||
-						Engine.element(
-							"details",
-							[Engine.class("inbox-later"), Engine.test_id("later")],
-							[Engine.element("summary", [], [Engine.text_s(model.signal().map(|state| "Later (${Model.later(state).len().to_str()})"))]), Liton.inbox_items(model, pane, model.signal().map(Model.later))],
+				Liton.create_form(model, id),
+				Html.div(
+					"inbox-counters",
+					[
+						Engine.each(
+							pane.map2(model.signal(), |shown, state| InboxDesk.counters(state, shown)),
+							|counter| counter.label,
+							|row|
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.class_s(row.field(|counter| "inbox-counter ${Liton.attention_word_class(counter.state)}")),
+										Html.flag("aria-pressed", row.field(|counter| counter.picked)),
+										Engine.test_id_s(row.field(|counter| "counter-${InboxDesk.state_key(counter.state)}")),
+										Engine.on_click(model.lift_row().update_by(row.field(|counter| counter).map2(id.lift_row(), |counter, pane_id| { counter, pane_id }), |state, { counter, pane_id }| set_option(state, pane_id, "status", if (counter.picked) "" else InboxDesk.state_key(counter.state)))),
+									],
+									[Html.span_s(row.field(|counter| counter.count.to_str()), [Engine.class("count")]), Html.span_s(row.key(), [Engine.class("label")])],
+								),
 						),
-					|| Engine.text(""),
+						Engine.when(
+							unread.map(|ids| !ids.is_empty()),
+							|| Html.button_s(unread.map(|ids| "Mark ${ids.len().to_str()} read"), [Engine.class("mark-read")], model.update_by(unread, |state, ids| Model.mark_seen(state, ids, Bool.True))),
+							|| Engine.text(""),
+						),
+					],
 				),
+				Liton.inbox_items(model, pane, rows.map(|listed| listed.map(|row| row.item))),
+				Html.p_s(rows.map2(pane, |listed, shown| if (!listed.is_empty()) "" else if (Model.option(shown, "list") == "Snoozed") "Nothing is snoozed." else "Nothing here: you are all caught up."), [Engine.class("inbox-empty")]),
 			],
 		)
-
-	inbox_section : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
-	inbox_section = |model, pane, name, items|
-		Engine.when(
-			items.map(|listed| !listed.is_empty()),
-			|| Html.div_attrs([Engine.class("inbox-section"), Engine.attr("data-part", "section")], [Html.h3(name, ""), Liton.inbox_items(model, pane, items)]),
-			|| Engine.text(""),
-		)
+	}
 
 	## Each item: its title, which opens it, its agent, state and summary, the
 	## permission it asks for, and Mark read or unread (not while working),
@@ -1473,7 +1503,7 @@ Liton := [].{
 	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
-			[Engine.class("inbox-items")],
+			[Engine.class("inbox-items"), Engine.test_id("inbox-rows")],
 			[
 				Engine.each(
 					items,
@@ -1568,9 +1598,6 @@ Liton := [].{
 			Danger => "deny"
 		}
 
-	unread_text : U64 -> Str
-	unread_text = |count| if (count == 0) "All read" else "${count.to_str()} unread"
-
 	## "Allowing…" or "Denying…" for an answer on its way.
 	answering : Model.Sent -> Try(Str, [NotAnswer])
 	answering = |sent|
@@ -1585,6 +1612,17 @@ Liton := [].{
 			NeedsYou => "needs you"
 			Failed => "failed"
 			Working => "working"
+			Done => "done"
+			Idle => "idle"
+		}
+
+	## The class that colours a state's word, in a counter or a row.
+	attention_word_class : Attention.State -> Str
+	attention_word_class = |state|
+		match state {
+			NeedsYou => "waiting"
+			Failed => "failed"
+			Working => "running"
 			Done => "done"
 			Idle => "idle"
 		}
