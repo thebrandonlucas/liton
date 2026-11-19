@@ -687,8 +687,15 @@ Model := [].{
 
 	## The deck's surfaces by their places, titled by their names, else
 	## by their places.
-	deck_titles : State -> List({ index : U64, title : Str, shown : Bool })
-	deck_titles = |state| Model.deck(state).map_with_index(|surface, index| { index, title: if (surface.name.is_empty()) "Surface ${(index + 1).to_str()}" else surface.name, shown: index == state.deck_shown })
+	## Each has its preview's URL and whether the daemon offers what it needs.
+	deck_titles : State -> List({ index : U64, title : Str, shown : Bool, preview : Str, offered : Bool })
+	deck_titles = |state| Model.deck(state).map_with_index(|surface, index| { index, title: if (surface.name.is_empty()) "Surface ${(index + 1).to_str()}" else surface.name, shown: index == state.deck_shown, preview: Model.preview("surface", surface.name), offered: Model.offers(state, { name: surface.name, snapshot: surface.snapshot }) })
+
+	## The URL of the thumbnail of a surface or a part (`kind` "surface" or
+	## "widget") by its name, as `zig build devtool -- previews` renders
+	## them into ui/previews.
+	preview : Str, Str -> Str
+	preview = |kind, name| "previews/${kind}-${Str.join_with(Str.split_on(name.with_ascii_lowercased(), " "), "-")}.webp"
 
 	## The URL hash naming a Workbench's panel (`slot_hash`) on the deck's
 	## surface shown, which it names once the deck has switched:

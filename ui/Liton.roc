@@ -830,6 +830,7 @@ Liton := [].{
 										Html.div(
 											"settings-row deck-row",
 											[
+												Liton.thumbnail(row.field(|surface| surface.preview), row.field(|surface| surface.offered)),
 												Html.span_s(title, [Engine.class("settings-row-title")]),
 												Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
 												button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
@@ -849,13 +850,30 @@ Liton := [].{
 					[
 						Html.div(
 							"choices settings-row",
-							[Engine.each(model.signal().map(Model.surfaces), |preset| preset.name, |row| Html.button_s(row.key().map(|name| "Add ${name}"), [], model.lift_row().update_by(row.key(), Model.add_surface)))],
+							[
+								Engine.each(
+									model.signal().map(Model.surfaces),
+									|preset| preset.name,
+									|row|
+										Engine.element(
+											"button",
+											[Engine.attr("type", "button"), Engine.class("deck-add"), Html.aria_label_s(row.key().map(|name| "Add ${name}")), Engine.on_click(model.lift_row().update_by(row.key(), Model.add_surface))],
+											[Liton.thumbnail(row.key().map(|name| Model.preview("surface", name)), Engine.const(Bool.True)), Engine.text_s(row.key())],
+										),
+								),
+							],
 						),
 					],
 				),
 			],
 		)
 	}
+
+	## A static thumbnail of a surface or part, greyed where the daemon
+	## doesn't offer what it needs. An animated one, a short loop of it in
+	## use, would take its place on hover; none is made yet.
+	thumbnail : Signal(ctx, Str), Signal(ctx, Bool) -> Elem(ctx)
+	thumbnail = |url, offered| Engine.element("img", [Engine.attr_s("src", url), Engine.attr("alt", ""), Engine.attr("loading", "lazy"), Engine.class_s(offered.map(|available| if (available) "preview" else "preview unavailable"))], [])
 
 	## A deck's surface's parts to check, folded: by the provider offering
 	## what each needs, with its role and what it needs, greyed where the
@@ -883,7 +901,7 @@ Liton := [].{
 									||
 										Engine.element(
 											"label",
-											[Engine.class_s(row.field(|part| if (part.available) "deck-part" else "deck-part unavailable"))],
+											[Engine.class_s(row.field(|part| if (part.available) "deck-part" else "deck-part unavailable")), Engine.attr_s("data-widget", row.key())],
 											[
 												Html.checkbox(
 													row.field(|part| part.title).map2(title.lift_row(), |part, surface| "${part} on ${surface}"),
@@ -891,6 +909,7 @@ Liton := [].{
 													[Html.boolean("disabled", row.field(|part| !part.available and !part.shown))],
 													rows.set_value_by(row.key().map2(at, |widget, surface| (widget, surface)), |state, (widget, surface), checked| Model.show_part(state, { index: surface, widget, shown: checked })),
 												),
+												Liton.thumbnail(row.key().map(|widget| Model.preview("widget", widget)), row.field(|part| part.available)),
 												Html.span_s(row.field(|part| part.title), [Engine.class("deck-part-title")]),
 												Html.span_s(row.field(|part| part.detail), [Engine.class("help")]),
 											],

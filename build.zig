@@ -324,7 +324,12 @@ pub fn build(b: *std.Build) void {
     }
     const devtool = build_devtool.addPrefixedOutputFileArg("--output=", "liton-devtool");
     const devtool_step = b.step("devtool", "Run liton's development tool: zig build devtool -- help");
-    devtool_step.dependOn(&addDevtoolCommand(b, devtool, "devtool", b.args orelse &.{}).step);
+    const run_devtool = addDevtoolCommand(b, devtool, "devtool", b.args orelse &.{});
+    devtool_step.dependOn(&run_devtool.step);
+    // `previews` renders the UI against the daemon, both built first, in
+    // headless Chrome through roc-signals's DevTools client.
+    const previews = if (b.args) |args| args.len == 1 and std.mem.eql(u8, args[0], "previews") else false;
+    if (previews) run_devtool.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
 
     // The UI's .scm specs, in the native runner roc-signals's release builds
     // the UI into for the machine running the build. Without lambda-set
@@ -361,6 +366,10 @@ pub fn build(b: *std.Build) void {
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
     daemon_step.dependOn(&install_daemon.step);
+    if (previews) {
+        run_devtool.step.dependOn(&install_ui.step);
+        run_devtool.step.dependOn(&install_daemon.step);
+    }
 
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.

@@ -119,6 +119,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Swipe between the deck's surfaces: across a trackpad with two fingers (not over something that scrolls sideways), or across the deck's strip on a phone, which still swipes between a surface's panels above it. A three-finger swipe belongs to the system and switches its desktops instead.
 - Settings' Deck lists the deck's surfaces in order: move one up or down, remove one, or add a surface the daemon offers what it needs for.
 - Each surface in Settings' Deck lists its parts under the provider offering what they need, with each part's role and needs, greyed with what is missing where no provider offers it. Uncheck a part to hide it from that surface, or check one to show it again or add it where it fits, without leaving the surface you are on.
+- Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -Dfast -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
 
 ### Changed
 
