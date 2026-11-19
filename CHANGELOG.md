@@ -151,6 +151,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Rooms lists its rooms under headings of their kind (channels, forums, announcements, then direct messages), with a search over them that narrows the list as you type. A room with unread messages shows bold with a dot, and counts the messages that mention you, as "@1" (a direct conversation counts every unread message); Leave shows as the pointer is over a room.
 - A room's messages show their author's avatar, round for a person and square with a robot's badge for an agent, and messages an author posts within 5 minutes of their last show under it without repeating their name.
 - A room's message shows its actions over its top right as the pointer is over it: react with an emoji no one has used on it yet, Reply in its thread, and Copy link, which copies `room:<room>/<message>` and says Copied at once. They no longer leave a gap under every message; a message with no replies shows no thread line.
+- An @mention in a room's message shows as a chip, an agent's with a robot before its name.
 
 ### Fixed
 

@@ -2927,6 +2927,11 @@ Model := [].{
 		if (letter.is_empty()) "?" else letter
 	}
 
+	## The members of the room a Room or Thread pane shows, as a message
+	## @mentions them: a chip, an agent's marked.
+	mention_classes : Str, State -> List({ name : Str, class : Str })
+	mention_classes = |pane_id, state| Model.room_members_of(state, Model.room_pane(state, pane_id).room_id).map(|member| { name: member.name, class: if (member.kind == Person) "mention" else "mention agent" })
+
 	## Shows the Members pane, or hides it while it shows.
 	toggle_members : State -> State
 	toggle_members = |state|

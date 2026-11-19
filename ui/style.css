@@ -426,6 +426,9 @@ kbd:empty { display: none; }
 .reaction[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .reaction.pending { opacity: .6; }
 .room-reactions:not(:has(button)) { display: none; }
+/* An @mention as a chip, an agent's with a robot before its name. */
+.mention { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, var(--accent-to) 14%, transparent); font-weight: 600; }
+.mention.agent::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 3px; vertical-align: -1px; background: currentColor; -webkit-mask: var(--icon-bot) center / contain no-repeat; mask: var(--icon-bot) center / contain no-repeat; }
 /* A message's actions float over its top right as the pointer is over it,
    or a key focuses in them; on a touch screen they sit under it. */
 .room-message { position: relative; border-radius: var(--small-radius); }

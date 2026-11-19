@@ -2386,7 +2386,7 @@ Liton := [].{
 				Engine.when(
 					row.field(|line| line.deleted),
 					|| Html.p("This message was deleted.", "room-deleted"),
-					|| Liton.markdown(model, row.key().map2(id.lift_row(), |message_id, pane_id| "${pane_id}/${message_id}"), row.field(|line| Markdown.blocks(line.text))),
+					|| Liton.markdown(model, row.key().map2(id.lift_row(), |message_id, pane_id| "${pane_id}/${message_id}"), row.field(|line| line.text).map2(id.lift_row().map2(model.signal(), Model.mention_classes), |text, names| Markdown.mentions(Markdown.blocks(text), names))),
 				),
 				Html.div(
 					"room-reactions",
