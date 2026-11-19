@@ -1582,6 +1582,7 @@ Liton := [].{
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),
 								Html.span_s(row.field(|shown| shown.status), [Engine.class_s(row.field(|shown| "status-word ${shown.dot}")), Engine.test_id("row-status")]),
 								Html.span_s(row.field(|shown| shown.age), [Engine.class("age"), Engine.test_id("row-age")]),
+								Html.span_s(row.field(|shown| shown.second_line), [Engine.class("second-line")]),
 								Liton.icon_button(row.field(|shown| if (shown.kind == Group) "New workspace in ${shown.title}" else if (shown.kind == Session) "New agent beside ${shown.title}" else "New agent in ${shown.title}"), "icon new-agent", model.update_by(asked, Model.open_form)),
 							].concat(if (menus == Menus) [Liton.row_menu(model, asked, row.field(|shown| shown.title))] else []),
 						)
