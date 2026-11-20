@@ -13,6 +13,11 @@ Setup := [].{
 	## slots, the left drawer, the main area and the right drawer.
 	Shell : [Workbench, Tiling]
 
+	## How a layout's tiles look: `Joined`, one frame under one header,
+	## its panes apart by hairlines, or `Tiles`, each a frame of its own with
+	## the theme's gap between them.
+	Frame : [Joined, Tiles]
+
 	## A pane of a tile: its widget, the context it is pinned to, and its
 	## options.
 	Pane : Grid.Pane
@@ -26,8 +31,11 @@ Setup := [].{
 	## `collapsed` are the Workbench drawers hidden, and `hidden` the ids of
 	## the panes it hides, which their tile's ⋯ menus show again. `theme`
 	## names the theme it shows, or is "" for the setup's default; a preset's
-	## "" keeps the theme shown.
-	Snapshot : { version : U32, shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str), theme : Str }
+	## "" keeps the theme shown. `frame` is how its tiles look.
+	Snapshot : { version : U32, shell : Shell, frame : Frame, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str), theme : Str }
+
+	## A snapshot as it was before snapshots named their frame.
+	Unframed : { version : U32, shell : Shell, grid : Grid.Layout, collapsed : List(Slot), hidden : List(Str), theme : Str }
 
 	## A layout to start from, named: a snapshot of the UI's layout.
 	Preset : { name : Str, snapshot : Snapshot }
@@ -78,6 +86,20 @@ Setup := [].{
 	## browser keeps a deck of them.
 	snapshot_version : U32
 	snapshot_version = 9
+
+	## The frame of a snapshot that names none: a Workbench's joined,
+	## Tiling's tiles.
+	frame_of : Shell -> Frame
+	frame_of = |shell| if (shell == Workbench) Joined else Tiles
+
+	## `snapshot` in the frame `framing` read, else in its shell's.
+	framed : Unframed, Try(Frame, _) -> Snapshot
+	framed = |{ version, shell, grid, collapsed, hidden, theme }, framing| { version, shell, frame: framing ?? Setup.frame_of(shell), grid, collapsed, hidden, theme }
+
+	## Presets read as before snapshots named their frame, in the `frames`
+	## read of them, if any.
+	framed_presets : List({ name : Str, snapshot : Unframed }), List(Frame) -> List(Preset)
+	framed_presets = |presets, frames| presets.map_with_index(|{ name, snapshot }, index| { name, snapshot: Setup.framed(snapshot, frames.get(index)) })
 
 	## The grid of columns side by side, as snapshots before version 8 laid
 	## them out: a tile for each column of tabs and each pane a column stacks,
@@ -165,11 +187,14 @@ Setup := [].{
 	## A manifest's setup, one from before setups declared a deck with none.
 	offered_from_json : Str -> Try(Offered, [Invalid])
 	offered_from_json = |text| {
-		parsed : Try({ setup : { presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str } }, _)
+		parsed : Try({ setup : { presets : List({ name : Str, snapshot : Unframed }), default_preset : Str, themes : List(Theme), default_theme : Str } }, _)
 		parsed = Json.parse(text)
 		decked : Try({ setup : { deck : List(Str) } }, _)
 		decked = Json.parse(text)
-		parsed.map_ok(|{ setup }| { presets: setup.presets, default_preset: setup.default_preset, themes: setup.themes, default_theme: setup.default_theme, deck: decked.map_ok(|saved| saved.setup.deck) ?? [] }).map_err(|_| Invalid)
+		framing : Try({ setup : { presets : List({ snapshot : { frame : Frame } }) } }, _)
+		framing = Json.parse(text)
+		frames = framing.map_ok(|saved| saved.setup.presets.map(|preset| preset.snapshot.frame)) ?? []
+		parsed.map_ok(|{ setup }| { presets: Setup.framed_presets(setup.presets, frames), default_preset: setup.default_preset, themes: setup.themes, default_theme: setup.default_theme, deck: decked.map_ok(|saved| saved.setup.deck) ?? [] }).map_err(|_| Invalid)
 	}
 
 	## The preset a client starts with: the default, or the first if it names
@@ -195,8 +220,10 @@ Setup := [].{
 		decked : Try({ deck : List(Str) }, _)
 		decked = Json.parse(text)
 		deck = decked.map_ok(|saved| saved.deck) ?? []
-		parsed : Try({ remotes : List(Remote), transformers : List(Str), presets : List(Preset), default_preset : Str, themes : List(Theme), default_theme : Str }, _)
+		parsed : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : Unframed }), default_preset : Str, themes : List(Theme), default_theme : Str }, _)
 		parsed = Json.parse(text)
+		framing : Try({ presets : List({ snapshot : { frame : Frame } }) }, _)
+		framing = Json.parse(text)
 		columns : Try({ remotes : List(Remote), transformers : List(Str), presets : List({ name : Str, snapshot : { version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) } }), default_preset : Str }, _)
 		columns = Json.parse(text)
 		hiding : Try({ presets : List({ snapshot : { hidden : List(Str) } }) }, _)
@@ -204,11 +231,11 @@ Setup := [].{
 		themed : Try({ presets : List({ snapshot : { theme : Str } }), themes : List(Theme), default_theme : Str }, _)
 		themed = Json.parse(text)
 		match (parsed, columns) {
-			(Ok({ remotes, transformers, presets, default_preset, themes, default_theme }), _) => Ok({ remotes, transformers, presets, default_preset, themes, default_theme, deck })
+			(Ok({ remotes, transformers, presets, default_preset, themes, default_theme }), _) => Ok({ remotes, transformers, presets: Setup.framed_presets(presets, framing.map_ok(|saved| saved.presets.map(|preset| preset.snapshot.frame)) ?? []), default_preset, themes, default_theme, deck })
 			(_, Ok({ remotes, transformers, presets, default_preset })) => {
 				hidden = |index| hiding.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.hidden) ?? []) ?? []
 				theme = |index| themed.map_ok(|saved| saved.presets.get(index).map_ok(|preset| preset.snapshot.theme) ?? "") ?? ""
-				laid_out = presets.map_with_index(|{ name, snapshot }, index| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, grid: Setup.grid_of(snapshot.columns), collapsed: snapshot.collapsed, hidden: hidden(index), theme: theme(index) } })
+				laid_out = presets.map_with_index(|{ name, snapshot }, index| { name, snapshot: { version: snapshot.version, shell: snapshot.shell, frame: Setup.frame_of(snapshot.shell), grid: Setup.grid_of(snapshot.columns), collapsed: snapshot.collapsed, hidden: hidden(index), theme: theme(index) } })
 				Ok({ remotes, transformers, default_preset, presets: laid_out, themes: themed.map_ok(|saved| saved.themes) ?? [], default_theme: themed.map_ok(|saved| saved.default_theme) ?? "", deck })
 			}
 			_ => Err(Invalid)
@@ -229,7 +256,7 @@ replaced = |items, item, same|
 	}
 
 layout : Str -> Setup.Snapshot
-layout = |widget| { version: Setup.snapshot_version, shell: Tiling, grid: Grid.single({ id: "column-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }), collapsed: [], hidden: [], theme: "" }
+layout = |widget| { version: Setup.snapshot_version, shell: Tiling, frame: Tiles, grid: Grid.single({ id: "column-1", left: 0, top: 0, right: 1, bottom: 1, active: "pane-1", panes: [{ id: "pane-1", widget, pinned: "", options: [] }] }), collapsed: [], hidden: [], theme: "" }
 
 chat : Setup.Preset
 chat = { name: "Chat", snapshot: layout("chat") }
@@ -284,7 +311,7 @@ expect {
 expect {
 	setup = { remotes: [echo], transformers: ["attention"], presets: [chat], default_preset: "Chat", themes: [dusk], default_theme: "Dusk", deck: ["Chat"] }
 	text = Setup.to_json(setup)
-	text == "{\"deck\":[\"Chat\"],\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"grid\":{\"columns\":[1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":9}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
+	text == "{\"deck\":[\"Chat\"],\"default_preset\":\"Chat\",\"default_theme\":\"Dusk\",\"presets\":[{\"name\":\"Chat\",\"snapshot\":{\"collapsed\":[],\"frame\":\"Tiles\",\"grid\":{\"columns\":[1],\"rows\":[1],\"tiles\":[{\"active\":\"pane-1\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-1\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":9}}],\"remotes\":[{\"name\":\"echo\",\"url\":\"http://127.0.0.1:8096\"}],\"themes\":[{\"accent\":\"#e8c872\",\"accent_to\":\"#e8c872\",\"background\":{\"Flat\":\"#111111\"},\"edge\":22,\"edge_active\":70,\"fonts\":{\"display\":\"serif\",\"mono\":\"monospace\",\"ui\":\"system-ui\"},\"gap\":10,\"glass\":{\"blur\":5,\"opacity\":46,\"tint\":\"#0c0c0c\"},\"motion\":\"Normal\",\"muted\":\"#a8a08a\",\"name\":\"Dusk\",\"radius\":10,\"scheme\":\"Dark\",\"text\":\"#ece8dc\"}],\"transformers\":[\"attention\"]}" and Setup.from_json(text) == Ok(setup)
 }
 
 # A setup evaluated before snapshots were grids has its columns as a grid,

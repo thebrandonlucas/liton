@@ -8,6 +8,6 @@
     (expect-absent (role region :name "Sessions") :never-drawn)
     ; The first change saves the layout, in the current version.
     (click (label "Make tile wider"))
-    (expect-local-storage "liton.snapshot" "{\"surfaces\":[{\"name\":\"\",\"snapshot\":{\"collapsed\":[],\"grid\":{\"columns\":[3,2],\"rows\":[1],\"tiles\":[{\"active\":\"pane-7\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-7\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0},{\"active\":\"pane-8\",\"bottom\":1,\"id\":\"column-2\",\"left\":1,\"panes\":[{\"id\":\"pane-8\",\"options\":[],\"pinned\":\"\",\"widget\":\"capabilities\"}],\"right\":2,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":9}}],\"version\":9}")
+    (expect-local-storage "liton.snapshot" "{\"surfaces\":[{\"name\":\"\",\"snapshot\":{\"collapsed\":[],\"frame\":\"Tiles\",\"grid\":{\"columns\":[3,2],\"rows\":[1],\"tiles\":[{\"active\":\"pane-7\",\"bottom\":1,\"id\":\"column-1\",\"left\":0,\"panes\":[{\"id\":\"pane-7\",\"options\":[],\"pinned\":\"\",\"widget\":\"chat\"}],\"right\":1,\"top\":0},{\"active\":\"pane-8\",\"bottom\":1,\"id\":\"column-2\",\"left\":1,\"panes\":[{\"id\":\"pane-8\",\"options\":[],\"pinned\":\"\",\"widget\":\"capabilities\"}],\"right\":2,\"top\":0}]},\"hidden\":[],\"shell\":\"Tiling\",\"theme\":\"\",\"version\":9}}],\"version\":9}")
   )
 )

@@ -5,6 +5,7 @@ import cap.Capability
 import cap.Chat
 import cap.Context
 import cap.Files
+import cap.Hosts
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -18,6 +19,7 @@ import setup.Grid
 import setup.Setup
 import Highlight
 import History
+import HostDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -123,6 +125,7 @@ Model := [].{
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
+		frame : Setup.Frame,
 		grid : Grid.Layout,
 		collapsed : List(Slot),
 		hidden : List(Str),
@@ -357,6 +360,10 @@ Model := [].{
 		## What Schedules panes show (ui/ScheduleDesk.roc), and the
 		## schedules.v1 requests on their way (sent as `call_outbox`).
 		schedules : ScheduleDesk.State,
+
+		## What Settings' Hosts shows (ui/HostDesk.roc), and the hosts.v1
+		## requests on their way (sent as `call_outbox`).
+		hosts : HostDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -484,6 +491,7 @@ Model := [].{
 				workspace_views: [],
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
+				frame: restored.map_ok(|loaded| loaded.frame) ?? Default.developer.snapshot.frame,
 				grid: Grid.empty,
 				collapsed: [],
 				hidden: [],
@@ -564,6 +572,7 @@ Model := [].{
 				tickets: TicketDesk.initial,
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
+				hosts: HostDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -584,7 +593,7 @@ Model := [].{
 
 	## The snapshot of the layout as it is now.
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, frame: state.frame, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
 	## The deck as it is now, the surface shown as the layout shows it.
 	deck : State -> List(Surface)
@@ -611,7 +620,7 @@ Model := [].{
 				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
 				jump = if (hash == state.url_hash) laid.jump else { ..laid.jump, replace: hash }
 				deck_slide = { serial: state.deck_slide.serial + 1, toward: if (index > state.deck_shown) Next else Previous }
-				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
+				{ ..laid, theme: surface.snapshot.theme, frame: surface.snapshot.frame, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
 			}
 			_ => state
 		}
@@ -804,6 +813,17 @@ Model := [].{
 		}
 	}
 
+	## Whether the deck's surface at `index` shows its tiles joined.
+	joined_at : State, U64 -> Bool
+	joined_at = |state, index| Model.deck(state).get(index).map_ok(|surface| surface.snapshot.frame == Joined) ?? Bool.False
+
+	## Shows the deck's surface at `index` joined, or as tiles apart.
+	join_surface : State, { index : U64, joined : Bool } -> State
+	join_surface = |state, { index, joined }| {
+		frame = if (joined) Joined else Tiles
+		if (index == state.deck_shown) Model.with_snapshot_text({ ..state, frame: frame }) else { ..state, deck: state.deck.map_with_index(|surface, at| if (at == index) { ..surface, snapshot: { ..surface.snapshot, frame: frame } } else surface) }
+	}
+
 	## The deck's surfaces by their places, titled by their names, else
 	## by their places.
 	## Each has its preview's URL and whether the daemon offers what it needs.
@@ -860,10 +880,13 @@ Model := [].{
 	## of it (`restore`), its name "". A surface that doesn't read is left out.
 	restore_deck : Str -> Try(List(Surface), [Invalid])
 	restore_deck = |text| {
-		decked : Try(Setup.Deck, _)
+		decked : Try({ version : U32, surfaces : List({ name : Str, snapshot : Setup.Unframed }) }, _)
 		decked = Json.parse(text)
+		framing : Try({ surfaces : List({ snapshot : { frame : Setup.Frame } }) }, _)
+		framing = Json.parse(text)
+		frames = framing.map_ok(|saved| saved.surfaces.map(|surface| surface.snapshot.frame)) ?? []
 		read = match decked {
-			Ok({ version, surfaces: kept }) if version >= 9 => kept.keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
+			Ok({ version, surfaces: kept }) if version >= 9 => Setup.framed_presets(kept, frames).keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
 			_ => Model.restore(text).map_ok(|restored| [{ name: "", snapshot: restored }]) ?? []
 		}
 		if (read.is_empty()) Err(Invalid) else Ok(read.map(|kept| { name: kept.name, snapshot: kept.snapshot, focus: [] }))
@@ -871,7 +894,7 @@ Model := [].{
 
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
-	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
+	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, frame: Setup.frame_of(shell), grid, collapsed, hidden, theme: "" }
 
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
@@ -891,7 +914,8 @@ Model := [].{
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
 	## Reads a snapshot, a Workbench's only if its grid keeps a Workbench's
-	## rules (`workbench_holds`). Before version 8, its columns are laid out
+	## rules (`workbench_holds`). One naming no frame is in its shell's
+	## (`Setup.frame_of`). Before version 8, its columns are laid out
 	## as a grid (`Setup.grid_of`); before version 7, its parts split as
 	## `split_parts` does; before version 6, it hides no panes; before version
 	## 5, it shows the setup's default theme; before version 4, panes have
@@ -900,8 +924,10 @@ Model := [].{
 	## then it loads the Developer preset.
 	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		gridded : Try(Snapshot, _)
+		gridded : Try(Setup.Unframed, _)
 		gridded = Json.parse(text)
+		framing : Try({ frame : Setup.Frame }, _)
+		framing = Json.parse(text)
 		# From version 4 to 7 a snapshot is laid out alike; version 5 names its
 		# theme, and version 6 the panes it hides.
 		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
@@ -918,7 +944,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (gridded, laid, third, second, first) {
-			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
+			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(Setup.framed(saved, framing.map_ok(|read| read.frame)))
 			(_, Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, grid: Model.split_parts(version, Setup.grid_of(columns)), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, _, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, grid: Setup.grid_of(Model.with_options(columns)), collapsed: [], hidden: [] }))
 			(_, _, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
@@ -952,7 +978,7 @@ Model := [].{
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, frame: loaded.frame, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -1000,7 +1026,7 @@ Model := [].{
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, frame: preset.snapshot.frame, surface: name }
 			Err(NotFound) => state
 		}
 
@@ -1379,7 +1405,7 @@ Model := [].{
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
-	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden })
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and preset.snapshot.frame == state.frame and Model.layout_of(preset.snapshot) == { shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden })
 
 	## Every pane, tile by tile.
 	panes : State -> List(Pane)
@@ -2470,7 +2496,9 @@ Model := [].{
 		# The schedules, and the runs of the one opened, while a Schedules
 		# pane is on screen.
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The hosts, for Settings' Hosts and the host badges.
+		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2554,7 +2582,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
 		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		# A timeline the daemon has yet to fetch is asked for at once.
 		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
@@ -2631,6 +2659,7 @@ Model := [].{
 			(_, Links(links)) => { ..state, tickets: TicketDesk.received(state.tickets, Links(links)) }
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
+			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -3180,7 +3209,7 @@ Model := [].{
 	## uncommitted lines added and removed, as "+3" and "−1". `age` is how
 	## long ago a session or workspace last changed (`Model.age`). A
 	## workspace `pinned`, or its one session, lists first.
-	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, second_line : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, pinned : Bool, depth : U64 }
+	Row : { key : Str, kind : [Group, Workspace, Session, Folder, File, Thread], title : Str, detail : Str, second_line : Str, host : Str, counts : Counts, dot : Str, status : Str, age : Str, focused : Bool, folded : Bool, creatable : Bool, pinned : Bool, depth : U64 }
 
 	## A row's counts, each "" when it has none (see `Row`).
 	Counts : { members : Str, added : Str, removed : Str }
@@ -3211,14 +3240,18 @@ Model := [].{
 		listed = in_order.keep_if(|workspace| workspace.pinned).concat(in_order.drop_if(|workspace| workspace.pinned))
 		by_status = Model.option(shown, "group_by") == "Status"
 		groups =
-			if by_status {
+			if Model.option(shown, "group_by") == "Host" {
+				known = state.hosts.listed
+				hosts = listed.fold([], |found, workspace| if (found.contains(HostDesk.host_of(known, workspace.provider))) found else found.append(HostDesk.host_of(known, workspace.provider)))
+				hosts.map(|host| { key: "group:host:${host}", title: if (host.is_empty()) "This daemon" else known.find_first(|listed_host| listed_host.name == host).map_ok(|listed_host| if (listed_host.label.is_empty()) host else listed_host.label) ?? host, dot: "", members: listed.keep_if(|workspace| HostDesk.host_of(known, workspace.provider) == host), creatable: Bool.False })
+			} else if by_status {
 				pinned = { key: "group:Pinned", title: "Pinned", dot: "group-pinned", members: listed.keep_if(|workspace| workspace.pinned), creatable: Bool.False }
 				[NeedsInput, ReadyToReview, Working, Done].map(|status| { key: "group:${status_word(status)}", title: status_word(status), dot: "group-${status_class(status)}", members: listed.keep_if(|workspace| !workspace.pinned and Model.workspace_status(state, workspace) == status), creatable: Bool.False }).prepend(pinned).drop_if(|group| group.members.is_empty())
 			} else {
 				projects = state.workspaces.projects.map(|project| { key: "group:${project.id}", title: sentence_case(project.name), dot: "", members: listed.keep_if(|workspace| workspace.project_id == project.id), creatable: Bool.True })
 				Model.ordered(projects, order, |group| group.members.map(workspace_changed).fold(0, U64.max), |group| group.title)
 			}
-		blank = { key: "", kind: Group, title: "", detail: "", second_line: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		blank = { key: "", kind: Group, title: "", detail: "", second_line: "", host: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		mark = |row| if (Model.starting(state, row.key) or Model.starting(state, row.key.drop_prefix("workspace:"))) { ..row, dot: "starting", status: "starting…", creatable: Bool.False } else row
 		# Grouped by status, a workspace's branch, its project, and its
 		# provider's name where several providers list workspaces, in place
@@ -3238,7 +3271,7 @@ Model := [].{
 			}
 			dot = if (workspace.session_ids.any(|session_id| Model.unread(state, session_id))) "${attention_dot(Model.workspace_rank(state, workspace))} unread" else attention_dot(Model.workspace_rank(state, workspace))
 			newest_age = Model.ordered(sessions, "Latest", |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).first().map_ok(|latest_session| Model.age(state, latest_session)) ?? ""
-			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: if (by_status) "" else branch, second_line: second_line_of(workspace, branch), counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: Model.focused(state, [Session, Workspace]) == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
+			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, host: Model.host_badge(state, workspace.provider), detail: if (by_status) "" else branch, second_line: second_line_of(workspace, branch), counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: Model.focused(state, [Session, Workspace]) == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
 			match sessions.first() {
 				Ok(lone) if sessions.len() == 1 => {
 					lone_row = Model.session_row(state, shown, lone)
@@ -3315,7 +3348,7 @@ Model := [].{
 	session_row : State, Pane, Chat.Session -> Row
 	session_row = |state, shown, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		{ key: listed_session.id, kind: Session, title: Model.session_title(shown, listed_session), detail: "", second_line: "", counts: Model.no_counts, dot: Model.session_dot(state, listed_session), status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: Model.session_title(shown, listed_session), detail: "", second_line: "", host: Model.host_badge(state, listed_session.provider), counts: Model.no_counts, dot: Model.session_dot(state, listed_session), status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
@@ -3979,6 +4012,83 @@ Model := [].{
 		}
 	}
 
+	## Sends a hosts.v1 request, shown at once (`HostDesk`) until the daemon
+	## answers.
+	ask_hosts : State, Hosts.Request -> State
+	ask_hosts = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "hosts.v1", text: Json.to_str({ capability: "hosts.v1", request }) }, hosts: HostDesk.asking(state.hosts, serial, request), notice: "" }
+	}
+
+	## Takes the daemon's answer to a hosts.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	hosts_answered : State, U64, Str -> State
+	hosts_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Hosts.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, hosts: HostDesk.answered(state.hosts, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => Model.poll({ ..state, hosts: HostDesk.answered(state.hosts, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Settings' Hosts changed by `change`: its menu, the removal it asks
+	## to confirm, or its dialog.
+	with_hosts : State, (HostDesk.State -> HostDesk.State) -> State
+	with_hosts = |state, change| { ..state, hosts: change(state.hosts) }
+
+	## Sends what the host dialog holds, shown at once, and closes it; or
+	## says why it can't.
+	save_host : State -> State
+	save_host = |state| {
+		editor = state.hosts.editor
+		match HostDesk.request_of(editor, HostDesk.shown(state.hosts)) {
+			Err(reason) => Model.with_hosts(state, |desk| { ..desk, editor: { ..desk.editor, failed: reason } })
+			Ok(request) => Model.ask_hosts(Model.with_hosts(state, |desk| { ..desk, editor: HostDesk.closed }), request)
+		}
+	}
+
+	## Opens the host dialog on a new host, or on the host `name` to change.
+	edit_host : State, Str -> State
+	edit_host = |state, name|
+		Model.with_hosts(
+			state,
+			|desk| {
+				editor = if (name.is_empty()) { ..HostDesk.closed, open: Bool.True } else HostDesk.shown(desk).find_first(|host| host.name == name).map_ok(HostDesk.edit) ?? HostDesk.closed
+				{ ..desk, editor, removing: "" }
+			},
+		)
+
+	## The host dialog changed by `change`.
+	with_host_editor : State, (HostDesk.Editor -> HostDesk.Editor) -> State
+	with_host_editor = |state, change| Model.with_hosts(state, |desk| { ..desk, editor: change(desk.editor) })
+
+	## Switches the host `name` off, or on again, shown at once.
+	switch_host : State, Str -> State
+	switch_host = |state, name|
+		match HostDesk.shown(state.hosts).find_first(|host| host.name == name) {
+			Ok(host) => Model.ask_hosts(state, SetEnabled({ name, enabled: !host.enabled }))
+			Err(_) => state
+		}
+
+	## Asks to confirm removing the host `name`, or, `sure`, removes
+	## it, gone at once.
+	remove_host : State, Str, Bool -> State
+	remove_host = |state, name, sure| if (sure) Model.ask_hosts(state, RemoveHost({ name: name })) else Model.with_hosts(state, |desk| { ..desk, removing: name })
+
+	## The host that offers what `provider` names, while items come from
+	## more than one place, the daemon's own providers counting as one: ""
+	## when they don't, or for the daemon's own (`HostDesk.host_of`).
+	host_badge : State, Str -> Str
+	host_badge = |state, provider| {
+		known = state.hosts.listed.keep_if(|host| host.enabled)
+		places = state.providers.keep_if(|listed| listed.capabilities.contains(Capability.chat_v1) or listed.capabilities.contains(Capability.workspaces_v1)).map(|listed| HostDesk.host_of(known, listed.id)).fold([], |found, origin| if (found.contains(origin)) found else found.append(origin))
+		if (places.len() > 1) HostDesk.host_of(known, provider) else ""
+	}
+
 	## Opens a schedule in place, showing its runs and actions, or closes it.
 	open_schedule : State, Str -> State
 	open_schedule = |state, schedule_id| { ..state, schedules: { ..state.schedules, opened: if (state.schedules.opened == schedule_id) "" else schedule_id } }
@@ -4112,7 +4222,7 @@ Model := [].{
 			}
 		paths = review.threads.fold([], |so_far, thread| if (so_far.contains(thread.anchor.path)) so_far else so_far.append(thread.anchor.path))
 		threads = paths.join_map(|path| review.threads.keep_if(|thread| thread.anchor.path == path).sort_with(|a, b| if (a.anchor.start_line < b.anchor.start_line) Before else if (a.anchor.start_line > b.anchor.start_line) After else Same))
-		row = |key, title, detail, status| { key, kind: Thread, title, detail, second_line: "", counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		row = |key, title, detail, status| { key, kind: Thread, title, detail, second_line: "", host: "", counts: Model.no_counts, dot: status, status, age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 		threads.map(|thread| row("thread:${thread.id}", Review.lines(thread.anchor), first_line(thread.comments), thread_state(thread))).concat(review.comments.map(|comment| row("comment:${comment.id}", "Overall", first_line([comment]), comment_state(comment.state))))
 	}
 
@@ -5555,7 +5665,7 @@ expect {
 ## open in it.
 folder_rows : Model.State, Context.Id, Model.FilePane, Str, U64 -> List(Model.Row)
 folder_rows = |state, context, shown, folder, depth| {
-	blank = { key: "", kind: File, title: "", detail: "", second_line: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth }
+	blank = { key: "", kind: File, title: "", detail: "", second_line: "", host: "", counts: Model.no_counts, dot: "", status: "", age: "", focused: Bool.False, folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth }
 	entries =
 		match state.trees.find_first(|known| known.context == context and known.tree.path == folder).map_ok(|known| known.tree.listing) {
 			Ok(Listed(listed)) => listed.keep_if(|entry| entry.kind == Directory).concat(listed.drop_if(|entry| entry.kind == Directory))

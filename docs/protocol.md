@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -702,6 +702,61 @@ mock's workspaces; their cron expressions are of the minute and hour alone
 (`0 9 * * *`, `*/15 * * * *`), in UTC, and their cadences every second at
 most, and they don't archive the sessions they start. Its pure functions take the time, so its tests run them by a clock of
 their own. A fresh mock has a schedule of a new session each night at 03:00.
+
+### Hosts
+
+`hosts.v1` lists and changes the daemons liton's daemon connects to: Paseo
+daemons and other liton daemons (Providers outside the daemon). The daemon
+offers it itself, as provider `hosts`, and keeps its hosts in its database:
+
+```json
+{ "name": "paseo", "kind": "Paseo", "target": "127.0.0.1:6767", "label": "",
+  "enabled": true, "status": "Online", "version": "0.15.3",
+  "last_online": "2026-01-01T09:00:00.000Z", "origin": "Environment" }
+{ "name": "team", "kind": "Liton", "target": "https://liton.example", "label": "Team",
+  "enabled": true, "status": { "Error": "the token was refused" }, "origin": "Added" }
+```
+
+A `Paseo` host's target is `host:port`, and it is reached over its WebSocket
+with its password; a `Liton` host's is an `http://` or `https://` URL, reached
+with the token it paired the daemon with (Authentication, Federation). A name
+is 1 to 32 letters, digits, `-` and `_`, and names what the host offers:
+`<name>/paseo` and `<name>/<id>` for a Paseo host's provider, sessions and
+workspaces, and a liton host's as a remote's. The Paseo host `PASEO_*` sets
+is called `paseo` and keeps bare ids, as before there were hosts. `status`
+is `Connecting` until the daemon first hears from a host, then `Online`,
+`Offline` when it can't be reached, `{"Error": why}` when it answers but
+refuses, such as a wrong password, and `Disabled` while switched off.
+`version` is what its server tells and `last_online` when it last answered,
+each left out until known. `origin` is `Added` by a client, or
+`Environment` or `Setup` for one the daemon's environment (`PASEO_*`,
+`LITON_PROVIDERS` with `LITON_PROVIDER_TOKENS`) or setup sets again at each
+start: such a host can be relabelled, disabled and enabled, but its target
+and password are changed where they are set, and it can't be removed.
+
+```json
+{ "capability": "hosts.v1", "request": "ListHosts" }
+{ "Ok": { "Hosts": [ … ] } }
+{ "capability": "hosts.v1", "request": { "AddHost": { "name": "team", "kind": "Liton", "target": "https://liton.example", "label": "Team", "password": "…" } } }
+{ "capability": "hosts.v1", "request": { "UpdateHost": { "name": "team", "label": "The team" } } }
+{ "capability": "hosts.v1", "request": { "SetEnabled": { "name": "paseo", "enabled": false } } }
+{ "capability": "hosts.v1", "request": { "RemoveHost": { "name": "team" } } }
+{ "Ok": "Accepted" }
+```
+
+`AddHost`'s `password` is the Paseo password or the liton token, and is
+written only: the daemon keeps it in its database, which it keeps readable by
+its own user alone (mode 0600), and never answers or logs it. `UpdateHost`
+changes the fields given and keeps the rest. Each change takes effect at
+once, without a restart, and answers `Accepted` or `Rejected` with why; the
+next poll of the topic `hosts` shows it.
+
+Adding a host makes the daemon connect where it is told, from its own
+machine and network, so `hosts.v1` answers only paired devices
+(Authentication), and the daemon checks a target's form but not where it
+leads: a paired device can point it at anything the daemon's machine
+reaches. Relay pairing links and SSH tunnels to a Paseo daemon are later
+work: today a Paseo host is reached directly.
 
 ### Audio
 
