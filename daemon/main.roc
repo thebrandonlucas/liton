@@ -2183,7 +2183,8 @@ store! = |db, session_id, stored, { state, events }| {
 ## `PaseoFiles.lifetime_ms` ago or never, then the summaries due (see
 ## `summarized!`). Nothing watched, no connection. A
 ## question that fails is logged and the next asked; a lost connection ends
-## the cycle. What was pending (see `wanted!`) when it began no longer is.
+## the cycle. What is pending (see `wanted!`) is asked first, and what a
+## poll first watches while it runs, next (see `asked_each!`).
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
 ## A cached poll's (`Cached`) runs none.
 paseo_cycle! : Context => Try({}, _)
@@ -2210,9 +2211,11 @@ paseo_cycle! = |{ db, paseo, summary_model, upstream, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok({ connection, features }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
-							asked_each!(db, connection, ordered, 1)
-							Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE since <= :began;", params: { began } })?
+							# What a client waits for, pending, first.
+							pending : List({ kind : Str, subject : Str })
+							pending = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending;", params: {}, limits: Sqlite.default_query_limits })?
+							by_kind = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							asked_each!(db, connection, by_kind.keep_if(|item| pending.contains(item)).concat(by_kind.drop_if(|item| pending.contains(item))), 1, began)
 							match summary_model {
 								Ok(configured) if features.background_agents =>
 									match summarized!(db, connection, configured) {
@@ -2275,10 +2278,13 @@ greeted! = |connection|
 	}
 
 ## Asks about each of `wanted` in turn, the `number`th first, until the
-## connection is lost.
-asked_each! : Sqlite.Db, Tcp.Connection, List({ kind : Str, subject : Str }), U64 => {}
-asked_each! = |db, connection, wanted, number|
-	match wanted.first() {
+## connection is lost, but first about what a poll first watched since the
+## cycle `began`. Each asked is no longer pending (see `wanted!`).
+asked_each! : Sqlite.Db, Tcp.Connection, List({ kind : Str, subject : Str }), U64, I64 => {}
+asked_each! = |db, connection, wanted, number, began| {
+	arrived : List({ kind : Str, subject : Str })
+	arrived = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending WHERE since > :began ORDER BY since;", params: { began }, limits: Sqlite.default_query_limits }) ?? []
+	match arrived.concat(wanted).first() {
 		Err(_) => {}
 		Ok({ kind, subject }) =>
 			match asked!(db, connection, { kind, subject }, "liton-${number.to_str()}") {
@@ -2288,10 +2294,12 @@ asked_each! = |db, connection, wanted, number|
 						Ok({}) => {}
 						Err(err) => logged!("Paseo: asking about the ${kind} ${subject} failed: ${Str.inspect(err)}")
 					}
-					asked_each!(db, connection, wanted.drop_first(1), number + 1)
+					_ = Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE kind = :kind AND subject = :subject;", params: { kind, subject } })
+					asked_each!(db, connection, if (arrived.is_empty()) wanted.drop_first(1) else wanted, number + 1, began)
 				}
 			}
 	}
+}
 
 ## Asks Paseo about one thing a poll watched, and keeps the answer.
 asked! : Sqlite.Db, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
