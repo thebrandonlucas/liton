@@ -112,6 +112,11 @@ Hosts := [].{
 	## sets, else `<name>/paseo`.
 	paseo_provider : Str -> Str
 	paseo_provider = |name| Hosts.named(name, "paseo")
+
+	## The id the host `name` gives what liton names `id` (see `named`).
+	their_id : Str, Str -> Str
+	their_id = |name, id| if (name == "paseo") id else id.drop_prefix("${name}/")
+
 }
 
 origin_name : Hosts.Origin -> Str
@@ -170,6 +175,7 @@ expect ["http://127.0.0.1:8096", "https://liton.example", "https://liton.example
 expect ["127.0.0.1:8096", "ftp://x", "http://", "http://u@x", "http://x?y", "http://x:y", "http://x y"].all(|target| Hosts.target_problem(Liton, target).is_err())
 expect ["paseo", "my-box_2"].all(|name| Hosts.name_problem(name) == Ok({})) and ["", "a/b", "a b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"].all(|name| Hosts.name_problem(name).is_err())
 expect Hosts.named("paseo", "a1") == "a1" and Hosts.named("box", "a1") == "box/a1" and Hosts.paseo_provider("box") == "box/paseo" and Hosts.paseo_provider("paseo") == "paseo"
+expect Hosts.their_id("box", "box/a1") == "a1" and Hosts.their_id("paseo", "a1") == "a1" and Hosts.their_id("paseo", Hosts.named("paseo", "box/a1")) == "box/a1"
 
 expect {
 	paseo = { name: "paseo", kind: Paseo, target: "127.0.0.1:6767", label: "", enabled: Bool.True, status: Online, version: Ok("0.15.3"), last_online: Err(Missing), origin: Environment }

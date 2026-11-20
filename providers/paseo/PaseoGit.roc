@@ -1,3 +1,4 @@
+import cap.Hosts
 import cap.WorkspaceGit
 import Paseo
 
@@ -85,14 +86,15 @@ PaseoGit := [].{
 	commit_file_request = |directory, sha, path, request_id| Json.to_str({ type: "session", message: { type: "checkout.commits.file_diff.request", cwd: directory, sha, path, requestId: request_id } })
 
 	## The workspace and status in a `checkout_status_response` answering
-	## `request_id`; a directory outside git has no status.
-	status_answer : Str, Str, Str -> Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	status_answer = |text, directory, request_id| {
+	## `request_id`, of a directory of the Paseo host `host`; a directory
+	## outside git has no status.
+	status_answer : Str, Str, Str, Str -> Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, [OtherMessage, GitFailed(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	status_answer = |host, text, directory, request_id| {
 		answered : Try({ message : { payload : Checkout } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "checkout_status_response", request_id)?)
 		checkout = answered?.message.payload
 		repository_root = checkout.repo_root ?? directory
-		workspace = { id: directory, provider: "paseo", name: repository_root.split_on("/").last() ?? repository_root, directory, repository_root, kind: Checkout }
+		workspace = { id: directory, provider: Hosts.paseo_provider(host), name: repository_root.split_on("/").last() ?? repository_root, directory, repository_root, kind: Checkout }
 		if !checkout.is_git {
 			Ok({ workspace: { ..workspace, kind: NotGit }, status: NoStatus })
 		} else {
@@ -220,13 +222,14 @@ git_checkout = checkout("\"isGit\":true,\"isPaseoOwnedWorktree\":false,\"repoRoo
 status : WorkspaceGit.Status
 status = { branch: Branch("fix-login"), base: Base("main"), dirty: Bool.True, ahead: 2, behind: 1, upstream: Upstream({ ahead: 1, behind: 0 }) }
 
-expect PaseoGit.status_answer(git_checkout, "/work/app", "g1") == Ok({ workspace: { id: "/work/app", provider: "paseo", name: "app", directory: "/work/app", repository_root: "/work/app", kind: Checkout }, status: Status(status) })
-expect PaseoGit.status_answer(git_checkout, "/work/app", "g2").map_ok(|_| {}) == Err(OtherMessage)
-expect PaseoGit.status_answer(checkout("\"isGit\":false,\"isPaseoOwnedWorktree\":false,\"repoRoot\":null,\"currentBranch\":null,\"isDirty\":null,\"baseRef\":null,\"aheadBehind\":null,\"aheadOfOrigin\":null,\"behindOfOrigin\":null,\"hasRemote\":false,\"remoteUrl\":null"), "/work/app", "g1").map_ok(|answered| (answered.workspace.kind, answered.status)) == Ok((NotGit, NoStatus))
+expect PaseoGit.status_answer("paseo", git_checkout, "/work/app", "g1") == Ok({ workspace: { id: "/work/app", provider: "paseo", name: "app", directory: "/work/app", repository_root: "/work/app", kind: Checkout }, status: Status(status) })
+expect PaseoGit.status_answer("paseo", git_checkout, "/work/app", "g2").map_ok(|_| {}) == Err(OtherMessage)
+expect PaseoGit.status_answer("box", git_checkout, "/work/app", "g1").map_ok(|answered| answered.workspace.provider) == Ok("box/paseo")
+expect PaseoGit.status_answer("paseo", checkout("\"isGit\":false,\"isPaseoOwnedWorktree\":false,\"repoRoot\":null,\"currentBranch\":null,\"isDirty\":null,\"baseRef\":null,\"aheadBehind\":null,\"aheadOfOrigin\":null,\"behindOfOrigin\":null,\"hasRemote\":false,\"remoteUrl\":null"), "/work/app", "g1").map_ok(|answered| (answered.workspace.kind, answered.status)) == Ok((NotGit, NoStatus))
 
 expect {
 	worktree = checkout("\"isGit\":true,\"isPaseoOwnedWorktree\":true,\"repoRoot\":\"/work/app-wt\",\"mainRepoRoot\":\"/work/app\",\"currentBranch\":null,\"isDirty\":false,\"baseRef\":\"main\",\"aheadBehind\":null,\"aheadOfOrigin\":null,\"behindOfOrigin\":null,\"hasRemote\":false,\"remoteUrl\":null")
-	PaseoGit.status_answer(worktree, "/work/app-wt", "g1").map_ok(|answered| (answered.workspace.kind, answered.status)) == Ok((Worktree, Status({ branch: Detached, base: Base("main"), dirty: Bool.False, ahead: 0, behind: 0, upstream: NoUpstream })))
+	PaseoGit.status_answer("paseo", worktree, "/work/app-wt", "g1").map_ok(|answered| (answered.workspace.kind, answered.status)) == Ok((Worktree, Status({ branch: Detached, base: Base("main"), dirty: Bool.False, ahead: 0, behind: 0, upstream: NoUpstream })))
 }
 
 expect {

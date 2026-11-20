@@ -1,5 +1,6 @@
 import cap.Capability
 import cap.Chat
+import cap.Hosts
 import cap.Manifest
 
 ## Paseo's agents as chat.v1 sessions, all over Paseo's WebSocket, the one
@@ -9,9 +10,16 @@ import cap.Manifest
 ## snake_case fields below; liton reads only these fields.
 Paseo := [].{
 
-	## The Paseo provider, with the capabilities it offers.
+	## The provider of the Paseo host `host`, with the capabilities it offers:
+	## `paseo` for the one PASEO_* sets, else `<host>/paseo` (see `Hosts.named`).
+	## Each function below that names a session, workspace, project or
+	## schedule takes the host too, and names it as liton does.
+	provider_of : Str -> Manifest.Provider
+	provider_of = |host| { id: Hosts.paseo_provider(host), name: if (host == "paseo") "Paseo" else "Paseo on ${host}", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.schedules_v1] }
+
+	## The provider of the Paseo host PASEO_* sets, `paseo`.
 	provider : Manifest.Provider
-	provider = { id: "paseo", name: "Paseo", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.schedules_v1] }
+	provider = Paseo.provider_of("paseo")
 
 	## How many timeline entries a fetch asks for: a session's first fetch
 	## takes its last ones, later fetches follow on while a page `has_newer`.
@@ -274,12 +282,12 @@ Paseo := [].{
 	agent_kinds_request = |request_id| Json.to_str({ type: "session", message: { type: "list_available_providers_request", requestId: request_id } })
 
 	## The kinds of agent a `list_available_providers_response` answering
-	## `request_id` lists as available.
-	agent_kinds : Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	agent_kinds = |text, request_id| {
+	## `request_id` lists as available, of the Paseo host `host`.
+	agent_kinds : Str, Str, Str -> Try(List(Chat.Agent), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	agent_kinds = |host, text, request_id| {
 		answered : Try({ message : { payload : { providers : List({ provider : Str, available : Bool }) } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "list_available_providers_response", request_id)?)
-		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| Chat.agent_kind({ provider: Paseo.provider.id, agent: listed.provider })))
+		Ok(answered?.message.payload.providers.keep_if(|listed| listed.available).map(|listed| Chat.agent_kind({ provider: Hosts.paseo_provider(host), agent: listed.provider })))
 	}
 
 	## Paseo's providers with their models and modes, as Paseo knows them
@@ -391,15 +399,15 @@ Paseo := [].{
 
 	## The importable sessions a `fetch_recent_provider_sessions_response`
 	## answering `request_id` lists, each with its directory.
-	importable_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str }), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	importable_answer = |text, request_id| {
+	importable_answer : Str, Str, Str -> Try(List({ session : Chat.Session, directory : Str }), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	importable_answer = |host, text, request_id| {
 		answered : Try({ message : { payload : { entries : List(Importable) } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "fetch_recent_provider_sessions_response", request_id)?)
 		Ok(
 			answered?.message.payload.entries.map(
 				|entry| {
 					title = entry.title ?? (entry.first_prompt_preview ?? entry.provider_handle_id)
-					{ session: Chat.session({ id: "import:${entry.provider_id}:${entry.provider_handle_id}", provider: "paseo", agent: entry.provider_label, title, status: Idle }), directory: entry.cwd }
+					{ session: Chat.session({ id: Hosts.named(host, "import:${entry.provider_id}:${entry.provider_handle_id}"), provider: Hosts.paseo_provider(host), agent: entry.provider_label, title, status: Idle }), directory: entry.cwd }
 				},
 			),
 		)
@@ -449,26 +457,27 @@ Paseo := [].{
 	## far as Paseo does. A background agent, such as one writing a summary
 	## (see `PaseoSummaries`), isn't listed.
 	## They are in the order of Paseo's MCP `list_agents` (see `listed_order`).
-	agents_answer : Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
-	agents_answer = |text, request_id| {
+	agents_answer : Str, Str, Str -> Try(List({ session : Chat.Session, directory : Str, workspace_id : Str }), [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
+	agents_answer = |host, text, request_id| {
 		answered : Try({ message : { payload : { entries : List(Listed) } } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_agents_response", request_id)?)
-		Ok(answered?.message.payload.entries.drop_if(|{ agent, .. }| agent.background == Ok(Bool.True)).sort_with(|left, right| listed_order(left.agent, right.agent)).map(Paseo.listed_session))
+		Ok(answered?.message.payload.entries.drop_if(|{ agent, .. }| agent.background == Ok(Bool.True)).sort_with(|left, right| listed_order(left.agent, right.agent)).map(|listed| Paseo.listed_session(host, listed)))
 	}
 
 	## An agent as Paseo's agent lists list it, with its project's checkout.
 	Listed : { agent : ListedAgent, project : Try({ checkout : { current_branch : Try(Try(Str, [Null]), [Missing]) } }, [Missing]) }
 
-	## A listed agent as a chat.v1 session (see `agents_answer`), with the
-	## directory and the workspace it works in.
-	listed_session : Listed -> { session : Chat.Session, directory : Str, workspace_id : Str }
-	listed_session = |{ agent, project }| {
+	## A listed agent of the Paseo host `host` as a chat.v1 session (see
+	## `agents_answer`), with the directory and the workspace it works in.
+	listed_session : Str, Listed -> { session : Chat.Session, directory : Str, workspace_id : Str }
+	listed_session = |host, { agent, project }| {
 		title = agent.title ?? (Str.from_utf8(agent.id.to_utf8().take_first(7)) ?? agent.id)
 		optional = |value| value.map_err(|_| Missing)
+		workspace_id = agent.workspace_id.map_ok(|id| Hosts.named(host, id))
 		session = {
-			..Chat.session({ id: agent.id, provider: "paseo", agent: agent.provider, title, status: Paseo.listed_status(agent) }),
+			..Chat.session({ id: Hosts.named(host, agent.id), provider: Hosts.paseo_provider(host), agent: agent.provider, title, status: Paseo.listed_status(agent) }),
 			model: optional(agent.model),
-			workspace: Ok({ id: agent.workspace_id, directory: agent.cwd }),
+			workspace: Ok({ id: workspace_id, directory: agent.cwd }),
 			branch: optional(project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)),
 			running_since: optional(agent.active_turn.map_ok(|turn| turn.map_ok(|active| active.started_at) ?? Err(Null)) ?? Err(Null)),
 			updated: Ok(agent.updated_at),
@@ -482,7 +491,7 @@ Paseo := [].{
 			usage: agent.last_usage.map_ok(Paseo.usage),
 			archived: optional(agent.archived_at ?? Err(Null)),
 		}
-		{ session, directory: agent.cwd, workspace_id: agent.workspace_id ?? "" }
+		{ session, directory: agent.cwd, workspace_id: workspace_id ?? "" }
 	}
 
 	## Asks for a page of Paseo's agent history, archived agents too, the
@@ -499,12 +508,12 @@ Paseo := [].{
 	## The agents a `fetch_agent_history_response` answering `request_id`
 	## lists, in its order, each with its directory and workspace and when it
 	## was archived, and the cursor of the next page, if there is one.
-	history_answer : Str, Str -> Try({ agents : List({ session : Chat.Session, directory : Str, workspace_id : Str }), next : Try(Str, [Missing]) }, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	history_answer = |text, request_id| {
+	history_answer : Str, Str, Str -> Try({ agents : List({ session : Chat.Session, directory : Str, workspace_id : Str }), next : Try(Str, [Missing]) }, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	history_answer = |host, text, request_id| {
 		answered : Try({ message : { payload : { entries : List(Listed), page_info : { next_cursor : Try(Str, [Null]), has_more : Bool } } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "fetch_agent_history_response", request_id)?)
 		payload = answered?.message.payload
-		Ok({ agents: payload.entries.drop_if(|{ agent, .. }| agent.background == Ok(Bool.True)).map(Paseo.listed_session), next: if (payload.page_info.has_more) payload.page_info.next_cursor.map_err(|_| Missing) else Err(Missing) })
+		Ok({ agents: payload.entries.drop_if(|{ agent, .. }| agent.background == Ok(Bool.True)).map(|listed| Paseo.listed_session(host, listed)), next: if (payload.page_info.has_more) payload.page_info.next_cursor.map_err(|_| Missing) else Err(Missing) })
 	}
 
 	## Unarchives an agent: Paseo's `refresh_agent_request` lists it again and
@@ -642,10 +651,10 @@ Paseo := [].{
 			_ => "Paseo refused liton: ${reason}"
 		}
 
-	## A session that stands for Paseo refusing liton, listed first so the
-	## refusal shows where Paseo's sessions do.
-	refused_session : Str -> Chat.Session
-	refused_session = |reason| Chat.session({ id: "paseo-refused", provider: "paseo", agent: "paseo", title: Paseo.refusal(reason), status: Failed(Paseo.refusal(reason)) })
+	## A session that stands for the Paseo host `host` refusing liton, listed
+	## first so the refusal shows where its sessions do.
+	refused_session : Str, Str -> Chat.Session
+	refused_session = |host, reason| Chat.session({ id: Hosts.named(host, "paseo-refused"), provider: Hosts.paseo_provider(host), agent: "paseo", title: Paseo.refusal(reason), status: Failed(Paseo.refusal(reason)) })
 
 	## Fetches the entries after the state's cursor, or the last `page_limit`
 	## on a session's first fetch.
@@ -1017,21 +1026,25 @@ expect {
 	]
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_agents_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${Str.join_with(entries, ",")}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
 	listed = |id, title, status, workspace_id, updated| { ..Chat.session({ id, provider: "paseo", agent: "claude", title, status }), workspace: Ok({ id: workspace_id, directory: "/work" }), updated: Ok(updated) }
-	Paseo.agents_answer(text, "r1")
+	Paseo.agents_answer("paseo", text, "r1")
 		== Ok([
 			{ session: listed("a3", "Done", Finished, Ok("w1"), "2026-01-01T00:00:00.000Z"), directory: "/work", workspace_id: "w1" },
 			{ session: listed("a4", "Asks", AwaitingPermission, Err(Missing), "2026-01-02T00:00:00.000Z"), directory: "/work", workspace_id: "" },
 			{ session: { ..listed("a1b2c3d4e5", "a1b2c3d", Running, Ok("w1"), "2026-01-01T00:00:00.000Z"), model: Ok("opus"), branch: Ok("fix-login"), running_since: Ok("2026-01-01T00:01:00.000Z"), mode: Ok("plan"), thinking: Ok("high"), modes: Ok([{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }]), usage: Ok({ context_used: Ok(41_000), context_max: Ok(200_000), input_tokens: Ok(1_200), cached_input_tokens: Err(Missing), output_tokens: Ok(300), cost_usd: Ok(0.0125) }) }, directory: "/work", workspace_id: "w1" },
 		])
-		and Paseo.agents_answer(text, "r2").map_ok(|_| {}) == Err(OtherMessage)
+		and Paseo.agents_answer("paseo", text, "r2").map_ok(|_| {}) == Err(OtherMessage)
+		# Another Paseo host's are named under its name.
+		and Paseo.agents_answer("box", text, "r1").map_ok(|agents| agents.take_first(2).map(|{ session, workspace_id, .. }| (session.id, session.provider, session.workspace.map_ok(|placed| placed.id), workspace_id)))
+			== Ok([("box/a3", "box/paseo", Ok(Ok("box/w1")), "box/w1"), ("box/a4", "box/paseo", Ok(Err(Missing)), "")])
 }
 
 expect {
 	history_entry = |id, archived| "{\"agent\":{\"id\":\"${id}\",\"provider\":\"codex\",\"cwd\":\"/work\",\"model\":null,\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"updatedAt\":\"2026-01-02T00:00:00.000Z\",\"lastUserMessageAt\":null,\"title\":\"${id}\",\"status\":\"closed\",\"pendingPermissions\":[],\"archivedAt\":${archived}},\"project\":{\"projectKey\":\"p1\",\"projectName\":\"app\",\"checkout\":{\"cwd\":\"/work\",\"isGit\":false,\"currentBranch\":null}}}"
 	page = |more, cursor| session("{\"type\":\"fetch_agent_history_response\",\"payload\":{\"requestId\":\"h1\",\"entries\":[${history_entry("a9", "\"2026-01-03T00:00:00.000Z\"")},${history_entry("a8", "null")}],\"pageInfo\":{\"nextCursor\":${cursor},\"prevCursor\":null,\"hasMore\":${more}}}}")
 	shown = |id, archived| { session: { ..Chat.session({ id, provider: "paseo", agent: "codex", title: id, status: Finished }), workspace: Ok({ id: Err(Missing), directory: "/work" }), updated: Ok("2026-01-02T00:00:00.000Z"), archived }, directory: "/work", workspace_id: "" }
-	Paseo.history_answer(page("true", "\"c2\""), "h1") == Ok({ agents: [shown("a9", Ok("2026-01-03T00:00:00.000Z")), shown("a8", Err(Missing))], next: Ok("c2") })
-		and Paseo.history_answer(page("false", "null"), "h1").map_ok(|answered| answered.next) == Ok(Err(Missing))
+	Paseo.history_answer("paseo", page("true", "\"c2\""), "h1") == Ok({ agents: [shown("a9", Ok("2026-01-03T00:00:00.000Z")), shown("a8", Err(Missing))], next: Ok("c2") })
+		and Paseo.history_answer("paseo", page("false", "null"), "h1").map_ok(|answered| answered.next) == Ok(Err(Missing))
+		and Paseo.history_answer("box", page("false", "null"), "h1").map_ok(|answered| answered.agents.map(|agent| (agent.session.id, agent.session.provider))) == Ok([("box/a9", "box/paseo"), ("box/a8", "box/paseo")])
 		and Paseo.history_request({ search: "login", cursor: "", limit: 500 }, "h1") == request("{\"filter\":{\"includeArchived\":true},\"page\":{\"limit\":200},\"requestId\":\"h1\",\"search\":\"login\",\"sort\":[{\"direction\":\"desc\",\"key\":\"updated_at\"}],\"type\":\"fetch_agent_history_request\"}")
 		and Paseo.refreshed(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_refreshed\",\"agentId\":\"a9\",\"requestId\":\"u1\",\"timelineSize\":4}}"), "u1") == Ok({})
 		and Paseo.refreshed(session("{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"u1\",\"requestType\":\"refresh_agent_request\",\"error\":\"Agent not found: a9\"}}"), "u1") == Err(Refused("Agent not found: a9"))
@@ -1123,12 +1136,13 @@ expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_passw
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting
 expect Paseo.greeting("{\"type\":\"pong\"}") == NotGreeting
 expect Paseo.refusal("incorrect_password") == Paseo.refusal("Incorrect password")
-expect Paseo.refused_session("password_required").status == Failed("Paseo wants a password: set PASEO_PASSWORD to its password")
+expect Paseo.refused_session("paseo", "password_required").status == Failed("Paseo wants a password: set PASEO_PASSWORD to its password")
+expect Paseo.refused_session("box", "password_required").id == "box/paseo-refused" and Paseo.provider_of("box").id == "box/paseo" and Paseo.provider.id == "paseo"
 
 expect {
 	entry_of = |fields| "{\"providerId\":\"sandbox\",\"providerLabel\":\"Sandbox\",\"cwd\":\"/\",\"lastPromptPreview\":null,\"lastActivityAt\":\"2026-01-01T00:00:00.000Z\",${fields}}"
 	text = session("{\"type\":\"fetch_recent_provider_sessions_response\",\"payload\":{\"requestId\":\"i1\",\"entries\":[${entry_of("\"providerHandleId\":\"h1\",\"title\":\"Fix the build\",\"firstPromptPreview\":\"Fix it\"")},${entry_of("\"providerHandleId\":\"h2\",\"title\":null,\"firstPromptPreview\":null")}],\"providerErrors\":[{\"provider\":\"claude\",\"message\":\"disabled\"}]}}")
-	Paseo.importable_answer(text, "i1")
+	Paseo.importable_answer("paseo", text, "i1")
 		== Ok([
 			{ session: Chat.session({ id: "import:sandbox:h1", provider: "paseo", agent: "Sandbox", title: "Fix the build", status: Idle }), directory: "/" },
 			{ session: Chat.session({ id: "import:sandbox:h2", provider: "paseo", agent: "Sandbox", title: "h2", status: Idle }), directory: "/" },
@@ -1161,7 +1175,7 @@ expect {
 	Paseo.created(made, "r1") == Ok("a1") and Paseo.created(refused, "r1") == Err(Refused("Unknown provider")) and Paseo.created(made, "r2") == Err(OtherMessage)
 }
 
-expect Paseo.agent_kinds("{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([Chat.agent_kind({ provider: "paseo", agent: "claude" })])
+expect Paseo.agent_kinds("paseo", "{\"type\":\"session\",\"message\":{\"type\":\"list_available_providers_response\",\"payload\":{\"requestId\":\"r1\",\"fetchedAt\":\"x\",\"providers\":[{\"provider\":\"claude\",\"available\":true},{\"provider\":\"codex\",\"available\":false,\"error\":\"not installed\"}]}}}", "r1") == Ok([Chat.agent_kind({ provider: "paseo", agent: "claude" })])
 
 expect {
 	kinds = [Chat.agent_kind({ provider: "paseo", agent: "claude" }), Chat.agent_kind({ provider: "paseo", agent: "codex" })]

@@ -907,7 +907,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-send-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.send_request(session_id, message, while_running, request_id), request_id, Paseo.sent)
+					outcome = written!(daemon, Paseo.send_request(Hosts.their_id(daemon.name, session_id), message, while_running, request_id), request_id, Paseo.sent)
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -926,7 +926,7 @@ chat_call! = |context, provider, asked| {
 						Ok(Ok(Accepted))
 					}
 					PaseoSession(daemon) => {
-						outcome = written!(daemon, Paseo.permission_answer(session_id, request_id, allowed, choice), request_id, Paseo.resolved)
+						outcome = written!(daemon, Paseo.permission_answer(Hosts.their_id(daemon.name, session_id), request_id, allowed, choice), request_id, Paseo.resolved)
 						if outcome.is_ok() {
 							known = state_of!(db, session_id)?
 							store!(db, session_id, known.stored, { state: Paseo.forget_answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed, choice })] })?
@@ -948,7 +948,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-cancel-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.cancel_request(session_id, request_id), request_id, Paseo.canceled)
+					outcome = written!(daemon, Paseo.cancel_request(Hosts.their_id(daemon.name, session_id), request_id), request_id, Paseo.canceled)
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -962,7 +962,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-rename-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.rename_request(session_id, title, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "update_agent_response", id))
+					outcome = written!(daemon, Paseo.rename_request(Hosts.their_id(daemon.name, session_id), title, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "update_agent_response", id))
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -976,7 +976,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-archive-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.archive_request(session_id, request_id), request_id, Paseo.archived)
+					outcome = written!(daemon, Paseo.archive_request(Hosts.their_id(daemon.name, session_id), request_id), request_id, Paseo.archived)
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -996,7 +996,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-unarchive-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.unarchive_request(session_id, request_id), request_id, Paseo.refreshed)
+					outcome = written!(daemon, Paseo.unarchive_request(Hosts.their_id(daemon.name, session_id), request_id), request_id, Paseo.refreshed)
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -1016,7 +1016,7 @@ chat_call! = |context, provider, asked| {
 					}
 				}
 				PaseoSession(daemon) => {
-					outcome = configured!(daemon, session_id, { model, mode, thinking }, "liton-configure-${now_ms!().to_str()}")
+					outcome = configured!(daemon, Hosts.their_id(daemon.name, session_id), { model, mode, thinking }, "liton-configure-${now_ms!().to_str()}")
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -1092,7 +1092,7 @@ paseo_history! = |db, daemon, asked| {
 	}
 	answered = exchange!(connection, Paseo.history_request(asked, request_id), request_id)
 	_ = connection.write!(WebSocket.close(websocket_mask))
-	page = Paseo.history_answer(answered?, request_id)?
+	page = Paseo.history_answer(daemon.name, answered?, request_id)?
 	for { session, .. } in page.agents {
 		Sqlite.execute!({ db, query: "INSERT INTO paseo_history (host, id, listed) VALUES (:host, :id, :listed) ON CONFLICT (id) DO UPDATE SET host = excluded.host, listed = excluded.listed;", params: { host: daemon.name, id: session.id, listed: Json.to_str(session) } })?
 	}
@@ -1141,10 +1141,10 @@ paseo_started! : Context, PaseoDaemon, { agent : Str, cwd : Str, workspace_id : 
 paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, mode, thinking, prompt }| {
 	request_id = "liton-create-${now_ms!().to_str()}"
 	agent_id = Paseo.uuid("${request_id} ${cwd} ${agent} ${prompt}")
-	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id, model, mode, thinking, prompt, request_id }), request_id, Paseo.created)
+	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id: workspace_id.map_ok(|id| Hosts.their_id(daemon.name, id)), model, mode, thinking, prompt, request_id }), request_id, Paseo.created)
 	forget_check!(context.db, daemon.name, "cycle")?
 	match outcome {
-		Ok(session_id) => Ok(Ok(Started({ session_id: session_id })))
+		Ok(session_id) => Ok(Ok(Started({ session_id: Hosts.named(daemon.name, session_id) })))
 		Err(err) => Ok(Err(paseo_error(err)))
 	}
 }
@@ -1181,7 +1181,7 @@ workspaces_call! = |context, provider, asked| {
 				}
 				(_, Bool.True, Ok(daemon)) => {
 					request_id = "liton-project-${now_ms!().to_str()}"
-					outcome = written!(daemon, PaseoWorkspaces.rename_project_request(project_id, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "project.rename.response", id))
+					outcome = written!(daemon, PaseoWorkspaces.rename_project_request(Hosts.their_id(daemon.name, project_id), name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "project.rename.response", id))
 					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_workspaces_answer(outcome))
 				}
@@ -1206,10 +1206,10 @@ workspaces_call! = |context, provider, asked| {
 				(_, Ok(project), Ok(daemon)) => {
 					request_id = "liton-workspace-${now_ms!().to_str()}"
 					workspace_id = "wks_${Paseo.hex("${request_id} ${project.directory}")}"
-					outcome = written!(daemon, PaseoWorkspaces.create_request({ workspace_id, project, kind, branch, request_id }), request_id, PaseoWorkspaces.created)
+					outcome = written!(daemon, PaseoWorkspaces.create_request({ workspace_id, project: { ..project, id: Hosts.their_id(daemon.name, project.id) }, kind, branch, request_id }), request_id, PaseoWorkspaces.created)
 					forget_check!(db, daemon.name, "cycle")?
 					match outcome {
-						Ok(made_id) => Ok(Ok(Created({ workspace_id: made_id })))
+						Ok(made_id) => Ok(Ok(Created({ workspace_id: Hosts.named(daemon.name, made_id) })))
 						Err(err) => Ok(Err(paseo_error(err)))
 					}
 				}
@@ -1243,11 +1243,12 @@ workspace_changed! = |context, provider, workspace_id, asked| {
 		}
 		(_, Bool.True, Ok(daemon)) => {
 			request_id = "liton-workspace-${now_ms!().to_str()}"
+			their_workspace = Hosts.their_id(daemon.name, workspace_id)
 			outcome =
 				match asked {
-					Rename({ name, .. }) => written!(daemon, PaseoWorkspaces.rename_request(workspace_id, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.title.set.response", id))
-					Pin({ pinned, .. }) => written!(daemon, PaseoWorkspaces.pin_request(workspace_id, pinned, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.pin.set.response", id))
-					_ => written!(daemon, PaseoWorkspaces.archive_request(workspace_id, request_id), request_id, PaseoWorkspaces.archived)
+					Rename({ name, .. }) => written!(daemon, PaseoWorkspaces.rename_request(their_workspace, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.title.set.response", id))
+					Pin({ pinned, .. }) => written!(daemon, PaseoWorkspaces.pin_request(their_workspace, pinned, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.pin.set.response", id))
+					_ => written!(daemon, PaseoWorkspaces.archive_request(their_workspace, request_id), request_id, PaseoWorkspaces.archived)
 				}
 			forget_check!(db, daemon.name, "cycle")?
 			Ok(paseo_workspaces_answer(outcome))
@@ -1426,12 +1427,13 @@ paseo_schedules_call! = |context, daemon, asked| {
 			NewSession({ place: Workspace(workspace_id), .. }) => Ok(paseo_listed!(context.db, daemon.name)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "")
 			Session(_) => Ok("")
 		}
-	schedule_id = Schedules.schedule_of(asked)
+	host = daemon.name
+	schedule_id = Hosts.their_id(host, Schedules.schedule_of(asked))
 	answered =
 		match asked {
-			ListSchedules => written!(daemon, PaseoSchedules.request("list", "", request_id), request_id, PaseoSchedules.listed).map_ok(|listed| Schedules(listed))
-			Inspect(_) => written!(daemon, PaseoSchedules.request("inspect", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "inspect", id)).map_ok(|found| Inspected(found))
-			Create(draft) => written!(daemon, PaseoSchedules.create_request(draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "create", id)).map_ok(|made| Created({ schedule_id: made.schedule.id }))
+			ListSchedules => written!(daemon, PaseoSchedules.request("list", "", request_id), request_id, |answer_text, id| PaseoSchedules.listed(host, answer_text, id)).map_ok(|listed| Schedules(listed))
+			Inspect(_) => written!(daemon, PaseoSchedules.request("inspect", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(host, answer_text, "inspect", id)).map_ok(|found| Inspected(found))
+			Create(draft) => written!(daemon, PaseoSchedules.create_request(host, draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(host, answer_text, "create", id)).map_ok(|made| Created({ schedule_id: made.schedule.id }))
 			Update({ draft, .. }) => written!(daemon, PaseoSchedules.update_request(schedule_id, draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "update", id)).map_ok(|_| Accepted)
 			Pause(_) => written!(daemon, PaseoSchedules.request("pause", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "pause", id)).map_ok(|_| Accepted)
 			Resume(_) => written!(daemon, PaseoSchedules.request("resume", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "resume", id)).map_ok(|_| Accepted)
@@ -2098,7 +2100,7 @@ sessions! = |context| {
 		Ok(daemon) => {
 			wanted!(db, daemon.name, "agent_list", "")?
 			paseo_cycle!(context)?
-			refused = refusal!(db, daemon.name)?.map_ok(|{ reason, .. }| [Paseo.refused_session(reason)]) ?? []
+			refused = refusal!(db, daemon.name)?.map_ok(|{ reason, .. }| [Paseo.refused_session(daemon.name, reason)]) ?? []
 			$sessions = $sessions.concat(refused).concat(registered!(db, daemon.name)?)
 		}
 		Err(Disabled) => {}
@@ -2464,14 +2466,14 @@ asked! = |db, host, connection, { kind, subject }, request_id|
 		"importable" => listed_importable!(db, host, connection, request_id)
 		"agent_kinds" => listed_agent_kinds!(db, host, connection, request_id)
 		"schedules" => {
-			listed = PaseoSchedules.listed(exchange!(connection, PaseoSchedules.request("list", "", request_id), request_id)?, request_id)?
+			listed = PaseoSchedules.listed(host, exchange!(connection, PaseoSchedules.request("list", "", request_id), request_id)?, request_id)?
 			listing!(db, host, "schedules", Json.to_str(listed))
 		}
 		"schedule_runs" => {
-			found = PaseoSchedules.inspected(exchange!(connection, PaseoSchedules.request("inspect", subject, request_id), request_id)?, "inspect", request_id)?
+			found = PaseoSchedules.inspected(host, exchange!(connection, PaseoSchedules.request("inspect", Hosts.their_id(host, subject), request_id), request_id)?, "inspect", request_id)?
 			listing!(db, host, "runs ${subject}", Json.to_str(found.runs))
 		}
-		"timeline" => fetch!(db, connection, subject, request_id, 10)
+		"timeline" => fetch!(db, host, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, host, connection, subject, request_id)
 		"uncommitted" => diffed!(db, host, connection, subject, Uncommitted, request_id)
 		"base" => diffed!(db, host, connection, subject, AgainstBase, request_id)
@@ -2555,8 +2557,8 @@ summarized! = |db, host, connection, configured| {
 				since = visible!(db, session_id, row.through.to_u64_wrap())?.keep_if(|entry| entry.sequence.to_i64_wrap() <= row.ended_through)
 				request_id = "liton-summary-create-${session_id}"
 				agent_id = Paseo.uuid("liton-summary ${session_id} ${row.ended_through.to_str()}")
-				workspace_id = if (row.workspace_id == "") Err(Missing) else Ok(row.workspace_id)
-				asked = PaseoSummaries.create_request({ agent_id, session_id, chosen, cwd: row.directory, workspace_id, asked: PaseoSummaries.prompt(previous.map_err(|_| Missing), since), request_id })
+				workspace_id = if (row.workspace_id == "") Err(Missing) else Ok(Hosts.their_id(host, row.workspace_id))
+				asked = PaseoSummaries.create_request({ agent_id, session_id: Hosts.their_id(host, session_id), chosen, cwd: row.directory, workspace_id, asked: PaseoSummaries.prompt(previous.map_err(|_| Missing), since), request_id })
 				match Paseo.created(exchange!(connection, asked, request_id)?, request_id) {
 					Ok(made) => started_writing!(made)?
 					Err(err) => {
@@ -2577,7 +2579,7 @@ summarized! = |db, host, connection, configured| {
 listed_agents! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
 listed_agents! = |db, host, connection, request_id| {
 	provider = Hosts.paseo_provider(host)
-	listed = Paseo.agents_answer(exchange!(connection, Paseo.agents_request(request_id), request_id)?, request_id)?
+	listed = Paseo.agents_answer(host, exchange!(connection, Paseo.agents_request(request_id), request_id)?, request_id)?
 	for ({ session, directory, workspace_id }, position) in listed.map_with_index(|agent, position| (agent, position)) {
 		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, listed) VALUES (:id, :provider, :agent, :title, :position, :directory, :workspace_id, :listed) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, listed = excluded.listed;", params: { id: session.id, provider, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, listed: Json.to_str(session) } })?
 	}
@@ -2587,7 +2589,7 @@ listed_agents! = |db, host, connection, request_id| {
 ## Keeps the projects and workspaces Paseo lists.
 listed_workspaces! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
 listed_workspaces! = |db, host, connection, request_id| {
-	listed = PaseoWorkspaces.answer(exchange!(connection, PaseoWorkspaces.request(request_id), request_id)?, request_id)?
+	listed = PaseoWorkspaces.answer(host, exchange!(connection, PaseoWorkspaces.request(request_id), request_id)?, request_id)?
 	listing!(db, host, "workspaces", Json.to_str(listed))
 }
 
@@ -2598,7 +2600,7 @@ listed_importable! = |db, host, connection, request_id|
 	if recently_checked!(db, host, "importable", importable_interval_ms)? {
 		Ok({})
 	} else {
-		listed = Paseo.importable_answer(exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
+		listed = Paseo.importable_answer(host, exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
 		listing!(db, host, "importable", Json.to_str(listed))
 	}
 
@@ -2610,7 +2612,7 @@ listed_agent_kinds! = |db, host, connection, request_id|
 	if recently_checked!(db, host, "agent_kinds", importable_interval_ms)? {
 		Ok({})
 	} else {
-		kinds = Paseo.agent_kinds(exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
+		kinds = Paseo.agent_kinds(host, exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
 		snapshot_id = "${request_id}-providers"
 		listed = exchange!(connection, Paseo.providers_snapshot_request(snapshot_id), snapshot_id).map_ok(|answered| Paseo.with_choices(kinds, answered, snapshot_id) ?? kinds) ?? kinds
 		listing!(db, host, "agent_kinds", Json.to_str(listed))
@@ -2684,7 +2686,7 @@ fetched! = |db, host, directory, what|
 ## Asks for a directory's status and keeps it, then its commits when due.
 checked_out! : Sqlite.Db, Str, Tcp.Connection, Str, Str => Try({}, _)
 checked_out! = |db, host, connection, directory, request_id| {
-	checkout = PaseoGit.status_answer(exchange!(connection, PaseoGit.status_request(directory, request_id), request_id)?, directory, request_id)?
+	checkout = PaseoGit.status_answer(host, exchange!(connection, PaseoGit.status_request(directory, request_id), request_id)?, directory, request_id)?
 	cache!(db, host, directory, "workspace", { status: "", fingerprint: "", value: Json.to_str(checkout) })?
 	match checkout.status {
 		Status(status) if PaseoGit.refresh(Commits, fetched!(db, host, directory, "commits")?, status, now_ms!()) => {
@@ -2795,26 +2797,28 @@ websocket_mask = [0x6C, 0x69, 0x74, 0x6E]
 skip_headers! : Tcp.Connection => Try({}, _)
 skip_headers! = |connection| if (connection.read_line!()?.trim() == "") Ok({}) else skip_headers!(connection)
 
-## Fetches the page after a session's state and stores what it adds, again
-## while Paseo has newer entries, `pages` times at most.
-fetch! : Sqlite.Db, Tcp.Connection, Str, Str, U64 => Try({}, _)
-fetch! = |db, connection, session_id, request_id, pages| {
+## Fetches the page after the state of a session of the Paseo host `host`
+## and stores what it adds, again while Paseo has newer entries, `pages`
+## times at most.
+fetch! : Sqlite.Db, Str, Tcp.Connection, Str, Str, U64 => Try({}, _)
+fetch! = |db, host, connection, session_id, request_id, pages| {
 	known = state_of!(db, session_id)?
 	page_id = "${request_id}-page-${pages.to_str()}"
-	page = Paseo.timeline_page(exchange!(connection, Paseo.timeline_request(known.state, session_id, page_id), page_id)?, page_id)?
+	agent_id = Hosts.their_id(host, session_id)
+	page = Paseo.timeline_page(exchange!(connection, Paseo.timeline_request(known.state, agent_id, page_id), page_id)?, page_id)?
 	snapshot =
 		match page.agent {
 			Ok(agent) => agent
 			Err(Null) => {
-				agent_id = "${page_id}-agent"
-				Paseo.agent_snapshot(exchange!(connection, Paseo.agent_request(session_id, agent_id), agent_id)?, agent_id)?
+				snapshot_id = "${page_id}-agent"
+				Paseo.agent_snapshot(exchange!(connection, Paseo.agent_request(agent_id, snapshot_id), snapshot_id)?, snapshot_id)?
 			}
 		}
 	updated = Paseo.update(known.state, page, snapshot)
 	if updated.state != known.state or !updated.events.is_empty() {
 		store!(db, session_id, known.stored, updated)?
 	}
-	if (page.has_newer and pages > 1) fetch!(db, connection, session_id, request_id, pages - 1) else Ok({})
+	if (page.has_newer and pages > 1) fetch!(db, host, connection, session_id, request_id, pages - 1) else Ok({})
 }
 
 ## The next text message, after `received` of its fragments, answering pings.

@@ -1,3 +1,4 @@
+import cap.Hosts
 import cap.Schedules
 import Paseo
 
@@ -33,13 +34,13 @@ PaseoSchedules := [].{
 	request = |action, schedule_id, request_id|
 		if (schedule_id.is_empty()) Json.to_str({ type: "session", message: { type: "schedule/${action}", requestId: request_id } }) else Json.to_str({ type: "session", message: { type: "schedule/${action}", requestId: request_id, scheduleId: schedule_id } })
 
-	## A `schedule/create` of a draft, a new session's in `cwd`, the
-	## directory its place names.
-	create_request : Schedules.Draft, Str, Str -> Str
-	create_request = |draft, cwd, request_id| {
+	## A `schedule/create` of a draft, to the Paseo host `host`, a new
+	## session's in `cwd`, the directory its place names.
+	create_request : Str, Schedules.Draft, Str, Str -> Str
+	create_request = |host, draft, cwd, request_id| {
 		name : Try(Str, [Missing])
 		name = if (draft.name.is_empty()) Err(Missing) else Ok(draft.name)
-		Json.to_str({ type: "session", message: { type: "schedule/create", requestId: request_id, prompt: draft.prompt, name, cadence: PaseoSchedules.cadence(draft.cadence), target: PaseoSchedules.target(draft.target, cwd), maxRuns: draft.max_runs, expiresAt: draft.expires } })
+		Json.to_str({ type: "session", message: { type: "schedule/create", requestId: request_id, prompt: draft.prompt, name, cadence: PaseoSchedules.cadence(draft.cadence), target: PaseoSchedules.target(host, draft.target, cwd), maxRuns: draft.max_runs, expiresAt: draft.expires } })
 	}
 
 	## A `schedule/update` to a draft: its name, prompt, cadence, a new
@@ -67,11 +68,11 @@ PaseoSchedules := [].{
 			Cron({ expression, timezone }) => { type: "cron", everyMs: Err(Missing), expression: Ok(expression), timezone }
 		}
 
-	## A target as Paseo writes it, a new session's in `cwd`.
-	target : Schedules.Target, Str -> { type : Str, agentId : Try(Str, [Missing]), config : Try({ provider : Str, cwd : Str, model : Try(Str, [Missing]), modeId : Try(Str, [Missing]), thinkingOptionId : Try(Str, [Missing]), archiveOnFinish : Bool, isolation : Str }, [Missing]) }
-	target = |given, cwd|
+	## A target as the Paseo host `host` writes it, a new session's in `cwd`.
+	target : Str, Schedules.Target, Str -> { type : Str, agentId : Try(Str, [Missing]), config : Try({ provider : Str, cwd : Str, model : Try(Str, [Missing]), modeId : Try(Str, [Missing]), thinkingOptionId : Try(Str, [Missing]), archiveOnFinish : Bool, isolation : Str }, [Missing]) }
+	target = |host, given, cwd|
 		match given {
-			Session(session_id) => { type: "agent", agentId: Ok(session_id), config: Err(Missing) }
+			Session(session_id) => { type: "agent", agentId: Ok(Hosts.their_id(host, session_id)), config: Err(Missing) }
 			NewSession(made) => { type: "new-agent", agentId: Err(Missing), config: Ok({ provider: made.agent, cwd, model: made.model, modeId: made.mode, thinkingOptionId: made.thinking, archiveOnFinish: made.archive_on_finish, isolation: PaseoSchedules.isolation(made.isolation) }) }
 		}
 
@@ -79,9 +80,9 @@ PaseoSchedules := [].{
 	isolation : [Local, Worktree] -> Str
 	isolation = |given| if (given == Worktree) "worktree" else "local"
 
-	## A schedule Paseo stores as schedules.v1's.
-	schedule : Stored -> Schedules.Schedule
-	schedule = |stored| {
+	## A schedule the Paseo host `host` stores as schedules.v1's.
+	schedule : Str, Stored -> Schedules.Schedule
+	schedule = |host, stored| {
 		optional = |value| value.map_err(|_| Missing)
 		paced =
 			match (stored.cadence.type, stored.cadence.every_ms) {
@@ -90,13 +91,13 @@ PaseoSchedules := [].{
 			}
 		prompted =
 			match (stored.target.agent_id, stored.target.config) {
-				(Ok(agent_id), _) => Session(agent_id)
+				(Ok(agent_id), _) => Session(Hosts.named(host, agent_id))
 				(_, Ok(config)) => NewSession({ place: Directory(config.cwd), agent: config.provider, model: config.model, mode: config.mode_id, thinking: config.thinking_option_id, isolation: if (config.isolation == Ok("worktree")) Worktree else Local, archive_on_finish: config.archive_on_finish ?? Bool.False })
 				_ => Session("")
 			}
 		{
-			id: stored.id,
-			provider: Paseo.provider.id,
+			id: Hosts.named(host, stored.id),
+			provider: Hosts.paseo_provider(host),
 			name: stored.name ?? "",
 			prompt: stored.prompt,
 			cadence: paced,
@@ -109,35 +110,37 @@ PaseoSchedules := [].{
 		}
 	}
 
-	## A run Paseo stores as schedules.v1's.
-	run : StoredRun -> Schedules.Run
-	run = |stored| {
+	## A run the Paseo host `host` stores as schedules.v1's.
+	run : Str, StoredRun -> Schedules.Run
+	run = |host, stored| {
 		optional = |value| value.map_err(|_| Missing)
-		{ id: stored.id, scheduled_for: stored.scheduled_for, started: stored.started_at, ended: optional(stored.ended_at), status: if (stored.status == "running") Running else if (stored.status == "succeeded") Succeeded else Failed, session_id: optional(stored.agent_id), output: optional(stored.output), error: optional(stored.error) }
+		{ id: stored.id, scheduled_for: stored.scheduled_for, started: stored.started_at, ended: optional(stored.ended_at), status: if (stored.status == "running") Running else if (stored.status == "succeeded") Succeeded else Failed, session_id: optional(stored.agent_id).map_ok(|agent_id| Hosts.named(host, agent_id)), output: optional(stored.output), error: optional(stored.error) }
 	}
 
-	## The schedules a `schedule/list/response` answering `request_id` lists.
-	listed : Str, Str -> Try(List(Schedules.Schedule), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
-	listed = |text, request_id| {
+	## The schedules of the Paseo host `host` a `schedule/list/response`
+	## answering `request_id` lists.
+	listed : Str, Str, Str -> Try(List(Schedules.Schedule), [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str)])
+	listed = |host, text, request_id| {
 		answered : Try({ message : { payload : { schedules : Try(List(Stored), [Missing]), error : Try(Str, [Null]) } } }, _)
 		answered = Json.parser_camel()(Paseo.write_answer(text, "schedule/list/response", request_id)?)
 		payload = answered?.message.payload
 		match payload.error {
 			Ok(reason) => Err(Refused(reason))
-			Err(Null) => Ok((payload.schedules ?? []).map(PaseoSchedules.schedule))
+			Err(Null) => Ok((payload.schedules ?? []).map(|stored| PaseoSchedules.schedule(host, stored)))
 		}
 	}
 
-	## The schedule an answer of `action` to `request_id` holds, with its
-	## runs, the latest first, when it tells them; or why Paseo refused.
-	inspected : Str, Str, Str -> Try({ schedule : Schedules.Schedule, runs : List(Schedules.Run) }, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str), NoSchedule])
-	inspected = |text, action, request_id| {
+	## The schedule of the Paseo host `host` an answer of `action` to
+	## `request_id` holds, with its runs, the latest first, when it tells
+	## them; or why Paseo refused.
+	inspected : Str, Str, Str, Str -> Try({ schedule : Schedules.Schedule, runs : List(Schedules.Run) }, [OtherMessage, Refused(Str), InvalidJson(Str), MissingRequiredField(Str), NoSchedule])
+	inspected = |host, text, action, request_id| {
 		read : Try({ message : { payload : { schedule : Try(Try(Stored, [Null]), [Missing]), error : Try(Str, [Null]) } } }, _)
 		read = Json.parser_camel()(Paseo.write_answer(text, "schedule/${action}/response", request_id)?)
 		payload = read?.message.payload
 		match (payload.error, payload.schedule) {
 			(Ok(reason), _) => Err(Refused(reason))
-			(_, Ok(Ok(stored))) => Ok({ schedule: PaseoSchedules.schedule(stored), runs: (stored.runs ?? []).fold([], |latest_first, stored_run| latest_first.prepend(PaseoSchedules.run(stored_run))) })
+			(_, Ok(Ok(stored))) => Ok({ schedule: PaseoSchedules.schedule(host, stored), runs: (stored.runs ?? []).fold([], |latest_first, stored_run| latest_first.prepend(PaseoSchedules.run(host, stored_run))) })
 			_ => Err(NoSchedule)
 		}
 	}
@@ -161,16 +164,20 @@ expect {
 	list = "{\"type\":\"session\",\"message\":{\"type\":\"schedule/list/response\",\"payload\":{\"requestId\":\"l1\",\"schedules\":[${stored}],\"error\":null}}}"
 	inspected_text = "{\"type\":\"session\",\"message\":{\"type\":\"schedule/inspect/response\",\"payload\":{\"requestId\":\"i1\",\"schedule\":${nightly},\"error\":null}}}"
 	heartbeat = { ..Schedules.drafted({ id: "s1", provider: "paseo" }, { name: "", prompt: "Is CI green?", cadence: Every(1_800_000), target: Session("a1"), max_runs: Err(Missing), expires: Err(Missing) }), next_run: Ok("2026-01-01T00:30:00.000Z") }
-	shown = PaseoSchedules.inspected(inspected_text, "inspect", "i1")
-	PaseoSchedules.listed(list, "l1") == Ok([heartbeat])
+	shown = PaseoSchedules.inspected("paseo", inspected_text, "inspect", "i1")
+	PaseoSchedules.listed("paseo", list, "l1") == Ok([heartbeat])
 		and shown.map_ok(|found| found.schedule.target) == Ok(NewSession({ place: Directory("/work"), agent: "claude", model: Ok("opus"), mode: Err(Missing), thinking: Err(Missing), isolation: Worktree, archive_on_finish: Bool.True }))
 		and shown.map_ok(|found| (found.schedule.status, found.schedule.cadence, found.schedule.max_runs)) == Ok((Paused, Cron({ expression: "0 3 * * *", timezone: Ok("Europe/Berlin") }), Ok(5)))
 		and shown.map_ok(|found| found.runs.map(|listed_run| (listed_run.id, listed_run.status, listed_run.session_id))) == Ok([("r2", Running, Err(Missing)), ("r1", Succeeded, Ok("a9"))])
+		# Another Paseo host's are named under its name.
+		and PaseoSchedules.listed("box", list, "l1").map_ok(|listed| listed.map(|found| (found.id, found.provider, found.target))) == Ok([("box/s1", "box/paseo", Session("box/a1"))])
+		and PaseoSchedules.inspected("box", inspected_text, "inspect", "i1").map_ok(|found| found.runs.map(|listed_run| listed_run.session_id)) == Ok([Err(Missing), Ok("box/a9")])
 }
 
 expect {
 	draft = { name: "", prompt: "Is CI green?", cadence: Every(60_000), target: Session("a1"), max_runs: Err(Missing), expires: Err(Missing) }
-	PaseoSchedules.create_request(draft, "", "c1") == "{\"message\":{\"cadence\":{\"everyMs\":60000,\"type\":\"every\"},\"prompt\":\"Is CI green?\",\"requestId\":\"c1\",\"target\":{\"agentId\":\"a1\",\"type\":\"agent\"},\"type\":\"schedule/create\"},\"type\":\"session\"}"
+	PaseoSchedules.create_request("box", { ..draft, target: Session("box/a1") }, "", "c1") == PaseoSchedules.create_request("paseo", draft, "", "c1")
+		and PaseoSchedules.create_request("paseo", draft, "", "c1") == "{\"message\":{\"cadence\":{\"everyMs\":60000,\"type\":\"every\"},\"prompt\":\"Is CI green?\",\"requestId\":\"c1\",\"target\":{\"agentId\":\"a1\",\"type\":\"agent\"},\"type\":\"schedule/create\"},\"type\":\"session\"}"
 }
 
 expect {

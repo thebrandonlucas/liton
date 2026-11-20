@@ -1,3 +1,4 @@
+import cap.Hosts
 import cap.Workspaces
 import Paseo
 
@@ -32,19 +33,19 @@ PaseoWorkspaces := [].{
 	request : Str -> Str
 	request = |request_id| Json.to_str({ type: "session", message: { type: "fetch_workspaces_request", requestId: request_id, page: { limit: 200.U16 } } })
 
-	## The projects and workspaces in a `fetch_workspaces_response`, each
-	## workspace Idle and without sessions: the daemon places its agents in
-	## them.
-	answer : Str, Str -> Try(Workspaces.Listed, [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
-	answer = |text, request_id| {
+	## The projects and workspaces of the Paseo host `host` in a
+	## `fetch_workspaces_response`, each workspace Idle and without sessions:
+	## the daemon places its agents in them.
+	answer : Str, Str, Str -> Try(Workspaces.Listed, [OtherMessage, InvalidJson(Str), MissingRequiredField(Str)])
+	answer = |host, text, request_id| {
 		answered : Try({ message : { payload : { entries : List(Descriptor), empty_projects : Try(List(EmptyProject), [Missing]) } } }, _)
 		answered = Json.parser_camel()(Paseo.answer_to(text, "fetch_workspaces_response", request_id)?)
 		payload = answered?.message.payload
 		projects = payload.entries.map(|shown| { project_id: shown.project_id, project_display_name: shown.project_display_name, project_root_path: shown.project_root_path }).concat(payload.empty_projects ?? []).fold(
 			[],
-			|so_far, project| if (so_far.any(|known| known.id == project.project_id)) so_far else so_far.append({ id: project.project_id, provider: "paseo", name: project.project_display_name, directory: project.project_root_path }),
+			|so_far, project| if (so_far.any(|known| known.id == Hosts.named(host, project.project_id))) so_far else so_far.append({ id: Hosts.named(host, project.project_id), provider: Hosts.paseo_provider(host), name: project.project_display_name, directory: project.project_root_path }),
 		)
-		Ok({ projects, workspaces: payload.entries.map(workspace) })
+		Ok({ projects, workspaces: payload.entries.map(|shown| workspace(host, shown)) })
 	}
 
 	## Creates a workspace of `project` as `workspace_id`, an id liton picks
@@ -109,8 +110,8 @@ PaseoWorkspaces := [].{
 	rename_project_request = |project_id, name, request_id| Json.to_str({ type: "session", message: { type: "project.rename.request", projectId: project_id, customName: name, requestId: request_id } })
 }
 
-workspace : PaseoWorkspaces.Descriptor -> Workspaces.Workspace
-workspace = |shown| {
+workspace : Str, PaseoWorkspaces.Descriptor -> Workspaces.Workspace
+workspace = |host, shown| {
 	is_git = shown.project_kind == "git"
 	runtime_branch = shown.git_runtime.map_ok(|runtime| runtime.map_ok(|known| known.current_branch ?? Err(Null)) ?? Err(Null)) ?? Err(Null)
 	placed_branch = shown.project.map_ok(|placed| placed.checkout.current_branch ?? Err(Null)) ?? Err(Null)
@@ -128,9 +129,9 @@ workspace = |shown| {
 			_ => if (is_git) Checkout else Directory
 		}
 	{
-		id: shown.id,
-		provider: "paseo",
-		project_id: shown.project_id,
+		id: Hosts.named(host, shown.id),
+		provider: Hosts.paseo_provider(host),
+		project_id: Hosts.named(host, shown.project_id),
 		name: shown.name,
 		directory: shown.workspace_directory ?? shown.project_root_path,
 		kind,
@@ -161,7 +162,7 @@ expect {
 	empty = "{\"projectId\":\"p3\",\"projectDisplayName\":\"old\",\"projectRootPath\":\"/old\",\"projectKind\":\"git\"}"
 	text = "{\"type\":\"session\",\"message\":{\"type\":\"fetch_workspaces_response\",\"payload\":{\"requestId\":\"r1\",\"entries\":[${worktree},${looked_at_later},${plain}],\"emptyProjects\":[${empty}],\"pageInfo\":{\"nextCursor\":null,\"prevCursor\":null,\"hasMore\":false}}}}"
 	none = { id: "", provider: "paseo", project_id: "p1", name: "", directory: "/work/app", kind: Checkout, branch: Detached, state: Idle, dirty: Bool.False, changes: Uncounted, pinned: Bool.False, labels: [], session_ids: [] }
-	PaseoWorkspaces.answer(text, "r1")
+	PaseoWorkspaces.answer("paseo", text, "r1")
 		== Ok({
 			projects: [{ id: "p1", provider: "paseo", name: "app", directory: "/work/app" }, { id: "p2", provider: "paseo", name: "notes", directory: "/notes" }, { id: "p3", provider: "paseo", name: "old", directory: "/old" }],
 			workspaces: [
@@ -170,9 +171,12 @@ expect {
 				{ ..none, id: "w3", project_id: "p2", name: "notes", directory: "/notes", kind: Directory, branch: NotGit },
 			],
 		})
+		# Another Paseo host's are named under its name.
+		and PaseoWorkspaces.answer("box", text, "r1").map_ok(|{ projects, workspaces }| (projects.map(|project| (project.id, project.provider)), workspaces.map(|shown| (shown.id, shown.project_id, shown.provider))))
+			== Ok(([("box/p1", "box/paseo"), ("box/p2", "box/paseo"), ("box/p3", "box/paseo")], [("box/w1", "box/p1", "box/paseo"), ("box/w2", "box/p1", "box/paseo"), ("box/w3", "box/p2", "box/paseo")]))
 }
 
-expect PaseoWorkspaces.answer("{\"type\":\"session\",\"message\":{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"r1\",\"requestType\":\"fetch_workspaces_request\",\"error\":\"boom\"}}}", "r1").map_ok(|_| {}) == Err(OtherMessage)
+expect PaseoWorkspaces.answer("paseo", "{\"type\":\"session\",\"message\":{\"type\":\"rpc_error\",\"payload\":{\"requestId\":\"r1\",\"requestType\":\"fetch_workspaces_request\",\"error\":\"boom\"}}}", "r1").map_ok(|_| {}) == Err(OtherMessage)
 
 expect {
 	project = { id: "p1", provider: "paseo", name: "app", directory: "/work/app" }
