@@ -11,7 +11,7 @@
     (run-effect 4)
     ; The changed files as a tree, the thread on src/Auth.roc counted.
     (expect-visible (role region :name "Changed files"))
-    (expect-text (role region :name "Changed files") "Changed filesFix the login redirect2 files+3−1src+1 −1Auth.rocmodified1+1 −1docs+2 −0notes.mdadded+2 −0")
+    (expect-text (role region :name "Changed files") "Changed filesWorkspaces2 files+3−1src+1 −1Auth.rocmodified1+1 −1docs+2 −0notes.mdadded+2 −0")
     ; Picking a file marks it, and scrolls the view to its card.
     (click (role button :name "src/Auth.roc"))
     (expect-attr (role button :name "src/Auth.roc") aria-current "true")

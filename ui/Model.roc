@@ -128,6 +128,7 @@ Model := [].{
 
 		workspaces : Workspaces.Listed,
 		shell : Shell,
+		frame : Setup.Frame,
 		grid : Grid.Layout,
 		collapsed : List(Slot),
 		hidden : List(Str),
@@ -182,6 +183,13 @@ Model := [].{
 		poll_again : Bool,
 		waited : U64,
 		cursors : List({ capability : Str, topic : Str, cursor : Str }),
+
+		## The refresh of the daemon's providers (/liton/v1/refresh): whether
+		## the daemon offers one, as its last poll said, whether one is on
+		## its way, and the last sent's number. The sessions whose timelines
+		## the daemon is fetching anew (`refreshing`).
+		refresh : { offered : Bool, on_its_way : Bool, serial : U64 },
+		refreshing : List(Str),
 		notice : Str,
 		show_settings : Bool,
 		snapshot_text : Str,
@@ -491,6 +499,7 @@ Model := [].{
 				workspace_views: [],
 				workspaces: { projects: [], workspaces: [] },
 				shell: Tiling,
+				frame: restored.map_ok(|loaded| loaded.frame) ?? Default.developer.snapshot.frame,
 				grid: Grid.empty,
 				collapsed: [],
 				hidden: [],
@@ -513,6 +522,8 @@ Model := [].{
 				poll_again: Bool.False,
 				waited: 0,
 				cursors: [],
+				refresh: { offered: Bool.False, on_its_way: Bool.False, serial: 0 },
+				refreshing: [],
 				notice: "",
 				show_settings: Bool.False,
 				settings_page: { section: "surface", pushed: Bool.False },
@@ -591,7 +602,7 @@ Model := [].{
 
 	## The snapshot of the layout as it is now.
 	snapshot : State -> Snapshot
-	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
+	snapshot = |state| { version: Setup.snapshot_version, shell: state.shell, frame: state.frame, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden, theme: state.theme }
 
 	## The deck as it is now, the surface shown as the layout shows it.
 	deck : State -> List(Surface)
@@ -618,7 +629,7 @@ Model := [].{
 				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
 				jump = if (hash == state.url_hash) laid.jump else { ..laid.jump, replace: hash }
 				deck_slide = { serial: state.deck_slide.serial + 1, toward: if (index > state.deck_shown) Next else Previous }
-				{ ..laid, theme: surface.snapshot.theme, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
+				{ ..laid, theme: surface.snapshot.theme, frame: surface.snapshot.frame, surface: surface.name, focus: surface.focus, sub_focus: None, focused_pane: "", menu: "", url_hash: hash, jump, deck_slide }
 			}
 			_ => state
 		}
@@ -811,6 +822,17 @@ Model := [].{
 		}
 	}
 
+	## Whether the deck's surface at `index` shows its tiles joined.
+	joined_at : State, U64 -> Bool
+	joined_at = |state, index| Model.deck(state).get(index).map_ok(|surface| surface.snapshot.frame == Joined) ?? Bool.False
+
+	## Shows the deck's surface at `index` joined, or as tiles apart.
+	join_surface : State, { index : U64, joined : Bool } -> State
+	join_surface = |state, { index, joined }| {
+		frame = if (joined) Joined else Tiles
+		if (index == state.deck_shown) Model.with_snapshot_text({ ..state, frame: frame }) else { ..state, deck: state.deck.map_with_index(|surface, at| if (at == index) { ..surface, snapshot: { ..surface.snapshot, frame: frame } } else surface) }
+	}
+
 	## The deck's surfaces by their places, titled by their names, else
 	## by their places.
 	## Each has its preview's URL and whether the daemon offers what it needs.
@@ -867,10 +889,13 @@ Model := [].{
 	## of it (`restore`), its name "". A surface that doesn't read is left out.
 	restore_deck : Str -> Try(List(Surface), [Invalid])
 	restore_deck = |text| {
-		decked : Try(Setup.Deck, _)
+		decked : Try({ version : U32, surfaces : List({ name : Str, snapshot : Setup.Unframed }) }, _)
 		decked = Json.parse(text)
+		framing : Try({ surfaces : List({ snapshot : { frame : Setup.Frame } }) }, _)
+		framing = Json.parse(text)
+		frames = framing.map_ok(|saved| saved.surfaces.map(|surface| surface.snapshot.frame)) ?? []
 		read = match decked {
-			Ok({ version, surfaces: kept }) if version >= 9 => kept.keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
+			Ok({ version, surfaces: kept }) if version >= 9 => Setup.framed_presets(kept, frames).keep_oks(|surface| Model.restore(Json.to_str(surface.snapshot)).map_ok(|restored| { name: surface.name, snapshot: restored }))
 			_ => Model.restore(text).map_ok(|restored| [{ name: "", snapshot: restored }]) ?? []
 		}
 		if (read.is_empty()) Err(Invalid) else Ok(read.map(|kept| { name: kept.name, snapshot: kept.snapshot, focus: [] }))
@@ -878,7 +903,7 @@ Model := [].{
 
 	## A layout as a snapshot showing the setup's default theme.
 	snapshot_of : Layout -> Snapshot
-	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, grid, collapsed, hidden, theme: "" }
+	snapshot_of = |{ shell, grid, collapsed, hidden }| { version: Setup.snapshot_version, shell, frame: Setup.frame_of(shell), grid, collapsed, hidden, theme: "" }
 
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
@@ -898,7 +923,8 @@ Model := [].{
 	with_snapshot_text = |state| { ..state, snapshot_text: Json.to_str(Model.snapshot(state)) }
 
 	## Reads a snapshot, a Workbench's only if its grid keeps a Workbench's
-	## rules (`workbench_holds`). Before version 8, its columns are laid out
+	## rules (`workbench_holds`). One naming no frame is in its shell's
+	## (`Setup.frame_of`). Before version 8, its columns are laid out
 	## as a grid (`Setup.grid_of`); before version 7, its parts split as
 	## `split_parts` does; before version 6, it hides no panes; before version
 	## 5, it shows the setup's default theme; before version 4, panes have
@@ -907,8 +933,10 @@ Model := [].{
 	## then it loads the Developer preset.
 	restore : Str -> Try(Snapshot, [Invalid])
 	restore = |text| {
-		gridded : Try(Snapshot, _)
+		gridded : Try(Setup.Unframed, _)
 		gridded = Json.parse(text)
+		framing : Try({ frame : Setup.Frame }, _)
+		framing = Json.parse(text)
 		# From version 4 to 7 a snapshot is laid out alike; version 5 names its
 		# theme, and version 6 the panes it hides.
 		laid : Try({ version : U32, shell : Shell, columns : List(Column), collapsed : List(Slot) }, _)
@@ -925,7 +953,7 @@ Model := [].{
 		first = Json.parse(text)
 		laid_out = |shell, columns| shell == Tiling or columns.len() == 3
 		match (gridded, laid, third, second, first) {
-			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(saved)
+			(Ok(saved), _, _, _, _) if saved.version >= 8 and (saved.shell == Tiling or Model.workbench_holds(saved.grid)) => Ok(Setup.framed(saved, framing.map_ok(|read| read.frame)))
 			(_, Ok({ version, shell, columns, collapsed }), _, _, _) if version >= 4 and version <= 7 and laid_out(shell, columns) => Ok({ ..Model.snapshot_of({ shell, grid: Model.split_parts(version, Setup.grid_of(columns)), collapsed, hidden: if (version >= 6) hiding.map_ok(|saved| saved.hidden) ?? [] else [] }), theme: if (version >= 5) themed.map_ok(|saved| saved.theme) ?? "" else "" })
 			(_, _, Ok({ version: 3, shell, columns }), _, _) if laid_out(shell, columns) => Ok(Model.snapshot_of({ shell, grid: Setup.grid_of(Model.with_options(columns)), collapsed: [], hidden: [] }))
 			(_, _, _, Ok({ version: 2, columns }), _) => Ok(Model.snapshot_of(Model.migrated(Model.with_options(columns))))
@@ -959,7 +987,7 @@ Model := [].{
 	load_snapshot : State -> State
 	load_snapshot = |state|
 		match Model.restore(state.snapshot_text) {
-			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
+			Ok(loaded) => { ..Model.layout(state, Model.layout_of(loaded)), theme: loaded.theme, frame: loaded.frame, theme_chosen: !loaded.theme.is_empty(), notice: "Loaded a layout of ${loaded.grid.tiles.len().to_str()} tiles." }
 			Err(Invalid) => { ..state, notice: "That is not a liton snapshot." }
 		}
 
@@ -1007,7 +1035,7 @@ Model := [].{
 	use_preset : State, Str -> State
 	use_preset = |state, name|
 		match state.presets.find_first(|preset| preset.name == name) {
-			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, surface: name }
+			Ok(preset) => { ..Model.layout(state, Model.layout_of(preset.snapshot)), theme: if (state.theme_chosen or preset.snapshot.theme.is_empty()) state.theme else preset.snapshot.theme, frame: preset.snapshot.frame, surface: name }
 			Err(NotFound) => state
 		}
 
@@ -1386,7 +1414,7 @@ Model := [].{
 
 	## Whether the layout is the preset's, as it was loaded.
 	preset_shown : State, Str -> Bool
-	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and Model.layout_of(preset.snapshot) == { shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden })
+	preset_shown = |state, name| state.presets.any(|preset| preset.name == name and preset.snapshot.frame == state.frame and Model.layout_of(preset.snapshot) == { shell: state.shell, grid: state.grid, collapsed: state.collapsed, hidden: state.hidden })
 
 	## Every pane, tile by tile.
 	panes : State -> List(Pane)
@@ -2519,13 +2547,27 @@ Model := [].{
 
 	## Polls each second, unless a poll is still on its way, and takes the
 	## time `at` once a new minute begins, or each second while a chat on
-	## screen shows a turn running.
+	## screen shows a turn running. Where the daemon offers a refresh, it
+	## asks for one in place of the poll, which follows its answer.
 	tick : State, I64 -> State
 	tick = |state0, at| {
 		timing = Model.panes(state0).any(|shown| shown.widget == "chat" and Model.pane_visible(state0, shown.id) and Model.working(state0, shown).is_ok())
 		state = if (at // 60_000 == state0.now // 60_000 and !timing) state0 else { ..state0, now: at }
-		if (state.polling) { ..state, waited: state.waited + 1 } else Model.poll(state)
+		if (state.polling) { ..state, waited: state.waited + 1 } else if (state.refresh.offered and !state.refresh.on_its_way) Model.refreshed_again(state) else Model.poll(state)
 	}
+
+	## Asks the daemon to refresh its providers.
+	refreshed_again : State -> State
+	refreshed_again = |state| { ..state, refresh: { ..state.refresh, on_its_way: Bool.True, serial: state.refresh.serial + 1 } }
+
+	## Takes a refresh's answer, or its failure, and polls for what it fetched.
+	refreshed : State -> State
+	refreshed = |state| Model.poll({ ..state, refresh: { ..state.refresh, on_its_way: Bool.False } })
+
+	## Whether the daemon is fetching anew the timeline of a session whose
+	## timeline the UI shows.
+	refreshing_timeline : State, Str -> Bool
+	refreshing_timeline = |state, session_id| state.refreshing.contains(session_id) and !Model.loading(state, session_id)
 
 	## Polls at once when the topics the panes follow change, or once the
 	## poll on its way answers; but in place of one that has waited a second
@@ -2555,7 +2597,9 @@ Model := [].{
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
 		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), limits: LimitDesk.settled(applied.limits, sent.serial) }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
+		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
+		# A timeline the daemon has yet to fetch is asked for at once.
+		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -2583,11 +2627,17 @@ Model := [].{
 
 	## Takes a topic's update from the poll numbered `serial`.
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
-	updated = |state, serial, subject, { capability, topic, cursor, events, .. }| {
+	updated = |state, serial, subject, { capability, topic, cursor, events, refreshing, .. }| {
 		cursors = state.cursors.drop_if(|known| known.capability == capability and known.topic == topic).append({ capability, topic, cursor })
-		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events0 = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events =
+			match subject {
+				Timeline(session_id) => { ..with_events0, refreshing: with_events0.refreshing.drop_if(|kept| kept == session_id).concat(if (refreshing == Ok(Bool.True)) [session_id] else []) }
+				_ => with_events0
+			}
 		match subject {
-			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
+			# One the daemon has yet to fetch stays loading.
+			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) and refreshing != Ok(Bool.True) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
 			RoomMessages(room_id) => Model.logged(with_events, room_id, "", [])
 			RoomThread({ room_id, root }) => Model.logged(with_events, room_id, root, [])
 			# Unchanged items still settle what was set aside.
@@ -5440,7 +5490,7 @@ expect {
 expect {
 	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
 	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
-	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
+	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing), refreshing: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing), refreshing: Err(Missing) }]
 	answered = Model.polled(sent, sent.poll, answer)
 	again = Model.poll(answered)
 	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]

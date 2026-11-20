@@ -42,18 +42,23 @@ Protocol := [].{
 	## A topic followed after the cursor `after` ("" for from the start).
 	Wanted : { capability : Str, topic : Str, after : Str }
 
-	## `POST /liton/v1/poll`.
-	Poll : { topics : List(Wanted) }
+	## `POST /liton/v1/poll`. A `cached` poll is answered at once from what
+	## the daemon keeps, its providers asked apart (`POST /liton/v1/refresh`).
+	Poll : { topics : List(Wanted), cached : Try(Bool, [Missing]) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
 	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot), Rooms(List(Rooms.Room)), Members(List(Rooms.Member)), RoomEntry(Rooms.Entry), Tickets(Tickets.Listing), Ticket(Tickets.Ticket), Links(List(Tickets.Link)), Schedules(List(Schedules.Schedule)), Runs(List(Schedules.Run)), Hosts(List(Hosts.Host)), Reports(List(Usage.Report)), Limits(Limits.Status)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
-	Update : { capability : Str, topic : Str, cursor : Str, events : List(Event), error : Try(Error, [Missing]) }
+	## In a cached poll's answer, a topic is `refreshing` while its provider
+	## hasn't been asked about it since a poll first watched it: its events
+	## are what the daemon kept, none if it kept nothing yet.
+	Update : { capability : Str, topic : Str, cursor : Str, events : List(Event), error : Try(Error, [Missing]), refreshing : Try(Bool, [Missing]) }
 
-	## What `POST /liton/v1/poll` answers: an update of each topic asked.
-	Polled : { topics : List(Update) }
+	## What `POST /liton/v1/poll` answers: an update of each topic asked, and
+	## for a cached poll, whether the daemon has providers to `refresh`.
+	Polled : { topics : List(Update), refresh : Try(Bool, [Missing]) }
 
 	## What a topic follows. A `Changes` or `File` scope is named
 	## `Uncommitted`, `AgainstBase` or `Commit:<sha>`, and a `File`, `Tree` or
@@ -190,24 +195,24 @@ Protocol := [].{
 	snapshot : Wanted, Event -> Update
 	snapshot = |{ capability, topic, after }, event| {
 		cursor = Protocol.fingerprint(Json.to_str(event))
-		{ capability, topic, cursor, events: if (cursor == after) [] else [event], error: Err(Missing) }
+		{ capability, topic, cursor, events: if (cursor == after) [] else [event], error: Err(Missing), refreshing: Err(Missing) }
 	}
 
 	## An append-only timeline's update: the entries after the cursor, a
 	## sequence number, and the last one's as the next.
 	appended : Wanted, List(Chat.Entry) -> Update
 	appended = |{ capability, topic, after }, entries|
-		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| Entry(entry)), error: Err(Missing) }
+		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| Entry(entry)), error: Err(Missing), refreshing: Err(Missing) }
 
 	## A room's messages or thread, as `appended` gives a timeline.
 	room_appended : Wanted, List(Rooms.Entry) -> Update
 	room_appended = |{ capability, topic, after }, entries|
-		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| RoomEntry(entry)), error: Err(Missing) }
+		{ capability, topic, cursor: entries.last().map_ok(|entry| entry.sequence.to_str()) ?? after, events: entries.map(|entry| RoomEntry(entry)), error: Err(Missing), refreshing: Err(Missing) }
 
 	## The update of a topic that failed with `error`: no events, and its
 	## cursor where it was.
 	failed : Wanted, Error -> Update
-	failed = |{ capability, topic, after }, error| { capability, topic, cursor: after, events: [], error: Ok(error) }
+	failed = |{ capability, topic, after }, error| { capability, topic, cursor: after, events: [], error: Ok(error), refreshing: Err(Missing) }
 
 	## The sequence number a timeline's cursor holds, 0 for none.
 	sequence : Wanted -> Try(U64, Error)
@@ -361,7 +366,18 @@ expect {
 
 expect {
 	polled : Protocol.Polled
-	polled = { topics: [Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }]), Protocol.failed({ capability: "chat.v2", topic: "sessions", after: "" }, { code: Unsupported, message: "the daemon offers no chat.v2" })] }
+	polled = { topics: [Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }]), Protocol.failed({ capability: "chat.v2", topic: "sessions", after: "" }, { code: Unsupported, message: "the daemon offers no chat.v2" })], refresh: Err(Missing) }
 	Json.to_str(polled) == "{\"topics\":[{\"capability\":\"chat.v1\",\"cursor\":\"1\",\"events\":[{\"Entry\":{\"event\":{\"StatusChanged\":\"Running\"},\"sequence\":1}}],\"topic\":\"timeline/s1\"},{\"capability\":\"chat.v2\",\"cursor\":\"\",\"error\":{\"code\":\"Unsupported\",\"message\":\"the daemon offers no chat.v2\"},\"events\":[],\"topic\":\"sessions\"}]}"
 }
+# A cached poll says so, and its answer which topics are refreshing; a poll that doesn't is as before.
+expect {
+	cached : Try(Protocol.Poll, _)
+	cached = Json.parse("{\"topics\":[],\"cached\":true}")
+	plain : Try(Protocol.Poll, _)
+	plain = Json.parse("{\"topics\":[]}")
+	polled : Protocol.Polled
+	polled = { topics: [{ ..Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, []), refreshing: Ok(Bool.True) }], refresh: Ok(Bool.True) }
+	cached.map_ok(|poll| poll.cached) == Ok(Ok(Bool.True)) and plain.map_ok(|poll| poll.cached) == Ok(Err(Missing)) and Json.to_str(polled) == "{\"refresh\":true,\"topics\":[{\"capability\":\"chat.v1\",\"cursor\":\"\",\"events\":[],\"refreshing\":true,\"topic\":\"timeline/s1\"}]}"
+}
+
 expect ["room", "members/", "messages/", "thread/general", "thread//m1", "thread/general/"].all(|topic| Protocol.subject(offered, { capability: "rooms.v1", topic, after: "" }).map_err(|error| error.code) == Err(NotFound))

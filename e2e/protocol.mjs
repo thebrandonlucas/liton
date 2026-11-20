@@ -126,6 +126,15 @@ try {
     assert.deepEqual(again.map((t) => t.events.length), [0, 0, 0, 0, 0, 0, 0, 0]);
     assert.deepEqual(again.map((t) => t.cursor), first.map((t) => t.cursor));
   });
+  await step("a cached poll answers the same from what the daemon keeps, with nothing to refresh, and a refresh answers", async () => {
+    const topics = [{ capability: "chat.v1", topic: "sessions", after: "" }, { capability: "chat.v1", topic: "timeline/flaky-ci", after: "" }];
+    const plain = await post("poll", { topics });
+    const cached = await post("poll", { topics, cached: true });
+    assert.equal(plain.refresh, undefined);
+    assert.equal(cached.refresh, false);
+    assert.deepEqual(cached.topics, plain.topics);
+    assert.deepEqual(await post("refresh", {}), {});
+  });
   await step("files.v1 lists a workspace's directories and reads its files, by session or workspace", async () => {
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "files").patterns, ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"]);
     assert.ok(manifest.providers[0].capabilities.some((c) => c.name === "files"));

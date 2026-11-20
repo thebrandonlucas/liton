@@ -20,6 +20,7 @@ Default := [].{
 		snapshot: {
 			version: Setup.snapshot_version,
 			shell: Workbench,
+			frame: Joined,
 			grid: {
 				columns: [1, 1, 1],
 				rows: [1],
@@ -76,6 +77,7 @@ Default := [].{
 		snapshot: {
 			version: Setup.snapshot_version,
 			shell: Workbench,
+			frame: Joined,
 			grid: {
 				columns: [1, 1, 1],
 				rows: [1],
@@ -147,6 +149,7 @@ Default := [].{
 		snapshot: {
 			version: Setup.snapshot_version,
 			shell: Tiling,
+			frame: Tiles,
 			grid: {
 				columns: [1, 2, 1],
 				rows: [1],
