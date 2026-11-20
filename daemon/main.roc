@@ -113,6 +113,7 @@ import transformers.AttentionTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 import Auth
+import Nostr
 import Sha256
 
 ## What each request is answered from: the database, the hosts it answers,
