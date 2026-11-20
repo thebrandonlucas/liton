@@ -592,6 +592,19 @@ Paseo := [].{
 	hello = |client_id, password|
 		Json.to_str({ type: "hello", clientId: client_id, clientType: "cli", protocolVersion: 1.U8, auth: { kind: "password", password }, capabilities: { explicit_event_subscriptions: Bool.True, selective_agent_timeline: Bool.True, hello_rejection: Bool.True, all_providers: Bool.True, owned_subscriptions: Bool.True } })
 
+	## Where a Paseo host's target, `host:port`, says Paseo listens: its host,
+	## a bracketed IPv6 address unbracketed, and its port.
+	address : Str -> Try({ host : Str, port : U16 }, [NotAnAddress])
+	address = |target|
+		match target.split_last(":") {
+			Ok({ before, after }) if before != "" =>
+				match U16.from_str(after) {
+					Ok(port) if port > 0 => Ok({ host: before.drop_prefix("[").drop_suffix("]"), port })
+					_ => Err(NotAnAddress)
+				}
+			_ => Err(NotAnAddress)
+		}
+
 	## The WebSocket protocol that carries the password when Paseo is reached
 	## directly. Paseo 0.15 still takes it there, until 2027-03.
 	protocol : Str -> Str
@@ -1157,3 +1170,6 @@ expect {
 	Paseo.with_choices(kinds, text, "r1") == Ok([claude, Chat.agent_kind({ provider: "paseo", agent: "codex" })])
 		and Paseo.with_choices(kinds, text, "r2").map_ok(|_| {}) == Err(OtherMessage)
 }
+
+expect Paseo.address("127.0.0.1:6767") == Ok({ host: "127.0.0.1", port: 6767 }) and Paseo.address("[::1]:6767") == Ok({ host: "::1", port: 6767 }) and Paseo.address("::1:6767") == Ok({ host: "::1", port: 6767 })
+expect ["127.0.0.1", ":6767", "box:0", "box:http"].all(|target| Paseo.address(target) == Err(NotAnAddress))

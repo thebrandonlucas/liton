@@ -2904,12 +2904,8 @@ hosted! = |context| {
 	rows = Sqlite.query_many!({ db: context.db, query: "SELECT name, kind, target, secret FROM hosts WHERE enabled = 1 ORDER BY origin = 'Added', position;", params: {}, limits: Sqlite.default_query_limits })?
 	remotes = rows.keep_if(|row| row.kind == "Liton").map(|row| { name: row.name, url: row.target })
 	paseo =
-		match rows.find_first(|row| row.kind == "Paseo" and row.name == "paseo").map_ok(|row| (row.target.split_last(":"), row.secret)) {
-			Ok((Ok({ before, after }), password)) =>
-				match U16.from_str(after) {
-					Ok(port) => Ok({ host: before.drop_prefix("[").drop_suffix("]"), port, password })
-					Err(_) => Err(Disabled)
-				}
+		match rows.find_first(|row| row.kind == "Paseo" and row.name == "paseo").map_ok(|row| (Paseo.address(row.target), row.secret)) {
+			Ok((Ok({ host, port }), password)) => Ok({ host, port, password })
 			_ => Err(Disabled)
 		}
 	Ok({ ..context, remotes, paseo })
