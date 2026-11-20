@@ -4,7 +4,7 @@ import cap.Manifest
 
 ## Paseo's agents as chat.v1 sessions, all over Paseo's WebSocket, the one
 ## thing a relay carries: agents are listed, timelines fetched, agents
-## prompted and permissions answered there. Speaks Paseo 0.9.2 to 0.15.3.
+## prompted and permissions answered there. Speaks Paseo 0.9.2 to 0.16.1.
 ## Paseo's own JSON is camelCase, which `Json.parser_camel` reads into the
 ## snake_case fields below; liton reads only these fields.
 Paseo := [].{

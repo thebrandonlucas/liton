@@ -32,6 +32,7 @@ import Spinner
 import InboxDesk
 import Menu
 import Summary
+import Pairing
 
 Liton := [].{
 
@@ -76,7 +77,7 @@ Liton := [].{
 	program : Engine.Program
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.views_key, Liton.glass_key, Liton.surface_key, Wallpaper.url_key, Wallpaper.dim_key, ReviewDesk.viewed_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		|boot| Engine.state(Pairing.restored(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), boot.url), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The surface the browser kept, else the one the model starts with,
@@ -163,7 +164,8 @@ Liton := [].{
 				),
 				Liton.palette(model),
 				Liton.shortcuts(model),
-			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
+				Pairing.screen(model),
+			].concat(Liton.effects(model)).concat(Pairing.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
 
@@ -350,11 +352,13 @@ Liton := [].{
 
 	## Every request to the daemon is a call or a poll of /liton/v1
 	## (docs/protocol.md). One poll at a time follows every topic the panes
-	## show, each second and at once when what they show changes.
+	## show, each second and at once when what they show changes. The
+	## manifest is asked for again once this browser is paired, and a 401
+	## shows the pair screen (ui/Pairing.roc).
 	effects : State(Ctx, Model.State) -> List(Elem(Ctx))
 	effects = |model| [
 		Engine.watch(
-			Engine.const({}),
+			model.signal().map(|state| state.pairing.paired),
 			|_| [Engine.http_body({ url: "/liton/v1/manifest", timeout: Ms(5000) })],
 			model.on_result(
 				|state, _, res| {
@@ -362,9 +366,10 @@ Liton := [].{
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
 					# The setup's presets and themes, which a daemon may leave out.
-					match decoded {
-						Ok(offered) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
-						Err(_) => { ..state, notice: "Could not read the daemon's manifest.", unreachable: Bool.True }
+					match (res, decoded) {
+						(Err(Status(401)), _) => Pairing.refused(state)
+						(_, Ok(offered)) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
+						(_, Err(_)) => { ..state, notice: "Could not read the daemon's manifest.", unreachable: Bool.True }
 					}
 				},
 			),
@@ -382,9 +387,10 @@ Liton := [].{
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
 					decoded = Json.parse(res ?? "")
-					match decoded {
-						Ok(answer) => Model.polled({ ..state, unreachable: Bool.False }, poll, answer.topics)
-						Err(_) => Model.poll_failed(state)
+					match (res, decoded) {
+						(Err(Status(401)), _) => Pairing.refused(Model.poll_failed(state))
+						(_, Ok(answer)) => Model.polled({ ..state, unreachable: Bool.False }, poll, answer.topics)
+						(_, Err(_)) => Model.poll_failed(state)
 					}
 				},
 			),
@@ -706,7 +712,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "devices", "Devices")])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -724,6 +730,7 @@ Liton := [].{
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
+								shown("devices", || Pairing.section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
@@ -741,7 +748,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
