@@ -2162,8 +2162,8 @@ Model := [].{
 	unarchiving = |state, session_id| state.editing.any(|asked| asked.edit == Chat(Unarchive({ session_id: session_id })))
 
 	## Shows the part `widget`, its tile's tab shown and its drawer open: its
-	## pane, if the layout has one, else a new one beside a Workbench's left
-	## drawer's panes, or where `add_pane` puts it.
+	## pane, if the layout has one, else a new one where `add_pane` puts it,
+	## in a Workbench's main area, as Paseo opens History and Schedules.
 	open_part : State, Str -> State
 	open_part = |state, widget|
 		match Model.panes(state).find_first(|shown| shown.widget == widget) {
@@ -2171,16 +2171,7 @@ Model := [].{
 				opened = Model.show_pane(state, found.id)
 				Model.tile_of(opened, found.id).map_ok(|tile| Model.show_tile({ ..opened, collapsed: opened.collapsed.drop_if(|slot| slot == Model.slot_of(opened, tile.id)) }, tile.id)) ?? opened
 			}
-			Err(NotFound) => {
-				left = Model.slot_tile(state, Left)
-				if state.shell == Workbench and !left.is_empty() {
-					added = { id: "added-${state.next_id.to_str()}", widget, pinned: "", options: [] }
-					placed = { ..state, grid: Model.change_tile(state.grid, left, |into| { ..into, panes: into.panes.append(added) }), next_id: state.next_id + 1 }
-					Model.open_part(placed, widget)
-				} else {
-					Model.add_pane(state, widget)
-				}
-			}
+			Err(NotFound) => Model.add_pane(state, widget)
 		}
 
 	## A tool call and the result with its `call_id`, once one arrives. Output
