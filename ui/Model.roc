@@ -164,10 +164,14 @@ Model := [].{
 		inbox_selected : List(Str),
 
 		## The last poll sent, while `polling`, and whether another is to
-		## follow it at once; the cursor of each topic polled.
+		## follow it at once; the cursor of each topic polled. How many
+		## seconds the poll on its way has waited (`waited`), and whether
+		## the last failed (`lost`), which `connection` tells of.
 		poll : Poll,
 		polling : Bool,
 		poll_again : Bool,
+		waited : U64,
+		lost : Bool,
 		cursors : List({ capability : Str, topic : Str, cursor : Str }),
 		notice : Str,
 		show_settings : Bool,
@@ -481,6 +485,8 @@ Model := [].{
 				poll: { serial: 0, subjects: [], topics: [] },
 				polling: Bool.False,
 				poll_again: Bool.False,
+				waited: 0,
+				lost: Bool.False,
 				cursors: [],
 				notice: "",
 				show_settings: Bool.False,
@@ -2341,8 +2347,17 @@ Model := [].{
 		else if (followed.is_empty())
 			state
 		else
-			{ ..state, poll: { serial: state.poll.serial + 1, subjects: followed, topics }, polling: Bool.True, poll_again: Bool.False }
+			{ ..state, poll: { serial: state.poll.serial + 1, subjects: followed, topics }, polling: Bool.True, poll_again: Bool.False, waited: 0 }
 	}
+
+	## How the daemon answers polls: as it should, slowly (a poll waited
+	## `slow_seconds`), or not at all, the last poll having failed.
+	connection : State -> [Connected, Slow, Lost]
+	connection = |state| if (state.lost) Lost else if (state.polling and state.waited >= Model.slow_seconds) Slow else Connected
+
+	## How long a poll waits before the UI says the daemon is slow.
+	slow_seconds : U64
+	slow_seconds = 3
 
 	## Polls each second, unless a poll is still on its way, and takes the
 	## time `at` once a new minute begins, or each second while a chat on
@@ -2351,13 +2366,19 @@ Model := [].{
 	tick = |state0, at| {
 		timing = Model.panes(state0).any(|shown| shown.widget == "chat" and Model.pane_visible(state0, shown.id) and Model.working(state0, shown).is_ok())
 		state = if (at // 60_000 == state0.now // 60_000 and !timing) state0 else { ..state0, now: at }
-		if (state.polling) state else Model.poll(state)
+		if (state.polling) { ..state, waited: state.waited + 1 } else Model.poll(state)
 	}
 
 	## Polls at once when the topics the panes follow change, or once the
-	## poll on its way answers.
+	## poll on its way answers; but in place of one that has waited a second
+	## already, which `Liton.effects` then gives up, so a session picked
+	## shows without waiting for a poll held up by a slow provider.
 	follow : State -> State
-	follow = |state| if (state.polling and state.poll.subjects == Model.subjects(state)) state else Model.poll(state)
+	follow = |state|
+		if (state.polling and state.poll.subjects == Model.subjects(state))
+			state
+		else
+			Model.poll({ ..state, polling: state.polling and state.waited == 0 })
 
 	## Takes a poll's answer, each topic's in the order asked: its events and
 	## cursor, the focus on the latest session until there is one. Then sends
@@ -2375,7 +2396,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, lost: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
@@ -2400,7 +2421,7 @@ Model := [].{
 
 	## A poll that failed asks again with the next.
 	poll_failed : State -> State
-	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False }) else { ..state, polling: Bool.False }
+	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False, lost: Bool.True }) else { ..state, polling: Bool.False, lost: Bool.True }
 
 	## Takes a topic's update from the poll numbered `serial`.
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
@@ -5009,12 +5030,14 @@ expect {
 	sent(plan) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Ok("implement") })] and sent({ ..plan, choices: Err(Missing) }) == [AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.True, choice: Err(Missing) }), AnswerPermission({ session_id: "s", request_id: "p", allowed: Bool.False, choice: Err(Missing) })]
 }
 
-# One poll at a time: what is asked meanwhile is sent once it answers.
+# One poll at a time: what is asked meanwhile is sent once it answers, or
+# in its place once it has waited a second.
 expect {
 	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
 	meanwhile = Model.follow({ ..sent, focus: [Session("b")] })
 	answered = Model.polled(meanwhile, sent.poll, [])
-	Model.tick(sent, 0).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b"))
+	waiting = Model.follow({ ..Model.tick(sent, 0), focus: [Session("b")] })
+	Model.tick(sent, 0).poll.serial == 1 and Model.follow(sent).poll_again == Bool.False and meanwhile.poll.serial == 1 and answered.polling and answered.poll.subjects.contains(Timeline("b")) and waiting.poll.serial == 2 and waiting.poll.subjects.contains(Timeline("b"))
 }
 
 expect {

@@ -142,11 +142,15 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
 
 .work { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
-/* What went wrong last, over the bottom of the tiles until dismissed. */
-.toast { position: absolute; left: 50%; bottom: calc(var(--gap) * 2); z-index: 8; transform: translateX(-50%); max-width: min(560px, calc(100% - 4 * var(--gap)));
+/* What went wrong last, over the bottom of the tiles until dismissed, and
+   under it whether the daemon is waited for. */
+.toasts { position: absolute; left: 50%; bottom: calc(var(--gap) * 2); z-index: 8; transform: translateX(-50%); max-width: min(560px, calc(100% - 4 * var(--gap)));
+  display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+.toast { pointer-events: auto;
   display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; color: var(--text);
   background: var(--sheet); backdrop-filter: var(--backdrop-bar); -webkit-backdrop-filter: var(--backdrop-bar);
   border: 1px solid var(--fail); border-radius: var(--radius); box-shadow: var(--shadow); animation: menu-in var(--fast) ease-out backwards; }
+.toast.connection { border-color: var(--edge); padding-right: 14px; color: var(--muted); }
 .toast .dismiss { flex: none; padding: 3px; border-color: transparent; background: none; color: var(--muted); }
 
 /* The deck: a slim strip of its surfaces under the tiles, the one shown
@@ -1231,7 +1235,7 @@ kbd:empty { display: none; }
   .module .counted, .module.running, .needs-you:not(.counting), .drawer-toggle, .needs-you-count { display: none; }
   .workbench .slot-left .pane { padding-bottom: 0; }
   .workbench .slot-left .pane-header .settings-toggle { position: static; }
-  .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .toasts { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .bar button { min-width: 44px; min-height: 44px; }
   .bar .icon { --icon-size: 20px; }
   .tile-tabs { display: flex; gap: 6px; padding: var(--gap) var(--gap) 0; overflow-x: auto; }

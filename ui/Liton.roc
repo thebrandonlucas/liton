@@ -318,9 +318,10 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.review_desk.scroll), |scroll| scroll.refs.map(|ref| Engine.command(Engine.scroll_into_view(ref, { block: Start }))), Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
-		Engine.watch_changes(
+		# The latest poll only: one replaced on its way is given up (see `Model.follow`).
+		Engine.watch_latest(
 			model.signal().map(|state| state.poll),
-			|poll| [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
+			|poll| if (poll.topics.is_empty()) [] else [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
 			model.on_result(
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
@@ -563,9 +564,25 @@ Liton := [].{
 			|| Engine.text(""),
 		)
 
-	## What went wrong last, over the tiles until dismissed or replaced.
+	## What went wrong last, over the tiles until dismissed or replaced; and
+	## while the daemon answers slowly or not at all, that it is waited for.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
 	toast = |model|
+		Html.div(
+			"toasts",
+			[
+				Engine.when(
+					model.signal().map(|state| Model.connection(state) != Connected),
+					|| Html.div_attrs([Engine.class("toast connection"), Engine.attr("role", "status"), Engine.test_id("connection")], [Spinner.spinner("Connecting", Inline), Html.span_s(model.signal().map(|state| if (Model.connection(state) == Lost) "Can't reach the daemon. Trying again…" else "Waiting for the daemon…"), [])]),
+					|| Engine.text(""),
+				),
+				Liton.notice(model),
+			],
+		)
+
+	## What went wrong last, until dismissed or replaced.
+	notice : State(Ctx, Model.State) -> Elem(Ctx)
+	notice = |model|
 		Engine.when(
 			model.signal().map(|state| !state.notice.is_empty()),
 			|| Html.div_attrs([Engine.class("toast"), Engine.attr("role", "status")], [Html.span_s(model.signal().map(|state| state.notice), [Engine.test_id("notice")]), Liton.icon_button(Engine.const("Dismiss"), "icon dismiss", model.update(|state| { ..state, notice: "" }))]),
