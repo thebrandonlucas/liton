@@ -778,6 +778,15 @@ more often than its backend allows. `Refresh` asks again at once:
 { "Ok": "Accepted" }
 ```
 
+From Paseo, the reports are its `usage.list_reports.request`'s, one
+`usage.list_reports.update` per account (a source's `sourceId` its
+`source`), from a Paseo whose `server_info` lists the `usageSources`
+feature (0.11 and later), or else its `provider.usage.list.request`'s, from
+one that lists `providerUsageList`; one that lists neither tells none. An
+account whose report fails keeps the windows it last had, `Unavailable`
+with why. The daemon asks in its cycle at most once a minute while a poll
+follows `reports`, and at once after a `Refresh`.
+
 The mock has an account for each kind of agent it starts, whose 5-hour and
 weekly windows fill with each message its sessions are sent. Its sessions'
 context grows with each message too, and a message `/compact` empties it,

@@ -104,6 +104,7 @@ import paseo.PaseoFiles
 import paseo.PaseoGit
 import paseo.PaseoSchedules
 import paseo.PaseoSummaries
+import paseo.PaseoUsage
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
@@ -602,7 +603,11 @@ call! = |context, request| {
 				decoded = Json.parse(body)
 				answer : Protocol.Answer(Usage.Response)
 				answer = match decoded {
-					Ok({ request: Refresh, .. }) => Ok(Accepted)
+					Ok({ request: Refresh, .. }) => {
+						forget_check!(context.db, "usage")?
+						forget_check!(context.db, "cycle")?
+						Ok(Accepted)
+					}
 					Err(_) => Err(unanswered("usage.v1"))
 				}
 				Json.to_str(answer)
@@ -684,7 +689,8 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | UsageReports | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		UsageReports => if (context.paseo.is_ok()) wanted!(db, "usage", "") else Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
 		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
 		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
@@ -1724,16 +1730,58 @@ state_swapped! = |db, transformer, stored, state|
 	}
 
 ## The usage reports of the mock's accounts, whose windows fill with the
-## messages sent to its sessions.
+## messages sent to its sessions, then of Paseo's as the cycle last fetched
+## them (none before).
 usage_reports! : Context => Try(List(Usage.Report), _)
-usage_reports! = |context|
-	if context.mock.agents {
-		asked : List({ agent : Str, asked : I64 })
-		asked = Sqlite.query_many!({ db: context.db, query: "SELECT sessions.agent AS agent, count(*) AS asked FROM entries JOIN sessions ON sessions.id = entries.session_id WHERE sessions.provider = 'mock' AND entries.event LIKE '{\"UserMessage\"%' AND entries.visible_at <= :now GROUP BY sessions.agent;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
-		Ok(Mock.usage_reports(asked.map(|row| { agent: row.agent, asked: row.asked.to_u64_wrap() }), now_ms!()))
-	} else {
-		Ok([])
+usage_reports! = |context| {
+	mock =
+		if context.mock.agents {
+			asked : List({ agent : Str, asked : I64 })
+			asked = Sqlite.query_many!({ db: context.db, query: "SELECT sessions.agent AS agent, count(*) AS asked FROM entries JOIN sessions ON sessions.id = entries.session_id WHERE sessions.provider = 'mock' AND entries.event LIKE '{\"UserMessage\"%' AND entries.visible_at <= :now GROUP BY sessions.agent;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			Mock.usage_reports(asked.map(|row| { agent: row.agent, asked: row.asked.to_u64_wrap() }), now_ms!())
+		} else {
+			[]
+		}
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'usage';", params: {}, limits: Sqlite.default_query_limits })?
+	paseo : Try(List(Usage.Report), _)
+	paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(mock.concat(if (context.paseo.is_ok()) paseo ?? [] else []))
+}
+
+## How often, at most, the daemon asks Paseo for its usage reports while a
+## poll follows them: Paseo asks each account's provider in turn.
+usage_interval_ms : I64
+usage_interval_ms = 60_000
+
+## Asks Paseo for its accounts' usage reports, if it tells them, and keeps
+## them; what it last told is kept when asking fails.
+usage_fetched! : Sqlite.Db, Tcp.Connection, Paseo.Features => Try({}, _)
+usage_fetched! = |db, connection, features| {
+	request_id = "liton-usage-${now_ms!().to_str()}"
+	match PaseoUsage.request(features, request_id) {
+		Err(NoUsage) => Ok({})
+		Ok(request) => {
+			connection.write!(WebSocket.text(request, websocket_mask)).map_err(|err| ConnectionLost(Str.inspect(err)))?
+			reports = usage_read!(connection, request_id, [])?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('usage', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(reports) } })
+		}
 	}
+}
+
+## The reports Paseo sends for `request_id` after `so_far`, until it says
+## they all came.
+usage_read! : Tcp.Connection, Str, List(Usage.Report) => Try(List(Usage.Report), _)
+usage_read! = |connection, request_id, so_far| {
+	received = message!(connection, []).map_err(|err| ConnectionLost(Str.inspect(err)))?
+	match PaseoUsage.answer(Paseo.provider.id, received, request_id) {
+		Reported(report) => usage_read!(connection, request_id, so_far.append(report))
+		Listed(reports) => Ok(reports)
+		Done => Ok(so_far)
+		Failed(why) => Err(UsageFailed(why))
+		Other => usage_read!(connection, request_id, so_far)
+	}
+}
 
 ## Every enabled provider's projects and workspaces, each workspace with its
 ## sessions and as urgent as the most urgent of them. Paseo's come from what
@@ -2229,6 +2277,12 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 							host_status!(db, "paseo", Online, features.version)?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
+							if watched.any(|item| item.kind == "usage") and !recently_checked!(db, "usage", usage_interval_ms)? {
+								match usage_fetched!(db, connection, features) {
+									Ok({}) => {}
+									Err(err) => logged!("Paseo: asking for its usage failed: ${Str.inspect(err)}")
+								}
+							}
 							match summary_model {
 								Ok(configured) if features.background_agents =>
 									match summarized!(db, connection, configured) {
