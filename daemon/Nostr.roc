@@ -66,6 +66,35 @@ Nostr := [].{
 			Ok(event)
 		}
 
+	## A NIP-01 filter, its tag conditions as `tags`, each a letter then the
+	## values an event's tag of that letter must have one of, as `#h` is.
+	Filter : { ids : Try(List(Str), [Missing]), authors : Try(List(Str), [Missing]), kinds : Try(List(U32), [Missing]), tags : Try(List(List(Str)), [Missing]), since : Try(U64, [Missing]), until : Try(U64, [Missing]), limit : Try(U64, [Missing]) }
+
+	## How many events a filter answers at most, and when it names none.
+	most_events : U64
+	most_events = 500
+
+	default_events : U64
+	default_events = 200
+
+	## What `filter` asks the relay's table after the event `after` arrived,
+	## as the query's parameters: lists as JSON, or "" when not asked, and
+	## times not asked as -1.
+	parameters : Filter, I64 -> { after : I64, ids : Str, authors : Str, kinds : Str, tags : Str, since : I64, until : I64, limit : I64 }
+	parameters = |filter, after| {
+		listed = |asked| asked.map_ok(Json.to_str) ?? ""
+		{
+			after,
+			ids: listed(filter.ids),
+			authors: listed(filter.authors),
+			kinds: listed(filter.kinds),
+			tags: listed(filter.tags),
+			since: filter.since.map_ok(|time| time.to_i64_wrap()) ?? -1,
+			until: filter.until.map_ok(|time| time.to_i64_wrap()) ?? -1,
+			limit: (if ((filter.limit ?? Nostr.default_events) > Nostr.most_events) Nostr.most_events else filter.limit ?? Nostr.default_events).to_i64_wrap(),
+		}
+	}
+
 	## The room an event is in: its first `h` tag's value (NIP-29), or "".
 	room : Event -> Str
 	room = |event| event.tags.find_first(|tag| tag.first() == Ok("h")).map_ok(|tag| tag.get(1) ?? "") ?? ""
@@ -98,3 +127,8 @@ expect {
 }
 expect Nostr.room({ id: "", pubkey: "", created_at: 0, kind: 9, tags: [["e", "x"], ["h", "general"], ["h", "other"]], content: "", sig: "" }) == "general"
 expect Nostr.answer("ab", Bool.False, "invalid: \"id\"") == "[\"OK\",\"ab\",false,\"invalid: \\\"id\\\"\"]"
+expect {
+	asked : Try(Nostr.Filter, _)
+	asked = Json.parse("{\"kinds\":[9,7],\"tags\":[[\"h\",\"general\"]],\"limit\":900}")
+	asked.map_ok(|filter| Nostr.parameters(filter, 4)) == Ok({ after: 4, ids: "", authors: "", kinds: "[9,7]", tags: "[[\"h\",\"general\"]]", since: -1, until: -1, limit: 500 })
+}

@@ -594,6 +594,22 @@ NIP-01 says, and whose pubkey is the device's; where the daemon needs no
 device (LITON_AUTH), any pubkey. It doesn't verify signatures yet: an
 event is trusted as its device's, which is why a key binds to one device.
 
+`POST /liton/v1/nostr/req` answers the events any of its filters matches,
+NIP-01's REQ asked once, after the event `after` names (0, or left out, for
+all), in the order they arrived, with `cursor`, the last one's place, to ask
+after next time:
+
+```json
+{ "filters": [{ "kinds": [9, 7], "tags": [["h", "general"]], "limit": 100 }], "after": 41 }
+{ "events": [{ "id": "f1ec…", "pubkey": "79be…", "created_at": 1700000000, "kind": 9, "tags": [["h", "general"]], "content": "…", "sig": "fdc4…" }], "cursor": 42 }
+```
+
+A filter has NIP-01's `ids`, `authors`, `kinds`, `since`, `until` and
+`limit`, and its tag conditions, NIP-01's `#h` and the like, as `tags`: a
+letter, then the values an event's tag of that letter must have one of. A
+filter answers the latest `limit` (by default 200, at most 500) of what it
+matches.
+
 ### Tickets
 
 `tickets.v1` is the issues and tickets of the trackers providers reach,
