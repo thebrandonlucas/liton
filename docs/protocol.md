@@ -566,6 +566,34 @@ as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
 The mock provider keeps three rooms, one a forum, where its agents type and
 then answer when a message mentions them.
 
+### Relay
+
+The daemon is a Nostr relay of its own, the store of its rooms: it keeps
+NIP-01 events in its database and takes them over HTTP, under
+`/liton/v1/nostr/`, from paired devices alone (Authentication). Each device
+is bound to one Nostr key, its pubkey 64 lowercase hex digits, once:
+
+```json
+POST /liton/v1/devices/key   { "pubkey": "79be667e…" }
+{}
+```
+
+answered `409` when the device has a key already or the key is another
+device's. `POST /liton/v1/nostr/event` takes an event, NIP-01's JSON, and
+answers as NIP-01's `OK` does, `["OK", <id>, <accepted>, <why>]`:
+
+```json
+["OK", "1d60156c…", true, ""]
+["OK", "1d60156c…", true, "duplicate: the relay has this event"]
+["OK", "1d60156c…", false, "invalid: the event's id isn't the SHA-256 of its fields"]
+["OK", "1d60156c…", false, "restricted: this device isn't bound to the event's pubkey"]
+```
+
+It takes an event whose id is the SHA-256 of its fields, serialized as
+NIP-01 says, and whose pubkey is the device's; where the daemon needs no
+device (LITON_AUTH), any pubkey. It doesn't verify signatures yet: an
+event is trusted as its device's, which is why a key binds to one device.
+
 ### Tickets
 
 `tickets.v1` is the issues and tickets of the trackers providers reach,

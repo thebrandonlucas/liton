@@ -305,6 +305,8 @@ routed! = |started, request, headers| {
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
 		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
 		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
+		(Ok(Device(id)), POST, "/liton/v1/devices/key") => device_key!(context, request, id)
+		(Ok(asking), POST, "/liton/v1/nostr/event") => nostr_event!(context, request, asking)
 		(_, POST, _) if path.starts_with(audio_route) => audio_chunk!(context, request, path.drop_prefix(audio_route))
 		_ => Ok(text(404, "Not found"))
 	}
@@ -425,6 +427,57 @@ revoked! = |{ db, .. }, request, asking| {
 		Ok({ id }) => {
 			Sqlite.execute!({ db, query: "DELETE FROM devices WHERE id = :id;", params: { id } })?
 			Ok(if (asking == Device(id)) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
+		}
+	}
+}
+
+## Answers /liton/v1/devices/key: binds the Nostr pubkey `pubkey` to the
+## device asking, whose events the relay then takes as that key's. A device
+## binds one key once, and a key binds to one device: as the relay doesn't
+## verify signatures, a key bound twice could be used by either.
+device_key! : Context, Server.Request, Str => Try(Response, _)
+device_key! = |{ db, .. }, request, device_id| {
+	given : Try({ pubkey : Str }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Ok({ pubkey }) if Nostr.hex(pubkey, 64) => {
+			bound : List({ id : Str })
+			bound = Sqlite.query_many!({ db, query: "UPDATE devices SET pubkey = :pubkey WHERE id = :id AND pubkey = '' AND NOT EXISTS (SELECT 1 FROM devices WHERE pubkey = :pubkey) RETURNING id;", params: { id: device_id, pubkey }, limits: Sqlite.default_query_limits })?
+			Ok(if (bound.is_empty()) text(409, "this device has a key already, or the key is another device's") else json("{}"))
+		}
+		_ => Ok(text(400, "a key is {\"pubkey\": \"64 lowercase hex digits\"}"))
+	}
+}
+
+## Answers /liton/v1/nostr/event: takes a NIP-01 event into the relay,
+## answering `["OK", id, accepted, why]` as NIP-01 does. It takes an event
+## whose id is right and whose pubkey is the one the device asking is bound
+## to; where the daemon needs no device (LITON_AUTH), it takes any pubkey.
+nostr_event! : Context, Server.Request, [Device(Str), Open] => Try(Response, _)
+nostr_event! = |{ db, .. }, request, asking| {
+	match Nostr.from_json(read_json!(request)?) {
+		Err(Invalid) => Ok(text(400, "an event is NIP-01's: {\"id\", \"pubkey\", \"created_at\", \"kind\", \"tags\", \"content\", \"sig\"}"))
+		Ok(given) => {
+			keys : List({ pubkey : Str })
+			keys = match asking {
+				Device(id) => Sqlite.query_many!({ db, query: "SELECT pubkey FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+				Open => [{ pubkey: given.pubkey }]
+			}
+			why =
+				match Nostr.checked(given) {
+					Err(Malformed(field)) => Err("invalid: the event's ${field} isn't lowercase hex of its length")
+					Err(WrongId) => Err("invalid: the event's id isn't the SHA-256 of its fields")
+					Ok(_) if keys != [{ pubkey: given.pubkey }] => Err("restricted: this device isn't bound to the event's pubkey")
+					Ok(event) => Ok(event)
+				}
+			match why {
+				Err(refused) => Ok(json(Nostr.answer(given.id, Bool.False, refused)))
+				Ok(event) => {
+					stored : List({ seq : I64 })
+					stored = Sqlite.query_many!({ db, query: "INSERT INTO nostr_events (id, pubkey, kind, created_at, tags, content, sig, room) VALUES (:id, :pubkey, :kind, :created_at, :tags, :content, :sig, :room) ON CONFLICT (id) DO NOTHING RETURNING seq;", params: { id: event.id, pubkey: event.pubkey, kind: event.kind.to_i64(), created_at: event.created_at.to_i64_wrap(), tags: Json.to_str(event.tags), content: event.content, sig: event.sig, room: Nostr.room(event) }, limits: Sqlite.default_query_limits })?
+					Ok(json(Nostr.answer(event.id, Bool.True, if (stored.is_empty()) "duplicate: the relay has this event" else "")))
+				}
+			}
 		}
 	}
 }
@@ -1888,6 +1941,14 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS nostr_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, pubkey TEXT NOT NULL, kind INTEGER NOT NULL, created_at INTEGER NOT NULL, tags TEXT NOT NULL, content TEXT NOT NULL, sig TEXT NOT NULL, room TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS nostr_events_by_room ON nostr_events (room, seq);", params: {} })?
+	# Devices paired before the relay came have no Nostr key.
+	keyed : List({ name : Str })
+	keyed = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('devices') WHERE name = 'pubkey';", params: {}, limits: Sqlite.default_query_limits })?
+	if keyed.is_empty() {
+		Sqlite.execute!({ db, query: "ALTER TABLE devices ADD COLUMN pubkey TEXT NOT NULL DEFAULT '';", params: {} })?
+	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS hosts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', online_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and

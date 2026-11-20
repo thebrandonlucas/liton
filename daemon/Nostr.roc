@@ -66,6 +66,14 @@ Nostr := [].{
 			Ok(event)
 		}
 
+	## The room an event is in: its first `h` tag's value (NIP-29), or "".
+	room : Event -> Str
+	room = |event| event.tags.find_first(|tag| tag.first() == Ok("h")).map_ok(|tag| tag.get(1) ?? "") ?? ""
+
+	## NIP-01's answer to an event: `["OK", <id>, <accepted>, <why>]`.
+	answer : Str, Bool, Str -> Str
+	answer = |id, accepted, why| "[\"OK\",${Json.to_str(id)},${if (accepted) "true" else "false"},${Json.to_str(why)}]"
+
 	## Whether `text` is `length` lowercase hex digits.
 	hex : Str, U64 -> Bool
 	hex = |text, length| {
@@ -88,3 +96,5 @@ expect {
 	event = { id: "1d60156c7d5c3d752ed401ba085300ea90869712b4acc88edff9601de4c0b15c", pubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798", created_at: 0, kind: 1, tags: [], content: "", sig: "e817317210f3991ba20259c44953453c2dd6cdd840af98ad69908b43404bc59cda7f0c7e87ceeb13e832e2ce5867d2ba107e16c511fd589d3b05a06d9bd18930" }
 	Nostr.checked({ ..event, content: "changed" }) == Err(WrongId) and Nostr.checked({ ..event, id: "1D60" }) == Err(Malformed("id"))
 }
+expect Nostr.room({ id: "", pubkey: "", created_at: 0, kind: 9, tags: [["e", "x"], ["h", "general"], ["h", "other"]], content: "", sig: "" }) == "general"
+expect Nostr.answer("ab", Bool.False, "invalid: \"id\"") == "[\"OK\",\"ab\",false,\"invalid: \\\"id\\\"\"]"
