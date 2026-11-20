@@ -2,6 +2,7 @@
 ## file decodes back to the fixture, so the wire format changes only on purpose.
 import Chat
 import Fixtures
+import Hosts
 import Manifest
 import Schedules
 import Tickets
@@ -12,6 +13,7 @@ import "tests/responses.json" as responses_json : Str
 import "tests/timeline.json" as timeline_json : Str
 import "tests/tickets.json" as tickets_json : Str
 import "tests/schedules.json" as schedules_json : Str
+import "tests/hosts.json" as hosts_json : Str
 
 Golden := [].{}
 
@@ -57,3 +59,12 @@ expect {
 	decoded = Json.parse(schedules_json)
 	Json.to_str(schedules) == schedules_json.trim() and decoded == Ok(schedules)
 }
+
+expect {
+	hosts = { requests: Fixtures.host_requests, responses: Fixtures.host_responses }
+	decoded : Try({ requests : List(Hosts.Request), responses : List(Hosts.Response) }, _)
+	decoded = Json.parse(hosts_json)
+	Json.to_str(hosts) == hosts_json.trim() and decoded == Ok(hosts)
+}
+
+expect !Json.to_str(Fixtures.host_responses).contains("t0ken")
