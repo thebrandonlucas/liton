@@ -15,17 +15,17 @@ Menu := [].{
 	inside = "liton-menu"
 
 	## The menu `key` names: `host`'s class on its wrapper, its button with
-	## `button`'s attributes, and while open `items`, with `attrs`, in the
-	## page's top layer beside the button (style.css), over any pane that
-	## would clip it.
-	menu : State(ctx, Model.State), Signal(ctx, Str), Str, List(Attr(ctx)), List(Attr(ctx)), List(Elem(ctx)) -> Elem(ctx)
-	menu = |model, key, host, button, attrs, items| {
+	## `button`'s attributes, and while open `items` in the page's top layer
+	## beside the button (style.css), over any pane that would clip it, with
+	## `kind`'s class beside `menu` and `attrs`, which hold no class.
+	menu : State(ctx, Model.State), Signal(ctx, Str), Str, List(Attr(ctx)), Str, List(Attr(ctx)), List(Elem(ctx)) -> Elem(ctx)
+	menu = |model, key, host, button, kind, attrs, items| {
 		open = key.map2(model.signal(), |menu_key, state| state.menu == menu_key)
 		Html.div(
 			"menu-host ${host}",
 			[
 				Engine.element("button", [Engine.attr("type", "button"), Engine.attr("value", Menu.inside), Engine.attr("aria-haspopup", "true"), Html.flag("aria-expanded", open), Engine.on_click(model.update_by(key, Model.toggle_menu))].concat(button), []),
-				Engine.when(open, || Html.popover("Menu", { open, on_toggle: model.set_value(|state, _shown| state), dismiss: Manual }, [Engine.class("menu")].concat(attrs), items), || Engine.text("")),
+				Engine.when(open, || Html.popover("Menu", { open, on_toggle: model.set_value(|state, _shown| state), dismiss: Manual }, [Engine.class(if (kind.is_empty()) "menu" else "menu ${kind}")].concat(attrs), items), || Engine.text("")),
 			],
 		)
 	}

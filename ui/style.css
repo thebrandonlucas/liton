@@ -1328,7 +1328,11 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
   /* The deck sits over a Workbench's tab bar, where a swipe across it
      goes to the next or previous surface. */
-  .strip { order: 1; padding: 2px var(--room) var(--room); }
+  .strip { order: 1; display: flex; padding: 2px var(--room) var(--room); }
+  .strip .deck { flex: 1; min-width: 0; justify-content: flex-start; }
+  /* Its dot alone, the name in its menu. */
+  .connection-button { min-width: 32px; min-height: 32px; justify-content: center; padding: 0; }
+  .connection-button::after { display: none; }
   .deck { overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
   .tile-tabs:has(+ .workbench) { order: 2; }
   /* Settings: its rail is a list, and a section picked covers it. */

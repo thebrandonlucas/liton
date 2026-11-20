@@ -261,7 +261,8 @@ Liton := [].{
 				Engine.attr_s("data-name", model.signal().map(daemon_name)),
 				Engine.test_id("connection"),
 			],
-			[Engine.class("connection-menu")],
+			"connection-menu",
+			[],
 			[
 				Html.p_s(model.signal().map(|state| "${daemon_name(state)} · ${state_name(state)}"), [Engine.class("connection-title")]),
 				Engine.each(
@@ -1339,6 +1340,7 @@ Liton := [].{
 					Engine.const(Model.tab_menu),
 					"row-menu tab-menu",
 					[Engine.class("icon new-tab"), Html.aria_label("New tab"), Engine.attr_s("title", model.signal().map(|state| "New tab (${Keymap.text_of(state.operating_system, Keymap.defaults, "tab.new")})"))],
+					"",
 					[],
 					[Engine.each(model.signal().map(Model.tab_menu_items), |item| item.label, |item| Menu.item(item.field(|shown| if (shown.pane.is_empty()) "new-agent" else "show"), item.field(|shown| shown.label), model.lift_row().update_by(item.field(|shown| shown.pane), Model.pick_tab_menu)))],
 				),
@@ -1654,6 +1656,7 @@ Liton := [].{
 			id,
 			"pane-menu",
 			[Engine.class("icon menu-toggle"), Html.aria_label_s(title.map(|name| "${name} menu")), Engine.attr_s("title", title.map(|name| "${name} menu"))],
+			"",
 			[],
 			[
 				Html.p_s(shown.map(|{ pane, state }| Liton.context_label(state, pane)), [Engine.class("pane-context")]),
@@ -2581,6 +2584,7 @@ Liton := [].{
 			asked.map(Model.row_menu_key),
 			"row-menu",
 			[Engine.class("icon menu-toggle row-menu-toggle"), Html.aria_label_s(title.map(|name| "${name} menu")), Engine.attr_s("title", title.map(|name| "${name} menu"))],
+			"",
 			[],
 			[
 				Engine.each(
@@ -2890,7 +2894,8 @@ Liton := [].{
 						Html.aria_label_s(shown.map(|told| "Context: ${told.percent.to_str()}% used")),
 						Engine.attr_s("title", shown.map(|told| if (told.context.is_empty()) "What the last turn used" else "Context: ${told.context}")),
 					],
-					[Engine.class("usage"), Engine.test_id("context-usage")],
+					"usage",
+					[Engine.test_id("context-usage")],
 					[
 						Html.p_s(Engine.const("Last turn"), [Engine.class("usage-title")]),
 						row("Context", shown.map(|told| told.context)),
@@ -3947,6 +3952,7 @@ Liton := [].{
 			key,
 			"pane-menu room-menu",
 			[Engine.class("icon menu-toggle"), Html.aria_label("Room actions"), Engine.attr("title", "Room actions")],
+			"",
 			[],
 			[
 				Menu.item(Engine.const("link"), room.map(|shown| "Copy link to ${Liton.room_name(shown)}"), model.update_by(room.map(|shown| shown.id), |state, room_id| { ..Model.copy_room_link(state, room_id), menu: "" })),
