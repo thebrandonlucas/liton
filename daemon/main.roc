@@ -114,6 +114,7 @@ import transformers.NeedsYou
 import transformers.Transformer
 import Auth
 import Nostr
+import NostrRooms
 import Sha256
 
 ## What each request is answered from: the database, the hosts it answers,
@@ -473,15 +474,36 @@ nostr_event! = |{ db, .. }, request, asking| {
 				}
 			match why {
 				Err(refused) => Ok(json(Nostr.answer(given.id, Bool.False, refused)))
-				Ok(event) => {
-					stored : List({ seq : I64 })
-					stored = Sqlite.query_many!({ db, query: "INSERT INTO nostr_events (id, pubkey, kind, created_at, tags, content, sig, room) VALUES (:id, :pubkey, :kind, :created_at, :tags, :content, :sig, :room) ON CONFLICT (id) DO NOTHING RETURNING seq;", params: { id: event.id, pubkey: event.pubkey, kind: event.kind.to_i64(), created_at: event.created_at.to_i64_wrap(), tags: Json.to_str(event.tags), content: event.content, sig: event.sig, room: Nostr.room(event) }, limits: Sqlite.default_query_limits })?
-					Ok(json(Nostr.answer(event.id, Bool.True, if (stored.is_empty()) "duplicate: the relay has this event" else "")))
-				}
+				Ok(event) => Ok(json(nostr_stored!(db, event)?))
 			}
 		}
 	}
 }
+
+## Stores `event` in the relay if its room takes it (`NostrRooms.refusal`),
+## answering as NIP-01's `OK` does.
+nostr_stored! : Sqlite.Db, Nostr.Event => Try(Str, _)
+nostr_stored! = |db, event| {
+	room = Nostr.room(event)
+	moderation : List(NostrRow)
+	moderation = if (room == "") [] else Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE room = :room AND kind IN (${Str.join_with(NostrRooms.moderation_kinds.map(|kind| kind.to_str()), ", ")}) ORDER BY seq;", params: { room }, limits: Sqlite.default_query_limits })?
+	match NostrRooms.refusal(NostrRooms.of(moderation.map(nostr_event_of)), event) {
+		Err(why) => Ok(Nostr.answer(event.id, Bool.False, why))
+		Ok({}) => {
+			stored : List({ seq : I64 })
+			stored = Sqlite.query_many!({ db, query: "INSERT INTO nostr_events (id, pubkey, kind, created_at, tags, content, sig, room) VALUES (:id, :pubkey, :kind, :created_at, :tags, :content, :sig, :room) ON CONFLICT (id) DO NOTHING RETURNING seq;", params: { id: event.id, pubkey: event.pubkey, kind: event.kind.to_i64(), created_at: event.created_at.to_i64_wrap(), tags: Json.to_str(event.tags), content: event.content, sig: event.sig, room }, limits: Sqlite.default_query_limits })?
+			Ok(Nostr.answer(event.id, Bool.True, if (stored.is_empty()) "duplicate: the relay has this event" else ""))
+		}
+	}
+}
+
+## An event as the relay's table keeps it, with `seq`, its place in the
+## order events arrived.
+NostrRow : { seq : I64, id : Str, pubkey : Str, kind : I64, created_at : I64, tags : Str, content : Str, sig : Str }
+
+## The event a row of the relay's table keeps.
+nostr_event_of : NostrRow -> Nostr.Event
+nostr_event_of = |row| { id: row.id, pubkey: row.pubkey, kind: row.kind.to_u32_wrap(), created_at: row.created_at.to_u64_wrap(), tags: Json.parse(row.tags) ?? [], content: row.content, sig: row.sig }
 
 ## Answers /liton/v1/nostr/req: the events any of `filters` matches (NIP-01,
 ## its tag conditions as `tags`) that arrived after `after`, in the order
@@ -496,13 +518,13 @@ nostr_req! = |{ db, .. }, request| {
 		Ok({ filters, after }) => {
 			var $found = []
 			for filter in filters {
-				rows : List({ seq : I64, id : Str, pubkey : Str, kind : I64, created_at : I64, tags : Str, content : Str, sig : Str })
+				rows : List(NostrRow)
 				rows = Sqlite.query_many!({ db, query: nostr_matching, params: Nostr.parameters(filter, after ?? 0), limits: Sqlite.default_query_limits })?
 				$found = $found.concat(rows.drop_if(|row| $found.any(|kept| kept.seq == row.seq)))
 			}
 			arrived = $found.sort_with(|left, right| if (left.seq < right.seq) Before else if (left.seq > right.seq) After else Same)
 			events : List(Nostr.Event)
-			events = arrived.map(|row| { id: row.id, pubkey: row.pubkey, kind: row.kind.to_u32_wrap(), created_at: row.created_at.to_u64_wrap(), tags: Json.parse(row.tags) ?? [], content: row.content, sig: row.sig })
+			events = arrived.map(nostr_event_of)
 			cursor = arrived.last().map_ok(|row| row.seq) ?? (after ?? 0)
 			Ok(json(Json.to_str({ events, cursor })))
 		}

@@ -610,6 +610,20 @@ letter, then the values an event's tag of that letter must have one of. A
 filter answers the latest `limit` (by default 200, at most 500) of what it
 matches.
 
+Its rooms are NIP-29 groups, each named by its events' `h` tag, made by
+their moderation events in the order they arrived: `9007` creates a room,
+its author its first admin, with its `name`, `about`, `t` (`stream`,
+`forum`, `dm` or `announce`, as Buzz's) and the flags `open` or `closed`
+and `public` or `private`, which `9002` edits; `9000` adds the members its
+`p` tags name, an admin where the tag says `admin` after the key; `9001`
+removes them, `9005` deletes an event, `9008` the room; `9021` joins and
+`9022` leaves. The relay refuses, as `restricted:`, moderation but by a
+room's admins, a join of a room not `open` (its admins add its members), any
+other event in a room but by its members, in an `announce` room but by its
+admins, and outside a room any but a profile (kind 0). What the relay
+decides itself, such as the members an invite adds, it writes as events of
+its own, by the key of 64 zeros, unsigned until it can sign.
+
 ### Tickets
 
 `tickets.v1` is the issues and tickets of the trackers providers reach,
