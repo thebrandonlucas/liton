@@ -764,6 +764,9 @@ kbd:empty { display: none; }
 .status-line .status-word::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
 .inbox-item.unread .status-word::before, .status-word.running::before, .status-word.waiting::before { background: currentColor; }
 .status-word.waiting, .status-word.idle, .status-word.done, .status-line .reason { color: var(--warn); }
+.limit-warning { margin: 2px 0 0; color: var(--warn); font-size: 13px; }
+.limit-warning.over { color: var(--fail); }
+.limit-warning:empty { display: none; }
 .status-word.running { color: var(--ok); }
 .status-word.failed { color: var(--fail); }
 .inbox-item:not(.unread) .reason { color: var(--muted); }

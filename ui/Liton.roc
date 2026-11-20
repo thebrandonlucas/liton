@@ -2084,6 +2084,8 @@ Liton := [].{
 														Html.span_s(shown_item.map(InboxDesk.reason), [Engine.class("reason")]),
 													],
 												),
+												# Near or past its context limit (limits.v1), it says so.
+												Html.p_s(shown_item.map(|item| item.warning ?? ""), [Engine.class_s(shown_item.map(|item| if (item.warning.map_ok(|said| said.starts_with("Over")) ?? Bool.False) "limit-warning over" else "limit-warning")), Engine.test_id("limit-warning")]),
 												Html.div(
 													"details",
 													[
