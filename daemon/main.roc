@@ -121,7 +121,7 @@ import Sha256
 ## are written with ("" for the agent's smallest), the setup it offers, and
 ## whether answering may ask Paseo and the remotes when due (`Ask`), or
 ## only reads what the daemon keeps (`Cached`, a cached poll's).
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached] }
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : List(PaseoDaemon), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached] }
 
 ## A Paseo host: its name (see `Hosts.named`), where its daemon is, and its password.
 PaseoDaemon : { name : Str, host : Str, port : U16, password : Str }
@@ -186,7 +186,7 @@ init! = || {
 		}
 	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
 	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
-	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask }) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo: [], summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
@@ -495,7 +495,7 @@ offered! = |context| Ok(offered(context, remotes_up!(context)?.fold([], |so_far,
 ## `Transformer.offered`).
 offered : Context, List(Manifest.Provider) -> Manifest.Offered
 offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
-	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
+	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(paseo.map(|daemon| Paseo.provider_of(daemon.name))).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
 	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(hosts_provider)
@@ -650,7 +650,7 @@ polled_topics! = |context0, request| {
 				)
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
+			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(!context.paseo.is_empty() or !context.remotes.is_empty()) else Err(Missing) }
 			Ok(json(Json.to_str(polled)))
 		}
 	}
@@ -734,11 +734,18 @@ interested! = |context, subject| {
 		File({ context: focus, scope, path }) => git_interested!(context, focus, { scope, file: Selected(path) })
 		Tree({ context: focus, path }) => files_interested!(context, focus, "tree", path)
 		Contents({ context: focus, path }) => files_interested!(context, focus, "file", path)
-		_ =>
-			match context.paseo {
-				Ok(daemon) => paseo_interested!(db, daemon.name, subject)
-				Err(Disabled) => Ok({})
+		# A schedule's runs, of the Paseo host it is of.
+		ScheduleRuns(schedule_id) =>
+			match paseo_owner(context.paseo, schedule_id) {
+				Ok(daemon) => wanted!(db, daemon.name, "schedule_runs", schedule_id)
+				Err(NotPaseo) => Ok({})
 			}
+		_ => {
+			for daemon in context.paseo {
+				paseo_interested!(db, daemon.name, subject)?
+			}
+			Ok({})
+		}
 	}
 }
 
@@ -838,13 +845,13 @@ update! = |context, wanted, subject| {
 			match schedules!(context)?.find_first(|kept| kept.schedule.id == schedule_id) {
 				Ok(kept) => Ok(Protocol.snapshot(wanted, Runs(kept.runs)))
 				Err(_) =>
-					match context.paseo {
+					match paseo_owner(context.paseo, schedule_id) {
 						Ok(daemon) =>
 							match paseo_runs!(context.db, daemon, schedule_id)? {
 								Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
 								Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing), refreshing: Err(Missing) })
 							}
-						Err(Disabled) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
+						Err(NotPaseo) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 					}
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
@@ -1061,16 +1068,27 @@ history! = |context, provider, { search, cursor, limit }| {
 		}
 		_ => {}
 	}
-	match (start(Paseo.provider.id), context.paseo) {
-		(Ok(at), Ok(daemon)) =>
-			match paseo_history!(db, daemon, { search, cursor: at, limit }) {
-				Ok(Ok(page)) => {
-					$sessions = $sessions.concat(page.agents.map(|{ session, .. }| session))
-					$next = page.next.map_ok(|cursor_next| $next.append({ provider: Paseo.provider.id, cursor: cursor_next })) ?? $next
+	# A Paseo host that can't be asked is left out, unless no other answered.
+	var $failed = Err(NotFailed)
+	for daemon in context.paseo {
+		paseo_id = Hosts.paseo_provider(daemon.name)
+		match start(paseo_id) {
+			Ok(at) =>
+				match paseo_history!(db, daemon, { search, cursor: at, limit }) {
+					Ok(Ok(page)) => {
+						$sessions = $sessions.concat(page.agents.map(|{ session, .. }| session))
+						$next = page.next.map_ok(|cursor_next| $next.append({ provider: paseo_id, cursor: cursor_next })) ?? $next
+					}
+					Ok(Err(NoSearch)) => {}
+					Err(err) => {
+						$failed = Ok(paseo_error(err))
+					}
 				}
-				Ok(Err(NoSearch)) => {}
-				Err(err) => return Ok(Err(paseo_error(err)))
-			}
+			Err(Done) => {}
+		}
+	}
+	match $failed {
+		Ok(error) if $sessions.is_empty() => return Ok(Err(error))
 		_ => {}
 	}
 	next : HistoryCursor
@@ -1105,13 +1123,14 @@ started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat
 started! = |context, provider, { place, agent, model, mode, thinking, prompt }| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
-	paseo_listed =
-		match context.paseo {
-			Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.workspaces
-			_ => []
-		}
-	match (place, context.paseo) {
-		(Workspace(workspace_id), _) if mock_listed.any(|shown| shown.id == workspace_id) =>
+	paseo_placed = match place {
+		Workspace(workspace_id) => paseo_workspace!(context, provider, workspace_id)?
+		Directory(_) => Err(NotPaseo)
+	}
+	# A directory is of the Paseo host the call names.
+	named_paseo = context.paseo.find_first(|daemon| provider == Ok(Hosts.paseo_provider(daemon.name)))
+	match (place, paseo_placed, named_paseo) {
+		(Workspace(workspace_id), _, _) if mock_listed.any(|shown| shown.id == workspace_id) =>
 			match (Mock.agents.any(|kind| kind.agent == agent), Mock.configured(agent, { model: "", mode: "", thinking: "" }, { model, mode, thinking })) {
 				(Bool.False, _) => Ok(Ok(Rejected("the mock provider starts no ${agent} agent")))
 				(_, Err(reason)) => Ok(Ok(Rejected(reason)))
@@ -1125,15 +1144,32 @@ started! = |context, provider, { place, agent, model, mode, thinking, prompt }| 
 					Ok(Ok(Started({ session_id: session_id })))
 				}
 			}
-		(Workspace(workspace_id), Ok(daemon)) if paseo_listed.any(|shown| shown.id == workspace_id) => {
-			cwd = paseo_listed.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? ""
-			paseo_started!(context, daemon, { agent, cwd, workspace_id: Ok(workspace_id), model, mode, thinking, prompt })
-		}
-		(Directory(directory), Ok(daemon)) if provider == Ok(Paseo.provider.id) => paseo_started!(context, daemon, { agent, cwd: directory, workspace_id: Err(Missing), model, mode, thinking, prompt })
-		(Workspace(workspace_id), _) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
-		(Directory(_), _) => Ok(Err({ code: NotFound, message: "name a provider that starts agents in a directory, such as paseo" }))
+		(Workspace(workspace_id), Ok({ daemon, workspace }), _) => paseo_started!(context, daemon, { agent, cwd: workspace.directory, workspace_id: Ok(workspace_id), model, mode, thinking, prompt })
+		(Directory(directory), _, Ok(daemon)) => paseo_started!(context, daemon, { agent, cwd: directory, workspace_id: Err(Missing), model, mode, thinking, prompt })
+		(Workspace(workspace_id), _, _) => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
+		(Directory(_), _, _) => Ok(Err({ code: NotFound, message: "name a provider that starts agents in a directory, such as paseo" }))
 	}
 }
+
+## The Paseo host's workspace `workspace_id` names, as the cycle last listed
+## it, if a call naming `provider`, if it names one, reaches it.
+paseo_workspace! : Context, Try(Str, [Missing]), Str => Try(Try({ daemon : PaseoDaemon, workspace : Workspaces.Workspace }, [NotPaseo]), _)
+paseo_workspace! = |context, provider, workspace_id|
+	match paseo_owner(context.paseo, workspace_id) {
+		Ok(daemon) if Protocol.serves(provider, Hosts.paseo_provider(daemon.name)) =>
+			Ok(paseo_listed!(context.db, daemon.name)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|workspace| { daemon, workspace }).map_err(|_| NotPaseo))
+		_ => Ok(Err(NotPaseo))
+	}
+
+## The Paseo host's project `project_id` names, as `paseo_workspace!` finds
+## a workspace.
+paseo_project! : Context, Try(Str, [Missing]), Str => Try(Try({ daemon : PaseoDaemon, project : Workspaces.Project }, [NotPaseo]), _)
+paseo_project! = |context, provider, project_id|
+	match paseo_owner(context.paseo, project_id) {
+		Ok(daemon) if Protocol.serves(provider, Hosts.paseo_provider(daemon.name)) =>
+			Ok(paseo_listed!(context.db, daemon.name)?.projects.find_first(|shown| shown.id == project_id).map_ok(|project| { daemon, project }).map_err(|_| NotPaseo))
+		_ => Ok(Err(NotPaseo))
+	}
 
 ## Starts a Paseo agent, as an id the daemon picks (see `Paseo.create_request`),
 ## over a connection of its own, and lets the next poll list it at once.
@@ -1169,17 +1205,12 @@ workspaces_call! = |context, provider, asked| {
 		Archive({ workspace_id }) => workspace_changed!(context, provider, workspace_id, asked)
 		RenameProject({ project_id, name }) => {
 			mock_owns = context.mock.agents and Protocol.serves(provider, Mock.provider.id) and Mock.projects.any(|project| project.id == project_id)
-			paseo_projects =
-				match context.paseo {
-					Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.projects
-					_ => []
-				}
-			match (mock_owns, paseo_projects.any(|project| project.id == project_id), context.paseo) {
-				(Bool.True, _, _) => {
+			match (mock_owns, paseo_project!(context, provider, project_id)?) {
+				(Bool.True, _) => {
 					Sqlite.execute!({ db, query: "INSERT INTO mock_projects (id, name) VALUES (:id, :name) ON CONFLICT (id) DO UPDATE SET name = excluded.name;", params: { id: project_id, name } })?
 					Ok(Ok(Accepted))
 				}
-				(_, Bool.True, Ok(daemon)) => {
+				(_, Ok({ daemon, .. })) => {
 					request_id = "liton-project-${now_ms!().to_str()}"
 					outcome = written!(daemon, PaseoWorkspaces.rename_project_request(Hosts.their_id(daemon.name, project_id), name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "project.rename.response", id))
 					forget_check!(db, daemon.name, "cycle")?
@@ -1189,13 +1220,8 @@ workspaces_call! = |context, provider, asked| {
 			}
 		}
 		Create({ project_id, kind, branch }) => {
-			paseo_projects =
-				match context.paseo {
-					Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.projects
-					_ => []
-				}
-			match (Mock.projects.find_first(|project| project.id == project_id), paseo_projects.find_first(|project| project.id == project_id), context.paseo) {
-				(Ok(project), _, _) if context.mock.agents and Protocol.serves(provider, Mock.provider.id) => {
+			match (Mock.projects.find_first(|project| project.id == project_id), paseo_project!(context, provider, project_id)?) {
+				(Ok(project), _) if context.mock.agents and Protocol.serves(provider, Mock.provider.id) => {
 					made : { count : I64 }
 					made = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM mock_workspaces WHERE id LIKE 'workspace-%';", params: {}, limits: Sqlite.default_query_limits })?
 					number = (made.count + 1).to_str()
@@ -1203,7 +1229,7 @@ workspaces_call! = |context, provider, asked| {
 					Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value);", params: { id: workspace.id, value: Json.to_str(workspace) } })?
 					Ok(Ok(Created({ workspace_id: workspace.id })))
 				}
-				(_, Ok(project), Ok(daemon)) => {
+				(_, Ok({ daemon, project })) => {
 					request_id = "liton-workspace-${now_ms!().to_str()}"
 					workspace_id = "wks_${Paseo.hex("${request_id} ${project.directory}")}"
 					outcome = written!(daemon, PaseoWorkspaces.create_request({ workspace_id, project: { ..project, id: Hosts.their_id(daemon.name, project.id) }, kind, branch, request_id }), request_id, PaseoWorkspaces.created)
@@ -1225,13 +1251,8 @@ workspace_changed! : Context, Try(Str, [Missing]), Str, Workspaces.Request => Tr
 workspace_changed! = |context, provider, workspace_id, asked| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
-	paseo_listed =
-		match context.paseo {
-			Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.workspaces
-			_ => []
-		}
-	match (mock_listed.find_first(|shown| shown.id == workspace_id), paseo_listed.any(|shown| shown.id == workspace_id), context.paseo) {
-		(Ok(shown), _, _) => {
+	match (mock_listed.find_first(|shown| shown.id == workspace_id), paseo_workspace!(context, provider, workspace_id)?) {
+		(Ok(shown), _) => {
 			changed =
 				match asked {
 					Rename({ name, .. }) => Json.to_str({ ..shown, name: if (name == "") shown.id else name })
@@ -1241,7 +1262,7 @@ workspace_changed! = |context, provider, workspace_id, asked| {
 			Sqlite.execute!({ db, query: "INSERT INTO mock_workspaces (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: workspace_id, value: changed } })?
 			Ok(Ok(Accepted))
 		}
-		(_, Bool.True, Ok(daemon)) => {
+		(_, Ok({ daemon, .. })) => {
 			request_id = "liton-workspace-${now_ms!().to_str()}"
 			their_workspace = Hosts.their_id(daemon.name, workspace_id)
 			outcome =
@@ -1267,13 +1288,13 @@ agents! = |context| {
 			_ => so_far
 		},
 	)
-	from_paseo : Try(List(Chat.Agent), _)
-	from_paseo =
-		match context.paseo {
-			Ok(daemon) => Json.parse(listed!(context.db, daemon.name, "agent_kinds")?)
-			Err(Disabled) => Ok([])
-		}
-	Ok((if (context.mock.agents) Mock.agents else []).concat(from_paseo ?? []).concat(from_remotes))
+	var $from_paseo = []
+	for daemon in context.paseo {
+		kinds : Try(List(Chat.Agent), _)
+		kinds = Json.parse(listed!(context.db, daemon.name, "agent_kinds")?)
+		$from_paseo = $from_paseo.concat(kinds ?? [])
+	}
+	Ok((if (context.mock.agents) Mock.agents else []).concat($from_paseo).concat(from_remotes))
 }
 
 ## tickets.v1's tickets: the mock's, as calls changed them.
@@ -1394,18 +1415,17 @@ schedule_prompted! = |context, { prompt, target, .. }|
 			}
 	}
 
-## Paseo's schedules as the cycle last listed them, none before or with
-## Paseo off.
+## Each Paseo host's schedules as the cycle last listed them, none before.
 paseo_schedules! : Context => Try(List(Schedules.Schedule), _)
-paseo_schedules! = |context|
-	match context.paseo {
-		Ok(daemon) => {
-			kept : Try(List(Schedules.Schedule), _)
-			kept = Json.parse(listed!(context.db, daemon.name, "schedules")?)
-			Ok(kept ?? [])
-		}
-		Err(Disabled) => Ok([])
+paseo_schedules! = |context| {
+	var $schedules = []
+	for daemon in context.paseo {
+		kept : Try(List(Schedules.Schedule), _)
+		kept = Json.parse(listed!(context.db, daemon.name, "schedules")?)
+		$schedules = $schedules.concat(kept ?? [])
 	}
+	Ok($schedules)
+}
 
 ## The runs of a schedule of Paseo's as the cycle last inspected it.
 paseo_runs! : Sqlite.Db, PaseoDaemon, Str => Try(Try(List(Schedules.Run), [NotCached]), _)
@@ -1455,23 +1475,42 @@ schedules_call! = |context, provider, asked| {
 	db = context.db
 	kept = if (Protocol.serves(provider, Mock.provider.id)) schedules!(context)? else []
 	found = kept.find_first(|listed| listed.schedule.id == Schedules.schedule_of(asked))
-	# Paseo's: a schedule the mock doesn't have, or one made for Paseo's session or place.
-	paseo_owns =
+	# A Paseo host's: one made for the Paseo host the call names, or for a
+	# Paseo host's session or place, or a schedule the mock doesn't have.
+	named_paseo = context.paseo.find_first(|daemon| provider == Ok(Hosts.paseo_provider(daemon.name))).map_err(|_| NotPaseo)
+	paseo_daemon =
 		match asked {
-			ListSchedules => Bool.False
-			Create({ target: Session(session_id), .. }) => provider == Ok(Paseo.provider.id) or provider!(context, session_id)? != MockSession
-			Create({ target: NewSession({ place: Workspace(workspace_id), .. }), .. }) => provider == Ok(Paseo.provider.id) or !(mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) and Protocol.serves(provider, Mock.provider.id))
-			Create(_) => provider == Ok(Paseo.provider.id)
-			_ => found.is_err()
+			ListSchedules => Err(NotPaseo)
+			Create({ target: Session(session_id), .. }) =>
+				match (named_paseo, provider!(context, session_id)?) {
+					(Ok(daemon), _) => Ok(daemon)
+					(_, PaseoSession(daemon)) => Ok(daemon)
+					(_, MockSession) => Err(NotPaseo)
+					(_, NoSession) => paseo_owner(context.paseo, session_id)
+				}
+			Create({ target: NewSession({ place: Workspace(workspace_id), .. }), .. }) =>
+				match named_paseo {
+					Ok(daemon) => Ok(daemon)
+					Err(NotPaseo) => if (mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) and Protocol.serves(provider, Mock.provider.id)) Err(NotPaseo) else paseo_owner(context.paseo, workspace_id)
+				}
+			Create(_) => named_paseo
+			_ => if (found.is_ok()) Err(NotPaseo) else paseo_owner(context.paseo, Schedules.schedule_of(asked))
 		}
-	match context.paseo {
-		Ok(daemon) if paseo_owns and Protocol.serves(provider, Paseo.provider.id) => return paseo_schedules_call!(context, daemon, asked)
-		Ok(daemon) if asked == ListSchedules and Protocol.serves(provider, Paseo.provider.id) =>
+	match paseo_daemon {
+		Ok(daemon) if Protocol.serves(provider, Hosts.paseo_provider(daemon.name)) => return paseo_schedules_call!(context, daemon, asked)
+		_ => {}
+	}
+	if asked == ListSchedules {
+		var $listed = kept.map(|listed_kept| listed_kept.schedule)
+		for daemon in context.paseo.keep_if(|daemon| Protocol.serves(provider, Hosts.paseo_provider(daemon.name))) {
 			match paseo_schedules_call!(context, daemon, ListSchedules)? {
-				Ok(Schedules(listed)) => return Ok(Ok(Schedules(kept.map(|listed_kept| listed_kept.schedule).concat(listed))))
+				Ok(Schedules(listed)) => {
+					$listed = $listed.concat(listed)
+				}
 				other => return Ok(other)
 			}
-		_ => {}
+		}
+		return Ok(Ok(Schedules($listed)))
 	}
 	no_schedule = Err({ code: NotFound, message: "no schedule ${Schedules.schedule_of(asked)}" })
 	changed! = |change|
@@ -1620,7 +1659,7 @@ routed_provider! = |context, provider, session_id| {
 	found = provider!(context, session_id)?
 	owner = match found {
 		MockSession => Mock.provider.id
-		PaseoSession(_) => Paseo.provider.id
+		PaseoSession(daemon) => Hosts.paseo_provider(daemon.name)
 		NoSession => ""
 	}
 	Ok(if (Protocol.serves(provider, owner)) found else NoSession)
@@ -1663,9 +1702,9 @@ located! = |context, focus|
 			if context.mock.agents and mock_workspaces!(context.db)?.any(|shown| shown.id == workspace_id) {
 				Ok(MockWorkspace(workspace_id))
 			} else {
-				match context.paseo {
-					Ok(daemon) => Ok(paseo_listed!(context.db, daemon.name)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(daemon.name, shown.directory)) ?? Nowhere)
-					Err(Disabled) => Ok(Nowhere)
+				match paseo_workspace!(context, Err(Missing), workspace_id)? {
+					Ok({ daemon, workspace }) => Ok(paseo_directory(daemon.name, workspace.directory))
+					Err(NotPaseo) => Ok(Nowhere)
 				}
 			}
 		Room(_) | Ticket(_) => Ok(Nowhere)
@@ -1747,10 +1786,10 @@ watched! = |context, manifest, { capability, topic }|
 			for used in part.uses {
 				watched!(context, manifest, used)?
 			}
-			match context.paseo {
-				Ok(daemon) => wanted!(context.db, daemon.name, "newest", "")
-				Err(Disabled) => Ok({})
+			for daemon in context.paseo {
+				wanted!(context.db, daemon.name, "newest", "")?
 			}
+			Ok({})
 		}
 		Err(_) =>
 			match Protocol.subject(manifest, { capability, topic, after: "" }) {
@@ -1829,20 +1868,19 @@ state_swapped! = |db, transformer, stored, state|
 workspaces! : Context => Try(Workspaces.Listed, _)
 workspaces! = |context| {
 	db = context.db
-	match context.paseo {
-		Ok(daemon) => wanted!(db, daemon.name, "workspace_list", "")?
-		Err(Disabled) => {}
+	for daemon in context.paseo {
+		wanted!(db, daemon.name, "workspace_list", "")?
 	}
 	sessions = sessions!(context)?
 	from_mock = if (context.mock.agents) { projects: mock_projects!(db)?, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
-	from_paseo =
-		match context.paseo {
-			Ok(daemon) => paseo_listed!(db, daemon.name)?
-			Err(Disabled) => { projects: [], workspaces: [] }
-		}
+	var $from_paseo = { projects: [], workspaces: [] }
+	for daemon in context.paseo {
+		listed = paseo_listed!(db, daemon.name)?
+		$from_paseo = { projects: $from_paseo.projects.concat(listed.projects), workspaces: $from_paseo.workspaces.concat(listed.workspaces) }
+	}
+	from_paseo = $from_paseo
 	placed : List({ id : Str, workspace_id : Str })
 	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' OR provider LIKE '%/paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
-
 	paseo_workspaces = from_paseo.workspaces.map(|shown| { ..shown, session_ids: placed.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id) })
 	# A remote's workspaces come with the state it counted.
 	from_remotes = merged_events!(context, WorkspaceList)?.fold(
@@ -2043,10 +2081,10 @@ provider! = |{ db, mock, paseo, .. }, session_id| {
 	# An archived Paseo agent its history listed is Paseo's too.
 	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id UNION ALL SELECT CASE WHEN host = 'paseo' THEN 'paseo' ELSE host || '/paseo' END AS provider FROM paseo_history WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
-		match (rows.first().map_ok(|row| row.provider), paseo) {
-			(Ok("mock"), _) => if (mock.agents) MockSession else NoSession
-			(Ok("paseo"), Ok(daemon)) => PaseoSession(daemon)
-			_ => NoSession
+		match rows.first().map_ok(|row| row.provider) {
+			Ok("mock") => if (mock.agents) MockSession else NoSession
+			Ok(owner) => paseo.find_first(|daemon| Hosts.paseo_provider(daemon.name) == owner).map_ok(|daemon| PaseoSession(daemon)) ?? NoSession
+			Err(_) => NoSession
 		},
 	)
 }
@@ -2096,14 +2134,13 @@ sessions! = |context| {
 	for row in if (mock.agents) rows else [] {
 		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title, settings: { model: row.model, mode: row.mode, thinking: row.thinking } }, mock_listed, timed!(db, row.id, now_ms!())?))
 	}
-	match paseo {
-		Ok(daemon) => {
-			wanted!(db, daemon.name, "agent_list", "")?
-			paseo_cycle!(context)?
-			refused = refusal!(db, daemon.name)?.map_ok(|{ reason, .. }| [Paseo.refused_session(daemon.name, reason)]) ?? []
-			$sessions = $sessions.concat(refused).concat(registered!(db, daemon.name)?)
-		}
-		Err(Disabled) => {}
+	for daemon in paseo {
+		wanted!(db, daemon.name, "agent_list", "")?
+	}
+	paseo_cycle!(context)?
+	for daemon in paseo {
+		refused = refusal!(db, daemon.name)?.map_ok(|{ reason, .. }| [Paseo.refused_session(daemon.name, reason)]) ?? []
+		$sessions = $sessions.concat(refused).concat(registered!(db, daemon.name)?)
 	}
 	remote_sessions = merged_events!(context, Sessions)?.fold(
 		[],
@@ -2332,14 +2369,22 @@ store! = |db, session_id, stored, { state, events }| {
 ## the cycle. What is pending (see `wanted!`) is asked first, and what a
 ## poll first watches while it runs, next (see `asked_each!`).
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
-## A cached poll's (`Cached`) runs none.
+## A cached poll's (`Cached`) runs none. Each Paseo host has a cycle of its
+## own, one after the other, and one that fails, such as for a database
+## error, is logged and the next runs.
 paseo_cycle! : Context => Try({}, _)
-paseo_cycle! = |context|
-	match context.paseo {
-		Err(Disabled) => Ok({})
-		Ok(_) if context.upstream == Cached => Ok({})
-		Ok(daemon) => paseo_host_cycle!(context, daemon)
+paseo_cycle! = |context| {
+	if context.upstream == Cached {
+		return Ok({})
 	}
+	for daemon in context.paseo {
+		match paseo_host_cycle!(context, daemon) {
+			Ok({}) => {}
+			Err(err) => logged!("Paseo ${daemon.name}: its cycle failed: ${Str.inspect(err)}")
+		}
+	}
+	Ok({})
+}
 
 ## A cycle of one Paseo host (see `paseo_cycle!`).
 paseo_host_cycle! : Context, PaseoDaemon => Try({}, _)
@@ -2622,12 +2667,12 @@ listed_agent_kinds! = |db, host, connection, request_id|
 ## last listed them (none before), then the remotes' importable sessions.
 importable! : Context => Try(List(Chat.Importable), _)
 importable! = |context| {
-	listed : Try(List(Chat.Importable), _)
-	listed =
-		match context.paseo {
-			Ok(daemon) => Json.parse(listed!(context.db, daemon.name, "importable")?)
-			Err(Disabled) => Ok([])
-		}
+	var $listed = []
+	for daemon in context.paseo {
+		kept : Try(List(Chat.Importable), _)
+		kept = Json.parse(listed!(context.db, daemon.name, "importable")?)
+		$listed = $listed.concat(kept ?? [])
+	}
 	from_remotes = merged_events!(context, Importable)?.fold(
 		[],
 		|so_far, event| match event {
@@ -2635,7 +2680,7 @@ importable! = |context| {
 			_ => so_far
 		},
 	)
-	Ok((listed ?? []).concat(from_remotes))
+	Ok($listed.concat(from_remotes))
 }
 
 ## Sends a request, and answers the message that answers it, skipping
@@ -3087,19 +3132,45 @@ hosts_provider : Manifest.Provider
 hosts_provider = { id: "hosts", name: "Hosts", capabilities: [Capability.hosts_v1] }
 
 ## The context with the hosts enabled now: the liton hosts as its remotes,
-## and the Paseo host `paseo` as its Paseo, so a host added, changed or
+## and the Paseo hosts as its Paseo daemons, so a host added, changed or
 ## switched off counts from the next request.
 hosted! : Context => Try(Context, _)
 hosted! = |context| {
 	rows : List({ name : Str, kind : Str, target : Str, secret : Str })
 	rows = Sqlite.query_many!({ db: context.db, query: "SELECT name, kind, target, secret FROM hosts WHERE enabled = 1 ORDER BY origin = 'Added', position;", params: {}, limits: Sqlite.default_query_limits })?
 	remotes = rows.keep_if(|row| row.kind == "Liton").map(|row| { name: row.name, url: row.target })
-	paseo =
-		match rows.find_first(|row| row.kind == "Paseo" and row.name == "paseo").map_ok(|row| (Paseo.address(row.target), row.secret)) {
-			Ok((Ok({ host, port }), password)) => Ok({ name: "paseo", host, port, password })
-			_ => Err(Disabled)
-		}
-	Ok({ ..context, remotes, paseo })
+	Ok({ ..context, remotes, paseo: paseo_daemons(rows) })
+}
+
+## The Paseo daemons of the hosts `rows`, those whose target is an address.
+paseo_daemons : List({ name : Str, kind : Str, target : Str, secret : Str }) -> List(PaseoDaemon)
+paseo_daemons = |rows|
+	rows.fold(
+		[],
+		|so_far, row| match (row.kind, Paseo.address(row.target)) {
+			("Paseo", Ok({ host, port })) => so_far.append({ name: row.name, host, port, password: row.secret })
+			_ => so_far
+		},
+	)
+
+expect {
+	rows = [{ name: "paseo", kind: "Paseo", target: "127.0.0.1:6767", secret: "a" }, { name: "team", kind: "Liton", target: "https://liton.example", secret: "t" }, { name: "box", kind: "Paseo", target: "box.local:7777", secret: "b" }]
+	paseo_daemons(rows) == [{ name: "paseo", host: "127.0.0.1", port: 6767, password: "a" }, { name: "box", host: "box.local", port: 7777, password: "b" }]
+}
+
+## The Paseo host whose id `id` is, by its name (see `Hosts.named`): one
+## whose name it starts with, else `paseo`, whose ids are bare.
+paseo_owner : List(PaseoDaemon), Str -> Try(PaseoDaemon, [NotPaseo])
+paseo_owner = |daemons, id|
+	match daemons.find_first(|daemon| daemon.name != "paseo" and id.starts_with("${daemon.name}/")) {
+		Ok(daemon) => Ok(daemon)
+		Err(_) => daemons.find_first(|daemon| daemon.name == "paseo").map_err(|_| NotPaseo)
+	}
+
+expect {
+	paseo = { name: "paseo", host: "127.0.0.1", port: 6767, password: "a" }
+	box = { name: "box", host: "box.local", port: 7777, password: "b" }
+	paseo_owner([paseo, box], "box/w1") == Ok(box) and paseo_owner([paseo, box], "w1") == Ok(paseo) and paseo_owner([box], "w1") == Err(NotPaseo) and paseo_owner([paseo, box], "boxes/w1") == Ok(paseo)
 }
 
 ## Sets the hosts the environment and the setup name, `seeded`: the Paseo
