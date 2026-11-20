@@ -566,6 +566,23 @@ as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
 The mock provider keeps three rooms, one a forum, where its agents type and
 then answer when a message mentions them.
 
+The daemon's own relay (Relay, below) is the provider `relay` of rooms: a
+room is a group, a message its kind 9 with NIP-10's `root` and `reply` `e`
+tags for a thread and `p` tags for mentions, a reaction a kind 7, an edit a
+kind 40003 and a deletion a kind 5, or 9005 by an admin; a member is a key,
+named by its latest profile (kind 0), an `Agent` when the profile says
+`"bot": true`. A call of a relay room carries the event it makes beside its
+request, signed by the device's key: `Send` a kind 9, `React` a kind 7,
+`Unreact` a kind 5 marked `["k", "7"]` whose `e` names the message and whose
+content is the emoji, `Join` a 9021 and `Leave` a 9022, each in the room.
+The relay takes it as `POST /liton/v1/nostr/event` would, and the call
+answers `Rejected` with why it didn't:
+
+```json
+{ "capability": "rooms.v1", "request": { "Send": { "room_id": "dispatch", "text": "on it", "place": "TopLevel", "mentions": [] } },
+  "signed": { "id": "a7d4…", "pubkey": "c604…", "created_at": 1700000000, "kind": 9, "tags": [["h", "dispatch"]], "content": "on it", "sig": "…" } }
+```
+
 ### Relay
 
 The daemon is a Nostr relay of its own, the store of its rooms: it keeps
