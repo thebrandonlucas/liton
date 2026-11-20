@@ -424,6 +424,19 @@ daemon's own budgeted work upstream (see design.md, Paseo load). The daemon
 notes what all of a poll's topics want before asking upstream, so one poll costs
 at most one round of upstream work.
 
+A poll with `"cached": true` is answered at once from what the daemon keeps. It
+notes what its topics want as any poll does, but asks no provider: its answer
+says `"refresh": true` when the daemon has providers to ask (Paseo, remotes),
+and `POST /liton/v1/refresh`, with no body, asks them what polls watch, when
+due, and answers `{}` once done. A client keeps one refresh on its way and polls
+again when it answers. In a cached poll's answer, a topic whose provider hasn't
+been asked about it since a poll first watched it, such as a Paseo session's
+timeline or workspace, or a remote's topic, is `"refreshing": true`, with the
+events the daemon kept: none if it kept nothing, which a client shows as
+loading rather than empty. A poll without
+`cached` asks the providers due before answering, as before, so clients that
+don't refresh, and daemons polling another, see no change.
+
 The same topics will also stream: `GET /liton/v1/stream?topic=…` as server-sent
 events with the cursor as the event id, so a reconnect resumes with
 `Last-Event-ID`. Polling stays as the fallback.
@@ -888,7 +901,8 @@ The daemon hosts every transformer the same way, knowing none of them:
   transformer's output; the topics it `follows` are read from what the daemon
   keeps, with no work upstream. So a transformer adds little load beyond its
   `uses`: while a client watches attention, Paseo's cycle also fetches the
-  timelines of its three most recently active sessions, and attention
+  timelines of its five most recently active sessions, as it does while a
+  client watches `sessions`, and attention
   derives from what the daemon has of the rest.
 - **Topics.** Each poll of an offered topic derives it again and answers it
   like any topic: a snapshot by its fingerprint, entries after their

@@ -142,6 +142,7 @@ All notable changes to liton are documented in this file. The format is based on
 - History, a row over the Developer preset's Workspaces and a ⌘K command (Open the history), opens in the main area, as Paseo's does, and lists every session your providers keep, archived ones too, the latest first, each with its project, agent and how long ago it was archived; type to search, and Show more for the next page. Open an archived one to read its chat, and Unarchive it to list it again. chat.v1's `ListHistory` and `Unarchive` serve it, from the mock and from Paseo.
 - `schedules.v1` runs prompts on a cadence, every so long or by a cron expression in a time zone, in a session it keeps prompting (a heartbeat) or in a new session each time: `liton call schedules.v1 '"ListSchedules"'`, and `Create`, `Update`, `Pause`, `Resume`, `RunOnce` and `Delete`, with the `schedules` and `runs/<schedule_id>` topics. The mock runs its own, starting with a nightly one.
 - Schedules, a row over the Developer preset's Workspaces and ⌘K's Open the schedules, opens in the main area and lists the schedules of the daemon's providers, Paseo's and the mock's, each with its status, its cadence in words, whom it prompts and when it runs next. Open one to pause or resume it, run it now, edit or delete it, each shown at once, and to see its runs, each opening the session it prompted. New schedule (also in ⌘K) makes one: a name, the prompt, a cadence from presets such as Every 30 minutes or Weekdays at 09:00, or a cron expression in a time zone, and a new agent each run, picked as New agent picks one, or, from a session's ⋮ menu (Heartbeat…) or ⌘K's Heartbeat for the chat's session, that session itself.
+- A poll of `/liton/v1/poll` with `"cached": true` is answered at once from what the daemon keeps, while `POST /liton/v1/refresh` asks Paseo and the remote daemons what polls watch; topics the daemon hasn't fetched yet come back `"refreshing": true` (docs/protocol.md). Polls without it work as before.
 
 ### Changed
 
@@ -228,6 +229,8 @@ All notable changes to liton are documented in this file. The format is based on
 - Every drop-down, from the composer's mode, model and thinking to the inbox's and tickets' filters and Settings, is one compact pill as wide as what it shows, with a small chevron and a ring when focused, in place of the system's look.
 - The tiles, the deck's strip and the window's edges keep the theme's gap between them, at least 8 pixels (6 on a phone, beside its safe areas), even in a theme without gaps, so nothing meets the window's edge.
 - Each item of a menu has an icon: new agent or workspace, move, hide and show, pin and unpin, stop, mark read and unread, rename, copy, archive, copy link, and join and leave.
+- With Paseo or other daemons connected, the UI no longer waits on them to show what the daemon has: each poll answers at once from what it keeps, while a refresh of its own asks them. A session whose conversation the daemon hasn't fetched yet shows loading until it has, and one it kept shows at once, with a small spinner at its end while newer entries are fetched.
+- While a list of sessions is on screen, the daemon keeps the conversations of Paseo's five most recently active sessions fetched, so opening one near the top of the list shows it at once.
 
 ### Fixed
 

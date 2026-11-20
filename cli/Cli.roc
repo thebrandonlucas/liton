@@ -70,7 +70,7 @@ Cli := [].{
 	## capability and topic when several are followed; the topics to poll next,
 	## after their new cursors; and why any topic can't be followed.
 	polled : List(Protocol.Wanted), Protocol.Polled -> { lines : List(Str), next : List(Protocol.Wanted), failures : List(Str) }
-	polled = |wanted, { topics }| {
+	polled = |wanted, { topics, .. }| {
 		wrapped = wanted.len() > 1
 		line = |{ capability, topic, .. }, event| if (wrapped) Json.to_str({ capability, topic, event }) else Json.to_str(event)
 		{
@@ -145,14 +145,14 @@ expect Cli.failure("{\"Ok\":\"Accepted\"}") == Err(Answered) and Cli.failure("{\
 # One topic prints its events alone; several wrap each with its topic.
 expect {
 	wanted = [{ capability: "chat.v1", topic: "timeline/s1", after: "" }]
-	answer = { topics: [Protocol.appended(wanted.first() ?? { capability: "", topic: "", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }])] }
+	answer = { topics: [Protocol.appended(wanted.first() ?? { capability: "", topic: "", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }])], refresh: Err(Missing) }
 	alone = Cli.polled(wanted, answer)
 	alone.lines == ["{\"Entry\":{\"event\":{\"StatusChanged\":\"Running\"},\"sequence\":1}}"] and alone.next == [{ capability: "chat.v1", topic: "timeline/s1", after: "1" }] and alone.failures == []
 }
 
 expect {
 	wanted = [{ capability: "chat.v1", topic: "timeline/s1", after: "" }, { capability: "chat.v2", topic: "sessions", after: "" }]
-	answer = { topics: [Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }]), Protocol.failed({ capability: "chat.v2", topic: "sessions", after: "" }, { code: Unsupported, message: "the daemon offers no chat.v2" })] }
+	answer = { topics: [Protocol.appended({ capability: "chat.v1", topic: "timeline/s1", after: "" }, [{ sequence: 1, event: StatusChanged(Running) }]), Protocol.failed({ capability: "chat.v2", topic: "sessions", after: "" }, { code: Unsupported, message: "the daemon offers no chat.v2" })], refresh: Err(Missing) }
 	several = Cli.polled(wanted, answer)
 	several.lines == ["{\"capability\":\"chat.v1\",\"event\":{\"Entry\":{\"event\":{\"StatusChanged\":\"Running\"},\"sequence\":1}},\"topic\":\"timeline/s1\"}"] and several.failures == ["chat.v2 sessions: Unsupported: the daemon offers no chat.v2"]
 }

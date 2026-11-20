@@ -180,6 +180,13 @@ Model := [].{
 		poll_again : Bool,
 		waited : U64,
 		cursors : List({ capability : Str, topic : Str, cursor : Str }),
+
+		## The refresh of the daemon's providers (/liton/v1/refresh): whether
+		## the daemon offers one, as its last poll said, whether one is on
+		## its way, and the last sent's number. The sessions whose timelines
+		## the daemon is fetching anew (`refreshing`).
+		refresh : { offered : Bool, on_its_way : Bool, serial : U64 },
+		refreshing : List(Str),
 		notice : Str,
 		show_settings : Bool,
 		snapshot_text : Str,
@@ -507,6 +514,8 @@ Model := [].{
 				poll_again: Bool.False,
 				waited: 0,
 				cursors: [],
+				refresh: { offered: Bool.False, on_its_way: Bool.False, serial: 0 },
+				refreshing: [],
 				notice: "",
 				show_settings: Bool.False,
 				settings_page: { section: "surface", pushed: Bool.False },
@@ -2524,13 +2533,27 @@ Model := [].{
 
 	## Polls each second, unless a poll is still on its way, and takes the
 	## time `at` once a new minute begins, or each second while a chat on
-	## screen shows a turn running.
+	## screen shows a turn running. Where the daemon offers a refresh, it
+	## asks for one in place of the poll, which follows its answer.
 	tick : State, I64 -> State
 	tick = |state0, at| {
 		timing = Model.panes(state0).any(|shown| shown.widget == "chat" and Model.pane_visible(state0, shown.id) and Model.working(state0, shown).is_ok())
 		state = if (at // 60_000 == state0.now // 60_000 and !timing) state0 else { ..state0, now: at }
-		if (state.polling) { ..state, waited: state.waited + 1 } else Model.poll(state)
+		if (state.polling) { ..state, waited: state.waited + 1 } else if (state.refresh.offered and !state.refresh.on_its_way) Model.refreshed_again(state) else Model.poll(state)
 	}
+
+	## Asks the daemon to refresh its providers.
+	refreshed_again : State -> State
+	refreshed_again = |state| { ..state, refresh: { ..state.refresh, on_its_way: Bool.True, serial: state.refresh.serial + 1 } }
+
+	## Takes a refresh's answer, or its failure, and polls for what it fetched.
+	refreshed : State -> State
+	refreshed = |state| Model.poll({ ..state, refresh: { ..state.refresh, on_its_way: Bool.False } })
+
+	## Whether the daemon is fetching anew the timeline of a session whose
+	## timeline the UI shows.
+	refreshing_timeline : State, Str -> Bool
+	refreshing_timeline = |state, session_id| state.refreshing.contains(session_id) and !Model.loading(state, session_id)
 
 	## Polls at once when the topics the panes follow change, or once the
 	## poll on its way answers; but in place of one that has waited a second
@@ -2560,7 +2583,9 @@ Model := [].{
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
 		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
-		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
+		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
+		# A timeline the daemon has yet to fetch is asked for at once.
+		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
 		if (state.poll_again) Model.poll(answered) else answered
 	}
 
@@ -2588,11 +2613,17 @@ Model := [].{
 
 	## Takes a topic's update from the poll numbered `serial`.
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
-	updated = |state, serial, subject, { capability, topic, cursor, events, .. }| {
+	updated = |state, serial, subject, { capability, topic, cursor, events, refreshing, .. }| {
 		cursors = state.cursors.drop_if(|known| known.capability == capability and known.topic == topic).append({ capability, topic, cursor })
-		with_events = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events0 = events.fold({ ..state, cursors }, |so_far, event| Model.received(so_far, subject, event))
+		with_events =
+			match subject {
+				Timeline(session_id) => { ..with_events0, refreshing: with_events0.refreshing.drop_if(|kept| kept == session_id).concat(if (refreshing == Ok(Bool.True)) [session_id] else []) }
+				_ => with_events0
+			}
 		match subject {
-			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
+			# One the daemon has yet to fetch stays loading.
+			Timeline(session_id) if !with_events.timelines.any(|timeline| timeline.session_id == session_id) and refreshing != Ok(Bool.True) => { ..with_events, timelines: with_events.timelines.append({ session_id, entries: [] }) }
 			RoomMessages(room_id) => Model.logged(with_events, room_id, "", [])
 			RoomThread({ room_id, root }) => Model.logged(with_events, room_id, root, [])
 			# Unchanged items still settle what was set aside.
@@ -5353,7 +5384,7 @@ expect {
 expect {
 	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
 	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
-	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
+	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing), refreshing: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing), refreshing: Err(Missing) }]
 	answered = Model.polled(sent, sent.poll, answer)
 	again = Model.poll(answered)
 	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]

@@ -378,7 +378,9 @@ Liton := [].{
 
 	## Every request to the daemon is a call or a poll of /liton/v1
 	## (docs/protocol.md). One poll at a time follows every topic the panes
-	## show, each second and at once when what they show changes. The
+	## show, each second and at once when what they show changes, from what
+	## the daemon keeps; one refresh at a time, where the daemon offers it,
+	## has it ask its providers, and a poll follows its answer. The
 	## manifest is asked for again once this browser is paired, and a 401
 	## shows the pair screen (ui/Pairing.roc).
 	effects : State(Ctx, Model.State) -> List(Elem(Ctx))
@@ -409,18 +411,25 @@ Liton := [].{
 		# The latest poll only: one replaced on its way is given up (see `Model.follow`).
 		Engine.watch_latest(
 			model.signal().map(|state| state.poll),
-			|poll| if (poll.topics.is_empty()) [] else [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
+			|poll| if (poll.topics.is_empty()) [] else [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics, cached: Bool.True }), timeout: Ms(10000) })],
 			model.on_result(
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
 					decoded = Json.parse(res ?? "")
 					match (res, decoded) {
 						(Err(Status(401)), _) => Pairing.refused(Model.poll_failed(state))
-						(_, Ok(answer)) => Model.polled({ ..state, unreachable: Bool.False }, poll, answer.topics)
+						(_, Ok(answer)) => Model.polled({ ..state, unreachable: Bool.False, refresh: { ..state.refresh, offered: answer.refresh == Ok(Bool.True) } }, poll, answer.topics)
 						(_, Err(_)) => Model.poll_failed(state)
 					}
 				},
 			),
+		),
+		# Paseo answers a directory's first status in seconds, and the daemon
+		# gives up on it after 30.
+		Engine.watch_changes(
+			model.signal().map(|state| state.refresh.serial),
+			|_| [Engine.http_body({ method: "POST", url: "/liton/v1/refresh", headers: [("Content-Type", "application/json")], body: "{}", timeout: Ms(35000) })],
+			model.on_result(|state, _, _| Model.refreshed(state)),
 		),
 		Engine.watch_changes(
 			model.signal().map(|state| state.attention_outbox),
@@ -2989,6 +2998,12 @@ Liton := [].{
 					Engine.when(
 						shown.map(|{ pane, state }| Model.working(state, pane).is_ok()),
 						|| Html.li([Engine.class("entry working"), Engine.attr("role", "status"), Html.aria_label("Working")], [Html.span_s(Engine.const(""), [Engine.class("loader"), Engine.attr("aria-hidden", "true")]), Html.span_s(shown.map(|{ pane, state }| Model.working(state, pane) ?? ""), [Engine.class("elapsed"), Engine.test_id("working")])]),
+						|| Engine.text(""),
+					),
+					# While the daemon fetches what is newer than it kept.
+					Engine.when(
+						shown.map(|{ pane, state }| Model.refreshing_timeline(state, Model.session_of(state, pane))),
+						|| Html.li([Engine.class("entry refreshing")], [Spinner.spinner("Refreshing", Inline)]),
 						|| Engine.text(""),
 					),
 				],
