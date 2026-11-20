@@ -6,6 +6,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Added
 
+- Settings → Usage & limits, beside Hosts, shows each account's plan windows, such as its 5-hour and weekly limits, with how much of each is used and when it resets, and Refresh; and sets the weekly limit of each account and the default limit of each session's context, each a slider. The connection menu shows each account's 5-hour and weekly use as bars, and goes there.
 - Limits, each a percent, on how much of its context window a session fills and how much of its weekly quota an account uses (`limits.v1`, with the accounts' usage in `usage.v1`): past one, the daemon refuses new messages to the session, but `/compact`, and new agents on the account, while a turn already running finishes. The Inbox says when a session nears or passed its limit.
 - While sessions and workspaces come from more than one place, each row from a host, in Workspaces, Sessions and the Inbox, has a badge naming its host in the host's own colour, and Workspaces' Group by option lists them under each host.
 - Settings → Hosts, beside Devices, lists the daemons this one connects to, each with a status dot, its version and when it was last online. Its ⋮ menu edits a host, disables or enables it, and removes one you added after asking; Add host connects another liton daemon by its URL and token. Each change shows at once, and comes back with why if the daemon refuses it. A password or token typed is never shown again.

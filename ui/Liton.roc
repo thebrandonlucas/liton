@@ -5,6 +5,7 @@ import pf.Html
 import cap.Attention
 import cap.Capability
 import cap.Chat
+import cap.Limits
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -31,6 +32,7 @@ import Wallpaper
 import Spinner
 import History
 import HostDesk
+import LimitDesk
 import ScheduleDesk
 import InboxDesk
 import Menu
@@ -268,6 +270,12 @@ Liton := [].{
 			[],
 			[
 				Html.p_s(model.signal().map(|state| "${daemon_name(state)} · ${state_name(state)}"), [Engine.class("connection-title")]),
+				# Each account's 5-hour and weekly windows (usage.v1).
+				Engine.each(
+					model.signal().map(|state| LimitDesk.rows(state.limits, Bool.True)),
+					|row| row.key,
+					|row| Liton.usage_window(model.signal().lift_row(), row.field(|shown| shown), "usage-summary"),
+				),
 				Engine.each(
 					model.signal().map(|state| state.providers.map(|provider| { provider, health: Model.provider_health(state, provider) })),
 					|listed| listed.provider.id,
@@ -303,6 +311,7 @@ Liton := [].{
 						),
 				),
 				Engine.when(model.signal().map(|state| !state.hosts.listed.is_empty()), || Menu.item(Engine.const("hosts"), Engine.const("Hosts settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "hosts"), menu: "" })), || Engine.text("")),
+				Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.usage_v1) or state.capabilities.contains(Capability.limits_v1)), || Menu.item(Engine.const("usage"), Engine.const("Usage & limits"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "usage"), menu: "" })), || Engine.text("")),
 				Menu.item(Engine.const("host"), Engine.const("Host settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host"), menu: "" })),
 			],
 		)
@@ -464,6 +473,8 @@ Liton := [].{
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
 						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
 						"hosts.v1" => Model.hosts_answered(state, outbox.serial, res ?? "")
+						"limits.v1" => Model.limits_answered(state, outbox.serial, res ?? "")
+						"usage.v1" => Model.usage_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -763,7 +774,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices")])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "usage", "Usage & limits"), Liton.section_button(model, "devices", "Devices")])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -782,6 +793,7 @@ Liton := [].{
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
 								shown("hosts", || Liton.hosts_section(model)),
+								shown("usage", || Liton.usage_section(model)),
 								shown("devices", || Pairing.section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
@@ -800,7 +812,66 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("usage", "Usage & limits"), ("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+
+	## Settings' Usage & limits: each account's windows, how much of each
+	## is used, the weekly one amber near the weekly limit and red past it,
+	## and when each resets, with Refresh; and the weekly limit and each
+	## session's default context limit, each a slider set once let go and
+	## shown at once.
+	usage_section : State(Ctx, Model.State) -> Elem(Ctx)
+	usage_section = |model| {
+		desk = model.signal().map(|state| state.limits)
+		limit_row = |scope, name, test_name, help|
+			Html.div(
+				"settings-row limit-row",
+				[
+					Html.p(name, "settings-row-title"),
+					Html.span_s(desk.map(|shown| if (LimitDesk.pending(shown, scope)) "${LimitDesk.limit_text(LimitDesk.percent(shown, scope))} · saving…" else LimitDesk.limit_text(LimitDesk.percent(shown, scope))), [Engine.class("limit-value"), Engine.test_id(test_name)]),
+					Liton.limit_slider(Engine.const(name), desk.map(|shown| LimitDesk.percent(shown, scope)), model.set_value(|state, text| Model.set_limit(state, scope, text))),
+					Html.p(help, "help"),
+				],
+			)
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Accounts",
+					[
+						Engine.each(
+							desk.map(|shown| LimitDesk.rows(shown, Bool.False)),
+							|row| row.key,
+							|row| Liton.usage_window(model.signal().lift_row(), row.field(|shown| shown), "usage-window"),
+						),
+						Engine.when(desk.map(|shown| shown.reports.is_empty()), || Html.div("settings-row", [Html.p("No account tells its usage yet. Paseo tells its accounts' plans from 0.11.", "help")]), || Engine.text("")),
+						Html.div("settings-row", [Html.button_s(desk.map(|shown| if (shown.refreshing > 0) "Refreshing…" else "Refresh"), [Html.boolean("disabled", desk.map(|shown| shown.refreshing > 0))], model.update(Model.refresh_usage))]),
+					],
+				),
+				Liton.settings_card(
+					"Limits",
+					[
+						limit_row(Week, "Weekly limit", "weekly-limit", "Of each account's weekly quota. Past it, the daemon refuses new messages to its sessions and new agents on it; a turn already running finishes."),
+						limit_row(Default, "Each session's context", "default-limit", "Of its context window, for each session without a limit of its own, set from its composer's context meter. Past it, the daemon refuses new messages to it but /compact."),
+					],
+				),
+			],
+		)
+	}
+
+	## A window of an account's plan: its name, a bar of how much is used,
+	## amber or red as its week nears or passed the weekly limit, and the
+	## percent, with when it resets; or, heading its windows, an account,
+	## with why it tells no usage, if it doesn't.
+	usage_window : Signal(ctx, Model.State), Signal(ctx, LimitDesk.Row), Str -> Elem(ctx)
+	usage_window = |state, window, class|
+		Html.div_s(
+			window.map(|shown| if (shown.account) "settings-row usage-account" else class),
+			[
+				Html.span_s(window.map(|shown| shown.title), [Engine.class_s(window.map(|shown| if (shown.account) "settings-row-title" else "usage-window-name"))]),
+				Html.span_s(Engine.const(""), [Engine.class_s(window.map(|shown| if (shown.account) "usage-bar hidden" else Liton.limit_class("usage-bar", shown.state))), Engine.attr_s("style", window.map(|shown| "--used: ${shown.percent.to_str()}")), Engine.attr("aria-hidden", "true")]),
+				Html.span_s(window.map2(state, |shown, now| if (shown.account) shown.detail else Str.join_with(["${shown.percent.to_str()}%", if (shown.detail.is_empty()) "" else "resets ${Model.until(now, shown.detail)}"].drop_if(Str.is_empty), " · ")), [Engine.class_s(window.map(|shown| if (shown.account) "help limit-warning over" else "usage-window-used"))]),
+			],
+		)
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -3394,6 +3465,20 @@ Liton := [].{
 			|| Engine.text(""),
 		)
 	}
+
+	## A class with " near" or " over" after it as `state` is.
+	limit_class : Str, Limits.State -> Str
+	limit_class = |class, state|
+		match state {
+			Over => "${class} over"
+			Near => "${class} near"
+			Ok => class
+		}
+
+	## A slider of a limit's percent, named `name`, 0 for none, that sets it
+	## once let go.
+	limit_slider : Signal(ctx, Str), Signal(ctx, U64), Handler(ctx) -> Elem(ctx)
+	limit_slider = |name, percent, handler| Engine.element("input", [Engine.attr_s("aria-label", name), Engine.attr("type", "range"), Engine.attr("min", "0"), Engine.attr("max", "100"), Engine.attr("step", "5"), Engine.class("limit-slider"), Engine.prop_s(Engine.Prop.value, percent.map(|chosen| chosen.to_str())), Html.on_change(handler)], [])
 
 	## The composer's chip: the model a session runs, or its agent when the
 	## provider doesn't tell the model, and nothing without a session.

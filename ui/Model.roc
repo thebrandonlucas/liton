@@ -6,12 +6,14 @@ import cap.Chat
 import cap.Context
 import cap.Files
 import cap.Hosts
+import cap.Limits
 import cap.Manifest
 import cap.Protocol
 import cap.Review
 import cap.Rooms
 import cap.Schedules
 import cap.Tickets
+import cap.Usage
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
@@ -20,6 +22,7 @@ import setup.Setup
 import Highlight
 import History
 import HostDesk
+import LimitDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -356,6 +359,11 @@ Model := [].{
 		## What Settings' Hosts shows (ui/HostDesk.roc), and the hosts.v1
 		## requests on their way (sent as `call_outbox`).
 		hosts : HostDesk.State,
+
+		## The accounts' usage and the limits (ui/LimitDesk.roc), and the
+		## limits.v1 and usage.v1 requests on their way (sent as
+		## `call_outbox`).
+		limits : LimitDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -562,6 +570,7 @@ Model := [].{
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
 				hosts: HostDesk.initial,
+				limits: LimitDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -2470,7 +2479,12 @@ Model := [].{
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
 		# The hosts, for Settings' Hosts and the host badges.
 		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The accounts' usage while Settings' Usage & limits or the
+		# connection menu shows it, and the limits while those or a chat do.
+		accounts_shown = (state.show_settings and state.settings_page.section == "usage") or state.menu == "connection"
+		usage = if (state.capabilities.contains(Capability.usage_v1) and accounts_shown) [UsageReports] else []
+		limits = if (state.capabilities.contains(Capability.limits_v1) and (accounts_shown or laid_out.any(|shown| shown.widget == "chat"))) [LimitStatus] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(usage).concat(limits).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2540,7 +2554,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), limits: LimitDesk.settled(applied.limits, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
@@ -2610,6 +2624,8 @@ Model := [].{
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
 			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
+			(_, Reports(reports)) => { ..state, limits: { ..state.limits, reports } }
+			(_, Limits(status)) => { ..state, limits: { ..state.limits, status } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -3982,6 +3998,57 @@ Model := [].{
 			Ok(Ok(_)) => Model.poll({ ..state, hosts: HostDesk.answered(state.hosts, serial, Accepted(state.poll.serial + 1)) })
 			Ok(Err({ message, .. })) => undone(message)
 			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Sets or clears a limit, shown at once (`LimitDesk`) until the daemon
+	## answers: the slider of `scope` moved to `text` percent, 0 for none.
+	set_limit : State, Limits.Scope, Str -> State
+	set_limit = |state, scope, text|
+		match LimitDesk.request_of(scope, text) {
+			Ok(request) => {
+				serial = state.call_outbox.serial + 1
+				{ ..state, call_outbox: { serial, key: "limits.v1", text: Json.to_str({ capability: "limits.v1", request }) }, limits: LimitDesk.asking(state.limits, serial, request), notice: "" }
+			}
+			Err(NotANumber) => state
+		}
+
+	## Takes the daemon's answer to a limits.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	limits_answered : State, U64, Str -> State
+	limits_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Limits.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, limits: LimitDesk.answered(state.limits, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(Accepted)) => Model.poll({ ..state, limits: LimitDesk.answered(state.limits, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Asks the providers for their accounts' usage again, shown as
+	## refreshing until the daemon answers.
+	refresh_usage : State -> State
+	refresh_usage = |state| {
+		serial = state.call_outbox.serial + 1
+		request : Usage.Request
+		request = Refresh
+		{ ..state, call_outbox: { serial, key: "usage.v1", text: Json.to_str({ capability: "usage.v1", request }) }, limits: { ..state.limits, refreshing: serial } }
+	}
+
+	## Takes the daemon's answer to a Refresh: the next poll shows the
+	## reports.
+	usage_answered : State, U64, Str -> State
+	usage_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Usage.Response), _)
+		answered = Json.parse(text)
+		done = { ..state, limits: { ..state.limits, refreshing: if (state.limits.refreshing == serial) 0 else state.limits.refreshing } }
+		match answered {
+			Ok(Ok(Accepted)) => Model.poll(done)
+			Ok(Err({ message, .. })) => { ..done, notice: message }
+			Err(_) => { ..done, notice: "The daemon did not answer." }
 		}
 	}
 
