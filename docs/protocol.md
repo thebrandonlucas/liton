@@ -431,8 +431,9 @@ and `POST /liton/v1/refresh`, with no body, asks them what polls watch, when
 due, and answers `{}` once done. A client keeps one refresh on its way and polls
 again when it answers. In a cached poll's answer, a topic whose provider hasn't
 been asked about it since a poll first watched it, such as a Paseo session's
-timeline, is `"refreshing": true`, with the events the daemon kept: none if it
-kept nothing, which a client shows as loading rather than empty. A poll without
+timeline or workspace, or a remote's topic, is `"refreshing": true`, with the
+events the daemon kept: none if it kept nothing, which a client shows as
+loading rather than empty. A poll without
 `cached` asks the providers due before answering, as before, so clients that
 don't refresh, and daemons polling another, see no change.
 

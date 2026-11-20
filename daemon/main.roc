@@ -608,7 +608,14 @@ polled_topics! = |context0, request| {
 			var $updates = []
 			for wanted in topics {
 				update = topic_update!(context, manifest, wanted)?
-				$updates = $updates.append(if (context.upstream == Cached and refreshing!(context, manifest, wanted)?) { ..update, refreshing: Ok(Bool.True) } else update)
+				$updates = $updates.append(
+					match if (context.upstream == Cached) refreshing!(context, manifest, wanted)? else Fresh {
+						Refreshing => { ..update, refreshing: Ok(Bool.True) }
+						# Not what the topic holds, which a client would show.
+						Unanswered => { ..update, events: [], cursor: wanted.after, refreshing: Ok(Bool.True) }
+						Fresh => update
+					},
+				)
 			}
 			polled : Protocol.Polled
 			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
@@ -631,22 +638,36 @@ refreshed! = |context| {
 }
 
 ## Whether a topic's provider hasn't been asked about it since a poll first
-## watched it: a Paseo session's timeline, until a cycle fetched it, or a
-## remote's topic, until the remote first answered it.
-refreshing! : Context, Manifest.Offered, Protocol.Wanted => Try(Bool, _)
+## watched it (`Refreshing`): a Paseo session's timeline, until a cycle
+## fetched it, a remote's topic, until the remote first answered it, or a
+## Paseo workspace's git, `Unanswered` while Paseo never read it.
+refreshing! : Context, Manifest.Offered, Protocol.Wanted => Try([Fresh, Refreshing, Unanswered], _)
 refreshing! = |context, manifest, wanted| {
 	db = context.db
-	pending : List({ topic : Str })
-	pending =
-		match Protocol.subject(manifest, wanted).map_ok(|subject| (subject, Remote.routed(context.remotes, subject))) {
-			Ok((_, Ok({ endpoint, subject: theirs }))) => {
-				named = Protocol.named(theirs)
-				Sqlite.query_many!({ db, query: "SELECT topic FROM remote_pending WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote: endpoint.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
-			}
-			Ok((Timeline(session_id), Err(Merged))) => Sqlite.query_many!({ db, query: "SELECT subject AS topic FROM paseo_pending WHERE kind = 'timeline' AND subject = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
-			_ => []
+	paseo_pending! = |kinds, subject| {
+		rows : List({ subject : Str })
+		rows = Sqlite.query_many!({ db, query: "SELECT subject FROM paseo_pending WHERE subject = :subject AND kind IN (SELECT value FROM json_each(:kinds));", params: { subject, kinds: Json.to_str(kinds) }, limits: Sqlite.default_query_limits })?
+		Ok(if (rows.is_empty()) Fresh else Refreshing)
+	}
+	match Protocol.subject(manifest, wanted).map_ok(|subject| (subject, Remote.routed(context.remotes, subject))) {
+		Ok((_, Ok({ endpoint, subject: theirs }))) => {
+			named = Protocol.named(theirs)
+			rows : List({ topic : Str })
+			rows = Sqlite.query_many!({ db, query: "SELECT topic FROM remote_pending WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote: endpoint.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
+			Ok(if (rows.is_empty()) Fresh else Refreshing)
 		}
-	Ok(!pending.is_empty())
+		Ok((Timeline(session_id), Err(Merged))) => paseo_pending!(["timeline"], session_id)
+		Ok((Changes({ context: focus, .. }), Err(Merged))) | Ok((File({ context: focus, .. }), Err(Merged))) =>
+			match located!(context, focus)? {
+				PaseoDirectory(directory) =>
+					match paseo_pending!(["workspace", "uncommitted", "base"], directory)? {
+						Refreshing if cached!(db, directory, "workspace")?.is_err() => Ok(Unanswered)
+						pending => Ok(pending)
+					}
+				_ => Ok(Fresh)
+			}
+		_ => Ok(Fresh)
+	}
 }
 
 ## Notes that a poll watches a topic's subject, so the next cycle asks Paseo
