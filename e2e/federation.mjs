@@ -166,6 +166,36 @@ try {
     assert.ok(upstream <= Math.floor(elapsed / interval) + 1, measured);
     assert.ok(upstream >= 1, measured);
   });
+  await step("hosts.v1 lists the env's and setup's hosts, never their secrets, and keeps the database readable by its user alone", async () => {
+    const hosts = (await call("hosts.v1", "ListHosts")).Ok.Hosts;
+    assert.deepEqual(hosts.map((h) => [h.name, h.kind, h.origin]), [["echo", "Liton", "Setup"], ["peer", "Liton", "Environment"], ["down", "Liton", "Environment"]]);
+    assert.ok(hosts.every((h) => !("password" in h) && !("secret" in h)));
+    assert.equal(hosts.find((h) => h.name === "peer").status, "Online");
+    assert.equal(hosts.find((h) => h.name === "down").status, "Offline");
+    assert.equal(fs.statSync(path.join(scratch, "main.db")).mode & 0o777, 0o600);
+    assert.ok((await call("hosts.v1", { RemoveHost: { name: "peer" } })).Ok.Rejected);
+  });
+  await step("a liton host added at runtime federates at once, its token never shown; disabled it leaves, enabled it comes back, removed it is gone", async () => {
+    const providers = async () => (await (await fetch(`${base}/manifest`)).json()).providers.map((p) => p.id);
+    assert.ok((await call("hosts.v1", { AddHost: { name: "again", kind: "Liton", target: "not a url", label: "", password: "" } })).Ok.Rejected, "a bad target is refused");
+    assert.deepEqual(await call("hosts.v1", { AddHost: { name: "again", kind: "Liton", target: `http://127.0.0.1:${peerPort}`, label: "Again", password: "t0ken-never-shown" } }), { Ok: "Accepted" });
+    await until("the added host's providers", async () => (await providers()).includes("again/mock"));
+    const [listed] = await poll([{ capability: "hosts.v1", topic: "hosts", after: "" }]);
+    const again = listed.events[0].Hosts.find((h) => h.name === "again");
+    assert.equal(again.origin, "Added");
+    assert.ok(!JSON.stringify(listed).includes("t0ken-never-shown") && !main.stderrText.includes("t0ken-never-shown"), "the token shows nowhere");
+    await until("the added host's sessions", async () => (await call("chat.v1", "ListSessions")).Ok.Sessions.some((s) => s.id === "again/flaky-ci"));
+    assert.deepEqual(await call("hosts.v1", { SetEnabled: { name: "again", enabled: false } }), { Ok: "Accepted" });
+    assert.ok(!(await providers()).includes("again/mock"), "disabled, its providers leave");
+    assert.equal((await call("hosts.v1", "ListHosts")).Ok.Hosts.find((h) => h.name === "again").status, "Disabled");
+    assert.deepEqual(await call("hosts.v1", { SetEnabled: { name: "again", enabled: true } }), { Ok: "Accepted" });
+    await until("the host back", async () => (await providers()).includes("again/mock"));
+    assert.deepEqual(await call("hosts.v1", { UpdateHost: { name: "again", label: "Once more" } }), { Ok: "Accepted" });
+    assert.equal((await call("hosts.v1", "ListHosts")).Ok.Hosts.find((h) => h.name === "again").label, "Once more");
+    assert.deepEqual(await call("hosts.v1", { RemoveHost: { name: "again" } }), { Ok: "Accepted" });
+    assert.ok(!(await providers()).includes("again/mock"), "removed, its providers leave");
+    assert.ok(!(await call("hosts.v1", "ListHosts")).Ok.Hosts.some((h) => h.name === "again"));
+  });
   console.log(`PASS providers outside the daemon (${measured})`);
   process.exit(0);
 } catch (error) {
