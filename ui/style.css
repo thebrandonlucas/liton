@@ -182,7 +182,24 @@ button.icon::before { content: ""; width: var(--icon-size, 16px); height: var(--
    animation (-0, -1) for each switch; not where motion is reduced. It
    moves only: fading it too redrew every glass pane's blur at each frame,
    which dropped about half the slide's frames. */
-.deck { flex: none; display: flex; justify-content: center; gap: 4px; padding: 0 var(--room) calc(var(--room) + env(safe-area-inset-bottom)); }
+.strip { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 var(--room) calc(var(--room) + env(safe-area-inset-bottom)); }
+.deck { display: flex; justify-content: center; gap: 4px; }
+/* Which daemon this is: its name and a dot, green connected, amber
+   connecting, red unreachable; its menu, each provider so. */
+.connection { justify-self: start; min-width: 0; }
+.connection-button { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 1px 10px 1px 8px; border-color: transparent; border-radius: 999px; background: none;
+  color: var(--muted); font: 11px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.connection-button::before, .connection-provider::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.connection-button::after { content: attr(data-name); overflow: hidden; text-overflow: ellipsis; }
+.connection-button.connecting::before, .connection-provider.starting::before { background: var(--warn); }
+.connection-button.unreachable::before, .connection-provider.down::before { background: var(--fail); }
+.connection-button:hover, .connection-button[aria-expanded="true"] { color: var(--text); border-color: var(--edge); }
+.connection .menu { position-area: block-start span-inline-end; min-width: 260px; max-width: 340px; }
+.connection-title { margin: 2px 6px 6px; font: 600 12px var(--font-mono); color: var(--muted); }
+.connection-provider { display: grid; grid-template-columns: 7px minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 4px 8px; font-size: 12.5px; }
+.connection-provider > span { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
+.connection-provider .provider-health, .connection-provider .provider-offers { color: var(--muted); font-size: 11.5px; }
+.item-host { --icon: var(--icon-settings); }
 .deck-surface { padding: 1px 10px; border: 1px solid transparent; border-radius: 999px; background: none;
   color: var(--muted); font: 11px var(--font-mono); letter-spacing: .02em; opacity: .7; }
 .deck-surface:hover { opacity: 1; color: var(--text); border-color: var(--edge); }
@@ -1311,7 +1328,8 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
     font: 700 10.5px/17px var(--font-ui); text-align: center; }
   /* The deck sits over a Workbench's tab bar, where a swipe across it
      goes to the next or previous surface. */
-  .deck { order: 1; padding: 2px var(--room) var(--room); overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
+  .strip { order: 1; padding: 2px var(--room) var(--room); }
+  .deck { overflow-x: auto; scrollbar-width: none; touch-action: pan-y; }
   .tile-tabs:has(+ .workbench) { order: 2; }
   /* Settings: its rail is a list, and a section picked covers it. */
   .settings { grid-template-columns: minmax(0, 1fr); }

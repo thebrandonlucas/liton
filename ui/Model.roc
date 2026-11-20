@@ -68,7 +68,9 @@ Model := [].{
 	## what each part shows and is doing, as its fields say.
 	State : {
 		## The daemon, "" before its manifest is read, and what it offers.
+		## `unreachable` while its manifest or last poll went unanswered.
 		daemon : { id : Str, name : Str },
+		unreachable : Bool,
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
 		transformers : List(Manifest.Transformer),
@@ -433,6 +435,7 @@ Model := [].{
 		Model.layout(
 			{
 				daemon: { id: "", name: "" },
+				unreachable: Bool.False,
 				capabilities: [],
 				providers: [],
 				transformers: [],
@@ -630,6 +633,27 @@ Model := [].{
 			returned = Model.show_surface(change(Model.show_surface(state, index)), state.deck_shown)
 			{ ..returned, deck_slide: state.deck_slide, url_hash: state.url_hash, jump: state.jump, active_tile: state.active_tile, focused_pane: state.focused_pane, sub_focus: state.sub_focus }
 		}
+
+	## How the daemon is reached: connecting until its manifest is read,
+	## then connected, or unreachable while it doesn't answer.
+	connection : State -> [Connecting, Connected, Unreachable]
+	connection = |state|
+		if (state.unreachable) Unreachable else if (state.daemon.id.is_empty()) Connecting else Connected
+
+	## How a provider the daemon offers is doing, and why: as the daemon is
+	## reached, and a speech provider as its engine is (`Speech.State`).
+	provider_health : State, Manifest.Provider -> { health : [Ready, Starting, Down], why : Str }
+	provider_health = |state, provider|
+		if (Model.connection(state) == Unreachable)
+			{ health: Down, why: "the daemon doesn't answer" }
+		else if (provider.capabilities.contains(Capability.voice_v1))
+			match state.voice.engine {
+				Ready => { health: Ready, why: "its speech engine is ready" }
+				Loading => { health: Starting, why: "its speech engine is loading" }
+				Down(why) => { health: Down, why }
+			}
+		else
+			{ health: Ready, why: "connected" }
 
 	## What offers what a part needs: the first provider that offers all of
 	## it, else a transformer, else liton for a part needing nothing; or "Not
@@ -893,7 +917,7 @@ Model := [].{
 	## Keeps what the daemon's manifest offers: itself, its providers,
 	## transformers and capabilities.
 	advertise : State, Manifest.Offered -> State
-	advertise = |state, offered| { ..state, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
+	advertise = |state, offered| { ..state, unreachable: Bool.False, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
 	## Offers the presets and themes the daemon's setup offers, if any, and
 	## shows the preset it starts with, in its theme or else the setup's
@@ -2404,7 +2428,7 @@ Model := [].{
 
 	## A poll that failed asks again with the next.
 	poll_failed : State -> State
-	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False }) else { ..state, polling: Bool.False }
+	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False, unreachable: Bool.True }) else { ..state, polling: Bool.False, unreachable: Bool.True }
 
 	## Takes a topic's update from the poll numbered `serial`.
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State

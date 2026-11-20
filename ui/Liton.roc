@@ -181,47 +181,105 @@ Liton := [].{
 			Outside => 5000
 		}
 
-	## The deck's surfaces, by name, the one shown pressed, while it holds
-	## more than one: a click goes to one, and a swipe across them, as a
-	## phone's, to the next or previous.
+	## The strip under the tiles: which daemon this is (`Liton.connection`),
+	## and the deck's surfaces, by name, the one shown pressed, while it
+	## holds more than one: a click goes to one, and a swipe across them, as
+	## a phone's, to the next or previous.
 	deck_indicator : State(Ctx, Model.State) -> Elem(Ctx)
 	deck_indicator = |model|
-		Engine.when(
-			model.signal().map(|state| state.deck.len() > 1),
-			||
-				Engine.element(
-					"nav",
-					[
-						Engine.class("deck"),
-						Html.aria_label("Deck"),
-						Engine.test_id("deck"),
-						# A pointer zone on a touch screen only, so a mouse's click is in none.
-						Html.zone_s(model.signal().map(|state| if (state.coarse_pointer) "deck" else "")),
-						Engine.on_pointer(Down, model.set_value(|state, pointer| { ..state, deck_press: Down({ pointer: pointer.id, across: Liton.across_zone(pointer) }) })),
-						Html.on_pointer_up(model.set_value(|state, pointer| Model.deck_swiped(state, { pointer: pointer.id, across: Liton.across_zone(pointer) }))),
-						Html.on_pointer_cancel(model.set_value(|state, _| { ..state, deck_press: Up })),
-					],
-					[
-						Engine.each(
-							model.signal().map(Model.deck_titles),
-							|surface| surface.index.to_str(),
-							|row|
-								Engine.element(
-									"button",
-									[
-										Engine.attr("type", "button"),
-										Engine.class("deck-surface"),
-										Html.aria_label_s(row.field(|surface| "Surface ${(surface.index + 1).to_str()}: ${surface.title}")),
-										Html.flag("aria-pressed", row.field(|surface| surface.shown)),
-										Engine.on_click(model.lift_row().update_by(row.field(|surface| surface.index), Model.show_surface)),
-									],
-									[Engine.text_s(row.field(|surface| surface.title))],
+		Html.div(
+			"strip",
+			[
+				Liton.connection(model),
+				Engine.when(
+					model.signal().map(|state| state.deck.len() > 1),
+					||
+						Engine.element(
+							"nav",
+							[
+								Engine.class("deck"),
+								Html.aria_label("Deck"),
+								Engine.test_id("deck"),
+								# A pointer zone on a touch screen only, so a mouse's click is in none.
+								Html.zone_s(model.signal().map(|state| if (state.coarse_pointer) "deck" else "")),
+								Engine.on_pointer(Down, model.set_value(|state, pointer| { ..state, deck_press: Down({ pointer: pointer.id, across: Liton.across_zone(pointer) }) })),
+								Html.on_pointer_up(model.set_value(|state, pointer| Model.deck_swiped(state, { pointer: pointer.id, across: Liton.across_zone(pointer) }))),
+								Html.on_pointer_cancel(model.set_value(|state, _| { ..state, deck_press: Up })),
+							],
+							[
+								Engine.each(
+									model.signal().map(Model.deck_titles),
+									|surface| surface.index.to_str(),
+									|row|
+										Engine.element(
+											"button",
+											[
+												Engine.attr("type", "button"),
+												Engine.class("deck-surface"),
+												Html.aria_label_s(row.field(|surface| "Surface ${(surface.index + 1).to_str()}: ${surface.title}")),
+												Html.flag("aria-pressed", row.field(|surface| surface.shown)),
+												Engine.on_click(model.lift_row().update_by(row.field(|surface| surface.index), Model.show_surface)),
+											],
+											[Engine.text_s(row.field(|surface| surface.title))],
+										),
 								),
+							],
 						),
-					],
+					|| Engine.text(""),
 				),
-			|| Engine.text(""),
+			],
 		)
+
+	## Which daemon this is and how it is reached: its name and a dot,
+	## whose menu lists each provider it offers with how it is doing and
+	## what it offers, and goes to Settings' Host.
+	connection : State(Ctx, Model.State) -> Elem(Ctx)
+	connection = |model| {
+		state_name = |state|
+			match Model.connection(state) {
+				Connecting => "connecting"
+				Connected => "connected"
+				Unreachable => "unreachable"
+			}
+		health_name = |health|
+			match health {
+				Ready => "ready"
+				Starting => "starting"
+				Down => "down"
+			}
+		daemon_name = |state| if (state.daemon.name.is_empty()) "liton" else state.daemon.name
+		Menu.menu(
+			model,
+			Engine.const("connection"),
+			"connection",
+			[
+				Engine.class_s(model.signal().map(|state| "connection-button ${state_name(state)}")),
+				Html.aria_label_s(model.signal().map(|state| "Connection: ${daemon_name(state)}, ${state_name(state)}")),
+				Engine.attr_s("title", model.signal().map(|state| "${daemon_name(state)}: ${state_name(state)}")),
+				Engine.attr_s("data-name", model.signal().map(daemon_name)),
+				Engine.test_id("connection"),
+			],
+			[Engine.class("connection-menu")],
+			[
+				Html.p_s(model.signal().map(|state| "${daemon_name(state)} · ${state_name(state)}"), [Engine.class("connection-title")]),
+				Engine.each(
+					model.signal().map(|state| state.providers.map(|provider| { provider, health: Model.provider_health(state, provider) })),
+					|listed| listed.provider.id,
+					|row|
+						Html.div_s(
+							row.field(|listed| "connection-provider ${health_name(listed.health.health)}"),
+							[
+								Html.span_s(row.field(|listed| listed.provider.name), [Engine.class("provider-name")]),
+								Html.span_s(row.field(|listed| listed.health.why), [Engine.class("provider-health")]),
+								Html.span_s(row.field(|listed| "offers ${Str.join_with(listed.provider.capabilities.map(Capability.to_str), ", ")}"), [Engine.class("provider-offers")]),
+							],
+						),
+				),
+				Engine.when(model.signal().map(|state| state.providers.is_empty()), || Html.p("No providers yet.", "help"), || Engine.text("")),
+				Menu.item(Engine.const("host"), Engine.const("Host settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host"), menu: "" })),
+			],
+		)
+	}
 
 	## While a pane is held, the page reports the pointer (`Drag.pointer`):
 	## its moves drag the pane, and its release drops it.
@@ -306,7 +364,7 @@ Liton := [].{
 					# The setup's presets and themes, which a daemon may leave out.
 					match decoded {
 						Ok(offered) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
-						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
+						Err(_) => { ..state, notice: "Could not read the daemon's manifest.", unreachable: Bool.True }
 					}
 				},
 			),
@@ -325,7 +383,7 @@ Liton := [].{
 					decoded : Try(Protocol.Polled, _)
 					decoded = Json.parse(res ?? "")
 					match decoded {
-						Ok(answer) => Model.polled(state, poll, answer.topics)
+						Ok(answer) => Model.polled({ ..state, unreachable: Bool.False }, poll, answer.topics)
 						Err(_) => Model.poll_failed(state)
 					}
 				},
