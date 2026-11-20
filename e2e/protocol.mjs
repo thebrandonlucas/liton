@@ -82,6 +82,20 @@ try {
     assert.ok((await call("workspaces.v1", "ListWorkspaces")).Ok.Listed.workspaces.length > 0);
     assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "notes", text: "hi" } }), { Ok: "Accepted" });
   });
+  await step("the mock's sessions carry a Goal / Done / Now summary once a turn ended", async () => {
+    const sessions = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions;
+    const fixAuth = (await sessions()).find((s) => s.id === "fix-auth");
+    assert.deepEqual([fixAuth.summary.goal, fixAuth.summary.done, fixAuth.summary.now, typeof fixAuth.summary.at], ["Logging in sends me back to /login.", "The redirect target is hard-coded to /login.", "Waiting for your next message.", "string"]);
+    // notes, once its turn after the "hi" sent above is stopped: its first message is its goal.
+    const notes = async () => (await sessions()).find((s) => s.id === "notes");
+    for (const start = Date.now(); (await notes()).status !== "AwaitingPermission"; await new Promise((r) => setTimeout(r, 200))) {
+      if (Date.now() - start > 10000) throw new Error("notes isn't waiting for an answer after 10 s");
+    }
+    assert.equal((await notes()).summary, undefined);
+    assert.deepEqual(await call("chat.v1", { Cancel: { session_id: "notes" } }), { Ok: "Accepted" });
+    const summary = (await notes()).summary;
+    assert.deepEqual([summary.goal, summary.done, summary.now], ["hi", "Stopped.", "Waiting for your next message."]);
+  });
   await step("failed calls answer their error codes", async () => {
     const code = async (...args) => (await call(...args)).Err?.code;
     assert.equal(await code("chat.v1", { SendMessage: { session_id: "nope", text: "hi" } }), "NotFound");

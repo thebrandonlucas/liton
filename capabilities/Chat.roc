@@ -13,7 +13,8 @@ Chat := [].{
 	## there, when its running turn started and when it last changed, as times
 	## such as 2026-01-01T09:00:00.000Z. Then the mode it works in and its
 	## thinking level, by their ids, the modes it can switch to, what its
-	## last turn used, and when it was archived, if it was.
+	## last turn used, a summary of its work so far, and when it was
+	## archived, if it was.
 	Session : {
 		id : Str,
 		provider : Str,
@@ -29,8 +30,15 @@ Chat := [].{
 		thinking : Try(Str, [Missing]),
 		modes : Try(List(Option), [Missing]),
 		usage : Try(Usage, [Missing]),
+		summary : Try(Summary, [Missing]),
 		archived : Try(Str, [Missing]),
 	}
+
+	## A session's work in three sentences, as a small model wrote it after
+	## its last turn: what it is for (`goal`), what it has done (`done`) and
+	## what happens now (`now`), and when its turn ended, as a time such as
+	## 2026-01-01T09:00:00.000Z.
+	Summary : { goal : Str, done : Str, now : Str, at : Str }
 
 	## A mode an agent works in, such as Claude's plan mode, or another
 	## choice a provider names.
@@ -134,7 +142,7 @@ Chat := [].{
 
 	## A session the provider tells nothing more of.
 	session : { id : Str, provider : Str, agent : Str, title : Str, status : Status } -> Session
-	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing), mode: Err(Missing), thinking: Err(Missing), modes: Err(Missing), usage: Err(Missing), archived: Err(Missing) }
+	session = |{ id, provider, agent, title, status }| { id, provider, agent, title, status, model: Err(Missing), workspace: Err(Missing), branch: Err(Missing), running_since: Err(Missing), updated: Err(Missing), mode: Err(Missing), thinking: Err(Missing), modes: Err(Missing), usage: Err(Missing), summary: Err(Missing), archived: Err(Missing) }
 
 	## A permission request the provider tells no more of.
 	permission : { request_id : Str, tool : Str, description : Str } -> Permission

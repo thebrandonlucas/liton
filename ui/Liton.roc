@@ -31,6 +31,9 @@ import Wallpaper
 import Spinner
 import History
 import ScheduleDesk
+import InboxDesk
+import Summary
+import Pairing
 
 Liton := [].{
 
@@ -75,7 +78,7 @@ Liton := [].{
 	program : Engine.Program
 	program = Engine.program_boot(
 		{ storage_keys: [Liton.snapshot_key, Liton.views_key, Liton.glass_key, Liton.surface_key, Wallpaper.url_key, Wallpaper.dim_key, ReviewDesk.viewed_key], session_keys: [Liton.platform_key], media: [Liton.coarse_pointer_query], max_inflight: 32 },
-		|boot| Engine.state(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
+		|boot| Engine.state(Pairing.restored(Model.restore_views(Wallpaper.restored(Model.went({ ..Liton.restored_surface(Model.initial(Engine.boot_storage(boot, Liton.snapshot_key) ?? ""), Engine.boot_storage(boot, Liton.surface_key)), review_desk: { ..ReviewDesk.initial, viewed: ReviewDesk.restored(Engine.boot_storage(boot, ReviewDesk.viewed_key) ?? "") }, glass: Engine.boot_storage(boot, Liton.glass_key) != Ok("off"), coarse_pointer: Engine.boot_media(boot, Liton.coarse_pointer_query) ?? Bool.False, operating_system: if (Engine.boot_session(boot, Liton.platform_key) == Ok("mac")) Mac else Other, now: boot.now_ms }, boot.url), Engine.boot_storage(boot, Wallpaper.url_key) ?? "", Engine.boot_storage(boot, Wallpaper.dim_key) ?? ""), Engine.boot_storage(boot, Liton.views_key) ?? "[]"), boot.url), |model| Engine.state(Drag.idle, |drag| Liton.page(model.lift(), drag))),
 	).with_ports(Ports.registrations)
 
 	## The surface the browser kept, else the one the model starts with,
@@ -110,7 +113,7 @@ Liton := [].{
 					[
 						# Shown by CSS on narrow screens: Tiling shows the tile picked here,
 						# and a Workbench, which is swiped through, scrolls to it. Its left
-						# drawer's tab counts what needs you, unless an inbox there does.
+						# drawer's tab counts what needs you, unless an inbox does.
 						Html.div(
 							"tile-tabs",
 							[
@@ -125,7 +128,7 @@ Liton := [].{
 												Engine.class_s(row.field(|tile| tile.panes.find_first(|pane| pane.id == tile.active).map_ok(|pane| "widget-${pane.widget}") ?? "")),
 												Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |key, state| key == state.active_tile)),
 												Engine.test_id_s(row.key().map2(model.signal().lift_row(), |key, state| "show-${Model.tile_test_name(state, key)}")),
-												Engine.attr_presence("data-badge", row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| if (Model.slot_of(state, tile.id) != Left or tile.panes.any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
+												Engine.attr_presence("data-badge", row.field(|tile| tile).map2(model.signal().lift_row(), |tile, state| if (Model.slot_of(state, tile.id) != Left or Model.panes(state).any(|pane| pane.widget == "inbox") or Model.needs_you(state) == 0) Absent else Present(Model.needs_you(state).to_str()))),
 											],
 											model.lift_row().update_by(row.key(), Model.show_tile),
 										),
@@ -159,7 +162,8 @@ Liton := [].{
 				),
 				Liton.palette(model),
 				Liton.shortcuts(model),
-			].concat(Liton.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
+				Pairing.screen(model),
+			].concat(Liton.effects(model)).concat(Pairing.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
 
@@ -288,11 +292,13 @@ Liton := [].{
 
 	## Every request to the daemon is a call or a poll of /liton/v1
 	## (docs/protocol.md). One poll at a time follows every topic the panes
-	## show, each second and at once when what they show changes.
+	## show, each second and at once when what they show changes. The
+	## manifest is asked for again once this browser is paired, and a 401
+	## shows the pair screen (ui/Pairing.roc).
 	effects : State(Ctx, Model.State) -> List(Elem(Ctx))
 	effects = |model| [
 		Engine.watch(
-			Engine.const({}),
+			model.signal().map(|state| state.pairing.paired),
 			|_| [Engine.http_body({ url: "/liton/v1/manifest", timeout: Ms(5000) })],
 			model.on_result(
 				|state, _, res| {
@@ -300,9 +306,10 @@ Liton := [].{
 					decoded : Try(Manifest.Offered, _)
 					decoded = Json.parse(text)
 					# The setup's presets and themes, which a daemon may leave out.
-					match decoded {
-						Ok(offered) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
-						Err(_) => { ..state, notice: "Could not read the daemon's manifest." }
+					match (res, decoded) {
+						(Err(Status(401)), _) => Pairing.refused(state)
+						(_, Ok(offered)) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
+						(_, Err(_)) => { ..state, notice: "Could not read the daemon's manifest." }
 					}
 				},
 			),
@@ -320,9 +327,10 @@ Liton := [].{
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
 					decoded = Json.parse(res ?? "")
-					match decoded {
-						Ok(answer) => Model.polled(state, poll, answer.topics)
-						Err(_) => Model.poll_failed(state)
+					match (res, decoded) {
+						(Err(Status(401)), _) => Pairing.refused(Model.poll_failed(state))
+						(_, Ok(answer)) => Model.polled(state, poll, answer.topics)
+						(_, Err(_)) => Model.poll_failed(state)
 					}
 				},
 			),
@@ -652,7 +660,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "devices", "Devices")])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -670,6 +678,7 @@ Liton := [].{
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
+								shown("devices", || Pairing.section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
@@ -687,7 +696,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -1657,96 +1666,236 @@ Liton := [].{
 		)
 	}
 
-	## An inbox: what needs you, then the rest the latest first, each marked
-	## while unread, then what you set aside, folded away.
+	## An Inbox surface's list: its tabs and Focus, which pick what it
+	## lists (`InboxDesk.counted`), Jump to and New agent; counters by state,
+	## each of which shows only that state, and Mark read for those shown
+	## unread; then the items.
 	inbox : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
-	inbox = |model, pane|
+	inbox = |model, pane| {
+		id = pane.map(|shown| shown.id)
+		set_option = |state, pane_id, key, value| Model.with_snapshot_text(Model.set_option(state, pane_id, key, value))
+		rows = pane.map2(model.signal(), |shown, state| InboxDesk.rows(state, shown))
+		unread = rows.map(|listed| listed.keep_if(|row| row.item.unread).map(|row| row.item.session_id))
+		tab = |name|
+			Engine.element(
+				"button",
+				[Engine.attr("type", "button"), Engine.class("inbox-tab"), Html.aria_label(name), Html.flag("aria-pressed", pane.map(|shown| Model.option(shown, "list") == name)), Engine.on_click(model.update_by(id, |state, pane_id| set_option(state, pane_id, "list", name)))],
+				[Engine.text(name), Html.span_s(model.signal().map(|state| InboxDesk.tab_count(state, name)).map(|count| if (count == 0) "" else count.to_str()), [Engine.class("count"), Engine.test_id("tab-count-${name}")])],
+			)
 		Html.div(
 			"inbox",
 			[
 				Html.div(
-					"inbox-toolbar",
+					"inbox-top",
 					[
-						Html.span_s(model.signal().map(|state| Liton.unread_text(Model.inbox_items(state).keep_if(|item| item.unread and item.set_aside == No).len())), [Engine.class("unread-count"), Engine.test_id("unread-count")]),
-						Html.button("Mark all read", [], model.update(|state| Model.mark_seen(state, state.attention.map(|item| item.session_id), Bool.True))),
+						Html.div_attrs([Engine.class("inbox-tabs"), Engine.attr("role", "group"), Html.aria_label("List")], [tab("Inbox"), tab("All"), tab("Snoozed")]),
+						Html.button("Focus", [Engine.class("inbox-focus"), Engine.attr("title", "Only what waits on you"), Html.flag("aria-pressed", pane.map(|shown| Model.option(shown, "focus") == "true"))], model.update_by(pane, |state, shown| set_option(state, shown.id, "focus", if (Model.option(shown, "focus") == "true") "false" else "true"))),
+						Html.span_s(Engine.const(""), [Engine.class("spacer")]),
+						Engine.element("button", [Engine.attr("type", "button"), Engine.class("jump-to"), Html.aria_label("Jump to"), Engine.on_click(model.update(Commands.open_palette))], [Engine.text("Jump to"), Engine.element("kbd", [], [Engine.text_s(model.signal().map(|state| Keymap.text_of(state.operating_system, Keymap.defaults, "palette")))])]),
+						Engine.when(
+							model.signal().map(|state| InboxDesk.new_agent_key(state).is_ok()),
+							|| Html.button("New agent", [Engine.class("new-agent-button")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: InboxDesk.new_agent_key(state) ?? "" }))),
+							|| Engine.text(""),
+						),
 					],
 				),
-				Liton.inbox_section(model, pane, "Needs you", model.signal().map(|state| Model.waiting(state, NeedsYou))),
-				Liton.inbox_section(model, pane, "Latest", pane.map2(model.signal(), |shown, state| Model.latest(state, shown))),
+				Liton.create_form(model, id),
+				Html.div(
+					"inbox-counters",
+					[
+						Engine.each(
+							pane.map2(model.signal(), |shown, state| InboxDesk.counters(state, shown)),
+							|counter| counter.label,
+							|row|
+								Engine.element(
+									"button",
+									[
+										Engine.attr("type", "button"),
+										Engine.class_s(row.field(|counter| "inbox-counter ${Liton.attention_word_class(counter.state)}")),
+										Html.flag("aria-pressed", row.field(|counter| counter.picked)),
+										Engine.test_id_s(row.field(|counter| "counter-${InboxDesk.state_key(counter.state)}")),
+										Engine.on_click(model.lift_row().update_by(row.field(|counter| counter).map2(id.lift_row(), |counter, pane_id| { counter, pane_id }), |state, { counter, pane_id }| set_option(state, pane_id, "status", if (counter.picked) "" else InboxDesk.state_key(counter.state)))),
+									],
+									[Html.span_s(row.field(|counter| counter.count.to_str()), [Engine.class("count")]), Html.span_s(row.key(), [Engine.class("label")])],
+								),
+						),
+						Engine.when(
+							unread.map(|ids| !ids.is_empty()),
+							|| Html.button_s(unread.map(|ids| "Mark ${ids.len().to_str()} read"), [Engine.class("mark-read")], model.update_by(unread, |state, ids| Model.mark_seen(state, ids, Bool.True))),
+							|| Engine.text(""),
+						),
+					],
+				),
+				Html.div(
+					"inbox-filters",
+					InboxDesk.filters.map(|filter| Liton.inbox_filter(model, pane, filter.label, Liton.choices(pane.map2(model.signal(), |shown, state| InboxDesk.choices(state, shown, filter.key))), filter.key))
+						.concat([
+							Liton.inbox_filter(model, pane, "Group", ["Status", "Project", "Provider", "None"].map(|choice| Dropdown.option(choice, choice)), "group"),
+							Liton.inbox_filter(model, pane, "Sort", ["Updated", "Project", "Status", "Title"].map(|choice| Dropdown.option(choice, choice)), "sort"),
+							Html.button_s(
+								pane.map(|shown| if (Model.option(shown, "direction") == "Ascending") "↑" else "↓"),
+								[Engine.class("sort-direction"), Html.aria_label("Sort direction"), Engine.attr_s("title", pane.map(|shown| Model.option(shown, "direction")))],
+								model.update_by(pane, |state, shown| set_option(state, shown.id, "direction", if (Model.option(shown, "direction") == "Ascending") "Descending" else "Ascending")),
+							),
+						]),
+				),
+				Liton.inbox_select(model, pane, rows),
+				Liton.inbox_items(model, pane, rows),
+				Html.p_s(rows.map2(pane, |listed, shown| if (!listed.is_empty()) "" else if (Model.option(shown, "list") == "Snoozed") "Nothing is snoozed." else "Nothing here: you are all caught up."), [Engine.class("inbox-empty")]),
+			],
+		)
+	}
+
+	## What selects an Inbox pane's rows: Select, for all of them or none,
+	## and those unread, idle or running; while some are, how many, and Mark
+	## read, Settle and Snooze for them all, each at once.
+	inbox_select : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
+	inbox_select = |model, pane, rows| {
+		selected = rows.map2(model.signal(), |listed, state| InboxDesk.selected(state, listed))
+		all_selected = rows.map2(selected, |listed, picked| !listed.is_empty() and picked.len() == listed.len())
+		quick = |name, keeps|
+			Html.button_s(
+				rows.map(|listed| "${name} ${listed.count_if(|row| keeps(row.item)).to_str()}"),
+				[Engine.class("quick-select"), Html.aria_label("Select ${name.with_ascii_lowercased()}")],
+				model.update_by(rows, |state, listed| { ..state, inbox_selected: listed.keep_if(|row| keeps(row.item)).map(|row| row.item.session_id) }),
+			)
+		bulk = |name, act| Html.button(name, [Html.aria_label("${name} the selected")], model.update_by(selected.map2(pane, |picked, shown| { picked, shown }), |state, { picked, shown }| InboxDesk.act_on_selected(state, picked, |acted, session_id| act(acted, shown, session_id))))
+		Html.div(
+			"inbox-select",
+			[
+				Engine.element("label", [Engine.class("select-all")], [Html.checkbox(Engine.const("Select all"), all_selected, [], model.set_value_by(rows, |state, listed, checked| { ..state, inbox_selected: if (checked) listed.map(|row| row.item.session_id) else [] })), Engine.text("Select")]),
+				quick("Unread", |item| item.unread),
+				quick("Idle", |item| item.state == Idle),
+				quick("Running", |item| item.state == Working),
 				Engine.when(
-					model.signal().map(|state| !Model.later(state).is_empty()),
+					selected.map(|picked| !picked.is_empty()),
 					||
-						Engine.element(
-							"details",
-							[Engine.class("inbox-later"), Engine.test_id("later")],
-							[Engine.element("summary", [], [Engine.text_s(model.signal().map(|state| "Later (${Model.later(state).len().to_str()})"))]), Liton.inbox_items(model, pane, model.signal().map(Model.later))],
+						Html.div(
+							"inbox-bulk",
+							[
+								Html.span_s(selected.map(|picked| "${picked.len().to_str()} selected"), [Engine.class("selected-count"), Engine.test_id("selected-count")]),
+								Html.button("Mark read", [Html.aria_label("Mark the selected read")], model.update_by(selected, |state, picked| { ..Model.mark_seen(state, picked, Bool.True), inbox_selected: [] })),
+								bulk("Settle", |state, _, session_id| Model.set_aside(state, session_id, Settled)),
+								bulk("Snooze", |state, shown, session_id| Model.set_aside(state, session_id, Snoozed(Model.snooze_minutes(shown)))),
+								Html.button("Clear", [Html.aria_label("Select none")], model.update(|state| { ..state, inbox_selected: [] })),
+							],
 						),
 					|| Engine.text(""),
 				),
 			],
 		)
+	}
 
-	## A section of the Inbox called `name`, of `items`, shown only with some.
-	inbox_section : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
-	inbox_section = |model, pane, name, items|
-		Engine.when(
-			items.map(|listed| !listed.is_empty()),
-			|| Html.div_attrs([Engine.class("inbox-section"), Engine.attr("data-part", "section")], [Html.h3(name, ""), Liton.inbox_items(model, pane, items)]),
-			|| Engine.text(""),
+	## A drop-down of an Inbox pane's option `key`, named `name`, of
+	## `options`, which sets it at once.
+	inbox_filter : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Str, List(Elem(PaneCtx)), Str -> Elem(PaneCtx)
+	inbox_filter = |model, pane, name, options, key|
+		Engine.element(
+			"label",
+			[Engine.class("inbox-filter")],
+			[Engine.text(name), Dropdown.select(Engine.const(name), pane.map(|shown| Model.option(shown, key)), [], options, model.set_value_by(pane, |state, shown, value| Model.with_snapshot_text(Model.set_option(state, shown.id, key, value))))],
 		)
 
-	## Each item: its title, which opens it, its agent, state and summary, the
-	## permission it asks for, and Mark read or unread (not while working),
-	## Settle and Snooze, or Bring back once set aside. Unread, it is marked.
-	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(Attention.Item)) -> Elem(PaneCtx)
+	## Each row, under its group's heading if it starts one: a checkbox that
+	## selects it; its title, which opens it, as a click anywhere in it does;
+	## its status word, short id, agent and why it is listed; its provider,
+	## model and thinking level; the permission it asks for; how long ago it
+	## changed; and its actions as icons, shown while hovered: Snooze, Open in
+	## the whole chat (while a chat shows only the latest), Pin its
+	## workspace (where workspaces.v1 lists it), Mark read or unread (not
+	## while working) and Settle, or Bring back once set aside.
+	inbox_items : State(PaneCtx, Model.State), Signal(PaneCtx, Model.Pane), Signal(PaneCtx, List(InboxDesk.Row)) -> Elem(PaneCtx)
 	inbox_items = |model0, pane, items|
 		Html.ul(
-			[Engine.class("inbox-items")],
+			[Engine.class("inbox-items"), Engine.test_id("inbox-rows")],
 			[
 				Engine.each(
 					items,
-					|item| item.session_id,
+					|listed| listed.item.session_id,
 					|row| {
 						model = model0.lift_row()
 						id = row.key()
-						title = row.field(|item| item.title)
+						shown_item = row.field(|listed| listed.item)
+						title = shown_item.map2(model.signal(), |item, state| { item, state }).map2(pane.lift_row(), |{ item, state }, shown| Model.item_title(state, shown, item))
 						permission = id.map2(model.signal(), |session_id, state| Model.item_permission(state, session_id).map_ok(|asked| { session_id, asked }))
 						snooze_length = pane.lift_row().map(|shown| Model.option(shown, "snooze_length"))
+						workspace = id.map2(model.signal(), |session_id, state| if (state.capabilities.contains(Capability.workspaces_v1)) Model.row_workspace(state, session_id) else Err(NotFound))
 						opens = model.update_by(id, |state, session_id| Model.open(state, Session(session_id)))
+						# What a click on it alone does, not the row's.
+						apart = Engine.on_click(model.update(|state| state))
+						icon = |name, class, handler| Liton.icon_button(name, "icon ${class}", handler)
 						Html.li(
-							[Engine.class_s(row.field(|item| item).map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
+							[Engine.class_s(shown_item.map2(model.signal(), |item, state| Str.join_with(["inbox-item", if (Session(item.session_id) == Model.focused(state, [Session, Workspace])) "focused" else "", if (item.unread) "unread" else "", if (item.state == Working) "working" else "", if (state.inbox_selected.contains(item.session_id)) "selected" else ""].drop_if(Str.is_empty), " "))), Engine.attr("data-part", "item")].concat(Liton.row_activates(opens)),
 							[
-								Html.button_s(title, [], opens),
-								Html.div(
-									"session-meta",
-									[
-										Engine.text_s(row.field(|item| item.agent)),
-										Html.span_s(row.field(|item| Liton.attention_text(item.state)), [Engine.class_s(row.field(|item| Liton.attention_class(item.state))), Engine.test_id("attention-state")]),
-									],
-								),
-								Html.p_s(row.field(|item| item.summary), [Engine.class("summary")]),
+								# The first row of a group heads it, a click on which opens nothing.
 								Engine.when(
-									permission.map(|asked| asked.is_ok()),
-									|| Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title),
+									row.field(|listed| listed.starts_group),
+									|| Html.div_attrs([Engine.class("inbox-group"), Engine.attr("data-part", "group"), Engine.test_id_s(row.field(|listed| "group-${listed.group}")), apart], [Html.span_s(row.field(|listed| listed.group), [Engine.class("group-title")]), Html.span_s(row.field(|listed| listed.group_count.to_str()), [Engine.class("count")])]),
 									|| Engine.text(""),
 								),
-								Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
-								Engine.when(
-									row.field(|item| item.set_aside == No),
-									||
-										Html.div_attrs(
-											[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
+								Html.div(
+									"inbox-row",
+									[
+										Engine.element("span", [Engine.class("row-check"), apart], [Html.checkbox(title.map(|name| "Select ${name}"), id.map2(model.signal(), |session_id, state| state.inbox_selected.contains(session_id)), [], model.set_value_by(id, InboxDesk.select))]),
+										Html.div(
+											"inbox-main",
 											[
-												Html.button_s(row.field(|item| if (item.unread) "Mark read" else "Mark unread"), [Engine.class("mark"), Html.aria_label_s(row.field(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"))], model.update_by(row.field(|item| item), |state, item| Model.mark_seen(state, [item.session_id], item.unread))),
-												Html.button("Settle", [Html.aria_label_s(title.map(|name| "Settle ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
-												Html.button_s(
-													snooze_length.map(|length| "Snooze ${length}"),
-													[Html.aria_label_s(title.map(|name| "Snooze ${name}"))],
-													model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes))),
+												Html.button_s(title, [Engine.class("row-title")], opens),
+												Html.div(
+													"status-line",
+													[
+														Html.span_s(shown_item.map(|item| InboxDesk.state_word(item.state)), [Engine.class_s(shown_item.map(|item| "status-word ${Liton.attention_word_class(item.state)}")), Engine.test_id("attention-state")]),
+														Html.span_s(id.map(InboxDesk.short_id), [Engine.class("short-id")]),
+														Html.span_s(shown_item.map(|item| item.agent), [Engine.class("agent")]),
+														Html.span_s(shown_item.map(InboxDesk.reason), [Engine.class("reason")]),
+													],
+												),
+												Html.div(
+													"details",
+													[
+														Html.span_s(row.field(|listed| listed.provider), [Engine.class("detail"), Engine.attr("data-label", "Provider")]),
+														Html.span_s(row.field(|listed| listed.model), [Engine.class("detail"), Engine.attr("data-label", "Model")]),
+														Html.span_s(row.field(|listed| listed.thinking), [Engine.class("detail"), Engine.attr("data-label", "Thinking")]),
+													],
+												),
+												Engine.when(
+													permission.map(|asked| asked.is_ok()),
+													|| Html.div_attrs([apart], [Liton.permission_card(model, id.map(|session_id| "inbox/${session_id}/permission"), permission.map(|asked| asked ?? Liton.no_permission), title)]),
+													|| Engine.text(""),
+												),
+												Html.span_s(id.map2(model.signal(), |session_id, state| Str.join_with(Model.unconfirmed(state, session_id).keep_oks(Liton.answering), " ")), [Engine.class("sent-status"), Engine.test_id("answer-status")]),
+											],
+										),
+										Html.div(
+											"inbox-side",
+											[
+												Html.span_s(shown_item.map2(model.signal(), |item, state| Liton.ago_text(Model.ago(state, item.updated))), [Engine.class("age")]),
+												Engine.when(
+													shown_item.map(|item| item.set_aside == No),
+													||
+														Html.div_attrs(
+															[Engine.class("inbox-actions"), Engine.attr("data-part", "actions")],
+															[
+																icon(title.map2(snooze_length, |name, length| "Snooze ${name} for ${length}"), "snooze", model.update_by(id.map2(pane.lift_row(), |session_id, shown| { session_id, minutes: Model.snooze_minutes(shown) }), |state, { session_id, minutes }| Model.set_aside(state, session_id, Snoozed(minutes)))),
+																Engine.when(
+																	model.signal().map(Model.shows_latest),
+																	|| icon(title.map(|name| "Open ${name} in the whole chat"), "open-chat", model.update_by(id, Model.open_whole)),
+																	|| Engine.text(""),
+																),
+																Engine.when(
+																	workspace.map(|found| found.is_ok()),
+																	|| icon(title.map2(workspace, |name, found| if (found.map_ok(|listed| listed.pinned) ?? Bool.False) "Unpin the workspace of ${name}" else "Pin the workspace of ${name}"), "pin", model.update_by(workspace, |state, found| found.map_ok(|listed| Model.edit(state, Workspaces(Pin({ workspace_id: listed.id, pinned: !listed.pinned })))) ?? state)),
+																	|| Engine.text(""),
+																),
+																icon(shown_item.map(|item| if (item.unread) "Mark ${item.title} read" else "Mark ${item.title} unread"), "mark", model.update_by(shown_item, |state, marked| Model.mark_seen(state, [marked.session_id], marked.unread))),
+																icon(title.map(|name| "Settle ${name}"), "settle", model.update_by(id, |state, session_id| Model.set_aside(state, session_id, Settled))),
+															],
+														),
+													|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_s(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
 												),
 											],
 										),
-									|| Html.div_attrs([Engine.class("inbox-actions"), Engine.attr("data-part", "actions")], [Html.button("Bring back", [Html.aria_label_s(title.map(|name| "Bring back ${name}"))], model.update_by(id, |state, session_id| Model.set_aside(state, session_id, No)))]),
+									],
 								),
 							],
 						)
@@ -1754,6 +1903,10 @@ Liton := [].{
 				),
 			],
 		)
+
+	## How long ago, as `Model.ago` says it, as a row's right side does.
+	ago_text : Str -> Str
+	ago_text = |ago| if (ago.is_empty() or ago == "now") ago else "${ago} ago"
 
 	## A permission request waiting for an answer, as a card: what its tool
 	## would do, its body as Markdown, if any, and a button for each of its
@@ -1798,10 +1951,6 @@ Liton := [].{
 			Danger => "deny"
 		}
 
-	## "3 unread", or "All read".
-	unread_text : U64 -> Str
-	unread_text = |count| if (count == 0) "All read" else "${count.to_str()} unread"
-
 	## "Allowing…" or "Denying…" for an answer on its way.
 	answering : Model.Sent -> Try(Str, [NotAnswer])
 	answering = |sent|
@@ -1817,6 +1966,17 @@ Liton := [].{
 			NeedsYou => "needs you"
 			Failed => "failed"
 			Working => "working"
+			Done => "done"
+			Idle => "idle"
+		}
+
+	## The class that colours a state's word, in a counter or a row.
+	attention_word_class : Attention.State -> Str
+	attention_word_class = |state|
+		match state {
+			NeedsYou => "waiting"
+			Failed => "failed"
+			Working => "running"
 			Done => "done"
 			Idle => "idle"
 		}
@@ -2501,8 +2661,8 @@ Liton := [].{
 		[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(slot)
 	}
 
-	## A chat pane: its session's timeline, a permission it asks for, and the
-	## composer.
+	## A chat pane: its session's summary, its timeline, a permission it
+	## asks for, and the composer.
 	chat : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	chat = |model0, id, shown| {
 		pending = id.map2(model0.signal(), |pane_id, state| Model.pending(state, pane_id))
@@ -2595,7 +2755,7 @@ Liton := [].{
 							],
 						),
 				),
-			]),
+			]).prepend(Summary.view(model0, id)).prepend(Liton.session_overview(model0, id, shown)),
 		)
 	}
 
@@ -2862,6 +3022,82 @@ Liton := [].{
 				Engine.when(model.signal().map(|state| state.history.next.is_ok() and !History.loading(state.history)), || Html.button("Show more", [Engine.class("history-more")], model.update(|state| { ..state, history: History.more(state.history) })), || Engine.text("")),
 			],
 		)
+
+	## Over a chat pane showing only the latest (its option `show`), the
+	## session's status, where it works and how long it has worked or since
+	## it was active; Show the whole chat, Snooze, Pin its workspace and
+	## Rename, over its summary (`Summary.view`). A pane that shows the
+	## whole chat after showing the latest has Show the latest only.
+	session_overview : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	session_overview = |model, id, shown| {
+		session = shown.map(|{ pane, state }| Model.session(state, Model.session_of(state, pane)))
+		agent = shown.map(|{ pane, state }| Liton.agent_of(state, pane))
+		show = |value| model.update_by(id, |state, pane_id| Model.with_snapshot_text(Model.set_option(state, pane_id, "show", value)))
+		workspace = session.map2(model.signal(), |listed, state| if (state.capabilities.contains(Capability.workspaces_v1)) Model.row_workspace(state, listed.id) else Err(NotFound))
+		icon = |name, class, handler| Liton.icon_button(Engine.const(name), "icon ${class}", handler)
+		Engine.switch(
+			shown.map(|{ pane, state }| if (Model.session_of(state, pane).is_empty()) NoSession else if (Model.option(pane, "show") == "Latest") Latest else if (pane.options.any(|set| set.key == "show")) Whole else NoSession),
+			[Latest, Whole, NoSession],
+			|showing|
+				match showing {
+					Latest =>
+						Html.div_attrs(
+							[Engine.class("session-overview"), Engine.attr("data-part", "overview")],
+							[
+								Html.div(
+									"overview-line",
+									[
+										Html.span_s(agent.map(|told| told.status), [Engine.class_s(agent.map(|told| "status-word ${told.dot}")), Engine.test_id("overview-status")]),
+										Html.span_s(agent.map(|told| told.place), [Engine.class("overview-place")]),
+										Html.span_s(shown.map(|{ pane, state }| Liton.activity_text(state, pane)), [Engine.class("overview-activity"), Engine.test_id("overview-activity")]),
+									],
+								),
+								Html.div(
+									"overview-actions",
+									[
+										icon("Show the whole chat", "expand", show("Whole chat")),
+										Engine.when(
+											session.map2(model.signal(), |listed, state| state.attention.any(|item| item.session_id == listed.id)),
+											|| icon("Snooze", "snooze", model.update_by(session, |state, listed| Model.set_aside(state, listed.id, Snoozed(Model.inbox_snooze_minutes(state))))),
+											|| Engine.text(""),
+										),
+										Engine.when(
+											workspace.map(|found| found.is_ok()),
+											|| Liton.icon_button(workspace.map(|found| if (found.map_ok(|listed| listed.pinned) ?? Bool.False) "Unpin its workspace" else "Pin its workspace"), "icon pin", model.update_by(workspace, |state, found| found.map_ok(|listed| Model.edit(state, Workspaces(Pin({ workspace_id: listed.id, pinned: !listed.pinned })))) ?? state)),
+											|| Engine.text(""),
+										),
+										Engine.when(
+											model.signal().map(|state| state.capabilities.contains(Capability.chat_v1)),
+											|| icon("Rename", "rename", model.update_by(id.map2(session, |pane_id, listed| { pane_id, key: listed.id }), |state, { pane_id, key }| Model.row_act(state, { pane_id, key, action: Rename }))),
+											|| Engine.text(""),
+										),
+									],
+								),
+								Engine.when(
+									id.map2(model.signal(), |pane_id, state| state.renaming.pane == pane_id),
+									|| Html.form("Rename", [Engine.class("rename-form"), Engine.on("submit", model.update(Model.rename_row))], [Html.text_input(Engine.const("New name"), "text", model.signal().map(|state| state.renaming.text), [Engine.ref("rename"), Engine.class("rename")], model.set_value(|state, text| { ..state, renaming: { ..state.renaming, text } }))]),
+									|| Engine.text(""),
+								),
+							],
+						)
+					Whole => Html.div("overview-whole", [Html.button("Show the latest only", [Engine.class("show-latest")], show("Latest"))])
+					NoSession => Engine.text("")
+				},
+		)
+	}
+
+	## How long the agent of a chat pane's session has worked on its turn,
+	## or else how long ago it was active, as `Model.age` says it.
+	activity_text : Model.State, Model.Pane -> Str
+	activity_text = |state, pane| {
+		ago = Model.age(state, Model.session(state, Model.session_of(state, pane)))
+		match Model.working(state, pane) {
+			Ok(worked) if !worked.is_empty() => "running for ${worked}"
+			_ if ago.is_empty() => ""
+			_ if ago == "now" => "active now"
+			_ => "active ${ago} ago"
+		}
+	}
 
 	## What a composer's round button does: send, or stop its session's agent
 	## while it works and nothing is typed, or nothing while it stops.

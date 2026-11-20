@@ -1,0 +1,15 @@
+(test "Liton — revoking this browser in Settings' Devices signs it out: the pair screen shows once the daemon answers"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (click (role button :name "Settings"))
+    (click (role button :name "Devices"))
+    (stub-http "devices" :url "/liton/v1/devices" :status 200 :body "{\"devices\":[{\"id\":\"d1\",\"name\":\"Browser on a Mac\",\"created_at\":0,\"seen_at\":0,\"current\":true},{\"id\":\"d2\",\"name\":\"Phone or tablet\",\"created_at\":0,\"seen_at\":0,\"current\":false},{\"id\":\"d3\",\"name\":\"liton command line\",\"created_at\":0,\"seen_at\":0,\"current\":false}]}")
+    (run-effect 3)
+    (click (role button :name "Revoke Browser on a Mac"))
+    (expect-visible (text "Revoking…"))
+    (stub-http "revoke" :url "/liton/v1/devices/revoke" :status 200 :body "{}")
+    (run-effect 4)
+    (expect-visible (text "Pair this browser"))
+  )
+)

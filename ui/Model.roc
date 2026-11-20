@@ -67,6 +67,21 @@ Model := [].{
 	## take it, or is "" while it waits.
 	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
 
+	## A device paired with the daemon, as /liton/v1/devices lists it, its
+	## times in milliseconds, `current` the one asking.
+	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool }
+
+	## Pairing this browser with the daemon and the devices paired
+	## (ui/Pairing.roc): whether the daemon answered that it isn't paired;
+	## the code typed or the URL's `#pair=` gave, and whether that one is to
+	## be tried once the daemon refuses; the pairing sent, its code and this
+	## browser's name, by its serial, while `sending`, and why the last failed; the pairings made, each
+	## asking for the manifest again; the devices last listed, and the
+	## listings asked for; the revocations on their way, as `revoke` sent
+	## them; and a code made for another device, while `asking` or once
+	## given, with the link that pairs a browser with it.
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str } }
+
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
 	State : {
@@ -146,6 +161,10 @@ Model := [].{
 		## waits).
 		attending : List({ serial : U64, request : Attention.Request, accepted : U64 }),
 		attention_outbox : { serial : U64, request : Attention.Request },
+
+		## The sessions an Inbox pane's rows select, for what acts on them
+		## together.
+		inbox_selected : List(Str),
 
 		## The last poll sent, while `polling`, and whether another is to
 		## follow it at once; the cursor of each topic polled.
@@ -251,6 +270,7 @@ Model := [].{
 		## The background this browser shows over the theme's (`Wallpaper`):
 		## an image's URL, or "" for the theme's, and its dim in percent.
 		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
+		pairing : Pairing,
 
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
@@ -467,6 +487,7 @@ Model := [].{
 				attention: [],
 				attending: [],
 				attention_outbox: { serial: 0, request: ListItems },
+				inbox_selected: [],
 				poll: { serial: 0, subjects: [], topics: [] },
 				polling: Bool.False,
 				poll_again: Bool.False,
@@ -509,6 +530,7 @@ Model := [].{
 				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" } },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -898,13 +920,16 @@ Model := [].{
 	}
 
 	## Whether the daemon offers what a preset's navigators and views need,
-	## those it shows as it opens (each tile's active pane), or its manifest
-	## is still to be read, as liton's own presets show until the setup's
-	## arrive. An inspector without its capability shows what it needs.
+	## those it shows as it opens (each tile's active pane, but for those of
+	## a collapsed drawer), or its manifest is still to be read, as liton's
+	## own presets show until the setup's arrive. An inspector without its
+	## capability shows what it needs, as a pane opened from a collapsed
+	## drawer does.
 	offers : State, Setup.Preset -> Bool
 	offers = |state, preset| {
 		needed = |shown| Widgets.find(shown.widget).role != Inspector
-		opened = preset.snapshot.grid.tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
+		shown_tiles = preset.snapshot.grid.tiles.drop_if(|tile| preset.snapshot.collapsed.contains(Model.slot_in(preset.snapshot.shell, preset.snapshot.grid, tile.id)))
+		opened = shown_tiles.join_map(|tile| tile.panes.keep_if(|shown| shown.id == tile.active and needed(shown)))
 		state.daemon.id.is_empty() or opened.all(|shown| Widgets.missing(Widgets.find(shown.widget), state.capabilities).is_empty())
 	}
 
@@ -1271,12 +1296,17 @@ Model := [].{
 	window_of : State, Pane -> U64
 	window_of = |state, shown| {
 		session_id = Model.session_of(state, shown)
-		state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
+		if (Model.option(shown, "show") == "Latest") Model.latest_window else state.windows.find_first(|kept| kept.pane == shown.id and kept.session_id == session_id).map_ok(|kept| kept.count) ?? Model.window
 	}
+
+	## How many of a timeline's latest entries a chat pane showing only the
+	## latest shows.
+	latest_window : U64
+	latest_window = 8
 
 	## Whether a chat pane leaves out earlier entries of its timeline.
 	has_earlier : State, Pane -> Bool
-	has_earlier = |state, shown| Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
+	has_earlier = |state, shown| Model.option(shown, "show") != "Latest" and Model.entries(state, Model.session_of(state, shown)).len() > Model.window_of(state, shown)
 
 	## Shows half of `Model.window` more of a chat pane's earlier entries.
 	show_earlier : State, Str -> State
@@ -1879,7 +1909,7 @@ Model := [].{
 		view_of = |kind| tile.panes.find_first(|shown| shown.pinned.is_empty() and Widgets.shows(Widgets.find(shown.widget), View, kind)).map_ok(|shown| shown.id) ?? ""
 		row = |tab| {
 			(key, title, widget, dot) = match tab {
-				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_row(state, Model.session(state, session_id)).dot)
+				Session(session_id) => (session_id, Model.session(state, session_id).title, "chat", Model.session_dot(state, Model.session(state, session_id)))
 				Diff => ("diff", "Diff", "changes", "")
 				Ticket(ticket_id) => (Context.to_str(Ticket(ticket_id)), TicketDesk.ticket_shown(state.tickets, ticket_id).map_ok(|ticket| ticket.summary.key) ?? ticket_id, "tickets", "")
 			}
@@ -2341,7 +2371,8 @@ Model := [].{
 	## a chat pane shows; the attention items, which the title counts; of
 	## each Changes pane on screen, its scope's changes and the hunks of the
 	## file it shows, and of each Review pane every file's; of each Files pane on screen, its root, the directories
-	## open and the file it shows; the workspaces, while a pane lists them;
+	## open and the file it shows; the workspaces, while a pane lists them
+	## or an inbox's filters, Pin and New agent use them;
 	## the review of the context of each, Files, Changes or Review, on screen; and
 	## of Tickets panes on screen, the tickets, the links and the ticket each
 	## shows. Until the manifest arrives, every capability counts as offered.
@@ -2373,7 +2404,7 @@ Model := [].{
 		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
-		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces")) [WorkspaceList, Agents] else []
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces" or shown.widget == "inbox")) [WorkspaceList, Agents] else []
 		# The kinds of agent, with their models and modes, for chat panes'
 		# composers, followed last.
 		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
@@ -2744,15 +2775,6 @@ Model := [].{
 	waiting : State, Attention.State -> List(Attention.Item)
 	waiting = |state, attention_state| Model.inbox_items(state).keep_if(|item| item.state == attention_state and item.set_aside == No)
 
-	## The items an inbox pane lists under what needs you, the latest first:
-	## those not set aside, idle ones if it shows them.
-	latest : State, Pane -> List(Attention.Item)
-	latest = |state, shown| Model.inbox_items(state).keep_if(|item| item.set_aside == No and item.state != NeedsYou and (item.state != Idle or Model.option(shown, "show_idle") == "true"))
-
-	## The inbox's items settled or snoozed.
-	later : State -> List(Attention.Item)
-	later = |state| Model.inbox_items(state).keep_if(|item| item.set_aside != No)
-
 	## How many items need you, as the document title and the inbox's tab
 	## show.
 	needs_you : State -> U64
@@ -2802,6 +2824,11 @@ Model := [].{
 	## Whether a session's item is unread, as the inbox shows it.
 	unread : State, Str -> Bool
 	unread = |state, session_id| state.attention.find_first(|item| item.session_id == session_id).map_ok(|item| state.attending.fold(item, |shown, asked| Model.attended(shown, asked.request)).unread) ?? Bool.False
+
+	## How long Snooze sets an item aside where no inbox pane says: as the
+	## first inbox pane's does, else an hour.
+	inbox_snooze_minutes : State -> U32
+	inbox_snooze_minutes = |state| Model.panes(state).find_first(|shown| shown.widget == "inbox").map_ok(Model.snooze_minutes) ?? 60
 
 	## How long an inbox pane's Snooze sets an item aside, in minutes.
 	snooze_minutes : Pane -> U32
@@ -2863,6 +2890,19 @@ Model := [].{
 			Room(_) => Model.open_view(state, context)
 		}
 	}
+
+	## Opens a session as `Model.open` does, the chat showing it showing the
+	## whole of it rather than only the latest.
+	open_whole : State, Str -> State
+	open_whole = |state, session_id| {
+		opened = Model.open(state, Session(session_id))
+		showing = Model.panes(opened).find_first(|shown| shown.widget == "chat" and Model.pane_visible(opened, shown.id) and Model.session_of(opened, shown) == session_id)
+		showing.map_ok(|shown| Model.with_snapshot_text(Model.set_option(opened, shown.id, "show", "Whole chat"))) ?? opened
+	}
+
+	## Whether a chat pane shows only the latest of its session.
+	shows_latest : State -> Bool
+	shows_latest = |state| Model.panes(state).any(|shown| shown.widget == "chat" and Model.option(shown, "show") == "Latest")
 
 	## Focuses a context and shows a view of it, as `Model.open` does.
 	open_view : State, Context.Id -> State
@@ -3113,12 +3153,12 @@ Model := [].{
 			row = mark({ ..blank, key: Context.to_str(Workspace(workspace.id)), kind: Workspace, title: workspace.name, detail: if (by_status) "" else branch, second_line: second_line_of(workspace, branch), counts: Model.change_counts(state, workspace), dot, age: newest_age, focused: Model.focused(state, [Session, Workspace]) == Workspace(workspace.id), creatable: Bool.True, pinned: workspace.pinned })
 			match sessions.first() {
 				Ok(lone) if sessions.len() == 1 => {
-					lone_row = Model.session_row(state, lone)
+					lone_row = Model.session_row(state, shown, lone)
 					lone_branch = if (workspace.kind == Worktree) branch_name(workspace.branch) else ""
 					[mark({ ..lone_row, detail: if (by_status) "" else lone_branch, second_line: second_line_of(workspace, lone_branch), counts: row.counts, focused: lone_row.focused or row.focused, creatable: Bool.True, pinned: workspace.pinned })]
 				}
 				_ if Model.option(shown, "sessions") == "Tabs" => [row]
-				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, listed_session), depth: 1 })).prepend(row)
+				_ => sessions.map(|listed_session| mark({ ..Model.session_row(state, shown, listed_session), depth: 1 })).prepend(row)
 			}
 		}
 		groups.join_map(
@@ -3149,18 +3189,51 @@ Model := [].{
 		Attention.ranks.find_first(|rank| ranks.contains(rank)) ?? workspace.state
 	}
 
-	## A session's row, in a Workspaces or a Sessions pane.
-	session_row : State, Chat.Session -> Row
-	session_row = |state, listed_session| {
+	## A session's status dot: as urgent as its attention, and unread.
+	session_dot : State, Chat.Session -> Str
+	session_dot = |state, listed_session| {
+		dot = attention_dot(Attention.item(listed_session, []).state)
+		if (Model.unread(state, listed_session.id)) "${dot} unread" else dot
+	}
+
+	## A session's title in a list `shown`: the goal its summary names, as
+	## the list's Title option says by default, or else its own.
+	session_title : Pane, Chat.Session -> Str
+	session_title = |shown, listed_session|
+		match (Model.option(shown, "title"), listed_session.summary) {
+			("Goal", Ok({ goal, .. })) if !goal.is_empty() => goal
+			_ => listed_session.title
+		}
+
+	## The summary a chat pane shows above its timeline, and whether open,
+	## unless its session has none or its Summary option hides it.
+	summary_of : State, Str -> Try({ summary : Chat.Summary, open : Bool }, [Missing])
+	summary_of = |state, pane_id| {
+		shown = Model.pane(state, pane_id)
+		shows = Model.option(shown, "summary")
+		if (shows == "Hidden") Err(Missing) else Model.session(state, Model.session_of(state, shown)).summary.map_ok(|summary| { summary, open: shows == "Open" })
+	}
+
+	## An inbox item's title in the Inbox `shown`: as its session's is in a
+	## list (`session_title`), or its own while it lists no such session.
+	item_title : State, Pane, Attention.Item -> Str
+	item_title = |state, shown, item| state.sessions.find_first(|listed_session| listed_session.id == item.session_id).map_ok(|listed_session| Model.session_title(shown, { ..listed_session, title: item.title })) ?? item.title
+
+	## Folds a chat pane's summary to its heading, or opens it.
+	toggle_summary : State, Str -> State
+	toggle_summary = |state, pane_id| Model.set_option(state, pane_id, "summary", if (Model.option(Model.pane(state, pane_id), "summary") == "Open") "Folded" else "Open")
+
+	## A session's row, in a Workspaces or a Sessions pane `shown`.
+	session_row : State, Pane, Chat.Session -> Row
+	session_row = |state, shown, listed_session| {
 		rank = Attention.item(listed_session, []).state
-		dot = if (Model.unread(state, listed_session.id)) "${attention_dot(rank)} unread" else attention_dot(rank)
-		{ key: listed_session.id, kind: Session, title: listed_session.title, detail: "", second_line: "", counts: Model.no_counts, dot, status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
+		{ key: listed_session.id, kind: Session, title: Model.session_title(shown, listed_session), detail: "", second_line: "", counts: Model.no_counts, dot: Model.session_dot(state, listed_session), status: attention_word(rank), age: Model.age(state, listed_session), focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id), folded: Bool.False, creatable: Bool.False, pinned: Bool.False, depth: 0 }
 	}
 
 	## A Sessions pane's rows: every session in its order, with its agent if
 	## it shows that.
 	session_rows : State, Pane -> List(Row)
-	session_rows = |state, shown| Model.ordered(state.sessions, Model.option(shown, "order"), |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).map(|listed_session| { ..Model.session_row(state, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
+	session_rows = |state, shown| Model.ordered(state.sessions, Model.option(shown, "order"), |listed_session| Model.changed(state, listed_session), |listed_session| listed_session.title).map(|listed_session| { ..Model.session_row(state, shown, listed_session), detail: if (Model.option(shown, "show_agent") == "true") listed_session.agent else "" })
 
 	## When a session last changed, as `Attention.recency` orders times: as
 	## its inbox item says, else as it does. One starting is the newest.
@@ -3199,6 +3272,13 @@ Model := [].{
 			Ok(_) if state.now > 0 => "now"
 			_ => ""
 		}
+
+	## Two texts in order, as a dictionary orders words, whatever their case.
+	text_order : Str, Str -> [Before, After, Same]
+	text_order = |left, right| {
+		lower = |text| text.to_utf8().map(|byte| if (byte >= 'A' and byte <= 'Z') byte + 32 else byte)
+		bytes_order(lower(left), lower(right))
+	}
 
 	## Newer than any time `Attention.recency` gives.
 	newest : U64

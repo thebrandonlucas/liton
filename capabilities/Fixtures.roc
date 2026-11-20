@@ -37,7 +37,7 @@ Fixtures := [].{
 		History({ sessions: [], next: Err(Missing) }),
 	]
 
-	## A session telling its mode, thinking level, modes and usage.
+	## A session telling its mode, thinking level, modes, usage and summary.
 	configured : Chat.Session
 	configured = {
 		..Chat.session({ id: "s2", provider: "mock", agent: "claude", title: "Plan the docs", status: Idle }),
@@ -45,6 +45,7 @@ Fixtures := [].{
 		thinking: Ok("high"),
 		modes: Ok([{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }]),
 		usage: Ok({ context_used: Ok(41_000), context_max: Ok(200_000), input_tokens: Ok(52_000), cached_input_tokens: Ok(40_000), output_tokens: Ok(3_100), cost_usd: Ok(0.42) }),
+		summary: Ok({ goal: "Document the planner.", done: "Outlined the guide.", now: "Waiting for your review.", at: "2026-01-01T09:00:09.000Z" }),
 	}
 
 	timeline : List(Chat.Entry)

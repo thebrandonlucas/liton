@@ -97,28 +97,30 @@ try {
     // fix-auth holds one session, which stands in its place with its branch.
     await see("Workspaces", ".tree-workspace button", "main");
     await see("Workspaces", ".tree-session .second-line", "fix-auth");
-    await see("Workspaces", ".tree-session button", "Fix the login redirect");
+    // titled by its summary's goal, from its first message.
+    await see("Workspaces", ".tree-session button", "Logging in sends me back to /login.");
     await click("Workspaces", ".tree-workspace button", "main");
     for (const title of ["Find the flaky CI test", "Scratch"]) await tab(title);
   });
   await step("the flaky CI session is waiting for you", () => tab("Find the flaky CI test", "waiting"));
-  await step("the Inbox preset lists it under Needs you, the title counts it, and opening an unread item reads it", async () => {
+  await step("the Inbox preset counts it as waiting on you, the title counts it, and opening an unread item reads it", async () => {
     await page.click(".settings-toggle");
     await click("Settings", "button", "Inbox preset");
-    await see("Inbox", ".inbox-section", "Needs you");
-    await see("Inbox", ".inbox-section .inbox-item", "Find the flaky CI test");
+    await see("Inbox", ".inbox-counter", "waiting on you");
+    await see("Inbox", ".inbox-item", "Find the flaky CI test");
     await until("the title count", () => page.evaluate(() => document.title === "(1) liton"));
     // Unread until opened, then read at once.
     await click("Settings", ".settings-close", "Back");
-    await see("Inbox", ".inbox-item.unread > button");
-    const title = await page.evaluate(() => document.querySelector(".inbox-item.unread > button").textContent);
-    await click("Inbox", ".inbox-item.unread > button", title);
-    const read = () => page.evaluate((title) => [...document.querySelectorAll(".inbox-item > button")].some((b) => b.textContent === title && !b.parentElement.classList.contains("unread")), title);
+    await see("Inbox", ".inbox-item.unread .row-title");
+    const title = await page.evaluate(() => document.querySelector(".inbox-item.unread .row-title").textContent);
+    await click("Inbox", ".inbox-item.unread .row-title", title);
+    const read = () => page.evaluate((title) => [...document.querySelectorAll(".inbox-item .row-title")].some((b) => b.textContent === title && !b.closest(".inbox-item").classList.contains("unread")), title);
     await until(`${title} read`, read);
     // And still, once the daemon took it and a poll or two followed.
     await new Promise((r) => setTimeout(r, 2500));
     assert.ok(await read(), `${title} read after polls`);
-    await page.click(".settings-toggle");
+    // The left drawer, the rooms', is collapsed: Settings is in the main area's header.
+    await page.click(".slot-main .settings-toggle");
     await click("Settings", "button", "Developer preset");
     await click("Settings", ".settings-close", "Back");
   });
@@ -136,8 +138,9 @@ try {
     await see("Changes", ".git-status", "main");
     await see("Changes", ".missing", "Working tree clean");
   });
-  await step("focusing the login fix shows its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
-    await click("Workspaces", ".tree-session button", "Fix the login redirect");
+  await step("focusing the login fix shows its summary, its reply as Markdown, its changed file in Changes, and picking it shows a hunk", async () => {
+    await click("Workspaces", ".tree-session button", "Logging in sends me back to /login.");
+    await see("Chat", ".session-summary .summary-line.done", "The redirect target is hard-coded to /login.");
     await see("Changes", ".git-status", "fix-auth");
     await click("Changes", '.git-file button[aria-label="src/Auth.roc"]', "Auth.roc");
     await see("Changes", ".hunk-header", "@@ -40,3 +40,3 @@");
@@ -210,7 +213,7 @@ try {
       const starting = () => [...document.querySelectorAll(".workspace-tab")].some((t) => t.textContent.includes("Write the docs") && !!t.querySelector(".status-dot.starting"));
       new MutationObserver(() => { window.sawStarting ||= starting(); }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
-    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Fix the login redirect"]');
+    await page.click('section[aria-label="Workspaces"] button[aria-label="New agent beside Logging in sends me back to /login."]');
     await see("Workspaces", ".create-form", "New agent in fix-auth");
     await (await page.$('section[aria-label="Workspaces"] input[aria-label="First prompt"]')).type("Write the docs");
     await click("Workspaces", ".create-form button", "Start");

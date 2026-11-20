@@ -37,6 +37,44 @@ whose `Origin` isn't its own address, to a POST of another type, and to one
 naming a host other than `LITON_HOST`, `localhost` or one of
 `LITON_ALLOWED_HOSTS`.
 
+### Authentication
+
+Every route under `/liton/v1` but `pair` answers only a paired device,
+and `401` to any other. The UI (`/ui`) and the docs (`/docs`) hold no
+secrets and are served to anyone.
+
+- **Pairing.** A device pairs once, with a pairing code: 8 symbols such as
+  `K7QM-4XWP`, used once, for 10 minutes. `liton pair`, run on the daemon's
+  machine, makes one (The CLI), and so does a paired device's
+  `POST /liton/v1/devices/code`, which answers `{"code", "expires_at",
+  "link"}`, the link opening the UI at the address asked with the code.
+  `POST /liton/v1/pair` with `{"code", "name"}` then answers
+  `{"device": {"id", "name"}}` and sets the device's token as a cookie,
+  `liton_token`, `HttpOnly` and `SameSite=Strict`, and `Secure` when a proxy
+  says the request came over HTTPS (`X-Forwarded-Proto` or `Forwarded`). A
+  page's scripts never see it. A client that isn't a browser asks
+  `"token": true` and is given the token in the answer too, to send as
+  `Authorization: Bearer <token>`. The daemon tries at most 10 pairings a
+  minute, right or wrong, and answers `429` beyond.
+- **Tokens.** A token is `<device id>.<secret>`, its secret 256 random bits
+  as hex. The daemon keeps only its SHA-256, compares it in constant time,
+  and never shows or logs a token.
+- **Devices.** `GET /liton/v1/devices` lists the devices paired,
+  `{"devices": [{"id", "name", "created_at", "seen_at", "current"}]}`, with
+  times in milliseconds and the one asking `current`. `POST
+  /liton/v1/devices/revoke` with `{"id"}` forgets one, whose token is refused
+  from then on; revoking the device asking also clears its cookie.
+- **When.** `LITON_AUTH` decides. `on`, the default, requires a paired
+  device unless the daemon listens on loopback alone (`LITON_HOST` is
+  `127.0.0.1`, `::1` or `localhost`) and the request carries none of a
+  proxy's `Forwarded`, `X-Forwarded-*` or `X-Real-IP` headers, so
+  `zig build run` works as it is. `required` always requires one, and is
+  what a daemon behind a proxy on the same machine needs, should the proxy
+  forward without those headers. `off` never does, for development only.
+- **Federation.** A daemon is a client of its remotes like any other: pair it
+  as the CLI does and give it the token with `LITON_PROVIDER_TOKENS`,
+  comma-separated as `name=token`, which it sends as `Authorization: Bearer`.
+
 ### Manifest
 
 `GET /liton/v1/manifest` lists what the daemon offers, and the topics of each
@@ -325,6 +363,19 @@ each left out when its provider doesn't tell. From Paseo, these are an
 agent's `currentModeId`, `effectiveThinkingOptionId` (or its
 `thinkingOptionId`), `availableModes` and `lastUsage`, and a provider's
 models and modes in its `get_providers_snapshot_request`.
+
+A session tells its `summary` too, once one is written: `{"goal", "done",
+"now", "at"}`, a sentence each of what the session is for, what it has done
+and what happens now, and when the turn it covers ended. It is a field of
+the session rather than a topic of its own: the lists that title a session
+by its goal already poll `sessions`, and a summary is three sentences.
+The mock writes one after each turn from the turn itself. For Paseo's, the
+daemon asks Paseo (0.15 or later, whose `server_info` lists the
+`backgroundAgents` feature) for a background agent on the session's
+smallest model, held to a JSON schema, 30 s after a turn ended, given what
+happened since and the summary so far: one agent per summary, at most two
+at a time, for the sessions whose timelines it fetches. Paseo archives the
+agent once it answered, and neither Paseo's lists nor liton's show it.
 
 Where a turn ends, a timeline has a `{"TurnEnded": {"started", "ended"}}`
 after the turn's last event: once its agent finished, failed or was stopped,
@@ -826,6 +877,15 @@ it, if given; following several topics, it wraps each event as
 followed. Either exits 2 on a usage error or when the daemon can't be
 reached.
 
+`liton pair`, run on the daemon's machine, prints a pairing code for a new
+device (Authentication) and a link to pair a browser with it. It writes the
+code in the daemon's database, at `LITON_DB` (default `liton.db`), as only
+someone who can write it already holds the daemon's every secret. `liton
+login <code>` pairs the CLI itself and keeps its token in
+`$XDG_CONFIG_HOME/liton/tokens` (by default under `~/.config`), readable by
+its owner alone, for the daemon at `LITON_URL`; `LITON_TOKEN` takes its
+place when set.
+
 `liton setup [path]` speaks no protocol: it runs a Litonfile (by default
 `./Litonfile.roc`, or the one in a directory given) with `roc`, and writes the
 setup it prints to `liton.setup.json` (design.md, Setups). It exits 1 when
@@ -839,6 +899,5 @@ resources, so an agent works with the same capabilities as a person.
 
 ## Open questions
 
-- Authentication between a client and a daemon that isn't on the same machine.
 - Whether a capability's operations should be listed like its topics, so that
   an unknown one is `Unsupported` rather than `BadRequest`.
