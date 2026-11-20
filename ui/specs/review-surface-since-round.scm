@@ -35,6 +35,6 @@
     (expect-text (test-id "since-round-note") "1 file changed since round 2.")
     (expect-visible (text "Redirects go back to the page asked for."))
     (expect-absent (role group :name "src/Auth.roc"))
-    (expect-text (role region :name "Changed files") "Changed filesFix the login redirect1 file+2−0docs+2 −0notes.mdadded1+2 −0")
+    (expect-text (role region :name "Changed files") "Changed filesWorkspaces1 file+2−0docs+2 −0notes.mdadded1+2 −0")
   )
 )

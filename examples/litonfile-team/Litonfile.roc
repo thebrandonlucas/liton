@@ -18,6 +18,7 @@ review = {
 	snapshot: {
 		version: Setup.snapshot_version,
 		shell: Tiling,
+		frame: Tiles,
 		grid: {
 			columns: [1, 2, 2],
 			rows: [1],

@@ -19,6 +19,6 @@
     (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/fix-auth\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspace.git.v1\",\"topic\":\"changes/fix-auth/AgainstBase\",\"cursor\":\"g-f2\",\"events\":[{\"Changes\":{\"workspace\":{\"Known\":{\"directory\":\"/w\",\"id\":\"/w\",\"kind\":\"Checkout\",\"name\":\"w\",\"provider\":\"mock\",\"repository_root\":\"/w\"}},\"status\":{\"Status\":{\"ahead\":1,\"base\":{\"Base\":\"main\"},\"behind\":0,\"branch\":{\"Branch\":\"fix-auth\"},\"dirty\":true,\"upstream\":\"NoUpstream\"}},\"changes\":{\"scope\":\"AgainstBase\",\"fingerprint\":\"f2\",\"files\":[{\"additions\":4,\"body\":\"Text\",\"change\":\"Added\",\"deletions\":0,\"path\":\"src/Redirect.roc\"}]},\"commits\":[]}}]},{\"capability\":\"review.v1\",\"topic\":\"threads/fix-auth\",\"cursor\":\"r1\",\"events\":[]}]}")
     (run-effect 5)
     (expect-visible (role group :name "src/Redirect.roc"))
-    (expect-text (role region :name "Changed files") "Changed filesFix the login redirect1 file+4−0src+4 −0Redirect.rocadded+4 −0")
+    (expect-text (role region :name "Changed files") "Changed filesWorkspaces1 file+4−0src+4 −0Redirect.rocadded+4 −0")
   )
 )
