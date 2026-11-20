@@ -330,6 +330,27 @@ try {
     const made = await session(started);
     assert.deepEqual([made.model, made.mode, made.thinking], ["gpt-5-codex", "read-only", "high"]);
   });
+  await step("usage.v1 tells the mock's accounts' windows; limits.v1 keeps limits and tells how near each is, and a message past one is refused but /compact, as a new agent past the weekly one is", async () => {
+    const polled = async (capability, topic) => (await post("poll", { topics: [{ capability, topic, after: "" }] })).topics[0].events[0];
+    const claude = (await polled("usage.v1", "reports")).Reports.find((r) => r.source === "claude");
+    assert.deepEqual([claude.provider, claude.status, claude.windows.map((w) => w.id), claude.windows[1].used_pct > 31], ["mock", "Available", ["five_hour", "weekly"], true]);
+    assert.deepEqual(await call("usage.v1", "Refresh"), { Ok: "Accepted" });
+    const fixAuth = async () => (await polled("limits.v1", "status")).Limits.sessions.find((s) => s.session_id === "fix-auth");
+    const { used_pct, state } = await fixAuth();
+    assert.deepEqual([used_pct > 10, state], [true, "Ok"]);
+    assert.deepEqual(await call("limits.v1", { SetLimit: { scope: { Session: "fix-auth" }, percent: used_pct } }), { Ok: "Accepted" });
+    assert.deepEqual(await fixAuth(), { session_id: "fix-auth", used_pct, limit_pct: used_pct, state: "Over" });
+    const refused = (await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "Go on" } })).Err;
+    assert.deepEqual(refused, { code: "Refused", message: `the session is over its context limit (${used_pct}% of ${used_pct}%): compact or start fresh` });
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "/compact" } }), { Ok: "Accepted" });
+    assert.deepEqual([(await fixAuth()).used_pct, (await fixAuth()).state], [10, "Ok"]);
+    assert.equal((await call("limits.v1", { SetLimit: { scope: "Week", percent: 0 } })).Ok.Rejected, "a limit is a percent from 1 to 100, not 0");
+    assert.deepEqual(await call("limits.v1", { SetLimit: { scope: "Week", percent: 30 } }), { Ok: "Accepted" });
+    assert.ok((await polled("limits.v1", "status")).Limits.weeks.every((w) => w.state === "Over" && w.limit_pct === 30));
+    assert.equal((await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "codex", prompt: "" } })).Err.code, "Refused");
+    for (const scope of [{ Session: "fix-auth" }, "Week"]) assert.deepEqual(await call("limits.v1", { ClearLimit: { scope } }), { Ok: "Accepted" });
+    assert.deepEqual((await polled("limits.v1", "status")).Limits.limits, []);
+  });
   await step("sessions, workspaces and projects are renamed, pinned and archived, and the listings show it", async () => {
     const workspaces = async () => (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed;
     const sessions = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions;

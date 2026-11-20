@@ -522,6 +522,14 @@ call! = |context, request| {
 			Ok(asked) => Protocol.routed(manifest, asked).map_ok(|id| (Capability.to_str(id), asked.provider))
 			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
 		}
+	match routed {
+		Ok((capability, _)) =>
+			match guarded!(context, manifest, capability, body)? {
+				Err(why) => return Ok(json(Json.to_str(call_failed({ code: Refused, message: why }))))
+				Ok({}) => {}
+			}
+		Err(_) => {}
+	}
 	match routed.map_ok(|(capability, _)| transformer_of(context, manifest, capability)) {
 		Ok(Ok(part)) => return Ok(json(transformer_call!(context, manifest, part, body)?))
 		_ => {}
@@ -1709,6 +1717,20 @@ transformer_call! = |context, manifest, part, body| {
 		if (state_swapped!(context.db, part.id, stored, called.state)?) Ok(called.answer) else answered!()
 	}
 	answered!()
+}
+
+## Whether the offered transformers that guard `capability` let a call of
+## it, `body`, through, or why the first that refuses it does.
+guarded! : Context, Manifest.Offered, Str, Str => Try(Try({}, Str), _)
+guarded! = |context, manifest, capability, body| {
+	guarding = context.transformers.keep_if(|part| part.guards.contains(capability) and manifest.transformers.any(|offered_part| offered_part.id == part.id))
+	for part in guarding {
+		match (part.guard)(inputs!(context, manifest, part)?, transformer_state!(context.db, part.id)?, body) {
+			Err(why) => return Ok(Err(why))
+			Ok({}) => {}
+		}
+	}
+	Ok(Ok({}))
 }
 
 ## A transformer's state as last stored, "" before.

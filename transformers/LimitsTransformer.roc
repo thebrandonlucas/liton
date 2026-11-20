@@ -21,6 +21,16 @@ LimitsTransformer := [].{
 		follows: |_| [],
 		derive: |inputs, stored, _| { state: stored, topics: [{ topic: "status", events: [Limits(LimitsTransformer.status(kept(stored), sessions(inputs), reports(inputs)))] }] },
 		call,
+		guards: ["chat.v1"],
+		guard: |inputs, stored, body| {
+			decoded : Try(Protocol.Call(Chat.Request), _)
+			decoded = Json.parse(body)
+			listed = sessions(inputs)
+			match decoded {
+				Ok(asked) => LimitsTransformer.refusal(LimitsTransformer.status(kept(stored), listed, reports(inputs)), listed, asked)
+				Err(_) => Ok({})
+			}
+		},
 	}
 
 	## How near each session that tells what its last turn used is to its
@@ -51,6 +61,35 @@ LimitsTransformer := [].{
 				},
 		)
 		{ limits, sessions: session_rows, weeks: week_rows }
+	}
+
+	## Why a chat.v1 request is refused, if it is: a message to a session
+	## over its context limit, other than `/compact`, which makes room; a
+	## message to a session whose account is over its weekly limit; or a
+	## new agent of a kind whose account is. A limit not set refuses
+	## nothing.
+	refusal : Limits.Status, List(Chat.Session), Protocol.Call(Chat.Request) -> Try({}, Str)
+	refusal = |shown, listed, { provider, request, .. }| {
+		over_week = |provider_id, agent|
+			shown.weeks.find_first(|week| week.state == Over and week.source == agent and Protocol.serves(provider_id, week.provider))
+		week_refusal = |week| Err("the ${week.source} account is over its weekly limit (${week.used_pct.to_str()}% of ${(week.limit_pct ?? 0).to_str()}%): raise the limit or wait until it resets")
+		match request {
+			SendMessage({ session_id, text, .. }) => {
+				session = listed.find_first(|candidate| candidate.id == session_id)
+				context = shown.sessions.find_first(|row| row.session_id == session_id and row.state == Over)
+				match (context, session.map_ok(|found| over_week(Ok(found.provider), found.agent))) {
+					(Ok(row), _) if !text.trim().starts_with("/compact") => Err("the session is over its context limit (${row.used_pct.to_str()}% of ${(row.limit_pct ?? 0).to_str()}%): compact or start fresh")
+					(_, Ok(Ok(week))) => week_refusal(week)
+					_ => Ok({})
+				}
+			}
+			Create({ agent, .. }) =>
+				match over_week(provider, agent) {
+					Ok(week) => week_refusal(week)
+					Err(_) => Ok({})
+				}
+			_ => Ok({})
+		}
 	}
 }
 
@@ -122,6 +161,28 @@ called = |stored, request| (LimitsTransformer.part.call)(fixture, stored, "{\"ca
 
 status_after : Str -> Limits.Status
 status_after = |stored| LimitsTransformer.status(kept(stored), sessions(fixture), reports(fixture))
+
+guarded : Str, Str -> Try({}, Str)
+guarded = |stored, request| (LimitsTransformer.part.guard)(fixture, stored, "{\"capability\":\"chat.v1\",\"request\":${request}}")
+
+# Without limits, nothing is refused.
+expect guarded("", "{\"SendMessage\":{\"session_id\":\"s1\",\"text\":\"Go on\"}}") == Ok({}) and guarded("", "\"Bogus\"") == Ok({})
+
+# Past its context limit, a message to a session is refused but /compact,
+# a running turn's steer too; past the weekly limit, an account's sessions
+# and new agents are.
+expect {
+	set = called("", "{\"SetLimit\":{\"scope\":\"Default\",\"percent\":80}}")
+	week = called(set.state, "{\"SetLimit\":{\"scope\":\"Week\",\"percent\":90}}")
+	weekly = Err("the codex account is over its weekly limit (92% of 90%): raise the limit or wait until it resets")
+	guarded(set.state, "{\"SendMessage\":{\"session_id\":\"s1\",\"text\":\"Go on\"}}") == Err("the session is over its context limit (85% of 80%): compact or start fresh")
+		and guarded(set.state, "{\"SendMessage\":{\"session_id\":\"s1\",\"text\":\"Go on\",\"while_running\":\"Steer\"}}").is_err()
+		and guarded(set.state, "{\"SendMessage\":{\"session_id\":\"s1\",\"text\":\"/compact\"}}") == Ok({})
+		and guarded(set.state, "{\"SendMessage\":{\"session_id\":\"s2\",\"text\":\"Go on\"}}") == Ok({})
+		and guarded(week.state, "{\"SendMessage\":{\"session_id\":\"s3\",\"text\":\"/compact\"}}") == weekly
+		and guarded(week.state, "{\"Create\":{\"place\":{\"Workspace\":\"main\"},\"agent\":\"codex\",\"prompt\":\"\"}}") == weekly
+		and guarded(week.state, "{\"Create\":{\"place\":{\"Workspace\":\"main\"},\"agent\":\"claude\",\"prompt\":\"\"}}") == Ok({})
+}
 
 # Without limits, each session and week is Ok.
 expect {

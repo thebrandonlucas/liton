@@ -23,6 +23,8 @@ AttentionTransformer := [].{
 			{ state: Json.to_str(kept), topics: [{ topic: "items", events: [Items(items)] }] }
 		},
 		call,
+		guards: [],
+		guard: |_, _, _| Ok({}),
 	}
 
 	## `observed`: when the daemon first saw a session as its `signature` is,

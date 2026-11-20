@@ -138,7 +138,7 @@ Error codes are a closed set shared by all capabilities:
 | `BadRequest` | the body isn't a call, the capability's name is malformed, or the request isn't one of the capability's requests |
 | `NotFound` | no such session or pending permission request, or the named provider doesn't offer the capability |
 | `Unavailable` | the provider can't be reached |
-| `Refused` | the provider said no, such as to liton's password |
+| `Refused` | the provider said no, such as to liton's password, or a transformer's guard did, such as past a limit (Limits) |
 | `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`, `files.v1`) |
 | `Overloaded` | try later (not used yet) |
 
@@ -829,6 +829,18 @@ neither. An account is listed once its report tells its weekly window. Each
 `state` is `Ok` below its limit or with none, `Near` within a tenth of it,
 and `Over` at it or past it.
 
+A limit set is enforced (Transformers, Guards). Past its context limit, a
+session's `SendMessage`, a steer too, is `Refused` with
+`"the session is over its context limit (85% of 80%): compact or start fresh"`,
+except a message starting `/compact`, which makes room where its agent
+compacts; past the weekly limit, a message to any session whose agent's
+account it is, and a `Create` of an agent of its kind, are `Refused`, `"the
+claude account is over its weekly limit (92% of 90%): raise the limit or
+wait until it resets"`. A turn already running is never stopped: it ends as
+it would. A session's account is the report of its provider whose `source`
+is its agent. A provider's own limits, such as a hard cap within a turn or
+when it compacts, are beyond liton's reach.
+
 ### Audio
 
 `voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
@@ -959,7 +971,10 @@ which declares:
   timeline's entries from the first), its stored state and the time, its new
   state and the events of each topic it offers;
 - `call`: from the same inputs, its state, a call's body and the time, its new
-  state and the call's answer.
+  state and the call's answer;
+- `guards` and `guard`: the capabilities whose calls it may refuse, and from
+  its inputs, its state and such a call's body, whether to let it through or
+  why not.
 
 The daemon hosts every transformer the same way, knowing none of them:
 
@@ -979,6 +994,10 @@ The daemon hosts every transformer the same way, knowing none of them:
   cursor. A topic it doesn't offer is `NotFound`.
 - **Calls.** A call to the capability goes to `call`, whose answer is
   returned as given.
+- **Guards.** Before the daemon answers a call of a capability an offered
+  transformer `guards`, it asks the transformer's `guard`, and answers
+  `Refused` with its reason should it refuse. A guard only refuses: it
+  can't change or cancel what the call's provider already does.
 - **State.** The daemon keeps each transformer's state, its own JSON, in
   SQLite, and stores a new one only if no other was stored since it read it;
   a call that loses is asked again. Attention's state is the settles and
