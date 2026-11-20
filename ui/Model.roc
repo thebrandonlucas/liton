@@ -3317,6 +3317,31 @@ Model := [].{
 	## (`pick_line`).
 	CodeRow : { key : Str, kind : [Code, Composer, Comment], path : Str, old : Str, new : Str, old_pick : Pick, new_pick : Pick, left : List(Highlight.Token), right : List(Highlight.Token), left_class : Str, right_class : Str, class : Str, note : Note }
 
+	## Rows of the code view in chunks of `chunk_lines` lines, each with the
+	## comments and composer after its lines, keyed by its first line's
+	## place so a comment added leaves the others' keys. A chunk is drawn at
+	## once (`eager`) when it is the first, or holds a comment, the composer
+	## or the lines focused, which keys and links scroll to.
+	CodeChunk : { key : Str, rows : List(CodeRow), eager : Bool }
+
+	## How many lines a chunk of the code view holds.
+	chunk_lines : U64
+	chunk_lines = 25
+
+	## A code view's rows in chunks (`CodeChunk`).
+	code_chunks : List(CodeRow) -> List(CodeChunk)
+	code_chunks = |rows| {
+		walked = rows.fold(
+			{ chunks: [], lines: 0.U64 },
+			|{ chunks, lines }, row|
+				match chunks.last() {
+					Ok(last) if row.kind != Code or lines % Model.chunk_lines != 0 => { chunks: chunks.drop_last(1).append({ ..last, rows: last.rows.append(row) }), lines: if (row.kind == Code) lines + 1 else lines }
+					_ => { chunks: chunks.append({ key: lines.to_str(), rows: [row], eager: lines == 0 }), lines: lines + 1 }
+				},
+		)
+		walked.chunks.map(|chunk| { ..chunk, eager: chunk.eager or chunk.rows.any(|row| row.kind != Code or row.class.contains("focused")) })
+	}
+
 	## A line to comment on, on a side of a diff: none when `line` is 0.
 	Pick : { side : Review.Side, line : U32 }
 

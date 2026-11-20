@@ -3301,9 +3301,37 @@ Liton := [].{
 	## they end on, and the composer of a comment under the lines picked.
 	## Clicking a number picks its line (`Model.pick_line`).
 	code_view : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
-	code_view = |model0, id, class, rows|
+	code_view = |model, id, class, rows|
 		Html.div_attrs(
 			[Engine.class_s(class)],
+			[Engine.each(rows.map(Model.code_chunks), |chunk| chunk.key, |chunk| Liton.code_chunk(model, id, chunk))],
+		)
+
+	## A chunk of a code view's rows (`Model.code_chunks`), drawn once it
+	## comes within reach of the screen, or at once when `eager`; until then
+	## a blank of its height, so a long diff draws only what is read.
+	code_chunk : State(ctx, Model.State), Signal(ctx, Str), RowRef(ctx, Model.CodeChunk) -> Elem(Row(ctx, Model.CodeChunk))
+	code_chunk = |model, id, chunk|
+		Html.div(
+			"code-chunk",
+			[
+				Engine.state(
+					Bool.False,
+					|seen|
+						Engine.when(
+							chunk.field(|shown| shown.eager).lift().map2(seen.signal(), |eager, was_seen| eager or was_seen),
+							|| Liton.code_rows(model.lift_row().lift(), id.lift_row().lift(), chunk.field(|shown| shown.rows).lift()),
+							|| Html.div_attrs([Engine.class("code-chunk-blank"), Engine.attr_s("style", chunk.field(|shown| "--rows: ${shown.rows.len().to_str()}").lift()), Engine.on_seen({ ahead: Bool.True }, seen.set_value(|was_seen, at| was_seen or at.intersecting))], []),
+						),
+				),
+			],
+		)
+
+	## The rows of a code view, as `code_view` says.
+	code_rows : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
+	code_rows = |model0, id, rows|
+		Html.div_attrs(
+			[Engine.class("code-rows")],
 			[
 				Engine.each(
 					rows,

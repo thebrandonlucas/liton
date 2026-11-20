@@ -1064,6 +1064,8 @@ kbd:empty { display: none; }
 .file-view, .file-diff { container-type: inline-size; }
 .code-view { width: max-content; min-width: 100%; font: 12px/1.5 var(--font-mono); tab-size: 2; }
 .code-item { display: contents; }
+.code-rows { display: contents; }
+.code-chunk-blank { height: calc(var(--rows) * 1.5em); }
 .code-row { display: grid; grid-template-columns: 4ch 4ch 1fr; }
 .code-row > span { white-space: pre; padding: 0 6px; min-height: 1.5em; }
 .code-view .number { min-height: 0; border: none; border-radius: 0; padding: 0 6px; background: none; font: inherit; text-align: right; color: var(--muted); user-select: none; }

@@ -218,6 +218,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- A long diff in the Review view, or a long file in Files, opens at once and scrolls smoothly: lines are drawn as they come near the screen, not all at once.
 - Typing a comment in the Review view, and picking a line to comment on, no longer stall on a long diff: each key took most of a second on 2,000 lines, and now takes a frame or two.
 - A commit's file Paseo fails to give is asked for again a minute later, not every few seconds.
 - A Paseo session whose turn ended while Paseo was still starting no longer goes without a summary until its next turn: the summary waits until Paseo lists the agent's models.
