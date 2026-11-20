@@ -91,6 +91,7 @@ import cap.Review
 import cap.Rooms
 import cap.Schedules
 import cap.Tickets
+import cap.Usage
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
@@ -596,6 +597,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("usage.v1", _)) => {
+				decoded : Try(Protocol.Call(Usage.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Usage.Response)
+				answer = match decoded {
+					Ok({ request: Refresh, .. }) => Ok(Accepted)
+					Err(_) => Err(unanswered("usage.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("voice.v1", _)) => {
 				decoded : Try(Protocol.Call(Voice.Request), _)
 				decoded = Json.parse(body)
@@ -673,7 +684,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		VoiceStatus | UsageReports | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
 		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
 		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
@@ -760,7 +771,7 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
-		UsageReports => Ok(Protocol.failed(wanted, { code: Unsupported, message: "the daemon offers no usage.v1 yet" }))
+		UsageReports => Ok(Protocol.snapshot(wanted, Reports(usage_reports!(context)?)))
 	}
 }
 
@@ -1710,6 +1721,18 @@ state_swapped! = |db, transformer, stored, state|
 		swapped : List({ transformer : Str })
 		swapped = Sqlite.query_many!({ db, query: "INSERT INTO transformer_states (transformer, state) VALUES (:transformer, :state) ON CONFLICT (transformer) DO UPDATE SET state = excluded.state WHERE transformer_states.state = :stored RETURNING transformer;", params: { transformer, state, stored }, limits: Sqlite.default_query_limits })?
 		Ok(!swapped.is_empty())
+	}
+
+## The usage reports of the mock's accounts, whose windows fill with the
+## messages sent to its sessions.
+usage_reports! : Context => Try(List(Usage.Report), _)
+usage_reports! = |context|
+	if context.mock.agents {
+		asked : List({ agent : Str, asked : I64 })
+		asked = Sqlite.query_many!({ db: context.db, query: "SELECT sessions.agent AS agent, count(*) AS asked FROM entries JOIN sessions ON sessions.id = entries.session_id WHERE sessions.provider = 'mock' AND entries.event LIKE '{\"UserMessage\"%' AND entries.visible_at <= :now GROUP BY sessions.agent;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
+		Ok(Mock.usage_reports(asked.map(|row| { agent: row.agent, asked: row.asked.to_u64_wrap() }), now_ms!()))
+	} else {
+		Ok([])
 	}
 
 ## Every enabled provider's projects and workspaces, each workspace with its

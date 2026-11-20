@@ -778,6 +778,11 @@ more often than its backend allows. `Refresh` asks again at once:
 { "Ok": "Accepted" }
 ```
 
+The mock has an account for each kind of agent it starts, whose 5-hour and
+weekly windows fill with each message its sessions are sent. Its sessions'
+context grows with each message too, and a message `/compact` empties it,
+as Claude's and Codex's own command does.
+
 ### Audio
 
 `voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
