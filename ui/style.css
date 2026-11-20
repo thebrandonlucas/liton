@@ -1003,6 +1003,7 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .entry.pending { opacity: .6; }
 .entry.working { display: flex; gap: 8px; align-items: center; color: var(--muted); font: 12px var(--font-mono); }
 .entry.working .loader { width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px dotted currentColor; animation: spin calc(var(--motion) * 1600ms + 1ms) linear infinite; }
+.entry.refreshing { display: flex; justify-content: center; opacity: .6; }
 .entry.user.failed { outline: 1px solid var(--fail); }
 .sent-status { display: block; color: var(--muted); font-size: 12px; }
 .sent-status:empty { display: none; }

@@ -224,6 +224,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Every drop-down, from the composer's mode, model and thinking to the inbox's and tickets' filters and Settings, is one compact pill as wide as what it shows, with a small chevron and a ring when focused, in place of the system's look.
 - The tiles, the deck's strip and the window's edges keep the theme's gap between them, at least 8 pixels (6 on a phone, beside its safe areas), even in a theme without gaps, so nothing meets the window's edge.
 - Each item of a menu has an icon: new agent or workspace, move, hide and show, pin and unpin, stop, mark read and unread, rename, copy, archive, copy link, and join and leave.
+- With Paseo or other daemons connected, the UI no longer waits on them to show what the daemon has: each poll answers at once from what it keeps, while a refresh of its own asks them. A session whose conversation the daemon hasn't fetched yet shows loading until it has, and one it kept shows at once, with a small spinner at its end while newer entries are fetched.
 
 ### Fixed
 
