@@ -74,6 +74,8 @@ Remote := [].{
 			Configure({ session_id, .. }) => Remote.owner(endpoints, session_id)
 			Create({ place: Workspace(workspace_id), .. }) => Remote.owner(endpoints, workspace_id)
 			Create({ place: Directory(_), .. }) => Err(Local)
+			ListHistory(_) => Err(Local)
+			Unarchive({ session_id }) => Remote.owner(endpoints, session_id)
 		}
 
 	## The topics of each remote a merged list needs: workspaces are counted
@@ -121,6 +123,8 @@ Remote := [].{
 						Workspace(workspace_id) => Create({ ..created, place: Workspace(their_id(workspace_id)) })
 						Directory(_) => Create(created)
 					}
+				ListHistory(asked_history) => ListHistory(asked_history)
+				Unarchive({ session_id }) => Unarchive({ session_id: their_id(session_id) })
 			}
 		{ capability: "chat.v1", provider: provider.map_ok(their_id), request }
 	}

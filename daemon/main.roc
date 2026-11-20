@@ -12,7 +12,7 @@
 ## LITON_ALLOWED_HOSTS lists, comma-separated, such as a proxy's domain.
 ## LITON_MOCK=off leaves out the mock provider, and a comma-separated list
 ## of its parts offers only those: `agents`, its scripted sessions (chat.v1,
-## workspaces.v1, workspace.git.v1 and files.v1), `rooms` and `tickets`, so
+## workspaces.v1, workspace.git.v1, files.v1 and schedules.v1), `rooms` and `tickets`, so
 ## LITON_MOCK=rooms,tickets offers its rooms and tickets beside Paseo's
 ## agents. The default, `on`, is all of them. Setting PASEO_PASSWORD adds
 ## the agents of the Paseo daemon at PASEO_HOST (default 127.0.0.1) and
@@ -81,16 +81,19 @@ import cap.Manifest
 import cap.Protocol
 import cap.Review
 import cap.Rooms
+import cap.Schedules
 import cap.Tickets
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
 import mock.Mock
 import mock.MockRooms
+import mock.MockSchedules
 import mock.MockTickets
 import paseo.Paseo
 import paseo.PaseoFiles
 import paseo.PaseoGit
+import paseo.PaseoSchedules
 import paseo.PaseoSummaries
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
@@ -551,6 +554,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("schedules.v1", provider)) => {
+				decoded : Try(Protocol.Call(Schedules.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Schedules.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => schedules_call!(context, provider, asked)?
+					Err(_) => Err(unanswered("schedules.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("voice.v1", _)) => {
 				decoded : Try(Protocol.Call(Voice.Request), _)
 				decoded = Json.parse(body)
@@ -629,6 +642,8 @@ interested! = |context, subject| {
 			wanted!(db, "workspace_list", "")
 		}
 		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
+		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
 	}
 }
@@ -701,6 +716,17 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
 		TicketLinks => Ok(Protocol.snapshot(wanted, Links(ticket_links!(context)?)))
+		ScheduleList => Ok(Protocol.snapshot(wanted, Schedules(schedules!(context)?.map(|kept| kept.schedule).concat(paseo_schedules!(context)?))))
+		ScheduleRuns(schedule_id) =>
+			match schedules!(context)?.find_first(|kept| kept.schedule.id == schedule_id) {
+				Ok(kept) => Ok(Protocol.snapshot(wanted, Runs(kept.runs)))
+				Err(_) if context.paseo.is_ok() =>
+					match paseo_runs!(context, schedule_id)? {
+						Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
+						Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing) })
+					}
+				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
+			}
 	}
 }
 
@@ -824,7 +850,7 @@ chat_call! = |context, provider, asked| {
 		Archive({ session_id }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
-					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 1 WHERE id = :session_id;", params: { session_id } })?
+					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = :now WHERE id = :session_id;", params: { session_id, now: now_ms!() } })?
 					Ok(Ok(Accepted))
 				}
 				PaseoSession(daemon) => {
@@ -836,6 +862,25 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 		Create(asked_create) => started!(context, provider, asked_create)
+		ListHistory(asked_history) =>
+			match history!(context, provider, asked_history)? {
+				Ok(page) => Ok(Ok(History(page)))
+				Err(error) => Ok(Err(error))
+			}
+		Unarchive({ session_id }) =>
+			match routed_provider!(context, provider, session_id)? {
+				MockSession => {
+					Sqlite.execute!({ db, query: "UPDATE sessions SET archived = 0 WHERE id = :session_id;", params: { session_id } })?
+					Ok(Ok(Accepted))
+				}
+				PaseoSession(daemon) => {
+					request_id = "liton-unarchive-${now_ms!().to_str()}"
+					outcome = written!(daemon, Paseo.unarchive_request(session_id, request_id), request_id, Paseo.refreshed)
+					forget_check!(db, "cycle")?
+					Ok(paseo_answer(outcome))
+				}
+				NoSession => Ok(no_session(session_id))
+			}
 		Configure({ session_id, model, mode, thinking }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
@@ -857,6 +902,80 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 			}
 	}
+}
+
+## Where each provider's history goes on from, as a ListHistory cursor
+## holds it: those it leaves out have no more.
+HistoryCursor : List({ provider : Str, cursor : Str })
+
+## A page of history (see `Chat.Request`): of each provider the call
+## reaches, or that `cursor` goes on with, its next `limit` sessions, the
+## latest first, archived ones too, and where each goes on from.
+history! : Context, Try(Str, [Missing]), { search : Str, cursor : Try(Str, [Missing]), limit : U64 } => Try(Protocol.Answer({ sessions : List(Chat.Session), next : Try(Str, [Missing]) }), _)
+history! = |context, provider, { search, cursor, limit }| {
+	db = context.db
+	from_cursor : Try(HistoryCursor, _)
+	from_cursor = Json.parse(cursor ?? "")
+	# A provider's cursor, or "" to start it, or Err when it has no more.
+	start = |id| match cursor {
+		Err(Missing) => if (Protocol.serves(provider, id)) Ok("") else Err(Done)
+		Ok(_) => (from_cursor ?? []).find_first(|kept| kept.provider == id).map_ok(|kept| kept.cursor).map_err(|_| Done)
+	}
+	var $sessions = []
+	var $next = []
+	match start(Mock.provider.id) {
+		Ok(at) if context.mock.agents => {
+			rows : List({ id : Str, agent : Str, title : Str, model : Str, mode : Str, thinking : Str, archived : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT id, agent, title, model, mode, thinking, archived FROM sessions WHERE provider = 'mock' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+			listed = mock_workspaces!(db)?
+			var $mock = []
+			for row in rows {
+				shown = Mock.session({ id: row.id, agent: row.agent, title: row.title, settings: { model: row.model, mode: row.mode, thinking: row.thinking } }, listed, timed!(db, row.id, now_ms!())?)
+				$mock = $mock.append({ ..shown, archived: if (row.archived > 0) Ok(Chat.timestamp(row.archived)) else Err(Missing) })
+			}
+			offset = U64.from_str(at) ?? 0
+			page = Mock.history($mock, { search, offset, limit })
+			$sessions = $sessions.concat(page.sessions)
+			$next = if (page.more) $next.append({ provider: Mock.provider.id, cursor: (offset + limit).to_str() }) else $next
+		}
+		_ => {}
+	}
+	match (start(Paseo.provider.id), context.paseo) {
+		(Ok(at), Ok(daemon)) =>
+			match paseo_history!(db, daemon, { search, cursor: at, limit }) {
+				Ok(Ok(page)) => {
+					$sessions = $sessions.concat(page.agents.map(|{ session, .. }| session))
+					$next = page.next.map_ok(|cursor_next| $next.append({ provider: Paseo.provider.id, cursor: cursor_next })) ?? $next
+				}
+				Ok(Err(NoSearch)) => {}
+				Err(err) => return Ok(Err(paseo_error(err)))
+			}
+		_ => {}
+	}
+	next : HistoryCursor
+	next = $next
+	Ok(Ok({ sessions: $sessions, next: if (next.is_empty()) Err(Missing) else Ok(Json.to_str(next)) }))
+}
+
+## A page of Paseo's agent history, over a connection of its own, its
+## agents kept so that an archived one's timeline and Unarchive reach
+## Paseo; `NoSearch` from a Paseo that doesn't search its history (before
+## 0.3.0), which has none to page through.
+paseo_history! : Sqlite.Db, PaseoDaemon, { search : Str, cursor : Str, limit : U64 } => Try(Try({ agents : List({ session : Chat.Session, directory : Str, workspace_id : Str }), next : Try(Str, [Missing]) }, [NoSearch]), _)
+paseo_history! = |db, daemon, asked| {
+	{ connection, features } = connected!(daemon, "liton-daemon-history")?
+	request_id = "liton-history-${now_ms!().to_str()}"
+	if !features.agent_history_search {
+		_ = connection.write!(WebSocket.close(websocket_mask))
+		return Ok(Err(NoSearch))
+	}
+	answered = exchange!(connection, Paseo.history_request(asked, request_id), request_id)
+	_ = connection.write!(WebSocket.close(websocket_mask))
+	page = Paseo.history_answer(answered?, request_id)?
+	for { session, .. } in page.agents {
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_history (id, listed) VALUES (:id, :listed) ON CONFLICT (id) DO UPDATE SET listed = excluded.listed;", params: { id: session.id, listed: Json.to_str(session) } })?
+	}
+	Ok(Ok(page))
 }
 
 ## Starts an agent in a workspace of the provider that has it, or in a
@@ -1066,6 +1185,201 @@ tickets_call! = |context, provider, asked| {
 				}
 				Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
 				Err(problem) => Ok(Err({ code: BadRequest, message: Tickets.refusal(problem) }))
+			}
+	}
+}
+
+## The mock's schedules, each run first if it is due (see
+## `mock_schedules_due!`).
+schedules! : Context => Try(List(MockSchedules.Kept), _)
+schedules! = |context|
+	if context.mock.agents {
+		mock_schedules_due!(context)?
+		mock_schedules!(context.db)
+	} else {
+		Ok([])
+	}
+
+## The mock's schedules as the daemon keeps them, in the order made.
+mock_schedules! : Sqlite.Db => Try(List(MockSchedules.Kept), _)
+mock_schedules! = |db| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM mock_schedules ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows.map_try(
+		|row| {
+			kept : Try(MockSchedules.Kept, _)
+			kept = Json.parse(row.value)
+			kept
+		},
+	)
+}
+
+## Keeps a mock schedule, after those made before it.
+schedule_kept! : Sqlite.Db, MockSchedules.Kept => Try({}, _)
+schedule_kept! = |db, kept|
+	Sqlite.execute!({ db, query: "INSERT INTO mock_schedules (id, position, value) VALUES (:id, (SELECT coalesce(max(position), -1) + 1 FROM mock_schedules), :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: kept.schedule.id, value: Json.to_str(kept) } })
+
+## Runs each mock schedule due by now (`MockSchedules.due`) once: it
+## prompts its session, or starts one, and keeps the run.
+mock_schedules_due! : Context => Try({}, _)
+mock_schedules_due! = |context| {
+	for kept in mock_schedules!(context.db)? {
+		match MockSchedules.due(kept, now_ms!()) {
+			Ok({ scheduled_for, kept: next }) => schedule_kept!(context.db, MockSchedules.ran(next, scheduled_for, now_ms!(), schedule_prompted!(context, next.schedule)?))?
+			Err(NotDue) => {}
+		}
+	}
+	Ok({})
+}
+
+## Prompts a mock schedule's session, or starts one for it, and answers
+## with the session prompted, or why it couldn't.
+schedule_prompted! : Context, Schedules.Schedule => Try(Try(Str, Str), _)
+schedule_prompted! = |context, { prompt, target, .. }|
+	match target {
+		Session(session_id) =>
+			match provider!(context, session_id)? {
+				MockSession => {
+					schedule!(context.db, session_id, |next| Mock.on_message(prompt, next))?
+					Ok(Ok(session_id))
+				}
+				_ => Ok(Err("no session ${session_id}"))
+			}
+		NewSession({ place, agent, model, mode, thinking, .. }) =>
+			match started!(context, Ok(Mock.provider.id), { place, agent, model, mode, thinking, prompt })? {
+				Ok(Started({ session_id })) => Ok(Ok(session_id))
+				Ok(Rejected(reason)) => Ok(Err(reason))
+				Ok(_) => Ok(Err("the session didn't start"))
+				Err({ message, .. }) => Ok(Err(message))
+			}
+	}
+
+## Paseo's schedules as the cycle last listed them, none before or with
+## Paseo off.
+paseo_schedules! : Context => Try(List(Schedules.Schedule), _)
+paseo_schedules! = |context| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'schedules';", params: {}, limits: Sqlite.default_query_limits })?
+	kept : Try(List(Schedules.Schedule), _)
+	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(if (context.paseo.is_ok()) kept ?? [] else [])
+}
+
+## The runs of a schedule of Paseo's as the cycle last inspected it.
+paseo_runs! : Context, Str => Try(Try(List(Schedules.Run), [NotCached]), _)
+paseo_runs! = |context, schedule_id| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = :what;", params: { what: "runs ${schedule_id}" }, limits: Sqlite.default_query_limits })?
+	kept : Try(List(Schedules.Run), _)
+	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(kept.map_err(|_| NotCached))
+}
+
+## Answers a schedules.v1 request of a schedule of Paseo's, over a
+## connection of its own, and lets the next poll ask again at once. A new
+## session's workspace is its directory, as Paseo starts it there.
+paseo_schedules_call! : Context, PaseoDaemon, Schedules.Request => Try(Protocol.Answer(Schedules.Response), _)
+paseo_schedules_call! = |context, daemon, asked| {
+	request_id = "liton-schedule-${now_ms!().to_str()}"
+	cwd! = |target|
+		match target {
+			NewSession({ place: Directory(directory), .. }) => Ok(directory)
+			NewSession({ place: Workspace(workspace_id), .. }) => Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "")
+			Session(_) => Ok("")
+		}
+	schedule_id = Schedules.schedule_of(asked)
+	answered =
+		match asked {
+			ListSchedules => written!(daemon, PaseoSchedules.request("list", "", request_id), request_id, PaseoSchedules.listed).map_ok(|listed| Schedules(listed))
+			Inspect(_) => written!(daemon, PaseoSchedules.request("inspect", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "inspect", id)).map_ok(|found| Inspected(found))
+			Create(draft) => written!(daemon, PaseoSchedules.create_request(draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.inspected(answer_text, "create", id)).map_ok(|made| Created({ schedule_id: made.schedule.id }))
+			Update({ draft, .. }) => written!(daemon, PaseoSchedules.update_request(schedule_id, draft, cwd!(draft.target)?, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "update", id)).map_ok(|_| Accepted)
+			Pause(_) => written!(daemon, PaseoSchedules.request("pause", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "pause", id)).map_ok(|_| Accepted)
+			Resume(_) => written!(daemon, PaseoSchedules.request("resume", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "resume", id)).map_ok(|_| Accepted)
+			RunOnce(_) => written!(daemon, PaseoSchedules.request("run-once", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "run-once", id)).map_ok(|_| Accepted)
+			Delete(_) => written!(daemon, PaseoSchedules.request("delete", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "delete", id)).map_ok(|_| Accepted)
+		}
+	forget_check!(context.db, "cycle")?
+	match answered {
+		Ok(response) => Ok(Ok(response))
+		Err(Refused(reason)) => Ok(Ok(Rejected(reason)))
+		Err(err) => Ok(Err(paseo_error(err)))
+	}
+}
+
+## Answers a schedules.v1 request, of the mock's schedules (see
+## `MockSchedules`).
+schedules_call! : Context, Try(Str, [Missing]), Schedules.Request => Try(Protocol.Answer(Schedules.Response), _)
+schedules_call! = |context, provider, asked| {
+	db = context.db
+	kept = if (Protocol.serves(provider, Mock.provider.id)) schedules!(context)? else []
+	found = kept.find_first(|listed| listed.schedule.id == Schedules.schedule_of(asked))
+	# Paseo's: a schedule the mock doesn't have, or one made for Paseo's session or place.
+	paseo_owns =
+		match asked {
+			ListSchedules => Bool.False
+			Create({ target: Session(session_id), .. }) => provider == Ok(Paseo.provider.id) or provider!(context, session_id)? != MockSession
+			Create({ target: NewSession({ place: Workspace(workspace_id), .. }), .. }) => provider == Ok(Paseo.provider.id) or !(mock_workspaces!(db)?.any(|shown| shown.id == workspace_id) and Protocol.serves(provider, Mock.provider.id))
+			Create(_) => provider == Ok(Paseo.provider.id)
+			_ => found.is_err()
+		}
+	match context.paseo {
+		Ok(daemon) if paseo_owns and Protocol.serves(provider, Paseo.provider.id) => return paseo_schedules_call!(context, daemon, asked)
+		Ok(daemon) if asked == ListSchedules and Protocol.serves(provider, Paseo.provider.id) =>
+			match paseo_schedules_call!(context, daemon, ListSchedules)? {
+				Ok(Schedules(listed)) => return Ok(Ok(Schedules(kept.map(|listed_kept| listed_kept.schedule).concat(listed))))
+				other => return Ok(other)
+			}
+		_ => {}
+	}
+	no_schedule = Err({ code: NotFound, message: "no schedule ${Schedules.schedule_of(asked)}" })
+	changed! = |change|
+		match found {
+			Ok(listed) =>
+				match change(listed) {
+					Ok(next) => {
+						schedule_kept!(db, next)?
+						Ok(Ok(Accepted))
+					}
+					Err(reason) => Ok(Ok(Rejected(reason)))
+				}
+			Err(_) => Ok(no_schedule)
+		}
+	match asked {
+		ListSchedules => Ok(Ok(Schedules(kept.map(|listed| listed.schedule))))
+		Inspect(_) =>
+			match found {
+				Ok(listed) => Ok(Ok(Inspected({ schedule: listed.schedule, runs: listed.runs })))
+				Err(_) => Ok(no_schedule)
+			}
+		Create(draft) if Protocol.serves(provider, Mock.provider.id) and context.mock.agents => {
+			schedule_id = "schedule-${now_ms!().to_str()}"
+			match MockSchedules.created(schedule_id, draft, now_ms!()) {
+				Ok(made) => {
+					schedule_kept!(db, made)?
+					Ok(Ok(Created({ schedule_id: schedule_id })))
+				}
+				Err(reason) => Ok(Ok(Rejected(reason)))
+			}
+		}
+		Create(_) => Ok(Err({ code: NotFound, message: "no provider makes schedules" }))
+		Update({ draft, .. }) => changed!(|listed| MockSchedules.updated(listed, draft, now_ms!()))
+		Pause(_) => changed!(|listed| Ok(MockSchedules.paused(listed)))
+		Resume(_) => changed!(|listed| Ok(MockSchedules.resumed(listed, now_ms!())))
+		RunOnce(_) =>
+			match found {
+				Ok(listed) => {
+					schedule_kept!(db, MockSchedules.ran(listed, now_ms!(), now_ms!(), schedule_prompted!(context, listed.schedule)?))?
+					Ok(Ok(Accepted))
+				}
+				Err(_) => Ok(no_schedule)
+			}
+		Delete({ schedule_id }) =>
+			if found.is_ok() {
+				Sqlite.execute!({ db, query: "DELETE FROM mock_schedules WHERE id = :schedule_id;", params: { schedule_id } })?
+				Ok(Ok(Accepted))
+			} else {
+				Ok(no_schedule)
 			}
 	}
 }
@@ -1398,7 +1712,7 @@ mock_workspaces! = |db| {
 	made : List({ id : Str, value : Str })
 	made = Sqlite.query_many!({ db, query: "SELECT id, value FROM mock_workspaces ORDER BY rowid;", params: {}, limits: Sqlite.default_query_limits })?
 	archived : List({ id : Str })
-	archived = Sqlite.query_many!({ db, query: "SELECT id FROM sessions WHERE provider = 'mock' AND archived = 1;", params: {}, limits: Sqlite.default_query_limits })?
+	archived = Sqlite.query_many!({ db, query: "SELECT id FROM sessions WHERE provider = 'mock' AND archived > 0;", params: {}, limits: Sqlite.default_query_limits })?
 	started : List({ id : Str, workspace_id : Str })
 	started = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'mock' AND workspace_id != '' AND archived = 0 ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
 	stored = made.map(
@@ -1452,12 +1766,14 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_history (id TEXT PRIMARY KEY, listed TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_events (room_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (room_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_joins (room_id TEXT PRIMARY KEY, joined INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_schedules (id TEXT PRIMARY KEY, position INTEGER NOT NULL, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
@@ -1491,6 +1807,17 @@ seed! = |db| {
 		for (seed, position) in Mock.seeds.map_with_index(|seed, position| (seed, position)) {
 			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position) VALUES (:id, 'mock', :agent, :title, :position);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap() } })?
 			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!(), seed.events.map(|event| { delay_ms: 0, event })), now_ms!())?
+		}
+		# A nightly schedule, of a new session each night.
+		nightly = { name: "Nightly dependencies", prompt: "Update the dependencies and run the tests.", cadence: Cron({ expression: "0 3 * * *", timezone: Err(Missing) }), target: NewSession({ place: Workspace("main"), agent: "claude", model: Err(Missing), mode: Err(Missing), thinking: Err(Missing), isolation: Worktree, archive_on_finish: Bool.True }), max_runs: Err(Missing), expires: Err(Missing) }
+		match MockSchedules.created("nightly", nightly, now_ms!()) {
+			Ok(kept) => schedule_kept!(db, kept)?
+			Err(_) => {}
+		}
+		# Archived a day ago, after a day's work.
+		for (seed, position) in Mock.archived_seeds.map_with_index(|seed, position| (seed, position + Mock.seeds.len())) {
+			Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, archived) VALUES (:id, 'mock', :agent, :title, :position, :archived);", params: { id: seed.id, agent: seed.agent, title: seed.title, position: position.to_i64_wrap(), archived: now_ms!() - 86_400_000 } })?
+			insert_events!(db, seed.id, 1, Mock.ended(Err(Missing), now_ms!() - 2 * 86_400_000, seed.events.map(|event| { delay_ms: 0, event })), now_ms!() - 2 * 86_400_000)?
 		}
 	}
 	Ok({})
@@ -1540,7 +1867,8 @@ timed! = |db, session_id, until| {
 provider! : Context, Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSession], _)
 provider! = |{ db, mock, paseo, .. }, session_id| {
 	rows : List({ provider : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+	# An archived Paseo agent its history listed is Paseo's too.
+	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id UNION ALL SELECT 'paseo' AS provider FROM paseo_history WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
 		match (rows.first().map_ok(|row| row.provider), paseo) {
 			(Ok("mock"), _) => if (mock.agents) MockSession else NoSession
@@ -1840,7 +2168,7 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok({ connection, features }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							match summary_model {
 								Ok(configured) if features.background_agents =>
@@ -1930,6 +2258,14 @@ asked! = |db, connection, { kind, subject }, request_id|
 		"workspace_list" => listed_workspaces!(db, connection, request_id)
 		"importable" => listed_importable!(db, connection, request_id)
 		"agent_kinds" => listed_agent_kinds!(db, connection, request_id)
+		"schedules" => {
+			listed = PaseoSchedules.listed(exchange!(connection, PaseoSchedules.request("list", "", request_id), request_id)?, request_id)?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('schedules', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+		}
+		"schedule_runs" => {
+			found = PaseoSchedules.inspected(exchange!(connection, PaseoSchedules.request("inspect", subject, request_id), request_id)?, "inspect", request_id)?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES (:what, :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { what: "runs ${subject}", value: Json.to_str(found.runs) } })
+		}
 		"timeline" => fetch!(db, connection, subject, request_id, 10)
 		"workspace" => checked_out!(db, connection, subject, request_id)
 		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
