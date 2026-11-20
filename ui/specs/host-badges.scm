@@ -1,0 +1,13 @@
+(test "Liton — while workspaces come from more than one place, each row of another host's has its badge, and Workspaces groups them by host as its option says"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"peer/mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"hosts\",\"version\":1}],\"id\":\"hosts\",\"name\":\"Hosts\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\",\"updated\":\"2026-01-02T09:00:00.000Z\",\"workspace\":{\"directory\":\"/src/app\",\"id\":\"w1\"}},{\"agent\":\"codex\",\"id\":\"peer/s2\",\"provider\":\"peer/mock\",\"status\":\"Idle\",\"title\":\"Write docs\",\"updated\":\"2026-01-02T09:30:00.000Z\",\"workspace\":{\"directory\":\"/src/site\",\"id\":\"peer/w2\"}}]}]},{\"capability\":\"hosts.v1\",\"topic\":\"hosts\",\"cursor\":\"h1\",\"events\":[{\"Hosts\":[{\"enabled\":true,\"kind\":\"Liton\",\"label\":\"Team\",\"name\":\"peer\",\"origin\":\"Environment\",\"status\":\"Online\",\"target\":\"http://127.0.0.1:8096\"}]}]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"l1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"},{\"directory\":\"/src/site\",\"id\":\"peer/p2\",\"name\":\"site\",\"provider\":\"peer/mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"app\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\"],\"state\":\"Idle\"},{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src\",\"dirty\":false,\"id\":\"peer/w2\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"site\",\"pinned\":false,\"project_id\":\"peer/p2\",\"provider\":\"peer/mock\",\"session_ids\":[\"peer/s2\"],\"state\":\"Idle\"}]}}]}]}")
+    (run-effect 3)
+    (expect-visible (text "peer"))
+    (expect-visible (text "Write docs"))
+  )
+)
+

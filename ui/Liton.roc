@@ -1005,6 +1005,12 @@ Liton := [].{
 		)
 	}
 
+	## The badge of the host `host` names, in its identity colour, or
+	## nothing for "" (`Model.host_badge`).
+	host_badge : Signal(ctx, Model.State), Signal(ctx, Str) -> Elem(ctx)
+	host_badge = |state, host|
+		Html.span_s(host, [Engine.class_s(host.map2(state, |named, shown| if (named.is_empty()) "host-badge empty" else "host-badge host-hue-${HostDesk.hue(shown.hosts.listed, named).to_str()}")), Engine.test_id("host-badge")])
+
 	## The dialog adding a host, or changing one: its kind and name only
 	## while adding, its target, label and password or token, which is sent
 	## once and never shown again.
@@ -2092,6 +2098,7 @@ Liton := [].{
 														Html.span_s(shown_item.map(|item| InboxDesk.state_word(item.state)), [Engine.class_s(shown_item.map(|item| "status-word ${Liton.attention_word_class(item.state)}")), Engine.test_id("attention-state")]),
 														Html.span_s(id.map(InboxDesk.short_id), [Engine.class("short-id")]),
 														Html.span_s(shown_item.map(|item| item.agent), [Engine.class("agent")]),
+														Liton.host_badge(model.signal(), shown_item.map2(model.signal(), |item, state| Model.host_badge(state, item.provider))),
 														Html.span_s(shown_item.map(InboxDesk.reason), [Engine.class("reason")]),
 													],
 												),
@@ -2715,6 +2722,7 @@ Liton := [].{
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
 								if (menus == Menus) Liton.row_title(model, asked, row.field(|shown| shown.title)) else Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], picks),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
+								Liton.host_badge(model.signal(), row.field(|shown| shown.host)),
 								Html.span_s(row.field(|shown| shown.counts.members), [Engine.class("counts")]),
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),

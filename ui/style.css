@@ -1494,3 +1494,5 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .host-hue-4 { --host-hue: #39c5cf; } .host-hue-5 { --host-hue: #ff7b72; } .host-hue-6 { --host-hue: #e3b341; } .host-hue-7 { --host-hue: #a5d6ff; }
 .host-hue-8 { --host-hue: #db61a2; } .host-hue-9 { --host-hue: #8b949e; }
 .connection-provider.disabled::before { background: var(--muted); }
+.host-badge.empty { display: none; }
+.tree-row .host-badge { flex: none; align-self: center; }
