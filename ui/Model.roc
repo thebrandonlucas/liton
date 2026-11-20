@@ -4001,10 +4001,6 @@ Model := [].{
 		}
 	}
 
-	## Opens or closes a host's ⋮ menu.
-	host_menu : State, Str -> State
-	host_menu = |state, name| Model.with_hosts(state, |desk| { ..desk, menu: if (desk.menu == name) "" else name, removing: "" })
-
 	## Opens the host dialog on a new host, or on the host `name` to change.
 	edit_host : State, Str -> State
 	edit_host = |state, name|
@@ -4012,7 +4008,7 @@ Model := [].{
 			state,
 			|desk| {
 				editor = if (name.is_empty()) { ..HostDesk.closed, open: Bool.True } else HostDesk.shown(desk).find_first(|host| host.name == name).map_ok(HostDesk.edit) ?? HostDesk.closed
-				{ ..desk, editor, menu: "", removing: "" }
+				{ ..desk, editor, removing: "" }
 			},
 		)
 
@@ -4031,7 +4027,7 @@ Model := [].{
 	## Asks to confirm removing the host `name`, or, `sure`, removes
 	## it, gone at once.
 	remove_host : State, Str, Bool -> State
-	remove_host = |state, name, sure| if (sure) Model.ask_hosts(state, RemoveHost({ name: name })) else Model.with_hosts(state, |desk| { ..desk, removing: name, menu: "" })
+	remove_host = |state, name, sure| if (sure) Model.ask_hosts(state, RemoveHost({ name: name })) else Model.with_hosts(state, |desk| { ..desk, removing: name })
 
 	## The host that offers what `provider` names, while items come from
 	## more than one place, the daemon's own providers counting as one: ""

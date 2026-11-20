@@ -914,7 +914,6 @@ Liton := [].{
 							|row| {
 								name = row.key()
 								state = model.signal().lift_row()
-								menu_open = name.map2(state, |named, shown| shown.hosts.menu == named)
 								Html.div(
 									"settings-row host-row",
 									[
@@ -943,34 +942,17 @@ Liton := [].{
 												),
 											],
 										),
-										Html.div(
+										Menu.menu(
+											model.lift_row(),
+											name.map(|named| "host:${named}"),
 											"row-menu",
+											[Engine.class("icon menu-toggle row-menu-toggle"), Html.aria_label_s(name.map(|named| "${named} menu"))],
+											"",
+											[],
 											[
-												Engine.element(
-													"button",
-													[
-														Engine.attr("type", "button"),
-														Engine.class("icon menu-toggle row-menu-toggle"),
-														Html.aria_label_s(name.map(|named| "${named} menu")),
-														Engine.attr("aria-haspopup", "true"),
-														Html.flag("aria-expanded", menu_open),
-														Engine.on_click(model.lift_row().update_by(name, Model.host_menu)),
-													],
-													[],
-												),
-												Engine.when(
-													menu_open,
-													||
-														Html.div(
-															"menu",
-															[
-																Html.button("Edit", [], model.lift_row().update_by(name, Model.edit_host)),
-																Html.button_s(row.field(|host| if (host.enabled) "Disable" else "Enable"), [], model.lift_row().update_by(name, Model.switch_host)),
-																Engine.when(row.field(|host| host.origin == Added), || Html.button("Remove", [Engine.class("danger")], model.lift_row().update_by(name, |shown, named| Model.remove_host(shown, named, Bool.False))), || Engine.text("")),
-															],
-														),
-													|| Engine.text(""),
-												),
+												Menu.item(Engine.const("rename"), Engine.const("Edit"), model.lift_row().update_by(name, |shown, named| { ..Model.edit_host(shown, named), menu: "" })),
+												Menu.item(Engine.const("hide"), row.field(|host| if (host.enabled) "Disable" else "Enable"), model.lift_row().update_by(name, |shown, named| { ..Model.switch_host(shown, named), menu: "" })),
+												Engine.when(row.field(|host| host.origin == Added), || Menu.item(Engine.const("archive"), Engine.const("Remove"), model.lift_row().update_by(name, |shown, named| { ..Model.remove_host(shown, named, Bool.False), menu: "" })), || Engine.text("")),
 											],
 										),
 										Engine.when(
@@ -1042,14 +1024,14 @@ Liton := [].{
 													"host-fields",
 													[
 														Dropdown.select(Engine.const("Kind"), editor.map(|shown| if (shown.kind == Liton) "Liton" else "Paseo"), [], [Dropdown.option("Paseo", "Paseo daemon"), Dropdown.option("Liton", "liton daemon")], set(|shown, text| { ..shown, kind: if (text == "Liton") Liton else Paseo })),
-														Html.text_input(Engine.const("Name"), "text", editor.map(|shown| shown.name), [Engine.attr("placeholder", "laptop"), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, name: text })),
+														Html.text_input(Engine.const("Name"), "text", editor.map(|shown| shown.name), [Engine.attr("placeholder", "Name, such as laptop"), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, name: text })),
 													],
 												),
 											|| Engine.text(""),
 										),
-										Html.text_input(Engine.const("Target"), "text", editor.map(|shown| shown.target), [Engine.attr_s("placeholder", editor.map(|shown| if (shown.kind == Liton) "https://liton.example" else "127.0.0.1:6767")), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, target: text })),
-										Html.text_input(Engine.const("Label"), "text", editor.map(|shown| shown.label), [Engine.attr("placeholder", "Optional")], set(|shown, text| { ..shown, label: text })),
-										Html.text_input(editor.map(|shown| if (shown.kind == Liton) "Token" else "Password"), "password", editor.map(|shown| shown.password), [Engine.attr_s("placeholder", adding.map(|new| if (new) "" else "Leave empty to keep it")), Engine.attr("autocomplete", "new-password")], set(|shown, text| { ..shown, password: text })),
+										Html.text_input(Engine.const("Target"), "text", editor.map(|shown| shown.target), [Engine.attr_s("placeholder", editor.map(|shown| if (shown.kind == Liton) "URL, such as https://liton.example" else "host:port, such as 127.0.0.1:6767")), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, target: text })),
+										Html.text_input(Engine.const("Label"), "text", editor.map(|shown| shown.label), [Engine.attr("placeholder", "Label (optional)")], set(|shown, text| { ..shown, label: text })),
+										Html.text_input(editor.map(|shown| if (shown.kind == Liton) "Token" else "Password"), "password", editor.map(|shown| shown.password), [Engine.attr_s("placeholder", editor.map(|shown| if (!shown.editing.is_empty()) "Leave empty to keep it" else if (shown.kind == Liton) "Token it paired this daemon with" else "Paseo's password")), Engine.attr("autocomplete", "new-password")], set(|shown, text| { ..shown, password: text })),
 										Html.p("It is sent once, kept by the daemon and never shown again.", "help"),
 										Html.p_s(editor.map(|shown| shown.failed), [Engine.class("pair-failed"), Engine.attr("role", "alert"), Engine.test_id("host-failed")]),
 										Html.div(

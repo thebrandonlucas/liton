@@ -17,12 +17,11 @@ HostDesk := [].{
 	Editor : { open : Bool, editing : Str, kind : Hosts.Kind, name : Str, target : Str, label : Str, password : Str, failed : Str }
 
 	## The hosts as polls answered them, the requests on their way, the
-	## host whose ⋮ menu is open ("" for none), the one asked to confirm
-	## its removal, and the dialog.
-	State : { listed : List(Hosts.Host), asked : List(Asked), menu : Str, removing : Str, editor : Editor }
+	## host asked to confirm its removal ("" for none), and the dialog.
+	State : { listed : List(Hosts.Host), asked : List(Asked), removing : Str, editor : Editor }
 
 	initial : State
-	initial = { listed: [], asked: [], menu: "", removing: "", editor: HostDesk.closed }
+	initial = { listed: [], asked: [], removing: "", editor: HostDesk.closed }
 
 	closed : Editor
 	closed = { open: Bool.False, editing: "", kind: Paseo, name: "", target: "", label: "", password: "", failed: "" }
@@ -59,7 +58,7 @@ HostDesk := [].{
 
 	## `desk` with a request on its way as `serial`.
 	asking : State, U64, Hosts.Request -> State
-	asking = |desk, serial, request| { ..desk, asked: desk.asked.append({ serial, request, accepted: 0 }), menu: "", removing: "" }
+	asking = |desk, serial, request| { ..desk, asked: desk.asked.append({ serial, request, accepted: 0 }), removing: "" }
 
 	## `desk` with the daemon's answer to the request `serial`: accepted, it
 	## holds until the poll numbered `poll` answers; refused, it is undone.
