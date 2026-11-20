@@ -1,8 +1,10 @@
-(test "Liton — a designed surface shows its panes joined in one frame; Settings' Surface and Deck show a surface's panes as tiles apart instead, at once, and keep it"
+(test "Liton — a designed surface shows its panes joined in one frame, its drawers' tabs in their headers; Settings' Surface and Deck show a surface's panes as tiles apart instead, at once, and keep it"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1},{\"name\":\"rooms\",\"version\":1},{\"name\":\"tickets\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
     (expect-attr (test-id "grid") data-frame "joined")
+    ; The right drawer's tabs are in its shown pane's header.
+    (expect-text (test-id "header-pane-3") "ChangesFilesTickets")
     (click (role button :name "Settings"))
     (click (role button :name "Surface"))
     (expect-checked (label "Joined") true)

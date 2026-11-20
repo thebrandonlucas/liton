@@ -1228,7 +1228,8 @@ Liton := [].{
 				Engine.when(
 					id.map2(laid, |tile_id, state| Model.workspace_tile(state) == Ok(tile_id)),
 					|| Html.div("workspace-view-header", [Liton.workspace_header(model, drag, tile), Liton.workspace_tabs(model, drag, tile)]),
-					|| Liton.tile_tabs(model, drag, laid, id, tile, tiling),
+					# A joined frame's tabs are in its shown pane's header.
+					|| Engine.when(laid.map(|state| state.frame == Joined), || Engine.text(""), || Liton.tile_tabs(model, drag, laid, id, tile, tiling)),
 				),
 				Engine.each(row.field(|shown| shown.panes), |pane| pane.id, |pane_row| Liton.pane_view(model, drag, laid, tile, pane_row)),
 				# Handles on its right and bottom edges move the lines there.
@@ -1253,8 +1254,9 @@ Liton := [].{
 	}
 
 	## A tile's bar of its tabs, each with a × that hides it in a Workbench
-	## and closes it in Tiling, and in Tiling its controls.
-	tile_tabs : State(TileCtx, Model.State), State(TileCtx, Drag.Gesture), Signal(TileCtx, Model.State), Signal(TileCtx, Str), Signal(TileCtx, Model.Tile), Signal(TileCtx, Bool) -> Elem(TileCtx)
+	## and closes it in Tiling, and in Tiling its controls. In a joined
+	## frame it is in its shown pane's header, in place of the pane's title.
+	tile_tabs : State(ctx, Model.State), State(ctx, Drag.Gesture), Signal(ctx, Model.State), Signal(ctx, Str), Signal(ctx, Model.Tile), Signal(ctx, Bool) -> Elem(ctx)
 	tile_tabs = |model, drag, laid, id, tile, tiling|
 		Html.div(
 			"tile-header",
@@ -1426,6 +1428,11 @@ Liton := [].{
 					[Engine.class("pane-header"), Engine.attr("data-part", "header"), Engine.test_id_s(id.map(|pane_id| "header-${pane_id}"))],
 					[
 						Engine.when(place.map(|at| at == MainTab or at == MainTabWithSettings), || Liton.drawer_toggle(model, Left, Engine.const(Model.no_counts)), || Engine.text("")),
+						Engine.when(
+							shown.map(|{ pane, state }| Liton.tabs_in_header(state, pane)),
+							|| Liton.tile_tabs(model, drag, laid.lift_row(), tile.lift_row().map(|group| group.id), tile.lift_row(), model.signal().map(|state| state.shell == Tiling)),
+							|| Engine.text(""),
+						),
 						# Dragging its header moves the pane, as its tab does.
 						Engine.element(
 							"div",
@@ -1433,9 +1440,10 @@ Liton := [].{
 							[
 								Engine.switch(
 									shown.map(|{ pane, state }| Liton.heading_of(state, pane)),
-									[AgentHeading, RoomHeading, PaneHeading],
+									[AgentHeading, RoomHeading, PaneHeading, TabsHeading],
 									|heading|
 										match heading {
+											TabsHeading => Engine.text("")
 											AgentHeading => Liton.agent_header(shown.map(|{ pane, state }| Liton.agent_of(state, pane)))
 											RoomHeading =>
 												Html.div(
@@ -1458,6 +1466,8 @@ Liton := [].{
 								),
 							],
 						),
+						# A joined frame's header holds the Review view's bar.
+						Engine.when(shown.map(|{ pane, state }| Liton.review_bar_in_header(state, pane)), || Liton.review_bar(model, row.field(|pane| pane)), || Engine.text("")),
 						Html.span_s(row.field(|pane| if (pane.pinned.is_empty()) "" else "pinned"), [Engine.class("badge pinned")]),
 						Html.span_s(shown.map(|{ pane, state }| if ((pane.widget == "workspaces" or pane.widget == "sessions") and Model.needs_you(state) > 0) Model.needs_you(state).to_str() else ""), [Engine.class("needs-you-count"), Engine.attr("title", "Need you"), Engine.test_id("header-needs-you")]),
 						Engine.when(
@@ -1530,15 +1540,25 @@ Liton := [].{
 	}
 
 	## What a pane's header names: a chat's agent; a room shown, in place
-	## of a header of its own; or the pane's title.
-	heading_of : Model.State, Model.Pane -> [AgentHeading, RoomHeading, PaneHeading]
+	## of a header of its own; in a joined frame, only its tile's tabs, while
+	## it shows more than one (`TabsHeading`, `Liton.tabs_in_header`); or the
+	## pane's title.
+	heading_of : Model.State, Model.Pane -> [AgentHeading, RoomHeading, PaneHeading, TabsHeading]
 	heading_of = |state, pane|
 		if (pane.widget == "chat" and !Model.session_of(state, pane).is_empty())
 			AgentHeading
 		else if (pane.widget == "room" and Model.body(state, pane) == Room and !Model.room_pane(state, pane.id).room_id.is_empty())
 			RoomHeading
+		else if (Liton.tabs_in_header(state, pane))
+			TabsHeading
 		else
 			PaneHeading
+
+	## Whether a pane's header shows its tile's tabs, as a joined frame's
+	## shown pane's does while the tile shows more than one, but for the
+	## workspace tile, whose tabs are its own (`Liton.workspace_tabs`).
+	tabs_in_header : Model.State, Model.Pane -> Bool
+	tabs_in_header = |state, pane| state.frame == Joined and state.grid.tiles.any(|tile| tile.active == pane.id and Model.shown_panes(state, tile).len() > 1 and Model.workspace_tile(state) != Ok(tile.id))
 
 	## What lets a tab or header drag pane `id`: its press, and the release
 	## or cancel of a press that never moved, a click. The page reports the
@@ -3363,7 +3383,7 @@ Liton := [].{
 								Html.div(
 									"review-cards",
 									[
-										Liton.review_bar(model, pane),
+										Engine.when(pane.map2(model.signal(), |shown_pane, state| Liton.review_bar_in_header(state, shown_pane)), || Engine.text(""), || Liton.review_bar(model, pane)),
 										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
 										Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
 										Engine.each(
@@ -3384,6 +3404,11 @@ Liton := [].{
 			],
 		)
 	}
+
+	## Whether the Review view's bar is in its pane's header, as in a
+	## joined frame, rather than over its cards.
+	review_bar_in_header : Model.State, Model.Pane -> Bool
+	review_bar_in_header = |state, pane| state.frame == Joined and pane.widget == "review" and Model.body(state, pane) == Review and Model.git_shown(state, pane) == Shown
 
 	## The Review view's bar: the branch, how many files are marked viewed,
 	## how many comments its threads have, with the previous and next thread,

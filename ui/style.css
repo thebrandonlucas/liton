@@ -324,7 +324,7 @@ kbd:empty { display: none; }
 .tile-header { display: flex; gap: 4px; align-items: center; }
 .tile-controls { display: flex; gap: 4px; margin-left: auto; }
 .moves { display: flex; }
-.tile-header button, .tile-tabs button { padding: 1px 9px; font: 12px var(--font-mono); color: var(--muted); background: var(--glass); }
+.tile-header button, .tile-tabs button { padding: 1px 9px; font: 12px var(--font-mono); white-space: nowrap; color: var(--muted); background: var(--glass); }
 .tile-header [aria-pressed="true"], .tile-tabs [aria-pressed="true"] { color: var(--accent); border-color: var(--edge-active); }
 .tile:not(.tabbed) .tab, .pane.hidden { display: none; }
 /* A tab: its widget's icon and title, and a × that shows on hover. */
@@ -353,7 +353,7 @@ kbd:empty { display: none; }
 .widget-ticket-properties { --icon: var(--icon-sliders); }
 .tile-header .tab-close { --icon: var(--icon-x); --icon-size: 12px; padding: 1px 3px; border-color: transparent; background: none; opacity: 0; }
 .tab:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
-@media (hover: none) { .tile-header .tab-close { opacity: 1; } }
+@media (hover: none) { .tile-header .tab-close { opacity: 1; } .pane-header .tile-header .tab-close { display: none; } }
 /* The workspace a Workbench shows: its header, its name, project and
    menu between the drawers' buttons, over its tabs, in place of its panes'
    headers. */
@@ -421,7 +421,9 @@ kbd:empty { display: none; }
 .pane-header button:hover { color: var(--text); border-color: var(--edge); }
 /* A joined frame (Setup.Frame): the surface is one glass frame, its tiles
    parted by hairlines, which are also the lines that resize them, and its
-   panes plain within it. */
+   panes plain within it. Their headers make one band across its top: the
+   main area's holds its title, actions and the drawers' buttons, and a
+   tabbed tile's its tabs, as a segmented control, in place of its title. */
 .grid[data-frame="joined"] { margin: var(--room) var(--room) 0; padding: 0;
   background: var(--glass); backdrop-filter: var(--backdrop); -webkit-backdrop-filter: var(--backdrop);
   border: 1px solid var(--edge); border-radius: var(--radius); box-shadow: var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent); }
@@ -436,6 +438,30 @@ kbd:empty { display: none; }
 [data-frame="joined"] .resize-line.right:hover::after, [data-frame="joined"] .resize-line.bottom:hover::after { content: ""; position: absolute; background: var(--accent); }
 [data-frame="joined"] .resize-line.right:hover::after { top: 0; bottom: 0; left: 3px; width: 2px; }
 [data-frame="joined"] .resize-line.bottom:hover::after { left: 0; right: 0; top: 3px; height: 2px; }
+[data-frame="joined"] .pane-header, [data-frame="joined"] .workspace-header { box-sizing: border-box; min-height: 42px; }
+[data-frame="joined"] .workspace-header { padding: 4px 8px; border-bottom: 1px solid var(--edge); }
+[data-frame="joined"] .workspace-view-header { gap: 0; }
+[data-frame="joined"] .workspace-tabs { padding: 4px 6px; border-bottom: 1px solid var(--edge); }
+[data-frame="joined"] .slot:not(.slot-main) .pane-context { display: none; }
+[data-frame="joined"] .tile.tabbed .pane-header .pane-grip { flex: 1; align-self: stretch; }
+/* A chat's or room's heading goes under its tabs. */
+.pane-header:has(> .tile-header):has(.agent-header, .room-title) { flex-wrap: wrap; row-gap: 4px; }
+[data-frame="joined"] .pane-header:has(> .tile-header) .pane-grip:has(.agent-header, .room-title) { order: 1; flex-basis: 100%; }
+.pane-header:has(> .review-bar) .pane-grip { flex: none; }
+.pane-header .tile-header { flex: 0 1 auto; min-width: 0; gap: 2px; padding: 2px; border-radius: var(--small-radius); background: var(--tool); overflow: hidden; }
+.pane-header .tile-header .tab { position: relative; min-width: 0; border-radius: calc(var(--small-radius) - 1px); }
+.pane-header .tile-header .tab-select { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 3px 7px; border: none; background: none; color: var(--muted); }
+.pane-header .tile-header .tab:has([aria-pressed="true"]) { background: var(--selected); }
+.pane-header .tile-header [aria-pressed="true"] { color: var(--text); }
+/* Its ×, over the tab's end while hovered, so it takes none of its width. */
+.pane-header .tile-header .tab-close { position: absolute; top: 0; bottom: 0; right: 0; min-width: 0; min-height: 0; padding: 0 5px; border-radius: inherit; background: var(--selected); }
+.pane-header .tile-header .tile-controls { flex: none; }
+/* The Review view's bar, in its header, goes under its title where it
+   doesn't fit beside it, as on a phone, and wraps there. */
+.pane-header:has(> .review-bar) { flex-wrap: wrap; row-gap: 4px; }
+.pane-header .review-bar { position: static; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0; border: none; background: none; white-space: nowrap; }
+.pane-header .review-bar .scope { flex: 0 1 auto; }
+[data-frame="joined"] .review { --review-bar: 0px; }
 /* A chat pane's header: its session and agent. */
 .agent-header { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .agent-line { display: flex; gap: 8px; align-items: center; min-width: 0; }
