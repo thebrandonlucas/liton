@@ -70,7 +70,7 @@ try {
   await step("the manifest lists the mock, attention as a transformer, and topics", () => {
     assert.equal(manifest.protocol, 1);
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "hosts"]);
-    assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
+    assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses.map((u) => u.name).join(",")]), [["attention", "attention", "chat"], ["limits", "limits", "chat,usage"]]);
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
   });
@@ -215,14 +215,14 @@ try {
   await step("liton setup evaluates a Litonfile to the same JSON each time, which the manifest offers", async () => {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
-    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
+    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention", "limits"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
     assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme, deck: setup.deck });
     assert.deepEqual(setup.deck, ["Developer", "Rooms", "Review", "Board"]);
     assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain", "Neutral", "Sky", "Graphite"], "Pastoral"]);
   });
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
-    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"], "Review"]);
+    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], ["limits"], ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"], "Review"]);
   });
   await step("review.v1 keeps a context's threads, moves one to its lines, and sends the drafts to the agent as one message", async () => {
     const threads = async () => (await post("poll", { topics: [{ capability: "review.v1", topic: "threads/notes", after: "" }] })).topics[0].events[0].Threads;

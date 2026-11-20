@@ -44,8 +44,9 @@
 ## passwords and tokens, so the daemon keeps it readable by its user alone.
 ##
 ## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
-## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
-## items that need you, as needs-you.v1.
+## `attention`, attention.v1 from chat.v1, `limits`, limits.v1 from chat.v1
+## and usage.v1, and `needs-you`, attention.v1's items that need you, as
+## needs-you.v1.
 ##
 ## Paseo's sessions get a Goal / Done / Now summary after their turns,
 ## from a background agent Paseo runs (from Paseo 0.15; see
@@ -112,6 +113,7 @@ import setup.Default
 import setup.Setup
 import speech.LocalSpeech
 import transformers.AttentionTransformer
+import transformers.LimitsTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 import Auth
@@ -210,7 +212,7 @@ setup! = |named| {
 transformers_named : List(Str) -> Try(List(Transformer.Part), Str)
 transformers_named = |named| {
 	ids = named.map(|id| id.trim()).drop_if(|id| id == "")
-	known = [AttentionTransformer.part, NeedsYou.part]
+	known = [AttentionTransformer.part, LimitsTransformer.part, NeedsYou.part]
 	match ids.find_first(|id| !known.any(|part| part.id == id)) {
 		Ok(unknown) => Err("no transformer is called ${unknown}; there are ${Str.join_with(known.map(|part| part.id), ", ")}")
 		Err(NotFound) => Ok(known.keep_if(|part| ids.contains(part.id)))
@@ -746,8 +748,8 @@ update! = |context, wanted, subject| {
 				Ok(after) => Ok(Protocol.appended(wanted, visible!(context.db, session_id, after)?))
 				Err(error) => Ok(Protocol.failed(wanted, error))
 			}
-		# A transformer offers attention.v1 (see `topic_update!`), never a provider.
-		Items => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
+		# A transformer offers attention.v1 and limits.v1 (see `topic_update!`), never a provider.
+		Items | LimitStatus => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
 		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
 		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
 		Agents => Ok(Protocol.snapshot(wanted, Agents(agents!(context)?)))

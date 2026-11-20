@@ -41,5 +41,5 @@ setup = Setup.merge(
 
 main! = |_arguments| Stdout.line!(Setup.to_json(setup))
 
-expect setup.remotes == [{ name: "team", url: "http://127.0.0.1:8096" }] and setup.transformers == []
+expect setup.remotes == [{ name: "team", url: "http://127.0.0.1:8096" }] and setup.transformers == ["limits"]
 expect setup.presets.map(|preset| preset.name) == ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"] and setup.default_preset == "Review"

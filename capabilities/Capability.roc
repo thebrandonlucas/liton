@@ -53,6 +53,11 @@ Capability := [].{
 	usage_v1 : Id
 	usage_v1 = { name: "usage", version: 1 }
 
+	## Limits on sessions' context and accounts' weekly use, and how near
+	## each is, derived from chat.v1 and usage.v1.
+	limits_v1 : Id
+	limits_v1 = { name: "limits", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"

@@ -1,6 +1,7 @@
 ## Values the golden JSON files in tests/ hold.
 import Chat
 import Hosts
+import Limits
 import Manifest
 import Schedules
 import Tickets
@@ -176,4 +177,21 @@ Fixtures := [].{
 		},
 		{ provider: "paseo", source: "codex", account: "", plan: "", status: Unavailable("the login expired: run codex login"), windows: [], balances: [] },
 	]
+
+	## Each request of limits.v1, and its `status`: a session past the
+	## default limit, one near its own, and an account under the weekly one.
+	limit_requests : List(Limits.Request)
+	limit_requests = [
+		SetLimit({ scope: Session("fix-auth"), percent: 50 }),
+		SetLimit({ scope: Week, percent: 90 }),
+		SetLimit({ scope: Default, percent: 80 }),
+		ClearLimit({ scope: Session("fix-auth") }),
+	]
+
+	limit_status : Limits.Status
+	limit_status = {
+		limits: [{ scope: Default, percent: 80 }, { scope: Session("notes"), percent: 40 }, { scope: Week, percent: 90 }],
+		sessions: [{ session_id: "fix-auth", used_pct: 85, limit_pct: Ok(80), state: Over }, { session_id: "notes", used_pct: 37, limit_pct: Ok(40), state: Near }],
+		weeks: [{ provider: "paseo", source: "claude", account: "me@example.com", used_pct: 41, limit_pct: Ok(90), state: Ok, resets_at: Ok("2026-01-05T09:00:00.000Z") }],
+	}
 }

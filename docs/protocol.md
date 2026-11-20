@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`, `usage.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`, `usage.v1`, `limits.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -154,7 +154,8 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
 and `Unlink` (Tickets, below); `schedules.v1`'s `ListSchedules`, `Inspect`, `Create`, `Update`,
 `Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below); `usage.v1`'s
-`Refresh` (Usage, below).
+`Refresh` (Usage, below); `limits.v1`'s `SetLimit` and `ClearLimit`
+(Limits, below).
 
 `{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
 it works on a turn, the message interrupts it, or with `"while_running":
@@ -337,6 +338,7 @@ events when nothing changed:
 | `schedules.v1` | `schedules` | snapshot | `{"Schedules": [Schedule]}` |
 | `schedules.v1` | `runs/<schedule_id>` | snapshot | `{"Runs": [Run]}`, the latest first |
 | `usage.v1` | `reports` | snapshot | `{"Reports": [Report]}`, each account's windows and balances |
+| `limits.v1` | `status` | snapshot | `{"Limits": {"limits", "sessions", "weeks"}}`, how near each session and account is to its limit |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -792,6 +794,41 @@ weekly windows fill with each message its sessions are sent. Its sessions'
 context grows with each message too, and a message `/compact` empties it,
 as Claude's and Codex's own command does.
 
+### Limits
+
+`limits.v1` holds limits, each a percent: on how much of its context window
+a session fills, and on how much of its weekly quota an account uses. The
+`limits` transformer derives it from chat.v1's `sessions` and usage.v1's
+`reports` (Transformers, below), and keeps the limits set:
+
+```json
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": { "Session": "fix-auth" }, "percent": 50 } } }
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": "Week", "percent": 90 } } }
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": "Default", "percent": 80 } } }
+{ "capability": "limits.v1", "request": { "ClearLimit": { "scope": { "Session": "fix-auth" } } } }
+{ "Ok": "Accepted" }
+```
+
+A limit's scope is one session's context window, `{"Session": id}`; every
+account's weekly window, `Week`; or the context window of each session
+without a limit of its own, `Default`. Setting a scope's limit replaces the
+one it had, and a percent outside 1 to 100 is `Rejected` with why. The
+topic `status` tells the limits set, and how near each is:
+
+```json
+{ "Limits": {
+  "limits": [{ "scope": "Default", "percent": 80 }, { "scope": "Week", "percent": 90 }],
+  "sessions": [{ "session_id": "fix-auth", "used_pct": 85, "limit_pct": 80, "state": "Over" }],
+  "weeks": [{ "provider": "paseo", "source": "claude", "account": "me@example.com", "used_pct": 41, "limit_pct": 90, "state": "Ok", "resets_at": "2026-01-05T09:00:00.000Z" }] } }
+```
+
+A session is listed once its provider tells what its last turn used of its
+context window (chat.v1's `usage`), `used_pct` rounded to a whole percent,
+with the limit on it, its own or else the default, left out when there is
+neither. An account is listed once its report tells its weekly window. Each
+`state` is `Ok` below its limit or with none, `Near` within a tenth of it,
+and `Over` at it or past it.
+
 ### Audio
 
 `voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
@@ -949,9 +986,10 @@ The daemon hosts every transformer the same way, knowing none of them:
   change whose provider tells no `updated`.
 
 A setup names the transformers the daemon hosts by id, and `LITON_TRANSFORMERS`
-adds to them, comma-separated. There are two: `attention`, which liton's own
-setup names, and `needs-you`, attention's items that need you as `needs-you.v1`,
-to show and check composition (`LITON_TRANSFORMERS=needs-you`).
+adds to them, comma-separated. There are three: `attention` and `limits`,
+which liton's own setup names, and `needs-you`, attention's items that need
+you as `needs-you.v1`, to show and check composition
+(`LITON_TRANSFORMERS=needs-you`).
 A remote's transformers are not routed: the daemon derives its own from every
 provider, local or remote.
 
