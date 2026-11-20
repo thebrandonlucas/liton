@@ -845,7 +845,8 @@ The daemon hosts every transformer the same way, knowing none of them:
   transformer's output; the topics it `follows` are read from what the daemon
   keeps, with no work upstream. So a transformer adds little load beyond its
   `uses`: while a client watches attention, Paseo's cycle also fetches the
-  timelines of its three most recently active sessions, and attention
+  timelines of its five most recently active sessions, as it does while a
+  client watches `sessions`, and attention
   derives from what the daemon has of the rest.
 - **Topics.** Each poll of an offered topic derives it again and answers it
   like any topic: a snapshot by its fingerprint, entries after their

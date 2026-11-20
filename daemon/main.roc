@@ -667,6 +667,11 @@ interested! = |context, subject| {
 		File({ context: focus, scope, path }) => git_interested!(context, focus, { scope, file: Selected(path) })
 		Tree({ context: focus, path }) => files_interested!(context, focus, "tree", path)
 		Contents({ context: focus, path }) => files_interested!(context, focus, "file", path)
+		# The newest sessions' timelines too, so that one picked is usually kept.
+		Sessions if context.paseo.is_ok() => {
+			wanted!(db, "agent_list", "")?
+			wanted!(db, "newest", "")
+		}
 		Importable if context.paseo.is_ok() => wanted!(db, "importable", "")
 		Agents if context.paseo.is_ok() => wanted!(db, "agent_kinds", "")
 		WorkspaceList if context.paseo.is_ok() => {
@@ -2009,13 +2014,15 @@ interest_ms : I64
 interest_ms = 10_000
 
 ## How many of the Paseo sessions that changed last have their timelines
-## fetched in each cycle while a transformer is watched, so that attention's
-## summaries follow them though no client watches their timelines. Each is
+## fetched in each cycle while a client watches the sessions or a
+## transformer, so that a session picked near the top of a list shows at
+## once, and attention's summaries follow them though no client watches
+## their timelines. Each is
 ## one more request on the cycle's one connection, asked after the one
 ## before, two when Paseo's page leaves out the agent (see `fetch!`); one
 ## a client watches costs nothing more.
 newest_timelines : U64
-newest_timelines = 3
+newest_timelines = 5
 
 ## How long a cycle may run before another can start: Paseo answers a
 ## directory's first status in seconds, and Tcp gives up after 30.
