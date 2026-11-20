@@ -631,17 +631,23 @@ refreshed! = |context| {
 }
 
 ## Whether a topic's provider hasn't been asked about it since a poll first
-## watched it: a Paseo session's timeline, until a cycle fetched it.
+## watched it: a Paseo session's timeline, until a cycle fetched it, or a
+## remote's topic, until the remote first answered it.
 refreshing! : Context, Manifest.Offered, Protocol.Wanted => Try(Bool, _)
-refreshing! = |context, manifest, wanted|
-	match Protocol.subject(manifest, wanted) {
-		Ok(Timeline(session_id)) => {
-			pending : List({ kind : Str })
-			pending = Sqlite.query_many!({ db: context.db, query: "SELECT kind FROM paseo_pending WHERE kind = 'timeline' AND subject = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
-			Ok(!pending.is_empty())
+refreshing! = |context, manifest, wanted| {
+	db = context.db
+	pending : List({ topic : Str })
+	pending =
+		match Protocol.subject(manifest, wanted).map_ok(|subject| (subject, Remote.routed(context.remotes, subject))) {
+			Ok((_, Ok({ endpoint, subject: theirs }))) => {
+				named = Protocol.named(theirs)
+				Sqlite.query_many!({ db, query: "SELECT topic FROM remote_pending WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote: endpoint.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
+			}
+			Ok((Timeline(session_id), Err(Merged))) => Sqlite.query_many!({ db, query: "SELECT subject AS topic FROM paseo_pending WHERE kind = 'timeline' AND subject = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+			_ => []
 		}
-		_ => Ok(Bool.False)
-	}
+	Ok(!pending.is_empty())
+}
 
 ## Notes that a poll watches a topic's subject, so the next cycle asks Paseo
 ## about it.
@@ -1801,6 +1807,7 @@ create_tables! = |db| {
 		Sqlite.execute!({ db, query: "DROP TABLE attention_asides;", params: {} })?
 	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_pending (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, PRIMARY KEY (remote, capability, topic));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_pending (kind TEXT NOT NULL, subject TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
@@ -2687,10 +2694,12 @@ remote_timeout_ms = 5_000
 remote_manifest_ms : I64
 remote_manifest_ms = 60_000
 
-## Notes that a poll watches a remote's topic, as the remote names it.
+## Notes that a poll watches a remote's topic, as the remote names it,
+## pending until the remote first answers it.
 remote_wanted! : Sqlite.Db, Str, Protocol.Subject => Try({}, _)
 remote_wanted! = |db, remote, subject| {
 	named = Protocol.named(subject)
+	Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO remote_pending (remote, capability, topic) SELECT :remote, :capability, :topic WHERE NOT EXISTS (SELECT 1 FROM remote_topics WHERE remote = :remote AND capability = :capability AND topic = :topic);", params: { remote, capability: named.capability, topic: named.topic } })?
 	Sqlite.execute!({ db, query: "INSERT INTO remote_topics (remote, capability, topic, wanted_at) VALUES (:remote, :capability, :topic, :now) ON CONFLICT (remote, capability, topic) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { remote, capability: named.capability, topic: named.topic, now: now_ms!() } })
 }
 
@@ -2898,6 +2907,7 @@ kept! = |db, remote, update| {
 			Ok(failed) => Json.to_str(failed)
 			Err(Missing) => ""
 		}
+	Sqlite.execute!({ db, query: "DELETE FROM remote_pending WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic } })?
 	Sqlite.execute!({ db, query: "UPDATE remote_topics SET cursor = :cursor, error = :error, event = CASE WHEN :event = '' THEN event ELSE :event END WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic, cursor: update.cursor, error, event: snapshot } })
 }
 
