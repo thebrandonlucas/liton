@@ -2202,6 +2202,7 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok({ connection, features }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
+							host_status!(db, "paseo", Online, features.version)?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							match summary_model {
@@ -2217,9 +2218,13 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 						}
 						Err(HelloRejected(reason)) => {
 							logged!("Paseo: ${Paseo.refusal(reason)}. Asking again in ${(refused_wait_ms // 1000).to_str()} s.")
+							host_status!(db, "paseo", Error(Paseo.refusal(reason)), Err(Missing))?
 							Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('refusal', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str({ reason, at: now_ms!() }) } })?
 						}
-						Err(err) => logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
+						Err(err) => {
+							logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
+							host_status!(db, "paseo", Offline, Err(Missing))?
+						}
 					}
 					held!(db, now_ms!())?
 				}
@@ -2785,6 +2790,7 @@ remote_cycle! = |context, endpoint| {
 					if remote.failures > 0 {
 						logged!("liton: the provider ${endpoint.name} answers again")
 					}
+					host_status!(db, endpoint.name, Online, Err(Missing))?
 					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :now, failures = 0 WHERE name = :name;", params: { name: endpoint.name, now: now_ms!() } })
 				}
 				Err(err) => {
@@ -2792,6 +2798,15 @@ remote_cycle! = |context, endpoint| {
 					if remote.failures == 0 {
 						logged!("liton: the provider ${endpoint.name} at ${endpoint.url} can't be reached, asking again with backoff: ${Str.inspect(err)}")
 					}
+					status : Hosts.Status
+					status =
+						match err {
+							AnsweredStatus(401) => Error("it refused the token: pair this daemon with it again")
+							AnsweredStatus(code) => Error("it answered ${code.to_str()}")
+							NotAManifest | NotAPoll => Error("it doesn't answer as a liton daemon")
+							_ => Offline
+						}
+					host_status!(db, endpoint.name, status, Err(Missing))?
 					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :at, failures = :failures WHERE name = :name;", params: { name: endpoint.name, failures, at: now_ms!() + Remote.backoff_ms(failures) - context.remote_interval_ms } })
 				}
 			}
@@ -2978,6 +2993,14 @@ hosts_call! = |db, asked| {
 				}
 			}
 	}
+}
+
+## Notes how the host `name` was found: `Online` now, with the version it
+## told, if any, or else why not.
+host_status! : Sqlite.Db, Str, Hosts.Status, Try(Str, [Missing]) => Try({}, _)
+host_status! = |db, name, status, version| {
+	online = if (status == Online) now_ms!() else 0
+	Sqlite.execute!({ db, query: "UPDATE hosts SET status = :status, version = CASE WHEN :version = '' THEN version ELSE :version END, online_at = max(online_at, :online) WHERE name = :name;", params: { name, status: Json.to_str(status), version: version ?? "", online } })
 }
 
 ## Forgets that the Paseo host `paseo` refused liton, when it changed, so

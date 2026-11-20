@@ -601,19 +601,19 @@ Paseo := [].{
 	## whether it applies an agent's config in one request (from 0.3.2), and
 	## whether it searches its agent history (from 0.3.0), and whether it runs
 	## agents in the background, hidden from lists (from 0.15.0), as summaries
-	## need (see `PaseoSummaries`).
-	Features : { agent_config_apply : Bool, agent_history_search : Bool, background_agents : Bool }
+	## need (see `PaseoSummaries`); and the version it tells, if it does.
+	Features : { agent_config_apply : Bool, agent_history_search : Bool, background_agents : Bool, version : Try(Str, [Missing]) }
 
 	## What a message after `hello` says of it: Paseo welcomes a client with
 	## its `server_info` and its features, or refuses it with
 	## `hello.rejected` and a reason.
 	greeting : Str -> [Welcomed(Features), Rejected(Str), NotGreeting]
 	greeting = |text| {
-		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]), agent_history_search : Try(Bool, [Missing]), background_agents : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
+		parsed : Try({ type : Str, reason : Try(Str, [Missing]), message : Try({ type : Str, payload : Try({ status : Try(Str, [Missing]), version : Try(Str, [Missing]), features : Try({ agent_config_apply : Try(Bool, [Missing]), agent_history_search : Try(Bool, [Missing]), background_agents : Try(Bool, [Missing]) }, [Missing]) }, [Missing]) }, [Missing]) }, _)
 		parsed = Json.parser_camel()(text)
 		match parsed {
 			Ok({ type: "hello.rejected", reason, .. }) => Rejected(reason ?? "")
-			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), features }) }), .. }) => Welcomed({ agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False, agent_history_search: features.map_ok(|listed| listed.agent_history_search ?? Bool.False) ?? Bool.False, background_agents: features.map_ok(|listed| listed.background_agents ?? Bool.False) ?? Bool.False })
+			Ok({ message: Ok({ type: "status", payload: Ok({ status: Ok("server_info"), version, features }) }), .. }) => Welcomed({ version, agent_config_apply: features.map_ok(|listed| listed.agent_config_apply ?? Bool.False) ?? Bool.False, agent_history_search: features.map_ok(|listed| listed.agent_history_search ?? Bool.False) ?? Bool.False, background_agents: features.map_ok(|listed| listed.background_agents ?? Bool.False) ?? Bool.False })
 			_ => NotGreeting
 		}
 	}
@@ -1097,14 +1097,14 @@ expect {
 
 expect Paseo.hello("liton-daemon", "secret") == "{\"auth\":{\"kind\":\"password\",\"password\":\"secret\"},\"capabilities\":{\"all_providers\":true,\"explicit_event_subscriptions\":true,\"hello_rejection\":true,\"owned_subscriptions\":true,\"selective_agent_timeline\":true},\"clientId\":\"liton-daemon\",\"clientType\":\"cli\",\"protocolVersion\":1,\"type\":\"hello\"}"
 
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False, agent_history_search: Bool.False, background_agents: Bool.False })
-expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true,\"backgroundAgents\":true,\"agentHistorySearch\":true}}}")) == Welcomed({ agent_config_apply: Bool.True, agent_history_search: Bool.True, background_agents: Bool.True })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"version\":\"0.15.3\"}}")) == Welcomed({ agent_config_apply: Bool.False, agent_history_search: Bool.False, background_agents: Bool.False, version: Ok("0.15.3") })
+expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"server_info\",\"serverId\":\"s1\",\"features\":{\"agentRequestReceipts\":true,\"agentConfigApply\":true,\"backgroundAgents\":true,\"agentHistorySearch\":true}}}")) == Welcomed({ agent_config_apply: Bool.True, agent_history_search: Bool.True, background_agents: Bool.True, version: Err(Missing) })
 
 # One request where Paseo applies a config at once, else one for each change.
 expect {
 	changes = { model: Ok("opus"), mode: Err(Missing), thinking: Ok("high") }
-	Paseo.configure_requests({ agent_config_apply: Bool.True, agent_history_search: Bool.False, background_agents: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
-		and Paseo.configure_requests({ agent_config_apply: Bool.False, agent_history_search: Bool.False, background_agents: Bool.False }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
+	Paseo.configure_requests({ agent_config_apply: Bool.True, agent_history_search: Bool.False, background_agents: Bool.False, version: Err(Missing) }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"config\":{\"modelId\":\"opus\",\"thinkingOptionId\":\"high\"},\"requestId\":\"c1\",\"type\":\"agent.config.apply.request\"}"), answer: "agent.config.apply.response", request_id: "c1" }]
+		and Paseo.configure_requests({ agent_config_apply: Bool.False, agent_history_search: Bool.False, background_agents: Bool.False, version: Err(Missing) }, "a1", changes, "c1") == [{ request: request("{\"agentId\":\"a1\",\"modelId\":\"opus\",\"requestId\":\"c1-model\",\"type\":\"set_agent_model_request\"}"), answer: "set_agent_model_response", request_id: "c1-model" }, { request: request("{\"agentId\":\"a1\",\"requestId\":\"c1-thinking\",\"thinkingOptionId\":\"high\",\"type\":\"set_agent_thinking_request\"}"), answer: "set_agent_thinking_response", request_id: "c1-thinking" }]
 }
 expect Paseo.greeting("{\"type\":\"hello.rejected\",\"reason\":\"incorrect_password\",\"accepts\":[\"password\"]}") == Rejected("incorrect_password")
 expect Paseo.greeting(session("{\"type\":\"status\",\"payload\":{\"status\":\"agent_created\"}}")) == NotGreeting
