@@ -1,0 +1,16 @@
+(test "Liton — the connection menu lists the hosts the daemon connects to, each with its status and version, and goes to Settings' Hosts"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"hosts\",\"version\":1}],\"id\":\"hosts\",\"name\":\"Hosts\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[]}]},{\"capability\":\"hosts.v1\",\"topic\":\"hosts\",\"cursor\":\"h1\",\"events\":[{\"Hosts\":[{\"enabled\":true,\"kind\":\"Paseo\",\"label\":\"\",\"last_online\":\"2026-01-02T09:57:00.000Z\",\"name\":\"paseo\",\"origin\":\"Environment\",\"status\":\"Online\",\"target\":\"127.0.0.1:6767\",\"version\":\"0.15.3\"},{\"enabled\":true,\"kind\":\"Liton\",\"label\":\"Team\",\"name\":\"team\",\"origin\":\"Added\",\"status\":{\"Error\":\"it refused the token: pair this daemon with it again\"},\"target\":\"https://liton.example\"}]}]}]}")
+    (run-effect 3)
+    (click (test-id "connection"))
+    (expect-visible (text "Host paseo"))
+    (expect-visible (text "127.0.0.1:6767 · Online · 0.15.3"))
+    (expect-visible (text "Host Team"))
+    (click (role button :name "Hosts settings"))
+    (expect-visible (role heading :name "Hosts"))
+  )
+)

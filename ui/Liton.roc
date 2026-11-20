@@ -282,6 +282,27 @@ Liton := [].{
 						),
 				),
 				Engine.when(model.signal().map(|state| state.providers.is_empty()), || Html.p("No providers yet.", "help"), || Engine.text("")),
+				# The hosts it connects to (hosts.v1), each with its status.
+				Engine.each(
+					model.signal().map(|state| HostDesk.shown(state.hosts)),
+					|host| host.name,
+					|row|
+						Html.div_s(
+							row.field(
+								|host| match host.status {
+									Online => "connection-provider connection-host ready"
+									Connecting => "connection-provider connection-host starting"
+									Disabled => "connection-provider connection-host disabled"
+									_ => "connection-provider connection-host down"
+								},
+							),
+							[
+								Html.span_s(row.field(|host| if (host.label.is_empty()) "Host ${host.name}" else "Host ${host.label}"), [Engine.class("provider-name")]),
+								Html.span_s(row.field(|host| Str.join_with([host.target, HostDesk.status_text(host.status).word, host.version ?? ""].drop_if(Str.is_empty), " · ")), [Engine.class("provider-health")]),
+							],
+						),
+				),
+				Engine.when(model.signal().map(|state| !state.hosts.listed.is_empty()), || Menu.item(Engine.const("hosts"), Engine.const("Hosts settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "hosts"), menu: "" })), || Engine.text("")),
 				Menu.item(Engine.const("host"), Engine.const("Host settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host"), menu: "" })),
 			],
 		)
