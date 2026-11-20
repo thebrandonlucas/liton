@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`, `usage.v1`, `limits.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -138,7 +138,7 @@ Error codes are a closed set shared by all capabilities:
 | `BadRequest` | the body isn't a call, the capability's name is malformed, or the request isn't one of the capability's requests |
 | `NotFound` | no such session or pending permission request, or the named provider doesn't offer the capability |
 | `Unavailable` | the provider can't be reached |
-| `Refused` | the provider said no, such as to liton's password |
+| `Refused` | the provider said no, such as to liton's password, or a transformer's guard did, such as past a limit (Limits) |
 | `Unsupported` | the daemon offers no such capability or version, or the capability has no calls (`workspace.git.v1`, `files.v1`) |
 | `Overloaded` | try later (not used yet) |
 
@@ -153,7 +153,9 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
 and `Unlink` (Tickets, below); `schedules.v1`'s `ListSchedules`, `Inspect`, `Create`, `Update`,
-`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below).
+`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below); `usage.v1`'s
+`Refresh` (Usage, below); `limits.v1`'s `SetLimit` and `ClearLimit`
+(Limits, below).
 
 `{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
 it works on a turn, the message interrupts it, or with `"while_running":
@@ -335,6 +337,8 @@ events when nothing changed:
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
 | `schedules.v1` | `schedules` | snapshot | `{"Schedules": [Schedule]}` |
 | `schedules.v1` | `runs/<schedule_id>` | snapshot | `{"Runs": [Run]}`, the latest first |
+| `usage.v1` | `reports` | snapshot | `{"Reports": [Report]}`, each account's windows and balances |
+| `limits.v1` | `status` | snapshot | `{"Limits": {"limits", "sessions", "weeks"}}`, how near each session and account is to its limit |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -758,6 +762,98 @@ leads: a paired device can point it at anything the daemon's machine
 reaches. Relay pairing links and SSH tunnels to a Paseo daemon are later
 work: today a Paseo host is reached directly.
 
+### Usage
+
+`usage.v1` tells what the accounts agents run under have used of their
+plans, as their providers' usage reports tell: one report per account,
+with its windows, such as a 5-hour and a weekly limit, and its balances.
+
+```json
+{ "provider": "paseo", "source": "claude", "account": "me@example.com", "plan": "Max", "status": "Available",
+  "windows": [{ "id": "five_hour", "label": "Session", "short": "5h", "used_pct": 12.5, "resets_at": "2026-01-01T14:00:00.000Z" },
+              { "id": "weekly", "label": "Weekly", "short": "wk", "used_pct": 41.0, "resets_at": "2026-01-05T09:00:00.000Z" }],
+  "balances": [{ "id": "extra_usage", "label": "Extra usage", "used": 4.2, "limit": 50.0, "unit": "usd" }] }
+{ "provider": "paseo", "source": "codex", "account": "", "plan": "", "status": { "Unavailable": "the login expired: run codex login" }, "windows": [], "balances": [] }
+```
+
+`source` is the kind of agent that runs under the account, as a session's
+`agent` names it, so a client finds a session's account by its provider and
+agent. A window's `id` is `weekly` for the week's; `short` is a label of a
+few characters where space is tight, `""` for none; `used_pct` is a
+percent, and it and `resets_at` are left out when not told. A balance's
+`unit` is `usd`, `credits`, `requests` or `tokens`, and its `used`,
+`remaining` and `limit` are left out when not told. `status` is
+`Available`, or `{"Unavailable": why}`, such as a login that expired.
+
+A provider asks its backend only while a poll follows `reports`, and not
+more often than its backend allows. `Refresh` asks again at once:
+
+```json
+{ "capability": "usage.v1", "request": "Refresh" }
+{ "Ok": "Accepted" }
+```
+
+From Paseo, the reports are its `usage.list_reports.request`'s, one
+`usage.list_reports.update` per account (a source's `sourceId` its
+`source`), from a Paseo whose `server_info` lists the `usageSources`
+feature (0.11 and later), or else its `provider.usage.list.request`'s, from
+one that lists `providerUsageList`; one that lists neither tells none. An
+account whose report fails keeps the windows it last had, `Unavailable`
+with why. The daemon asks in its cycle at most once a minute while a poll
+follows `reports`, and at once after a `Refresh`.
+
+The mock has an account for each kind of agent it starts, whose 5-hour and
+weekly windows fill with each message its sessions are sent. Its sessions'
+context grows with each message too, and a message `/compact` empties it,
+as Claude's and Codex's own command does.
+
+### Limits
+
+`limits.v1` holds limits, each a percent: on how much of its context window
+a session fills, and on how much of its weekly quota an account uses. The
+`limits` transformer derives it from chat.v1's `sessions` and usage.v1's
+`reports` (Transformers, below), and keeps the limits set:
+
+```json
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": { "Session": "fix-auth" }, "percent": 50 } } }
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": "Week", "percent": 90 } } }
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": "Default", "percent": 80 } } }
+{ "capability": "limits.v1", "request": { "ClearLimit": { "scope": { "Session": "fix-auth" } } } }
+{ "Ok": "Accepted" }
+```
+
+A limit's scope is one session's context window, `{"Session": id}`; every
+account's weekly window, `Week`; or the context window of each session
+without a limit of its own, `Default`. Setting a scope's limit replaces the
+one it had, and a percent outside 1 to 100 is `Rejected` with why. The
+topic `status` tells the limits set, and how near each is:
+
+```json
+{ "Limits": {
+  "limits": [{ "scope": "Default", "percent": 80 }, { "scope": "Week", "percent": 90 }],
+  "sessions": [{ "session_id": "fix-auth", "used_pct": 85, "limit_pct": 80, "state": "Over" }],
+  "weeks": [{ "provider": "paseo", "source": "claude", "account": "me@example.com", "used_pct": 41, "limit_pct": 90, "state": "Ok", "resets_at": "2026-01-05T09:00:00.000Z" }] } }
+```
+
+A session is listed once its provider tells what its last turn used of its
+context window (chat.v1's `usage`), `used_pct` rounded to a whole percent,
+with the limit on it, its own or else the default, left out when there is
+neither. An account is listed once its report tells its weekly window. Each
+`state` is `Ok` below its limit or with none, `Near` within a tenth of it,
+and `Over` at it or past it.
+
+A limit set is enforced (Transformers, Guards). Past its context limit, a
+session's `SendMessage`, a steer too, is `Refused` with
+`"the session is over its context limit (85% of 80%): compact or start fresh"`,
+except a message starting `/compact`, which makes room where its agent
+compacts; past the weekly limit, a message to any session whose agent's
+account it is, and a `Create` of an agent of its kind, are `Refused`, `"the
+claude account is over its weekly limit (92% of 90%): raise the limit or
+wait until it resets"`. A turn already running is never stopped: it ends as
+it would. A session's account is the report of its provider whose `source`
+is its agent. A provider's own limits, such as a hard cap within a turn or
+when it compacts, are beyond liton's reach.
+
 ### Audio
 
 `voice.v1` is dictation: speech to text ([research/voice.md](research/voice.md)).
@@ -888,7 +984,10 @@ which declares:
   timeline's entries from the first), its stored state and the time, its new
   state and the events of each topic it offers;
 - `call`: from the same inputs, its state, a call's body and the time, its new
-  state and the call's answer.
+  state and the call's answer;
+- `guards` and `guard`: the capabilities whose calls it may refuse, and from
+  its inputs, its state and such a call's body, whether to let it through or
+  why not.
 
 The daemon hosts every transformer the same way, knowing none of them:
 
@@ -909,6 +1008,10 @@ The daemon hosts every transformer the same way, knowing none of them:
   cursor. A topic it doesn't offer is `NotFound`.
 - **Calls.** A call to the capability goes to `call`, whose answer is
   returned as given.
+- **Guards.** Before the daemon answers a call of a capability an offered
+  transformer `guards`, it asks the transformer's `guard`, and answers
+  `Refused` with its reason should it refuse. A guard only refuses: it
+  can't change or cancel what the call's provider already does.
 - **State.** The daemon keeps each transformer's state, its own JSON, in
   SQLite, and stores a new one only if no other was stored since it read it;
   a call that loses is asked again. Attention's state is the settles and
@@ -916,9 +1019,10 @@ The daemon hosts every transformer the same way, knowing none of them:
   change whose provider tells no `updated`.
 
 A setup names the transformers the daemon hosts by id, and `LITON_TRANSFORMERS`
-adds to them, comma-separated. There are two: `attention`, which liton's own
-setup names, and `needs-you`, attention's items that need you as `needs-you.v1`,
-to show and check composition (`LITON_TRANSFORMERS=needs-you`).
+adds to them, comma-separated. There are three: `attention` and `limits`,
+which liton's own setup names, and `needs-you`, attention's items that need
+you as `needs-you.v1`, to show and check composition
+(`LITON_TRANSFORMERS=needs-you`).
 A remote's transformers are not routed: the daemon derives its own from every
 provider, local or remote.
 

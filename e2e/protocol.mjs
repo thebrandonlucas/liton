@@ -70,7 +70,7 @@ try {
   await step("the manifest lists the mock, attention as a transformer, and topics", () => {
     assert.equal(manifest.protocol, 1);
     assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "hosts"]);
-    assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
+    assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses.map((u) => u.name).join(",")]), [["attention", "attention", "chat"], ["limits", "limits", "chat,usage"]]);
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
   });
@@ -224,14 +224,14 @@ try {
   await step("liton setup evaluates a Litonfile to the same JSON each time, which the manifest offers", async () => {
     assert.equal(await evaluated(path.join(repo, "Litonfile.roc"), path.join(scratch, "again")), own);
     const setup = JSON.parse(own);
-    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
+    assert.deepEqual([setup.remotes, setup.transformers, setup.presets.map((p) => p.name), setup.default_preset], [[], ["attention", "limits"], ["Developer", "Inbox", "Tiling", "Chat", "Rooms", "Review", "Board"], "Developer"]);
     assert.deepEqual(manifest.setup, { default_preset: setup.default_preset, presets: setup.presets, themes: setup.themes, default_theme: setup.default_theme, deck: setup.deck });
     assert.deepEqual(setup.deck, ["Developer", "Rooms", "Review", "Board"]);
     assert.deepEqual([setup.themes.map((t) => t.name), setup.default_theme], [["Pastoral", "Hypr", "Plain", "Neutral", "Sky", "Graphite"], "Pastoral"]);
   });
   await step("a Litonfile that imports liton's changes parts of it", async () => {
     const team = JSON.parse(await evaluated(path.join(repo, "examples/litonfile-team"), path.join(scratch, "team")));
-    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], [], ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"], "Review"]);
+    assert.deepEqual([team.remotes.map((r) => r.name), team.transformers, team.presets.map((p) => p.name), team.default_preset], [["team"], ["limits"], ["Developer", "Tiling", "Chat", "Rooms", "Review", "Board"], "Review"]);
   });
   await step("review.v1 keeps a context's threads, moves one to its lines, and sends the drafts to the agent as one message", async () => {
     const threads = async () => (await post("poll", { topics: [{ capability: "review.v1", topic: "threads/notes", after: "" }] })).topics[0].events[0].Threads;
@@ -338,6 +338,27 @@ try {
     const started = (await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "codex", mode: "read-only", thinking: "high", prompt: "" } })).Ok.Started.session_id;
     const made = await session(started);
     assert.deepEqual([made.model, made.mode, made.thinking], ["gpt-5-codex", "read-only", "high"]);
+  });
+  await step("usage.v1 tells the mock's accounts' windows; limits.v1 keeps limits and tells how near each is, and a message past one is refused but /compact, as a new agent past the weekly one is", async () => {
+    const polled = async (capability, topic) => (await post("poll", { topics: [{ capability, topic, after: "" }] })).topics[0].events[0];
+    const claude = (await polled("usage.v1", "reports")).Reports.find((r) => r.source === "claude");
+    assert.deepEqual([claude.provider, claude.status, claude.windows.map((w) => w.id), claude.windows[1].used_pct > 31], ["mock", "Available", ["five_hour", "weekly"], true]);
+    assert.deepEqual(await call("usage.v1", "Refresh"), { Ok: "Accepted" });
+    const fixAuth = async () => (await polled("limits.v1", "status")).Limits.sessions.find((s) => s.session_id === "fix-auth");
+    const { used_pct, state } = await fixAuth();
+    assert.deepEqual([used_pct > 10, state], [true, "Ok"]);
+    assert.deepEqual(await call("limits.v1", { SetLimit: { scope: { Session: "fix-auth" }, percent: used_pct } }), { Ok: "Accepted" });
+    assert.deepEqual(await fixAuth(), { session_id: "fix-auth", used_pct, limit_pct: used_pct, state: "Over" });
+    const refused = (await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "Go on" } })).Err;
+    assert.deepEqual(refused, { code: "Refused", message: `the session is over its context limit (${used_pct}% of ${used_pct}%): compact or start fresh` });
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: "fix-auth", text: "/compact" } }), { Ok: "Accepted" });
+    assert.deepEqual([(await fixAuth()).used_pct, (await fixAuth()).state], [10, "Ok"]);
+    assert.equal((await call("limits.v1", { SetLimit: { scope: "Week", percent: 0 } })).Ok.Rejected, "a limit is a percent from 1 to 100, not 0");
+    assert.deepEqual(await call("limits.v1", { SetLimit: { scope: "Week", percent: 30 } }), { Ok: "Accepted" });
+    assert.ok((await polled("limits.v1", "status")).Limits.weeks.every((w) => w.state === "Over" && w.limit_pct === 30));
+    assert.equal((await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "codex", prompt: "" } })).Err.code, "Refused");
+    for (const scope of [{ Session: "fix-auth" }, "Week"]) assert.deepEqual(await call("limits.v1", { ClearLimit: { scope } }), { Ok: "Accepted" });
+    assert.deepEqual((await polled("limits.v1", "status")).Limits.limits, []);
   });
   await step("sessions, workspaces and projects are renamed, pinned and archived, and the listings show it", async () => {
     const workspaces = async () => (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed;

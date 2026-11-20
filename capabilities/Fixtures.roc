@@ -1,9 +1,11 @@
 ## Values the golden JSON files in tests/ hold.
 import Chat
 import Hosts
+import Limits
 import Manifest
 import Schedules
 import Tickets
+import Usage
 
 Fixtures := [].{
 	manifest : Manifest.Advertised
@@ -155,4 +157,41 @@ Fixtures := [].{
 		Accepted,
 		Rejected("there is a host called team already"),
 	]
+
+	## A Claude account's report with its 5-hour and weekly windows and a
+	## balance, and one whose login expired, as usage.v1's `reports` holds
+	## them.
+	usage_reports : List(Usage.Report)
+	usage_reports = [
+		{
+			provider: "paseo",
+			source: "claude",
+			account: "me@example.com",
+			plan: "Max",
+			status: Available,
+			windows: [
+				{ id: "five_hour", label: "Session", short: "5h", used_pct: Ok(12.5), resets_at: Ok("2026-01-01T14:00:00.000Z") },
+				{ id: "weekly", label: "Weekly", short: "wk", used_pct: Ok(41), resets_at: Ok("2026-01-05T09:00:00.000Z") },
+			],
+			balances: [{ id: "extra_usage", label: "Extra usage", used: Ok(4.2), remaining: Err(Missing), limit: Ok(50), unit: "usd" }],
+		},
+		{ provider: "paseo", source: "codex", account: "", plan: "", status: Unavailable("the login expired: run codex login"), windows: [], balances: [] },
+	]
+
+	## Each request of limits.v1, and its `status`: a session past the
+	## default limit, one near its own, and an account under the weekly one.
+	limit_requests : List(Limits.Request)
+	limit_requests = [
+		SetLimit({ scope: Session("fix-auth"), percent: 50 }),
+		SetLimit({ scope: Week, percent: 90 }),
+		SetLimit({ scope: Default, percent: 80 }),
+		ClearLimit({ scope: Session("fix-auth") }),
+	]
+
+	limit_status : Limits.Status
+	limit_status = {
+		limits: [{ scope: Default, percent: 80 }, { scope: Session("notes"), percent: 40 }, { scope: Week, percent: 90 }],
+		sessions: [{ session_id: "fix-auth", used_pct: 85, limit_pct: Ok(80), state: Over }, { session_id: "notes", used_pct: 37, limit_pct: Ok(40), state: Near }],
+		weeks: [{ provider: "paseo", source: "claude", account: "me@example.com", used_pct: 41, limit_pct: Ok(90), state: Ok, resets_at: Ok("2026-01-05T09:00:00.000Z") }],
+	}
 }
