@@ -29,6 +29,8 @@ import Dropdown
 import Drag
 import Wallpaper
 import Spinner
+import History
+import ScheduleDesk
 import InboxDesk
 import Menu
 import Summary
@@ -407,6 +409,13 @@ Liton := [].{
 				},
 			),
 		),
+		# The page of history a History pane on screen asks for, the latest
+		# asked superseding the others.
+		Engine.watch_latest(
+			model.signal().map(Model.history_wanted),
+			|wanted| wanted.map_ok(|asked| [Liton.call(Json.to_str({ capability: "chat.v1", request: ListHistory({ search: asked.search, cursor: asked.cursor, limit: History.page_size }) }))]) ?? [],
+			model.on_result(|state, wanted, res| wanted.map_ok(|asked| Model.history_listed(state, asked, res ?? "")) ?? state),
+		),
 		Engine.watch(model.signal().map(Model.needs_you), |count| [Engine.command(Title(if (count == 0) "liton" else "(${count.to_str()}) liton"))], Engine.ignore({})),
 		Engine.watch_changes(
 			model.signal().map(|state| state.outbox),
@@ -430,6 +439,7 @@ Liton := [].{
 						"review.v1" => Model.reviewed(state, outbox.serial, res ?? "")
 						"rooms.v1" => Model.rooms_answered(state, outbox.serial, res ?? "")
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
+						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -1451,11 +1461,13 @@ Liton := [].{
 				),
 				Engine.switch(
 					shown.map(|{ pane, state }| Model.body(state, pane)),
-					[Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents],
+					[Sessions, Workspaces, History, Schedules, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents],
 					|body|
 						match body {
 							Sessions => Liton.tree(model, id, shown.map(|{ pane, state }| Model.session_rows(state, pane)), Menus)
 							Workspaces => Html.div("workspaces-pane", [Liton.nav_rows(model, id, shown), Liton.create_form(model, id), Liton.tree(model, id, shown.map(|{ pane, state }| Model.workspace_rows(state, pane)), Menus)])
+							History => Liton.history(model)
+							Schedules => Liton.schedules(model)
 							Chat => Liton.chat(model, id, shown)
 							Inbox => Liton.inbox(model, row.field(|pane| pane))
 							Changes => Liton.changes(model, id, row.field(|pane| pane))
@@ -2543,8 +2555,8 @@ Liton := [].{
 
 	## A Workspaces pane's rows over its list where it lists sessions as
 	## tabs, as Paseo's navigator has them: New workspace, and Search, which
-	## opens the palette. Paseo's History and Schedules wait on a history of
-	## the focus and an automations capability.
+	## opens the palette, History, which opens the sessions' history, and
+	## Schedules, while the daemon offers them.
 	nav_rows : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	nav_rows = |model, id, shown|
 		Engine.when(
@@ -2555,6 +2567,8 @@ Liton := [].{
 					[
 						Html.button("New workspace", [Engine.class("nav-row nav-new-workspace"), Engine.test_id("nav-new-workspace")], model.update_by(id, |state, pane_id| Model.open_form(state, { pane_id, key: "" }))),
 						Html.button_s(model.signal().map(|state| "Search ${Keymap.text_of(state.operating_system, Keymap.defaults, "palette")}"), [Engine.class("nav-row nav-search"), Html.aria_label_s(Engine.const("Search"))], model.update(Commands.open_palette)),
+						Html.button("History", [Engine.class("nav-row nav-history"), Engine.test_id("nav-history")], model.update(|state| Model.open_part(state, "history"))),
+						Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.schedules_v1)), || Html.button("Schedules", [Engine.class("nav-row nav-schedules"), Engine.test_id("nav-schedules")], model.update(|state| Model.open_part(state, "schedules"))), || Engine.text("")),
 					],
 				),
 			|| Engine.text(""),
@@ -2608,6 +2622,7 @@ Liton := [].{
 			Pin => if (item.label == "Unpin") "unpin" else "pin"
 			CopyId => "copy"
 			Archive => "archive"
+			Heartbeat => "heartbeat"
 		}
 
 	## A Workspaces pane's form, while open in it: an agent to start in a
@@ -2737,38 +2752,308 @@ Liton := [].{
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
-				Conversation.composer(
-					model0,
-					id,
-					{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
-					[
-						Html.div(
-							"composer-chips",
+				# An archived session's chat reads only, with Unarchive.
+				Engine.when(
+					shown.map(|{ pane, state }| Model.archived_at(state, Model.session_of(state, pane)).is_ok()),
+					|| Liton.archived_bar(model0, shown.map(|{ pane, state }| Model.session_of(state, pane))),
+					||
+						Conversation.composer(
+							model0,
+							id,
+							{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 							[
-								Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
-								Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
-								Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+								Html.div(
+									"composer-chips",
+									[
+										Liton.setting_chip(model0, id, Mode, "Mode", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+										Liton.setting_chip(model0, id, Model, "Model", Html.span_s(chip.map(|named| named.name), [Engine.class("model-chip"), Engine.attr_s("title", chip.map(|named| named.title)), Engine.test_id("model-chip")])),
+										Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
+									],
+								),
+								Liton.context_meter(model0, id),
+								Microphone.controls(model0, id),
+								# One round button: Send, or Stop while the agent works and
+								# nothing is typed, then a ring until it stops.
+								Engine.switch(
+									shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
+									[Send, Stop, Stopping],
+									|action|
+										match action {
+											Send => Conversation.send_button("Send")
+											Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
+											Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
+										},
+								),
 							],
 						),
-						Liton.context_meter(model0, id),
-						Microphone.controls(model0, id),
-						# One round button: Send, or Stop while the agent works and
-						# nothing is typed, then a ring until it stops.
-						Engine.switch(
-							shown.map(|{ pane, state }| Liton.composer_action(state, pane)),
-							[Send, Stop, Stopping],
-							|action|
-								match action {
-									Send => Conversation.send_button("Send")
-									Stop => Html.icon_button("", Engine.const("Stop"), "send stop", model0.update_by(id, Model.stop))
-									Stopping => Html.span_s(Engine.const("Stopping…"), [Engine.class("send stopping"), Engine.attr("role", "status"), Engine.test_id("stop-status")])
-								},
-						),
-					],
 				),
 			]).prepend(Summary.view(model0, id)).prepend(Liton.session_overview(model0, id, shown)),
 		)
 	}
+
+	## A Schedules pane: New schedule, the editor while open, and a row for
+	## each schedule with its status, cadence in words, target and next run;
+	## a row opened shows Pause or Resume, Run now, Edit and Delete, each
+	## shown at once, and its runs, each opening its session.
+	schedules : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	schedules = |model| {
+		desk = model.signal().map(|state| state.schedules)
+		Html.div(
+			"schedules",
+			[
+				Html.div("schedules-bar", [Html.button("New schedule", [Engine.class("schedules-new")], model.update(|state| Model.new_schedule(state, Err(Missing))))]),
+				Engine.when(desk.map(|shown| shown.editor.open), || Liton.schedule_editor(model), || Engine.text("")),
+				Html.ul(
+					[Engine.class("schedule-list"), Engine.attr("data-part", "list")],
+					[
+						Engine.each(
+							desk.map(ScheduleDesk.shown),
+							|schedule| schedule.id,
+							|row| {
+								state = model.signal().lift_row()
+								schedule_id = row.key()
+								opened = schedule_id.map2(state, |id, shown| shown.schedules.opened == id)
+								pending = schedule_id.map2(state, |id, shown| ScheduleDesk.pending(shown.schedules, id))
+								act = |change| model.lift_row().update_by(schedule_id, change)
+								Html.li(
+									[Engine.class_s(opened.map(|open| if (open) "schedule-row opened" else "schedule-row")), Engine.attr("data-part", "schedule")],
+									[
+										Engine.element(
+											"button",
+											[Engine.attr("type", "button"), Engine.class("schedule-title"), Engine.attr_s("aria-expanded", opened.map(|open| if (open) "true" else "false")), Engine.on_click(act(Model.open_schedule))],
+											[Engine.text_s(row.field(|schedule| if (schedule.name.is_empty()) schedule.prompt.split_on("\n").first() ?? schedule.prompt else schedule.name))],
+										),
+										Html.div(
+											"schedule-meta",
+											[
+												Html.span_s(row.field(|schedule| Liton.schedule_status(schedule.status)), [Engine.class_s(row.field(|schedule| "schedule-status ${Liton.schedule_status(schedule.status).with_ascii_lowercased()}")), Engine.test_id("schedule-status")]),
+												Html.span_s(row.field(|schedule| ScheduleDesk.cadence_text(schedule.cadence)), [Engine.class("cadence")]),
+												Html.span_s(row.field(|schedule| schedule.target).map2(state, |target, shown| Liton.target_text(shown, target)), [Engine.class("target")]),
+												Html.span_s(row.field(|schedule| schedule.next_run).map2(state, |next, shown| next.map_ok(|at| "next ${Model.until(shown, at)}") ?? ""), [Engine.class("next-run")]),
+												Html.span_s(pending, [Engine.class("schedule-pending"), Engine.attr("role", "status"), Engine.test_id("schedule-pending")]),
+											],
+										),
+										Engine.when(
+											opened,
+											||
+												Html.div(
+													"schedule-detail",
+													[
+														Html.p_s(row.field(|schedule| schedule.prompt), [Engine.class("schedule-prompt")]),
+														Html.div(
+															"schedule-actions",
+															[
+																Engine.when(
+																	row.field(|schedule| schedule.status == Paused),
+																	|| Html.button("Resume", [], act(|shown, id| Model.ask_schedules(shown, Resume({ schedule_id: id })))),
+																	|| Html.button("Pause", [], act(|shown, id| Model.ask_schedules(shown, Pause({ schedule_id: id })))),
+																),
+																Html.button("Run now", [], act(|shown, id| Model.ask_schedules(shown, RunOnce({ schedule_id: id })))),
+																Html.button("Edit", [], act(Model.edit_schedule)),
+																Html.button("Delete", [Engine.class("danger")], act(|shown, id| Model.ask_schedules(shown, Delete({ schedule_id: id })))),
+															],
+														),
+														Liton.schedule_runs(model.lift_row(), schedule_id),
+													],
+												),
+											|| Engine.text(""),
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+				Html.p_s(desk.map(|shown| if (ScheduleDesk.shown(shown).is_empty()) "No schedules yet." else ""), [Engine.class("schedules-empty")]),
+			],
+		)
+	}
+
+	## A schedule's status as a row says it.
+	schedule_status : [Active, Paused, Completed] -> Str
+	schedule_status = |status|
+		match status {
+			Active => "Active"
+			Paused => "Paused"
+			Completed => "Completed"
+		}
+
+	## Whom a schedule prompts: its session, or a new agent and where.
+	target_text : Model.State, [Session(Str), NewSession({ place : [Workspace(Str), Directory(Str)], agent : Str, model : Try(Str, [Missing]), mode : Try(Str, [Missing]), thinking : Try(Str, [Missing]), isolation : [Local, Worktree], archive_on_finish : Bool })] -> Str
+	target_text = |state, target|
+		match target {
+			Session(session_id) => "Heartbeat: ${Model.session(state, session_id).title}"
+			NewSession({ place, agent, .. }) => {
+				placed_in = match place {
+					Workspace(workspace_id) => state.workspaces.workspaces.find_first(|listed| listed.id == workspace_id).map_ok(|listed| listed.name) ?? workspace_id
+					Directory(directory) => directory.split_on("/").last() ?? directory
+				}
+				"New ${agent} in ${placed_in}"
+			}
+		}
+
+	## The runs of a schedule opened, the latest first, each with when it
+	## ran, how it went and what it said; one that prompted a session opens
+	## it.
+	schedule_runs : State(ctx, Model.State), Signal(ctx, Str) -> Elem(ctx)
+	schedule_runs = |model, schedule_id|
+		Html.ul(
+			[Engine.class("schedule-runs"), Engine.attr("data-part", "runs"), Html.aria_label("Runs")],
+			[
+				Engine.each(
+					schedule_id.map2(model.signal(), |id, state| ScheduleDesk.runs_of(state.schedules, id)),
+					|run| run.id,
+					|row| {
+						state = model.signal().lift_row()
+						opens = model.lift_row().update_by(row.field(|run| run.session_id ?? ""), |shown, session_id| if (session_id.is_empty()) shown else Model.open(shown, Session(session_id)))
+						Html.li(
+							[Engine.class_s(row.field(|run| if (run.status == Failed) "schedule-run failed" else "schedule-run"))],
+							[
+								Engine.element(
+									"button",
+									[Engine.attr("type", "button"), Engine.class("run-open"), Html.boolean("disabled", row.field(|run| run.session_id.is_err())), Engine.on_click(opens)],
+									[
+										Html.span_s(row.field(|run| run.started).map2(state, |started, shown| Model.ago_said(shown, started)), [Engine.class("run-when")]),
+										Html.span_s(row.field(|run| if (run.status == Running) "Running" else if (run.status == Failed) "Failed" else "Done"), [Engine.class("run-status")]),
+										Html.span_s(row.field(|run| (run.error ?? (run.output ?? "")).split_on("\n").first() ?? ""), [Engine.class("run-said")]),
+									],
+								),
+							],
+						)
+					},
+				),
+				Engine.when(
+					schedule_id.map2(model.signal(), |id, state| ScheduleDesk.runs_known(state.schedules, id) and ScheduleDesk.runs_of(state.schedules, id).is_empty()),
+					|| Html.li([Engine.class("schedule-run none")], [Engine.text("No runs yet.")]),
+					|| Engine.text(""),
+				),
+			],
+		)
+
+	## The schedule editor: its name and prompt, a cadence preset or a cron
+	## expression with its time zone, and its target, the session it was
+	## opened for (a heartbeat) or a new agent with the place, agent, model,
+	## mode and thinking pickers a new agent's form has.
+	schedule_editor : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	schedule_editor = |model| {
+		editor = model.signal().map(|state| state.schedules.editor)
+		set = |change| model.set_value(|state, text| Model.with_editor(state, |shown| change(shown, text)))
+		field = |name, part, placeholder, value, change| Html.text_input(Engine.const(name), "text", editor.map(value), [Engine.attr("placeholder", placeholder), Engine.class(part)], set(change))
+		offered = model.signal().map(Model.editor_choices)
+		default_option = |said| Engine.element("option", [Engine.prop(Engine.Prop.value, "")], [Engine.text_s(said)])
+		picker = |name, value, listed, default_label, change|
+			Engine.when(
+				offered.map(|offers| !listed(offers).is_empty()),
+				|| Dropdown.select(Engine.const(name), editor.map(value), [], [default_option(offered.map(default_label))].concat(Liton.choices(offered.map(listed))), set(change)),
+				|| Engine.text(""),
+			)
+		Html.form(
+			"Schedule",
+			[Engine.class("schedule-editor"), Engine.attr("data-part", "editor"), Engine.on("submit", model.update(Model.save_schedule))],
+			[
+				Html.p_s(editor.map(|shown| if (shown.schedule_id.is_empty()) "New schedule" else "Edit schedule"), [Engine.class("create-title")]),
+				field("Name", "schedule-name", "Name (optional)", |shown| shown.name, |shown, text| { ..shown, name: text }),
+				Html.textarea(Engine.const("Prompt"), editor.map(|shown| shown.prompt), [Engine.attr("placeholder", "The prompt it sends"), Engine.class("schedule-prompt-field")], set(|shown, text| { ..shown, prompt: text })),
+				Dropdown.select(Engine.const("Cadence"), editor.map(|shown| shown.cadence), [], ScheduleDesk.presets.map(|preset| Dropdown.option(preset.key, preset.label)).append(Dropdown.option("cron", "Cron expression…")), set(|shown, text| { ..shown, cadence: text })),
+				Engine.when(
+					editor.map(|shown| shown.cadence == "cron"),
+					|| Html.div("schedule-cron", [field("Cron expression", "cron", "0 9 * * *", |shown| shown.expression, |shown, text| { ..shown, expression: text }), field("Time zone", "timezone", "UTC", |shown| shown.timezone, |shown, text| { ..shown, timezone: text })]),
+					|| Engine.text(""),
+				),
+				Dropdown.select(
+					Engine.const("Target"),
+					editor.map(|shown| if (shown.heartbeat) "heartbeat" else "new"),
+					[],
+					[Dropdown.option("new", "A new agent each run")].concat([Engine.element("option", [Engine.prop(Engine.Prop.value, "heartbeat"), Html.boolean("hidden", editor.map(|shown| shown.session_id.is_empty()))], [Engine.text_s(editor.map2(model.signal(), |shown, state| "This session (heartbeat): ${Model.session(state, shown.session_id).title}"))])]),
+					set(|shown, text| { ..shown, heartbeat: text == "heartbeat" and !shown.session_id.is_empty() }),
+				),
+				Engine.when(
+					editor.map(|shown| !shown.heartbeat),
+					||
+						Html.div(
+							"schedule-agent",
+							[
+								Dropdown.select(Engine.const("Workspace"), editor.map(|shown| shown.place), [], Liton.choices(model.signal().map(|state| state.workspaces.workspaces.map(|listed| { value: listed.id, label: listed.name }))), model.set_value(|state, text| Model.with_editor(state, |shown| { ..shown, place: text, agent: if (Model.agent_kinds(state, text).contains(shown.agent)) shown.agent else Model.agent_kinds(state, text).first() ?? "" }))),
+								Dropdown.select(Engine.const("Agent"), editor.map(|shown| shown.agent), [], Liton.choices(editor.map2(model.signal(), |shown, state| Model.agent_kinds(state, shown.place).map(|agent| { value: agent, label: agent }))), set(|shown, text| if (text == shown.agent) shown else { ..shown, agent: text, model: "", mode: "", thinking: "" })),
+								picker("Model", |shown| shown.model, |offers| offers.models, |offers| offers.defaults.model, |shown, text| { ..shown, model: text }),
+								picker("Mode", |shown| shown.mode, |offers| offers.modes, |offers| offers.defaults.mode, |shown, text| { ..shown, mode: text }),
+								picker("Thinking", |shown| shown.thinking, |offers| offers.levels, |offers| offers.defaults.thinking, |shown, text| { ..shown, thinking: text }),
+								Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("In a worktree of its own"), editor.map(|shown| shown.worktree), [], model.set_value(|state, checked| Model.with_editor(state, |shown| { ..shown, worktree: checked }))), Engine.text("In a worktree of its own")]),
+								Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Archive when done"), editor.map(|shown| shown.archive_on_finish), [], model.set_value(|state, checked| Model.with_editor(state, |shown| { ..shown, archive_on_finish: checked }))), Engine.text("Archive when done")]),
+							],
+						),
+					|| Engine.text(""),
+				),
+				Html.p_s(editor.map(|shown| shown.failed), [Engine.class("create-failed"), Engine.test_id("schedule-failed")]),
+				Html.div(
+					"create-actions",
+					[
+						Html.submit_button("Save", []),
+						Html.button("Cancel", [], model.update(|state| Model.with_editor(state, |_| ScheduleDesk.closed))),
+					],
+				),
+			],
+		)
+	}
+
+	## In place of an archived session's composer: when it was archived, and
+	## Unarchive, which lists it again, unarchiving until it is.
+	archived_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	archived_bar = |model, session_id|
+		Html.div_attrs(
+			[Engine.class("archived-bar"), Engine.attr("data-part", "composer")],
+			[
+				Html.span_s(session_id.map2(model.signal(), |id, state| "Archived ${Model.archived_at(state, id).map_ok(|at| Model.ago_said(state, at)) ?? ""}"), [Engine.class("archived-when"), Engine.test_id("archived-when")]),
+				Engine.when(
+					session_id.map2(model.signal(), |id, state| Model.unarchiving(state, id)),
+					|| Html.span_s(Engine.const("Unarchiving…"), [Engine.class("unarchive pending"), Engine.attr("role", "status"), Engine.test_id("unarchive-status")]),
+					|| Html.button("Unarchive", [Engine.class("unarchive")], model.update_by(session_id, Model.unarchive)),
+				),
+			],
+		)
+
+	## A History pane: a search over every session the providers keep,
+	## archived ones too, and a row for each found, the latest first, that
+	## opens its chat; then more, while there are.
+	history : State(PaneCtx, Model.State) -> Elem(PaneCtx)
+	history = |model|
+		Html.div(
+			"history",
+			[
+				Html.div_attrs(
+					[Engine.class("history-search"), Engine.attr("data-part", "search")],
+					[Html.text_input(Engine.const("Search history"), "search", model.signal().map(|state| state.history.search), [Engine.attr("placeholder", "Search history")], model.set_value(|state, text| { ..state, history: History.searched(state.history, text) }))],
+				),
+				Html.ul(
+					[Engine.class("history-list"), Engine.attr("data-part", "list")],
+					[
+						Engine.each(
+							model.signal().map(Model.history_rows),
+							|row| row.id,
+							|row| {
+								opens = model.lift_row().update_by(row.key(), |state, session_id| Model.open(state, Session(session_id)))
+								Html.li(
+									[Engine.class_s(row.field(|shown| if (shown.focused) "history-row focused" else "history-row")), Engine.attr("data-part", "session")].concat(Liton.row_activates(opens)),
+									[
+										Engine.element("button", [Engine.attr("type", "button"), Engine.class("history-title"), Engine.on_click(opens)], [Engine.text_s(row.field(|shown| shown.title))]),
+										Html.div(
+											"history-meta",
+											[
+												Html.span_s(row.field(|shown| shown.project), [Engine.class("project")]),
+												Html.span_s(row.field(|shown| shown.agent), [Engine.class("agent")]),
+												Html.span_s(row.field(|shown| if (shown.archived.is_empty()) "" else "Archived ${shown.archived}"), [Engine.class("archived"), Engine.test_id("history-archived")]),
+											],
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+				Spinner.or_text(model.signal().map(|state| if (History.loading(state.history)) Loading else Said(if (!state.history.failed.is_empty()) state.history.failed else if (state.history.sessions.is_empty()) "No sessions match." else "")), Pane, [Engine.class("history-empty")]),
+				Engine.when(model.signal().map(|state| state.history.next.is_ok() and !History.loading(state.history)), || Html.button("Show more", [Engine.class("history-more")], model.update(|state| { ..state, history: History.more(state.history) })), || Engine.text("")),
+			],
+		)
 
 	## Over a chat pane showing only the latest (its option `show`), the
 	## session's status, where it works and how long it has worked or since

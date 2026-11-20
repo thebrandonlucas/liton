@@ -489,6 +489,7 @@ kbd:empty { display: none; }
 .item-rename { --icon: var(--icon-pencil); }
 .item-copy { --icon: var(--icon-copy); }
 .item-archive { --icon: var(--icon-archive); }
+.item-heartbeat { --icon: var(--icon-clock); }
 .item-link { --icon: var(--icon-link); }
 .item-leave { --icon: var(--icon-log-out); }
 .item-join { --icon: var(--icon-log-in); }
@@ -559,6 +560,8 @@ kbd:empty { display: none; }
 .nav-row::before { content: ""; flex: none; width: 15px; height: 15px; background: var(--muted); -webkit-mask: var(--nav-icon) center / contain no-repeat; mask: var(--nav-icon) center / contain no-repeat; }
 .nav-new-workspace { --nav-icon: var(--icon-plus); }
 .nav-search { --nav-icon: var(--icon-search); }
+.nav-history { --nav-icon: var(--icon-list); }
+.nav-schedules { --nav-icon: var(--icon-circle-play); }
 .tree-row .new-agent { flex: none; margin-left: auto; padding: 2px 5px; border-color: transparent; background: none; color: var(--muted); opacity: 0; }
 .tree-row .added:not(:empty) ~ .new-agent, .tree-row .age:not(:empty) ~ .new-agent { margin-left: 0; }
 .tree-row:not(.creatable) .new-agent { display: none; }
@@ -826,6 +829,47 @@ kbd:empty { display: none; }
 .ticket-meta span:empty { display: none; }
 .ticket-meta .age { margin-left: auto; }
 .ticket-empty { margin: 8px 10px; color: var(--muted); font-size: 13px; }
+.history-search { padding: 2px 4px 6px; }
+.history-search input { width: 100%; padding: 4px 8px; }
+.history-list { list-style: none; margin: 0; padding: 0; }
+.history-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border-radius: var(--small-radius); transition: background-color var(--fast) ease; }
+.history-row:hover { background: var(--tool); }
+.history-row.focused { background: var(--selected); }
+.history-title { min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font: 11px var(--font-mono); color: var(--muted); }
+.history-meta span:empty { display: none; }
+.history-meta .archived { margin-left: auto; }
+.history-empty { margin: 8px 10px; color: var(--muted); font-size: 13px; }
+.history-empty:empty { display: none; }
+.history-more { margin: 4px 10px 10px; }
+.schedules-bar { display: flex; justify-content: flex-end; padding: 2px 6px 6px; }
+.schedule-editor { display: flex; flex-direction: column; gap: 6px; margin: 0 6px 8px; padding: 10px; border: 1px solid var(--edge); border-radius: var(--radius); background: var(--tool); }
+.schedule-editor .create-title { margin: 0; font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+.schedule-editor input, .schedule-editor select { padding: 4px 6px; min-width: 0; }
+.schedule-editor textarea { min-height: 4.5em; resize: vertical; }
+.schedule-cron, .schedule-agent { display: flex; flex-direction: column; gap: 6px; }
+.schedule-list { list-style: none; margin: 0; padding: 0; }
+.schedule-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border-radius: var(--small-radius); transition: background-color var(--fast) ease; }
+.schedule-row:hover { background: var(--tool); }
+.schedule-row.opened { background: var(--selected); }
+.schedule-title { min-width: 0; border: none; padding: 0; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font: 11px var(--font-mono); color: var(--muted); }
+.schedule-meta span:empty { display: none; }
+.schedule-status.active { color: var(--accent); }
+.schedule-status.paused { color: var(--warning, var(--muted)); }
+.schedule-pending { font-style: italic; }
+.schedule-detail { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; }
+.schedule-prompt { margin: 0; font-size: 13px; white-space: pre-wrap; }
+.schedule-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.schedule-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.schedule-run .run-open { display: flex; gap: 8px; width: 100%; border: none; padding: 3px 4px; background: none; text-align: left; font: 11.5px var(--font-mono); color: var(--text); }
+.schedule-run .run-open:hover:not(:disabled) { background: var(--tool); }
+.schedule-run.failed .run-status { color: var(--fail); }
+.schedule-run .run-said { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.schedule-run.none { font-size: 12px; color: var(--muted); padding: 3px 4px; }
+.schedules-empty { margin: 8px 10px; color: var(--muted); font-size: 13px; }
+.schedules-empty:empty { display: none; }
+.archived-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px; padding: 8px 12px; border: 1px solid var(--edge); border-radius: var(--radius); color: var(--muted); font-size: 13px; }
 /* A ticket scrolls within its pane, down to its comment box. */
 .ticket { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 8px; }
 .ticket > * { flex: none; }

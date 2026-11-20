@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -143,7 +143,8 @@ Error codes are a closed set shared by all capabilities:
 | `Overloaded` | try later (not used yet) |
 
 The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
-`AnswerPermission`, `Cancel`, `Create`, `Rename`, `Archive` and `Configure`;
+`AnswerPermission`, `Cancel`, `Create`, `Rename`, `Archive`, `Configure`,
+`ListHistory` and `Unarchive`;
 `attention.v1`'s `ListItems`, `Settle`, `Snooze`, `Unsettle` and `Seen`;
 `workspaces.v1`'s `ListWorkspaces`, `Create`, `Rename`, `Pin`, `Archive` and
 `RenameProject`; `review.v1`'s `AddComment`, `EditComment`, `DeleteComment`,
@@ -151,7 +152,8 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `Finish` and `Cancel` (Audio, below); `rooms.v1`'s `ListRooms`, `Send`,
 `React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
-and `Unlink` (Tickets, below).
+and `Unlink` (Tickets, below); `schedules.v1`'s `ListSchedules`, `Inspect`, `Create`, `Update`,
+`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below).
 
 `{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
 it works on a turn, the message interrupts it, or with `"while_running":
@@ -214,8 +216,34 @@ or with a Paseo that doesn't list `agentConfigApply` among its features,
 its `set_agent_model_request`, `set_agent_mode_request` and
 `set_agent_thinking_request` one after the other; the mock's agents offer
 two models of three thinking levels each and a few modes, and refuse others;
-Paseo can't unarchive an agent or a workspace
-over its protocol, and neither can liton. The mock keeps its own changes.
+Paseo can't unarchive a workspace over its protocol, and neither can liton.
+The mock keeps its own changes.
+
+`ListHistory` pages through every session a provider keeps, archived ones
+too, the latest first: those whose title, agent or directory holds `search`
+(`""` for all), `limit` at a time. An archived session tells when it was
+`archived`. The answer's `next` is the cursor of the next page, left out
+after the last; a client sends it back as `cursor`, opaque, which holds where
+each provider goes on from, so the pages of several providers go on
+together. `Unarchive` lists an archived session again:
+
+```json
+{ "capability": "chat.v1", "request": { "ListHistory": { "search": "login", "limit": 50 } } }
+{ "Ok": { "History": { "sessions": [{ "id": "old-readme", "provider": "mock", "agent": "claude", "title": "Tidy the README", "status": "Idle", "archived": "2026-01-01T09:00:00.000Z" }], "next": "[{\"cursor\":\"50\",\"provider\":\"mock\"}]" } } }
+{ "capability": "chat.v1", "request": { "Unarchive": { "session_id": "old-readme" } } }
+{ "Ok": "Accepted" }
+```
+
+An archived session's timeline still follows (`timeline/<session_id>`), for
+a client to show it read only. The mock keeps the sessions it archives, and
+starts with one archived a day ago. From Paseo, a page is its
+`fetch_agent_history_request` with archived agents included, sorted by
+`updated_at`, its `pageInfo.nextCursor` the provider's cursor, and an
+archived agent's `archivedAt` its `archived`; `Unarchive` is its
+`refresh_agent_request`, which lists the agent again and reloads it. Paseo
+lists `agentHistorySearch` among its features from 0.3.0, so each Paseo
+liton speaks (0.9.2 to 0.15.3) has a history; one that doesn't list it adds
+no sessions to a page.
 
 `attention.v1` is an inbox: one item per session, those that need you first,
 then the rest by when they last changed, the latest first. An item is
@@ -305,6 +333,8 @@ events when nothing changed:
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
+| `schedules.v1` | `schedules` | snapshot | `{"Schedules": [Schedule]}` |
+| `schedules.v1` | `runs/<schedule_id>` | snapshot | `{"Runs": [Run]}`, the latest first |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -589,6 +619,76 @@ on, so that session links to it.
 
 A provider's credentials are the daemon's alone, read from its environment
 as Paseo's password is, and never reach a client.
+
+### Schedules
+
+`schedules.v1` runs prompts on a cadence, as Paseo's schedules do. A
+schedule sends its `prompt` either to a session that exists, a heartbeat,
+or to a new session each run:
+
+```json
+{ "id": "h1", "provider": "mock", "name": "Check CI", "prompt": "Is CI green?",
+  "cadence": { "Every": 1800000 }, "target": { "Session": "fix-auth" },
+  "status": "Active", "next_run": "2026-01-01T09:30:00.000Z", "last_run": "2026-01-01T09:00:00.000Z" }
+{ "id": "n1", "provider": "mock", "name": "", "prompt": "Update the deps",
+  "cadence": { "Cron": { "expression": "0 3 * * *", "timezone": "Europe/Berlin" } },
+  "target": { "NewSession": { "place": { "Workspace": "main" }, "agent": "claude", "model": "opus", "isolation": "Worktree", "archive_on_finish": true } },
+  "status": "Paused", "max_runs": 10, "expires": "2026-02-01T00:00:00.000Z" }
+```
+
+A cadence is `{"Every": ms}` or `{"Cron": {"expression", "timezone"}}`, the
+time zone UTC when left out. A new session is started as chat.v1's `Create`
+starts one, in a workspace or a directory, with the agent and, left out for
+the defaults, its model, mode and thinking level; `isolation` `Local` works
+in the place itself and `Worktree` in a worktree of its own, and
+`archive_on_finish` archives it once its run is done. `status` is `Active`,
+`Paused` or `Completed`, once it ran `max_runs` times or `expires` passed.
+`next_run`, `last_run`, `max_runs` and `expires` are left out when there is
+none.
+
+A run is `{"id", "scheduled_for", "started", "ended", "status",
+"session_id", "output", "error"}`, `status` `Running`, `Succeeded` or
+`Failed`, `ended` left out while it runs, and the session it prompted, what
+the agent answered and why it failed when its provider tells.
+
+```json
+{ "capability": "schedules.v1", "request": "ListSchedules" }
+{ "Ok": { "Schedules": [ … ] } }
+{ "capability": "schedules.v1", "request": { "Inspect": { "schedule_id": "h1" } } }
+{ "Ok": { "Inspected": { "schedule": { … }, "runs": [ … ] } } }
+{ "capability": "schedules.v1", "provider": "mock", "request": { "Create": { "name": "Check CI", "prompt": "Is CI green?", "cadence": { "Every": 1800000 }, "target": { "Session": "fix-auth" } } } }
+{ "Ok": { "Created": { "schedule_id": "h2" } } }
+{ "capability": "schedules.v1", "request": { "Update": { "schedule_id": "h1", "draft": { … } } } }
+{ "capability": "schedules.v1", "request": { "Pause": { "schedule_id": "h1" } } }
+{ "Ok": "Accepted" }
+```
+
+`Create` takes a draft, `{"name", "prompt", "cadence", "target",
+"max_runs", "expires"}`, for the provider the call names, or the one that
+offers schedules; a heartbeat's goes to its session's. `Update` changes a
+schedule to a draft. `Pause` stops one until `Resume`, `RunOnce` runs it
+now, besides its cadence, and `Delete` forgets it with its runs. Each
+answers `Accepted` or `Rejected` with why, or an error, and the next poll of
+`schedules` shows it.
+
+From Paseo, each call is its `schedule/list`, `schedule/inspect`,
+`schedule/create`, `schedule/update`, `schedule/pause`, `schedule/resume`,
+`schedule/run-once` or `schedule/delete`, one write over a connection of
+its own; a heartbeat is its `agent` target, a new session its `new-agent`
+config in the directory of the place named, and a run's session its
+`agentId`. The `schedules` topic is its `schedule/list`, and
+`runs/<schedule_id>` its `schedule/inspect`, asked in the daemon's cycle
+while polls watch them. Paseo lists no feature for schedules: each Paseo
+liton speaks (0.9.2 to 0.15.3) has them, as Paseo has since well before
+0.9. Paseo's schedules of a new session start it in a directory, so one
+made in a workspace reads back as made in its directory.
+
+The mock's schedules run by the daemon's clock, each due one run when a
+poll or call finds it due, prompting its session or starting one in the
+mock's workspaces; their cron expressions are of the minute and hour alone
+(`0 9 * * *`, `*/15 * * * *`), in UTC, and their cadences every second at
+most, and they don't archive the sessions they start. Its pure functions take the time, so its tests run them by a clock of
+their own. A fresh mock has a schedule of a new session each night at 03:00.
 
 ### Audio
 

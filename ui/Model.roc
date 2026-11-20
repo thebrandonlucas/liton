@@ -9,6 +9,7 @@ import cap.Manifest
 import cap.Protocol
 import cap.Review
 import cap.Rooms
+import cap.Schedules
 import cap.Tickets
 import cap.WorkspaceGit
 import cap.Workspaces
@@ -16,7 +17,9 @@ import setup.Default
 import setup.Grid
 import setup.Setup
 import Highlight
+import History
 import ReviewDesk
+import ScheduleDesk
 import Speech
 import TicketDesk
 import Widgets
@@ -337,6 +340,13 @@ Model := [].{
 		## What Tickets panes show (`TicketDesk`), and the tickets.v1
 		## requests on their way (sent as `call_outbox`).
 		tickets : TicketDesk.State,
+
+		## What History panes searched and the daemon listed (ui/History.roc).
+		history : History.State,
+
+		## What Schedules panes show (ui/ScheduleDesk.roc), and the
+		## schedules.v1 requests on their way (sent as `call_outbox`).
+		schedules : ScheduleDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -539,6 +549,8 @@ Model := [].{
 				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
 				tickets: TicketDesk.initial,
+				history: History.initial,
+				schedules: ScheduleDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -1014,7 +1026,7 @@ Model := [].{
 	## stopping it while it works, marking it read or unread unless it works,
 	## renaming it, pinning or unpinning its workspace, copying its id and
 	## archiving it. Each edit is offered where its capability is.
-	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Rename, Pin, CopyId, Archive]
+	RowAction : [NewWorkspace, NewAgent, Stop, MarkRead, MarkUnread, Rename, Pin, CopyId, Heartbeat, Archive]
 
 	## The ⋮ menu of the row `key` (see `RowAction`).
 	row_menu : State, Str -> List({ label : Str, action : RowAction })
@@ -1034,6 +1046,7 @@ Model := [].{
 					.concat(rename(Capability.chat_v1))
 					.concat(pin)
 					.append({ label: "Copy id", action: CopyId })
+					.concat(offered(Capability.schedules_v1, [{ label: "Heartbeat…", action: Heartbeat }]))
 					.concat(offered(Capability.chat_v1, [{ label: "Archive", action: Archive }]))
 			}
 			_ => []
@@ -1056,6 +1069,7 @@ Model := [].{
 			MarkRead => Model.mark_seen(state, [key], Bool.True)
 			MarkUnread => Model.mark_seen(state, [key], Bool.False)
 			CopyId => Model.copy(state, { key: "id:${key}", text: key })
+			Heartbeat => Model.new_schedule(state, Ok(key))
 			Rename => { ..state, renaming: { pane: pane_id, key, text: Model.row_name(state, key) }, jump: { serial: state.jump.serial + 1, panel: "rename", replace: "", push: "" } }
 			Pin => Model.row_workspace(state, key).map_ok(|workspace| Model.edit(state, Workspaces(Pin({ workspace_id: workspace.id, pinned: !workspace.pinned })))) ?? state
 			Archive =>
@@ -2122,14 +2136,88 @@ Model := [].{
 	entries = |state, session_id|
 		state.timelines.find_first(|timeline| timeline.session_id == session_id).map_ok(|timeline| timeline.entries) ?? []
 
-	## A known session, one starting, or one named by its id until the daemon
-	## lists it.
+	## A known session, one starting, one History lists, or one named by its
+	## id until the daemon lists it.
 	session : State, Str -> Chat.Session
 	session = |state, session_id| {
 		known = state.sessions.find_first(|listed| listed.id == session_id)
 		placeholder = state.creating.find_first(|creating| Model.created_id(creating) == session_id).map_ok(|creating| Chat.session({ id: session_id, provider: "", agent: creating.form.agent, title: creating.title, status: Idle }))
-		known ?? (placeholder ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle }))
+		in_history = state.history.sessions.find_first(|listed| listed.id == session_id)
+		known ?? (placeholder ?? (in_history ?? Chat.session({ id: session_id, provider: "", agent: "", title: session_id, status: Idle })))
 	}
+
+	## The page of history History panes ask for, while one is on screen.
+	history_wanted : State -> Try(History.Asked, [NotShown])
+	history_wanted = |state|
+		if (state.capabilities.contains(Capability.chat_v1) and Model.panes(state).any(|shown| shown.widget == "history" and Model.pane_visible(state, shown.id))) Ok(History.asked(state.history)) else Err(NotShown)
+
+	## Takes the daemon's answer to the page of history `asked`.
+	history_listed : State, History.Asked, Str -> State
+	history_listed = |state, asked, text| {
+		answered : Try(Protocol.Answer(Chat.Response), _)
+		answered = Json.parse(text)
+		page = match answered {
+			Ok(Ok(History(listed))) => Ok(listed)
+			Ok(Err({ message, .. })) => Err(message)
+			_ => Err("The daemon did not answer.")
+		}
+		{ ..state, history: History.listed(state.history, asked, page) }
+	}
+
+	## History panes' rows: each session History lists, its title, project
+	## (its workspace's, else its directory's name), agent, and how long ago
+	## it was archived, "" if it isn't, and whether it is focused.
+	history_rows : State -> List({ id : Str, title : Str, project : Str, agent : Str, archived : Str, focused : Bool })
+	history_rows = |state|
+		state.history.sessions.map(
+			|listed_session| {
+				workspace_id = listed_session.workspace.map_ok(|placed| placed.id ?? "") ?? ""
+				project_id = state.workspaces.workspaces.find_first(|workspace| workspace.id == workspace_id).map_ok(|workspace| workspace.project_id) ?? ""
+				directory = listed_session.workspace.map_ok(|placed| placed.directory) ?? ""
+				project = state.workspaces.projects.find_first(|known| known.id == project_id).map_ok(|known| known.name) ?? (directory.split_on("/").last() ?? "")
+				{ id: listed_session.id, title: listed_session.title, project, agent: listed_session.agent, archived: Model.archived_at(state, listed_session.id).map_ok(|at| Model.ago_said(state, at)) ?? "", focused: Model.focused(state, [Session, Workspace]) == Session(listed_session.id) }
+			},
+		)
+
+	## When a session was archived, as History lists it, while it is: not
+	## once the sessions list it again.
+	archived_at : State, Str -> Try(Str, [NotArchived])
+	archived_at = |state, session_id|
+		if (state.sessions.any(|listed_session| listed_session.id == session_id))
+			Err(NotArchived)
+		else
+			state.history.sessions.find_first(|listed_session| listed_session.id == session_id).map_err(|_| NotArchived)?.archived.map_err(|_| NotArchived)
+
+	## How long ago a time was, as a sentence ends: "5m ago", or "just now".
+	ago_said : State, Str -> Str
+	ago_said = |state, time|
+		match Model.ago(state, time) {
+			"now" => "just now"
+			"" => ""
+			said => "${said} ago"
+		}
+
+	## Lists an archived session again, shown unarchiving until the sessions
+	## list it.
+	unarchive : State, Str -> State
+	unarchive = |state, session_id| Model.edit(state, Chat(Unarchive({ session_id: session_id })))
+
+	## Whether a session is being unarchived.
+	unarchiving : State, Str -> Bool
+	unarchiving = |state, session_id| state.editing.any(|asked| asked.edit == Chat(Unarchive({ session_id: session_id })))
+
+	## Shows the part `widget`, its tile's tab shown and its drawer open: its
+	## pane, if the layout has one, else a new one where `add_pane` puts it,
+	## in a Workbench's main area, as Paseo opens History and Schedules.
+	open_part : State, Str -> State
+	open_part = |state, widget|
+		match Model.panes(state).find_first(|shown| shown.widget == widget) {
+			Ok(found) => {
+				opened = Model.show_pane(state, found.id)
+				Model.tile_of(opened, found.id).map_ok(|tile| Model.show_tile({ ..opened, collapsed: opened.collapsed.drop_if(|slot| slot == Model.slot_of(opened, tile.id)) }, tile.id)) ?? opened
+			}
+			Err(NotFound) => Model.add_pane(state, widget)
+		}
 
 	## A tool call and the result with its `call_id`, once one arrives. Output
 	## past its first 4 lines is `folded`.
@@ -2366,7 +2454,10 @@ Model := [].{
 		}
 		rooms_shown = laid_out.keep_if(|shown| ["rooms", "room", "thread", "members"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		rooms = if (offered(Capability.rooms_v1) and !rooms_shown.is_empty()) rooms_shown.keep_if(|shown| shown.widget != "rooms").join_map(room_topics).prepend(RoomList) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The schedules, and the runs of the one opened, while a Schedules
+		# pane is on screen.
+		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2420,7 +2511,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
@@ -2487,6 +2578,8 @@ Model := [].{
 			(_, Tickets(listing)) => { ..state, tickets: TicketDesk.received(state.tickets, Listing(listing)) }
 			(_, Ticket(ticket)) => { ..state, tickets: TicketDesk.received(state.tickets, Opened(ticket)) }
 			(_, Links(links)) => { ..state, tickets: TicketDesk.received(state.tickets, Links(links)) }
+			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
+			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -3203,6 +3296,19 @@ Model := [].{
 			_ => ""
 		}
 
+	## How long until a time to come, as `ago` says how long ago: "in 5m",
+	## or "now" once it is due.
+	until : State, Str -> Str
+	until = |state, time|
+		match epoch_ms(time) {
+			Ok(at) if state.now > 0 and at > state.now => {
+				minutes = (at - state.now + 59_999) // 60_000
+				"in ${if (minutes < 60) "${minutes.to_str()}m" else if (minutes < 1440) "${(minutes // 60).to_str()}h" else "${(minutes // 1440).to_str()}d"}"
+			}
+			Ok(_) if state.now > 0 => "now"
+			_ => ""
+		}
+
 	## Two texts in order, as a dictionary orders words, whatever their case.
 	text_order : Str, Str -> [Before, After, Same]
 	text_order = |left, right| {
@@ -3747,6 +3853,80 @@ Model := [].{
 			Ok(Ok(_)) => Model.poll({ ..state, reviewing: state.reviewing.map(|asked| if (asked.serial == serial) { ..asked, accepted: state.poll.serial + 1 } else asked) })
 			Ok(Err({ message, .. })) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: message }
 			Err(_) => { ..state, reviewing: state.reviewing.drop_if(|asked| asked.serial == serial), notice: "The daemon did not answer." }
+		}
+	}
+
+	## Sends a schedules.v1 request, shown at once (`ScheduleDesk`) until the
+	## daemon answers.
+	ask_schedules : State, Schedules.Request -> State
+	ask_schedules = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "schedules.v1", text: Json.to_str({ capability: "schedules.v1", request }) }, schedules: ScheduleDesk.asking(state.schedules, serial, request), notice: "" }
+	}
+
+	## Takes the daemon's answer to a schedules.v1 request: accepted, it
+	## holds until the poll it asks for shows it; refused, it is undone, with
+	## why.
+	schedules_answered : State, U64, Str -> State
+	schedules_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Schedules.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, schedules: ScheduleDesk.answered(state.schedules, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => Model.poll({ ..state, schedules: ScheduleDesk.answered(state.schedules, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Opens a schedule in place, showing its runs and actions, or closes it.
+	open_schedule : State, Str -> State
+	open_schedule = |state, schedule_id| { ..state, schedules: { ..state.schedules, opened: if (state.schedules.opened == schedule_id) "" else schedule_id } }
+
+	## Opens the Schedules part with its editor on a new schedule: a
+	## heartbeat of the session `session_id`, if given, else of a new agent
+	## in the workspace focused, or the first.
+	new_schedule : State, Try(Str, [Missing]) -> State
+	new_schedule = |state, session_id| {
+		workspace_id = match Model.focused(state, [Workspace]) {
+			Workspace(id) => id
+			_ => state.workspaces.workspaces.first().map_ok(|listed| listed.id) ?? ""
+		}
+		editor = { ..ScheduleDesk.closed, open: Bool.True, session_id: session_id ?? "", heartbeat: session_id.is_ok(), place: workspace_id, agent: Model.agent_kinds(state, workspace_id).first() ?? "" }
+		Model.open_part({ ..state, schedules: { ..state.schedules, editor } }, "schedules")
+	}
+
+	## Opens the editor on a schedule, to change it.
+	edit_schedule : State, Str -> State
+	edit_schedule = |state, schedule_id|
+		match ScheduleDesk.shown(state.schedules).find_first(|listed| listed.id == schedule_id) {
+			Ok(listed) => { ..state, schedules: { ..state.schedules, editor: ScheduleDesk.edit(listed) } }
+			Err(_) => state
+		}
+
+	## The editor changed by `change`.
+	with_editor : State, (ScheduleDesk.Editor -> ScheduleDesk.Editor) -> State
+	with_editor = |state, change| { ..state, schedules: { ..state.schedules, editor: change(state.schedules.editor) } }
+
+	## What the editor's new agent offers, as a Workspaces pane's form does.
+	editor_choices : State -> { models : List({ value : Str, label : Str }), modes : List({ value : Str, label : Str }), levels : List({ value : Str, label : Str }), defaults : { model : Str, mode : Str, thinking : Str } }
+	editor_choices = |state| {
+		editor = state.schedules.editor
+		Model.form_choices(state, { ..Model.closed_form, kind: Agent, place: editor.place, agent: editor.agent, model: editor.model, mode: editor.mode, thinking: editor.thinking })
+	}
+
+	## Creates the schedule the editor holds, or changes the one it opened,
+	## shown at once, and closes it; or says why it can't.
+	save_schedule : State -> State
+	save_schedule = |state| {
+		editor = state.schedules.editor
+		match ScheduleDesk.draft_of(editor, state.workspaces.workspaces.map(|listed| listed.id)) {
+			Err(reason) => Model.with_editor(state, |shown| { ..shown, failed: reason })
+			Ok(made) => {
+				closed = { ..state, schedules: { ..state.schedules, editor: ScheduleDesk.closed } }
+				Model.ask_schedules(closed, if (editor.schedule_id.is_empty()) Create(made) else Update({ schedule_id: editor.schedule_id, draft: made }))
+			}
 		}
 	}
 
@@ -4897,7 +5077,7 @@ Model := [].{
 	## a workspace's tabs says what to do while there is nothing to chat
 	## with, where workspaces are offered: `Welcome` while no workspace is picked, `NoAgents` while the one
 	## picked has none.
-	Body : [Sessions, Workspaces, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents]
+	Body : [Sessions, Workspaces, History, Schedules, Chat, Inbox, Changes, Files, Review, ReviewFiles, ReviewThreads, Tickets, Ticket, Scopes, Board, Properties, Rooms, Room, Thread, Members, Capabilities, Connecting, Unconnected, Missing, MainDiff, NoView, Welcome, NoAgents]
 
 	## The capabilities a pane's widget needs that no provider supplies, as
 	## `ci.v1, ...`.
@@ -4921,6 +5101,8 @@ Model := [].{
 			match shown.widget {
 				"sessions" => Sessions
 				"workspaces" => Workspaces
+				"history" => History
+				"schedules" => Schedules
 				"chat" => Chat
 				"inbox" => Inbox
 				"changes" => Changes
@@ -5418,7 +5600,7 @@ expect {
 expect {
 	state = { ..Model.initial(""), daemon: { id: "liton", name: "liton" }, capabilities: [Capability.chat_v1] }
 	swapped = Model.swap_part(state, "pane-8", "chat")
-	Model.swaps(state, "pane-8").map(|widget| widget.id) == ["chat", "capabilities"] and Model.swaps(state, "pane-1").map(|widget| widget.id) == ["sessions"] and Model.pane(swapped, "pane-8").widget == "chat" and !swapped.hidden.contains("pane-8") and Model.tile_of(swapped, "pane-8").map_ok(|tile| tile.active) == Ok("pane-8")
+	Model.swaps(state, "pane-8").map(|widget| widget.id) == ["chat", "capabilities"] and Model.swaps(state, "pane-1").map(|widget| widget.id) == ["sessions", "history"] and Model.pane(swapped, "pane-8").widget == "chat" and !swapped.hidden.contains("pane-8") and Model.tile_of(swapped, "pane-8").map_ok(|tile| tile.active) == Ok("pane-8")
 }
 
 # Where Workspaces lists sessions as tabs, as the Developer preset's does, a
