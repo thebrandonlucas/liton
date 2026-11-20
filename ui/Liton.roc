@@ -30,6 +30,7 @@ import Drag
 import Wallpaper
 import Spinner
 import History
+import HostDesk
 import ScheduleDesk
 import InboxDesk
 import Menu
@@ -281,6 +282,27 @@ Liton := [].{
 						),
 				),
 				Engine.when(model.signal().map(|state| state.providers.is_empty()), || Html.p("No providers yet.", "help"), || Engine.text("")),
+				# The hosts it connects to (hosts.v1), each with its status.
+				Engine.each(
+					model.signal().map(|state| HostDesk.shown(state.hosts)),
+					|host| host.name,
+					|row|
+						Html.div_s(
+							row.field(
+								|host| match host.status {
+									Online => "connection-provider connection-host ready"
+									Connecting => "connection-provider connection-host starting"
+									Disabled => "connection-provider connection-host disabled"
+									_ => "connection-provider connection-host down"
+								},
+							),
+							[
+								Html.span_s(row.field(|host| if (host.label.is_empty()) "Host ${host.name}" else "Host ${host.label}"), [Engine.class("provider-name")]),
+								Html.span_s(row.field(|host| Str.join_with([host.target, HostDesk.status_text(host.status).word, host.version ?? ""].drop_if(Str.is_empty), " · ")), [Engine.class("provider-health")]),
+							],
+						),
+				),
+				Engine.when(model.signal().map(|state| !state.hosts.listed.is_empty()), || Menu.item(Engine.const("hosts"), Engine.const("Hosts settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "hosts"), menu: "" })), || Engine.text("")),
 				Menu.item(Engine.const("host"), Engine.const("Host settings"), model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "host"), menu: "" })),
 			],
 		)
@@ -441,6 +463,7 @@ Liton := [].{
 						"rooms.v1" => Model.rooms_answered(state, outbox.serial, res ?? "")
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
 						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
+						"hosts.v1" => Model.hosts_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -740,7 +763,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "devices", "Devices")])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices")])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -758,6 +781,7 @@ Liton := [].{
 								shown("voice", || Liton.voice_section(model)),
 								shown("about", || Liton.about),
 								shown("host", || Liton.host_section(model)),
+								shown("hosts", || Liton.hosts_section(model)),
 								shown("devices", || Pairing.section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
@@ -776,7 +800,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -870,6 +894,162 @@ Liton := [].{
 				Html.div("settings-row", [Html.p("Docs", ""), Engine.element("a", [Engine.attr("href", "/docs/index.html"), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("help")], [Engine.text("The API, from the code's comments")])]),
 			],
 		)
+
+	## Settings' Hosts: the daemons this one connects to (hosts.v1), each
+	## with its status dot, version and when it was last online, and a ⋮
+	## menu to change, switch off or on, or remove it, a removal asking to be
+	## confirmed; and Add host, opening the dialog.
+	hosts_section : State(Ctx, Model.State) -> Elem(Ctx)
+	hosts_section = |model| {
+		desk = model.signal().map(|state| state.hosts)
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Hosts",
+					[
+						Engine.each(
+							desk.map(HostDesk.shown),
+							|host| host.name,
+							|row| {
+								name = row.key()
+								state = model.signal().lift_row()
+								Html.div(
+									"settings-row host-row",
+									[
+										Engine.element("span", [Engine.class_s(row.field(|host| "host-dot ${HostDesk.status_text(host.status).dot}")), Engine.attr("aria-hidden", "true")], []),
+										Html.div(
+											"host-text",
+											[
+												Html.span_s(row.field(|host| if (host.label.is_empty()) host.name else host.label), [Engine.class("settings-row-title")]),
+												Engine.element("span", [Engine.class_s(name.map2(state, |named, shown| "host-badge host-hue-${HostDesk.hue(shown.hosts.listed, named).to_str()}"))], [Engine.text_s(name)]),
+												Html.p_s(
+													row.field(|host| host).map2(
+														state,
+														|host, shown| {
+															pending = HostDesk.pending(shown.hosts, host.name)
+															kind = if (host.kind == Paseo) "Paseo" else "liton"
+															online = host.last_online.map_ok(|at| "last online ${Model.ago(shown, at)}") ?? ""
+															origin = match host.origin {
+																Environment => "set by the environment"
+																Setup => "set by the setup"
+																Added => ""
+															}
+															Str.join_with([kind, host.target, if (pending.is_empty()) HostDesk.status_text(host.status).word else pending, host.version ?? "", online, origin].drop_if(Str.is_empty), " · ")
+														},
+													),
+													[Engine.class("help"), Engine.test_id("host-detail")],
+												),
+											],
+										),
+										Menu.menu(
+											model.lift_row(),
+											name.map(|named| "host:${named}"),
+											"row-menu",
+											[Engine.class("icon menu-toggle row-menu-toggle"), Html.aria_label_s(name.map(|named| "${named} menu"))],
+											"",
+											[],
+											[
+												Menu.item(Engine.const("rename"), Engine.const("Edit"), model.lift_row().update_by(name, |shown, named| { ..Model.edit_host(shown, named), menu: "" })),
+												Menu.item(Engine.const("hide"), row.field(|host| if (host.enabled) "Disable" else "Enable"), model.lift_row().update_by(name, |shown, named| { ..Model.switch_host(shown, named), menu: "" })),
+												Engine.when(row.field(|host| host.origin == Added), || Menu.item(Engine.const("archive"), Engine.const("Remove"), model.lift_row().update_by(name, |shown, named| { ..Model.remove_host(shown, named, Bool.False), menu: "" })), || Engine.text("")),
+											],
+										),
+										Engine.when(
+											name.map2(state, |named, shown| shown.hosts.removing == named),
+											||
+												Html.div(
+													"host-confirm",
+													[
+														Html.p_s(name.map(|named| "Remove ${named}? This daemon disconnects from it and forgets its password."), [Engine.class("help")]),
+														Html.button_s(name.map(|named| "Remove ${named}"), [Engine.class("danger")], model.lift_row().update_by(name, |shown, named| Model.remove_host(shown, named, Bool.True))),
+														Html.button("Keep it", [], model.lift_row().update(|shown| Model.with_hosts(shown, |kept| { ..kept, removing: "" }))),
+													],
+												),
+											|| Engine.text(""),
+										),
+									],
+								)
+							},
+						),
+						Engine.when(desk.map(|shown| HostDesk.shown(shown).is_empty()), || Html.div("settings-row", [Html.p("No hosts yet: this daemon offers only its own providers.", "help")]), || Engine.text("")),
+						Html.div(
+							"settings-row",
+							[
+								Html.button("Add host", [], model.update(|state| Model.edit_host(state, ""))),
+								Html.p("A Paseo daemon by host:port and its password, or another liton daemon by its URL and the token it paired this one with. Adding one makes this daemon connect where you point it, from its machine.", "help"),
+							],
+						),
+					],
+				),
+				Liton.host_dialog(model),
+			],
+		)
+	}
+
+	## The badge of the host `host` names, in its identity colour, or
+	## nothing for "" (`Model.host_badge`).
+	host_badge : Signal(ctx, Model.State), Signal(ctx, Str) -> Elem(ctx)
+	host_badge = |state, host|
+		Html.span_s(host, [Engine.class_s(host.map2(state, |named, shown| if (named.is_empty()) "host-badge empty" else "host-badge host-hue-${HostDesk.hue(shown.hosts.listed, named).to_str()}")), Engine.test_id("host-badge")])
+
+	## The dialog adding a host, or changing one: its kind and name only
+	## while adding, its target, label and password or token, which is sent
+	## once and never shown again.
+	host_dialog : State(Ctx, Model.State) -> Elem(Ctx)
+	host_dialog = |model| {
+		editor = model.signal().map(|state| state.hosts.editor)
+		set = |change| model.set_value(|state, text| Model.with_host_editor(state, |shown| change(shown, text)))
+		adding = editor.map(|shown| shown.editing.is_empty())
+		Engine.when(
+			editor.map(|shown| shown.open),
+			||
+				Html.div(
+					"palette-layer",
+					[
+						Html.div_attrs([Engine.class("palette-backdrop"), Engine.on_click(model.update(|state| Model.with_host_editor(state, |_| HostDesk.closed)))], []),
+						Html.section_attrs(
+							"Host",
+							[Engine.class("palette host-dialog"), Engine.attr("role", "dialog")],
+							[
+								Html.form(
+									"Host",
+									[Engine.on("submit", model.update(Model.save_host))],
+									[
+										Html.h2_s(editor.map(|shown| if (shown.editing.is_empty()) "Add host" else "Edit ${shown.editing}"), []),
+										Engine.when(
+											adding,
+											||
+												Html.div(
+													"host-fields",
+													[
+														Dropdown.select(Engine.const("Kind"), editor.map(|shown| if (shown.kind == Liton) "Liton" else "Paseo"), [], [Dropdown.option("Paseo", "Paseo daemon"), Dropdown.option("Liton", "liton daemon")], set(|shown, text| { ..shown, kind: if (text == "Liton") Liton else Paseo })),
+														Html.text_input(Engine.const("Name"), "text", editor.map(|shown| shown.name), [Engine.attr("placeholder", "Name, such as laptop"), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, name: text })),
+													],
+												),
+											|| Engine.text(""),
+										),
+										Html.text_input(Engine.const("Target"), "text", editor.map(|shown| shown.target), [Engine.attr_s("placeholder", editor.map(|shown| if (shown.kind == Liton) "URL, such as https://liton.example" else "host:port, such as 127.0.0.1:6767")), Engine.attr("autocomplete", "off"), Engine.attr("spellcheck", "false")], set(|shown, text| { ..shown, target: text })),
+										Html.text_input(Engine.const("Label"), "text", editor.map(|shown| shown.label), [Engine.attr("placeholder", "Label (optional)")], set(|shown, text| { ..shown, label: text })),
+										Html.text_input(editor.map(|shown| if (shown.kind == Liton) "Token" else "Password"), "password", editor.map(|shown| shown.password), [Engine.attr_s("placeholder", editor.map(|shown| if (!shown.editing.is_empty()) "Leave empty to keep it" else if (shown.kind == Liton) "Token it paired this daemon with" else "Paseo's password")), Engine.attr("autocomplete", "new-password")], set(|shown, text| { ..shown, password: text })),
+										Html.p("It is sent once, kept by the daemon and never shown again.", "help"),
+										Html.p_s(editor.map(|shown| shown.failed), [Engine.class("pair-failed"), Engine.attr("role", "alert"), Engine.test_id("host-failed")]),
+										Html.div(
+											"host-actions",
+											[
+												Html.button("Cancel", [], model.update(|state| Model.with_host_editor(state, |_| HostDesk.closed))),
+												Html.button_s(adding.map(|new| if (new) "Add" else "Save"), [Engine.attr("type", "submit"), Engine.class("primary")], model.update(Model.save_host)),
+											],
+										),
+									],
+								),
+							],
+						),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
 
 	## What the daemon offers: its providers, each remote's under its name,
 	## with the capabilities each supplies, and its transformers, each with
@@ -1900,6 +2080,7 @@ Liton := [].{
 														Html.span_s(shown_item.map(|item| InboxDesk.state_word(item.state)), [Engine.class_s(shown_item.map(|item| "status-word ${Liton.attention_word_class(item.state)}")), Engine.test_id("attention-state")]),
 														Html.span_s(id.map(InboxDesk.short_id), [Engine.class("short-id")]),
 														Html.span_s(shown_item.map(|item| item.agent), [Engine.class("agent")]),
+														Liton.host_badge(model.signal(), shown_item.map2(model.signal(), |item, state| Model.host_badge(state, item.provider))),
 														Html.span_s(shown_item.map(InboxDesk.reason), [Engine.class("reason")]),
 													],
 												),
@@ -2523,6 +2704,7 @@ Liton := [].{
 								Html.span_s(Engine.const(""), [Engine.class_s(row.field(|shown| "status-dot ${shown.dot}")), Engine.attr("aria-hidden", "true"), Engine.attr_s("title", row.field(|shown| shown.status))]),
 								if (menus == Menus) Liton.row_title(model, asked, row.field(|shown| shown.title)) else Html.button_s(row.field(|shown| shown.title), [Engine.class("row-title")], picks),
 								Html.span_s(row.field(|shown| shown.detail), [Engine.class("branch")]),
+								Liton.host_badge(model.signal(), row.field(|shown| shown.host)),
 								Html.span_s(row.field(|shown| shown.counts.members), [Engine.class("counts")]),
 								Html.span_s(row.field(|shown| shown.counts.added), [Engine.class("added")]),
 								Html.span_s(row.field(|shown| shown.counts.removed), [Engine.class("removed")]),

@@ -1,5 +1,6 @@
 ## Values the golden JSON files in tests/ hold.
 import Chat
+import Hosts
 import Manifest
 import Schedules
 import Tickets
@@ -132,4 +133,26 @@ Fixtures := [].{
 			Rejected("no schedule h9"),
 		]
 	}
+
+	## A Paseo host the environment set and a liton host a client added,
+	## a call of each request and each answer: no password in any.
+	host_requests : List(Hosts.Request)
+	host_requests = [
+		ListHosts,
+		AddHost({ name: "team", kind: Liton, target: "https://liton.example", label: "Team", password: "t0ken" }),
+		UpdateHost({ name: "team", target: Err(Missing), label: Ok("The team"), password: Err(Missing) }),
+		SetEnabled({ name: "paseo", enabled: Bool.False }),
+		RemoveHost({ name: "team" }),
+	]
+
+	host_responses : List(Hosts.Response)
+	host_responses = [
+		Hosts([
+			{ name: "paseo", kind: Paseo, target: "127.0.0.1:6767", label: "", enabled: Bool.True, status: Online, version: Ok("0.15.3"), last_online: Ok("2026-01-01T09:00:00.000Z"), origin: Environment },
+			{ name: "team", kind: Liton, target: "https://liton.example", label: "Team", enabled: Bool.True, status: Error("the token was refused"), version: Err(Missing), last_online: Err(Missing), origin: Added },
+			{ name: "box", kind: Paseo, target: "box.local:6767", label: "", enabled: Bool.False, status: Disabled, version: Err(Missing), last_online: Err(Missing), origin: Added },
+		]),
+		Accepted,
+		Rejected("there is a host called team already"),
+	]
 }

@@ -37,6 +37,12 @@
 ## in one poll of its own. LITON_PROVIDER_TOKENS gives the token each was
 ## paired with, comma-separated as `name=token`.
 ##
+## The Paseo host PASEO_* sets, `paseo`, and the remotes, with their tokens,
+## are the daemon's first hosts (hosts.v1, docs/protocol.md, Hosts), which
+## it keeps in its database, set again at each start; clients add more,
+## change and switch them off while it runs. The database holds their
+## passwords and tokens, so the daemon keeps it readable by its user alone.
+##
 ## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
 ## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
 ## items that need you, as needs-you.v1.
@@ -63,6 +69,7 @@ app [Context, program] {
 	transformers: "../transformers/main.roc",
 }
 
+import pf.Cmd
 import pf.Env
 import pf.Http
 import pf.OsStr
@@ -77,6 +84,7 @@ import http.Response
 import cap.Capability
 import cap.Chat
 import cap.Context as Focus
+import cap.Hosts
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -129,8 +137,14 @@ init! : () => Try({ config : Server.Config, context : Context }, [Exit(I64)])
 init! = || {
 	port = U16.from_str(env_or!("LITON_PORT", "8095")) ?? 8095
 	host = env_or!("LITON_HOST", "127.0.0.1")
-	db = Sqlite.open!(Sqlite.default_config(Path.utf8(env_or!("LITON_DB", "liton.db")))) ? |_| Exit(2)
+	db_path = env_or!("LITON_DB", "liton.db")
+	kept_private!(db_path) ? |err| {
+		logged!("liton: can't make ${db_path} readable by this user alone: ${Str.inspect(err)}")
+		Exit(2)
+	}
+	db = Sqlite.open!(Sqlite.default_config(Path.utf8(db_path))) ? |_| Exit(2)
 	create_tables!(db) ? |_| Exit(3)
+	kept_private!(db_path) ? |_| Exit(2)
 	# A password Paseo refused may have been fixed since.
 	Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) ? |_| Exit(3)
 	mock = checked!(mock_parts(env_or!("LITON_MOCK", "on")))?
@@ -161,13 +175,20 @@ init! = || {
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	summary_model = if (env_or!("LITON_SUMMARY", "on") == "off") Err(Off) else Ok(env_or!("LITON_SUMMARY_MODEL", ""))
 	auth = checked!(Auth.mode(env_or!("LITON_AUTH", ""), host))?
-	context = { db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	from_environment = checked!(Remote.parsed(env_or!("LITON_PROVIDERS", "")))?.map(|endpoint| endpoint.name)
+	tokens = env_or!("LITON_PROVIDER_TOKENS", "")
+	seeded_paseo =
+		match paseo {
+			Ok(daemon) => [{ name: "paseo", kind: "Paseo", target: "${daemon.host}:${daemon.port.to_str()}", secret: daemon.password, origin: "Environment" }]
+			Err(Disabled) => []
+		}
+	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
+	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
-	for endpoint in remotes {
-		Sqlite.execute!({ db, query: "INSERT INTO remotes (name) VALUES (:name);", params: { name: endpoint.name } }) ? |_| Exit(3)
-		remote_cycle!(context, endpoint) ? |_| Exit(3)
-	}
+	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
+	remotes_cycle!(context) ? |_| Exit(3)
 	Ok({ config, context })
 }
 
@@ -261,7 +282,8 @@ respond! = |request, context| {
 ## /liton/v1 but pairing answers a device that must be paired and isn't
 ## with 401.
 routed! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-routed! = |context, request, headers| {
+routed! = |started, request, headers| {
+	context = hosted!(started)?
 	path =
 		match request.target() {
 			Resource({ raw_path, .. }) => raw_path
@@ -473,7 +495,7 @@ offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
 	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
-	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers)
+	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(hosts_provider)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -561,6 +583,16 @@ call! = |context, request| {
 				answer = match decoded {
 					Ok({ request: asked, .. }) => schedules_call!(context, provider, asked)?
 					Err(_) => Err(unanswered("schedules.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("hosts.v1", _)) => {
+				decoded : Try(Protocol.Call(Hosts.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Hosts.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => hosts_call!(context.db, asked)?
+					Err(_) => Err(unanswered("hosts.v1"))
 				}
 				Json.to_str(answer)
 			}
@@ -727,6 +759,7 @@ update! = |context, wanted, subject| {
 					}
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
+		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
 	}
 }
 
@@ -767,7 +800,7 @@ chat_call! : Context, Try(Str, [Missing]), Chat.Request => Try(Protocol.Answer(C
 chat_call! = |context, provider, asked| {
 	db = context.db
 	match Remote.chat_owner(context.remotes, asked) {
-		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded!(endpoint, provider, asked))
+		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded!(context.db, endpoint, provider, asked))
 		_ => {}
 	}
 	match asked {
@@ -1030,7 +1063,7 @@ workspaces_call! : Context, Try(Str, [Missing]), Workspaces.Request => Try(Proto
 workspaces_call! = |context, provider, asked| {
 	db = context.db
 	match Remote.workspaces_owner(context.remotes, asked) {
-		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded_workspaces!(endpoint, provider, asked))
+		Ok(endpoint) if Remote.serves(endpoint.name, provider) => return Ok(forwarded_workspaces!(context.db, endpoint, provider, asked))
 		Ok(_) => return Ok(Err({ code: NotFound, message: "no such workspace or project of the provider named" }))
 		Err(Local) => {}
 	}
@@ -1784,6 +1817,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS hosts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', online_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
@@ -2168,6 +2202,7 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 					match connected!(daemon, "liton-daemon") {
 						Ok({ connection, features }) => {
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
+							host_status!(db, "paseo", Online, features.version)?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
 							match summary_model {
@@ -2183,9 +2218,13 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 						}
 						Err(HelloRejected(reason)) => {
 							logged!("Paseo: ${Paseo.refusal(reason)}. Asking again in ${(refused_wait_ms // 1000).to_str()} s.")
+							host_status!(db, "paseo", Error(Paseo.refusal(reason)), Err(Missing))?
 							Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('refusal', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str({ reason, at: now_ms!() }) } })?
 						}
-						Err(err) => logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
+						Err(err) => {
+							logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
+							host_status!(db, "paseo", Offline, Err(Missing))?
+						}
 					}
 					held!(db, now_ms!())?
 				}
@@ -2686,10 +2725,10 @@ merged_events! = |context, subject| {
 
 ## Forwards a chat.v1 call to the remote whose session it names. A remote
 ## that can't be reached, or answers what isn't an answer, is `Unavailable`.
-forwarded! : Remote.Endpoint, Try(Str, [Missing]), Chat.Request => Protocol.Answer(Chat.Response)
-forwarded! = |endpoint, provider, asked| {
+forwarded! : Sqlite.Db, Remote.Endpoint, Try(Str, [Missing]), Chat.Request => Protocol.Answer(Chat.Response)
+forwarded! = |db, endpoint, provider, asked| {
 	unavailable = |problem| Err({ code: Unavailable, message: "the provider ${endpoint.name}: ${problem}" })
-	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.call(endpoint.name, provider, asked))) {
+	match remote_asked!(db, endpoint, POST, "call", Json.to_str(Remote.call(endpoint.name, provider, asked))) {
 		Ok(body) => {
 			answer : Try(Protocol.Answer(Chat.Response), _)
 			answer = Json.parse(body)
@@ -2701,10 +2740,10 @@ forwarded! = |endpoint, provider, asked| {
 
 ## Forwards a workspaces.v1 Create to the remote whose project it names,
 ## as `forwarded!` does a chat.v1 call.
-forwarded_workspaces! : Remote.Endpoint, Try(Str, [Missing]), Workspaces.Request => Protocol.Answer(Workspaces.Response)
-forwarded_workspaces! = |endpoint, provider, asked| {
+forwarded_workspaces! : Sqlite.Db, Remote.Endpoint, Try(Str, [Missing]), Workspaces.Request => Protocol.Answer(Workspaces.Response)
+forwarded_workspaces! = |db, endpoint, provider, asked| {
 	unavailable = |problem| Err({ code: Unavailable, message: "the provider ${endpoint.name}: ${problem}" })
-	match remote_asked!(endpoint, POST, "call", Json.to_str(Remote.workspaces_call(endpoint.name, provider, asked))) {
+	match remote_asked!(db, endpoint, POST, "call", Json.to_str(Remote.workspaces_call(endpoint.name, provider, asked))) {
 		Ok(body) => {
 			answer : Try(Protocol.Answer(Workspaces.Response), _)
 			answer = Json.parse(body)
@@ -2715,15 +2754,17 @@ forwarded_workspaces! = |endpoint, provider, asked| {
 }
 
 ## The body of a remote's 200 answer to `what` under its /liton/v1, within
-## `remote_timeout_ms`.
-remote_asked! : Remote.Endpoint, [GET, POST], Str, Str => Try(Str, _)
-remote_asked! = |endpoint, method, what, body| {
+## `remote_timeout_ms`, asked with the token its host keeps.
+remote_asked! : Sqlite.Db, Remote.Endpoint, [GET, POST], Str, Str => Try(Str, _)
+remote_asked! = |db, endpoint, method, what, body| {
+	kept : List({ secret : Str })
+	kept = Sqlite.query_many!({ db, query: "SELECT secret FROM hosts WHERE name = :name;", params: { name: endpoint.name }, limits: Sqlite.default_query_limits })?
 	asked = Request.from_method(if (method == GET) GET else POST).with_uri("${endpoint.url}/liton/v1/${what}").with_body(body.to_utf8()).with_timeout(TimeoutMilliseconds(remote_timeout_ms.to_u64_wrap()))
 	typed = if (method == GET) asked else asked.add_header("Content-Type", "application/json")
 	response = Http.send!(
-		match remote_token(env_or!("LITON_PROVIDER_TOKENS", ""), endpoint.name) {
-			Ok(token) => typed.add_header("Authorization", "Bearer ${token}")
-			Err(NoToken) => typed
+		match kept.first() {
+			Ok({ secret }) if secret != "" => typed.add_header("Authorization", "Bearer ${secret}")
+			_ => typed
 		},
 	)?
 	if response.status() != 200 {
@@ -2769,6 +2810,7 @@ remote_cycle! = |context, endpoint| {
 					if remote.failures > 0 {
 						logged!("liton: the provider ${endpoint.name} answers again")
 					}
+					host_status!(db, endpoint.name, Online, Err(Missing))?
 					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :now, failures = 0 WHERE name = :name;", params: { name: endpoint.name, now: now_ms!() } })
 				}
 				Err(err) => {
@@ -2776,6 +2818,15 @@ remote_cycle! = |context, endpoint| {
 					if remote.failures == 0 {
 						logged!("liton: the provider ${endpoint.name} at ${endpoint.url} can't be reached, asking again with backoff: ${Str.inspect(err)}")
 					}
+					status : Hosts.Status
+					status =
+						match err {
+							AnsweredStatus(401) => Error("it refused the token: pair this daemon with it again")
+							AnsweredStatus(code) => Error("it answered ${code.to_str()}")
+							NotAManifest | NotAPoll => Error("it doesn't answer as a liton daemon")
+							_ => Offline
+						}
+					host_status!(db, endpoint.name, status, Err(Missing))?
 					Sqlite.execute!({ db, query: "UPDATE remotes SET checked_at = :at, failures = :failures WHERE name = :name;", params: { name: endpoint.name, failures, at: now_ms!() + Remote.backoff_ms(failures) - context.remote_interval_ms } })
 				}
 			}
@@ -2790,7 +2841,7 @@ asked_remote! = |context, endpoint, remote| {
 	manifest =
 		if remote.manifest == "" or remote.manifest_at <= now - remote_manifest_ms or remote.failures > 0 {
 			fetched : Try(Manifest.Advertised, _)
-			fetched = Json.parse(remote_asked!(endpoint, GET, "manifest", "")?)
+			fetched = Json.parse(remote_asked!(db, endpoint, GET, "manifest", "")?)
 			kept = Json.to_str(fetched.map_err(|_| NotAManifest)?)
 			Sqlite.execute!({ db, query: "UPDATE remotes SET manifest = :manifest, manifest_at = :now WHERE name = :name;", params: { name: endpoint.name, manifest: kept, now } })?
 			kept
@@ -2808,7 +2859,7 @@ asked_remote! = |context, endpoint, remote| {
 		return Ok({})
 	}
 	polled : Try(Protocol.Polled, _)
-	polled = Json.parse(remote_asked!(endpoint, POST, "poll", Json.to_str(poll))?)
+	polled = Json.parse(remote_asked!(db, endpoint, POST, "poll", Json.to_str(poll))?)
 	for update in polled.map_err(|_| NotAPoll)?.topics {
 		kept!(db, endpoint.name, update)?
 	}
@@ -2838,6 +2889,159 @@ kept! = |db, remote, update| {
 			Err(Missing) => ""
 		}
 	Sqlite.execute!({ db, query: "UPDATE remote_topics SET cursor = :cursor, error = :error, event = CASE WHEN :event = '' THEN event ELSE :event END WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote, capability: update.capability, topic: update.topic, cursor: update.cursor, error, event: snapshot } })
+}
+
+## hosts.v1, which the daemon offers itself (see `offered`).
+hosts_provider : Manifest.Provider
+hosts_provider = { id: "hosts", name: "Hosts", capabilities: [Capability.hosts_v1] }
+
+## The context with the hosts enabled now: the liton hosts as its remotes,
+## and the Paseo host `paseo` as its Paseo, so a host added, changed or
+## switched off counts from the next request.
+hosted! : Context => Try(Context, _)
+hosted! = |context| {
+	rows : List({ name : Str, kind : Str, target : Str, secret : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT name, kind, target, secret FROM hosts WHERE enabled = 1 ORDER BY origin = 'Added', position;", params: {}, limits: Sqlite.default_query_limits })?
+	remotes = rows.keep_if(|row| row.kind == "Liton").map(|row| { name: row.name, url: row.target })
+	paseo =
+		match rows.find_first(|row| row.kind == "Paseo" and row.name == "paseo").map_ok(|row| (Paseo.address(row.target), row.secret)) {
+			Ok((Ok({ host, port }), password)) => Ok({ host, port, password })
+			_ => Err(Disabled)
+		}
+	Ok({ ..context, remotes, paseo })
+}
+
+## Sets the hosts the environment and the setup name, `seeded`: the Paseo
+## host PASEO_* sets, `paseo`, then the remotes, each keeping its label and
+## whether it is enabled, and forgets those set so before that they no
+## longer name. A host they name takes the place of one added so.
+hosts_seeded! : Sqlite.Db, List({ name : Str, kind : Str, target : Str, secret : Str, origin : Str }) => Try({}, _)
+hosts_seeded! = |db, seeded| {
+	Sqlite.execute!({ db, query: "DELETE FROM hosts WHERE origin != 'Added' AND name NOT IN (SELECT value FROM json_each(:names));", params: { names: Json.to_str(seeded.map(|host| host.name)) } })?
+	for (host, position) in seeded.map_with_index(|host, position| (host, position)) {
+		Sqlite.execute!({ db, query: "INSERT INTO hosts (name, kind, target, secret, origin, position) VALUES (:name, :kind, :target, :secret, :origin, :position) ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, target = excluded.target, secret = excluded.secret, origin = excluded.origin, position = excluded.position;", params: { name: host.name, kind: host.kind, target: host.target, secret: host.secret, origin: host.origin, position: position.to_i64_wrap() } })?
+	}
+	Ok({})
+}
+
+## The hosts, those the environment and the setup set first, as hosts.v1
+## lists them: never with their passwords or tokens.
+hosts! : Sqlite.Db => Try(List(Hosts.Host), _)
+hosts! = |db| {
+	rows : List({ name : Str, kind : Str, target : Str, label : Str, enabled : I64, origin : Str, status : Str, version : Str, online_at : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT name, kind, target, label, enabled, origin, status, version, online_at FROM hosts ORDER BY origin = 'Added', position;", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(
+		rows.map(
+			|row| {
+				status : Try(Hosts.Status, _)
+				status = Json.parse(row.status)
+				{
+					name: row.name,
+					kind: if (row.kind == "Liton") Liton else Paseo,
+					target: row.target,
+					label: row.label,
+					enabled: row.enabled != 0,
+					status: if (row.enabled == 0) Disabled else status ?? Connecting,
+					version: if (row.version == "") Err(Missing) else Ok(row.version),
+					last_online: if (row.online_at == 0) Err(Missing) else Ok(Chat.timestamp(row.online_at)),
+					origin: match row.origin {
+						"Environment" => Environment
+						"Setup" => Setup
+						_ => Added
+					},
+				}
+			},
+		),
+	)
+}
+
+## Answers a hosts.v1 request, each change at once (see `hosted!`). A
+## changed target, password or switch starts the host's status afresh.
+hosts_call! : Sqlite.Db, Hosts.Request => Try(Protocol.Answer(Hosts.Response), _)
+hosts_call! = |db, asked| {
+	known = hosts!(db)?
+	host_named = |name| known.find_first(|host| host.name == name).map_err(|_| { code: NotFound, message: "no host ${name}" })
+	match asked {
+		ListHosts => Ok(Ok(Hosts(known)))
+		AddHost(new) =>
+			match Hosts.added_problem(known, new) {
+				Err(why) => Ok(Ok(Rejected(why)))
+				Ok({}) if new.kind == Paseo and new.name != "paseo" => Ok(Ok(Rejected("liton connects to one Paseo host for now, called paseo")))
+				Ok({}) => {
+					Sqlite.execute!({ db, query: "INSERT INTO hosts (name, kind, target, label, secret, origin, position) VALUES (:name, :kind, :target, :label, :secret, 'Added', (SELECT coalesce(max(position), 0) + 1 FROM hosts));", params: { name: new.name, kind: if (new.kind == Liton) "Liton" else "Paseo", target: new.target, label: new.label, secret: new.password } })?
+					Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO remotes (name) SELECT name FROM hosts WHERE name = :name AND kind = 'Liton';", params: { name: new.name } })?
+					Ok(Ok(Accepted))
+				}
+			}
+		UpdateHost(change) =>
+			match host_named(change.name) {
+				Err(error) => Ok(Err(error))
+				Ok(host) =>
+					match Hosts.changed_problem(host, change) {
+						Err(why) => Ok(Ok(Rejected(why)))
+						Ok({}) => {
+							afresh = change.target.is_ok() or change.password.is_ok()
+							Sqlite.execute!({ db, query: "UPDATE hosts SET target = :target, label = :label, secret = CASE WHEN :replace = 1 THEN :secret ELSE secret END, status = CASE WHEN :afresh = 1 THEN '' ELSE status END WHERE name = :name;", params: { name: host.name, target: change.target ?? host.target, label: change.label ?? host.label, replace: if (change.password.is_ok()) 1.I64 else 0, secret: change.password ?? "", afresh: if (afresh) 1.I64 else 0 } })?
+							host_restarted!(db, host, afresh)?
+							Ok(Ok(Accepted))
+						}
+					}
+			}
+		RemoveHost({ name }) =>
+			match host_named(name).map_ok(|host| (host, Hosts.removed_problem(host))) {
+				Err(error) => Ok(Err(error))
+				Ok((_, Err(why))) => Ok(Ok(Rejected(why)))
+				Ok((host, Ok({}))) => {
+					Sqlite.execute!({ db, query: "DELETE FROM hosts WHERE name = :name;", params: { name } })?
+					Sqlite.execute!({ db, query: "DELETE FROM remotes WHERE name = :name;", params: { name } })?
+					Sqlite.execute!({ db, query: "DELETE FROM remote_topics WHERE remote = :name;", params: { name } })?
+					host_restarted!(db, host, Bool.True)?
+					Ok(Ok(Accepted))
+				}
+			}
+		SetEnabled({ name, enabled }) =>
+			match host_named(name) {
+				Err(error) => Ok(Err(error))
+				Ok(host) => {
+					Sqlite.execute!({ db, query: "UPDATE hosts SET enabled = :enabled, status = '' WHERE name = :name;", params: { name, enabled: if (enabled) 1.I64 else 0 } })?
+					host_restarted!(db, host, Bool.True)?
+					Ok(Ok(Accepted))
+				}
+			}
+	}
+}
+
+## Notes how the host `name` was found: `Online` now, with the version it
+## told, if any, or else why not.
+host_status! : Sqlite.Db, Str, Hosts.Status, Try(Str, [Missing]) => Try({}, _)
+host_status! = |db, name, status, version| {
+	online = if (status == Online) now_ms!() else 0
+	Sqlite.execute!({ db, query: "UPDATE hosts SET status = :status, version = CASE WHEN :version = '' THEN version ELSE :version END, online_at = max(online_at, :online) WHERE name = :name;", params: { name, status: Json.to_str(status), version: version ?? "", online } })
+}
+
+## Forgets that the Paseo host `paseo` refused liton, when it changed, so
+## the next cycle asks it at once rather than waiting.
+host_restarted! : Sqlite.Db, Hosts.Host, Bool => Try({}, _)
+host_restarted! = |db, host, changed|
+	if (changed and host.kind == Paseo) Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) else Ok({})
+
+## Makes the database `path`, with SQLite's journal beside it, readable and
+## writable by the daemon's user alone (0600), as it keeps the hosts'
+## passwords and tokens, creating it empty first so it is never open to
+## others. FIXME: basic-webserver can't set a file's mode, so this runs
+## chmod until it can.
+kept_private! : Str => Try({}, _)
+kept_private! = |path| {
+	if !(Path.exists!(Path.utf8(path)) ?? Bool.False) {
+		Path.write_bytes!(Path.utf8(path), [])?
+	}
+	var $files = []
+	for file in [path, "${path}-wal", "${path}-shm"] {
+		if Path.exists!(Path.utf8(file)) ?? Bool.False {
+			$files = $files.append(file)
+		}
+	}
+	Cmd.exec_str!("chmod", ["600"].concat($files))
 }
 
 ## Where clients post an utterance's audio, `<utterance_id>/<seq>` after it.

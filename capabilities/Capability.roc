@@ -45,6 +45,10 @@ Capability := [].{
 	rooms_v1 : Id
 	rooms_v1 = { name: "rooms", version: 1 }
 
+	## The daemons the daemon connects to, changed while it runs.
+	hosts_v1 : Id
+	hosts_v1 = { name: "hosts", version: 1 }
+
 	## `chat.v1`, as the docs and errors name it.
 	to_str : Id -> Str
 	to_str = |id| "${id.name}.v${id.version.to_str()}"

@@ -55,7 +55,7 @@ Widgets := [].{
 			sets: [Workspace, Session],
 			follows: [],
 			options: [
-				{ key: "group_by", label: "Group by", help: "List workspaces under their project, or under what they need from you.", kind: Choice({ default: "Project", choices: ["Project", "Status"] }) },
+				{ key: "group_by", label: "Group by", help: "List workspaces under their project, under what they need from you, or under the host they are on.", kind: Choice({ default: "Project", choices: ["Project", "Status", "Host"] }) },
 				{ key: "show_idle", label: "Show idle workspaces", help: "List workspaces whose agents need nothing.", kind: Bool(Bool.True) },
 				{ key: "sessions", label: "Sessions", help: "List each workspace's sessions under it, or, in a Workbench, as tabs of the workspace the main area shows.", kind: Choice({ default: "Rows", choices: ["Rows", "Tabs"] }) },
 				Widgets.order,
