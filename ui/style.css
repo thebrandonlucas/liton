@@ -1388,3 +1388,24 @@ kbd:empty { display: none; }
 .settings-row > button { justify-self: start; }
 .pair-offered-code { font: 22px var(--font-mono); letter-spacing: .12em; color: var(--text); }
 .pair-link { overflow-wrap: anywhere; user-select: all; }
+
+/* Settings' Hosts: a row per host, its status dot, name badge and ⋮ menu; the dialog adding or changing one. */
+.settings-row.host-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 10px; }
+.host-text { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.host-text .help { flex-basis: 100%; overflow-wrap: anywhere; }
+.host-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.host-dot.online { background: #3fb950; }
+.host-dot.connecting { background: #d29922; }
+.host-dot.error { background: #f85149; }
+.host-dot.offline { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.host-row .row-menu-toggle { --icon: var(--icon-ellipsis-vertical); --icon-size: 14px; padding: 2px 3px; border-color: transparent; background: none; color: var(--muted); }
+.host-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.host-dialog form { display: grid; gap: 10px; padding: 16px; }
+.host-dialog h2 { margin: 0; }
+.host-fields { display: grid; gap: 10px; }
+.host-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* A host's identity colour, one of ten, on its badge in Settings and on rows. */
+.host-badge { padding: 0 6px; border-radius: 999px; font-size: 11px; line-height: 16px; color: var(--host-hue); background: color-mix(in srgb, var(--host-hue) 16%, transparent); white-space: nowrap; }
+.host-hue-0 { --host-hue: #4c8dff; } .host-hue-1 { --host-hue: #3fb950; } .host-hue-2 { --host-hue: #d2a8ff; } .host-hue-3 { --host-hue: #f0883e; }
+.host-hue-4 { --host-hue: #39c5cf; } .host-hue-5 { --host-hue: #ff7b72; } .host-hue-6 { --host-hue: #e3b341; } .host-hue-7 { --host-hue: #a5d6ff; }
+.host-hue-8 { --host-hue: #db61a2; } .host-hue-9 { --host-hue: #8b949e; }

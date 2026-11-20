@@ -5,6 +5,7 @@ import cap.Capability
 import cap.Chat
 import cap.Context
 import cap.Files
+import cap.Hosts
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -18,6 +19,7 @@ import setup.Grid
 import setup.Setup
 import Highlight
 import History
+import HostDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -345,6 +347,10 @@ Model := [].{
 		## What Schedules panes show (ui/ScheduleDesk.roc), and the
 		## schedules.v1 requests on their way (sent as `call_outbox`).
 		schedules : ScheduleDesk.State,
+
+		## What Settings' Hosts shows (ui/HostDesk.roc), and the hosts.v1
+		## requests on their way (sent as `call_outbox`).
+		hosts : HostDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -548,6 +554,7 @@ Model := [].{
 				tickets: TicketDesk.initial,
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
+				hosts: HostDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -2412,7 +2419,9 @@ Model := [].{
 		# The schedules, and the runs of the one opened, while a Schedules
 		# pane is on screen.
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The hosts, for Settings' Hosts and the host badges.
+		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2466,7 +2475,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
 		answered = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		if (state.poll_again) Model.poll(answered) else answered
 	}
@@ -2535,6 +2544,7 @@ Model := [].{
 			(_, Links(links)) => { ..state, tickets: TicketDesk.received(state.tickets, Links(links)) }
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
+			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -3833,6 +3843,87 @@ Model := [].{
 			Ok(Err({ message, .. })) => undone(message)
 			Err(_) => undone("The daemon did not answer.")
 		}
+	}
+
+	## Sends a hosts.v1 request, shown at once (`HostDesk`) until the daemon
+	## answers.
+	ask_hosts : State, Hosts.Request -> State
+	ask_hosts = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "hosts.v1", text: Json.to_str({ capability: "hosts.v1", request }) }, hosts: HostDesk.asking(state.hosts, serial, request), notice: "" }
+	}
+
+	## Takes the daemon's answer to a hosts.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	hosts_answered : State, U64, Str -> State
+	hosts_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Hosts.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, hosts: HostDesk.answered(state.hosts, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => Model.poll({ ..state, hosts: HostDesk.answered(state.hosts, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Settings' Hosts changed by `change`: its menu, the removal it asks
+	## to confirm, or its dialog.
+	with_hosts : State, (HostDesk.State -> HostDesk.State) -> State
+	with_hosts = |state, change| { ..state, hosts: change(state.hosts) }
+
+	## Sends what the host dialog holds, shown at once, and closes it; or
+	## says why it can't.
+	save_host : State -> State
+	save_host = |state| {
+		editor = state.hosts.editor
+		match HostDesk.request_of(editor, HostDesk.shown(state.hosts)) {
+			Err(reason) => Model.with_hosts(state, |desk| { ..desk, editor: { ..desk.editor, failed: reason } })
+			Ok(request) => Model.ask_hosts(Model.with_hosts(state, |desk| { ..desk, editor: HostDesk.closed }), request)
+		}
+	}
+
+	## Opens or closes a host's ⋮ menu.
+	host_menu : State, Str -> State
+	host_menu = |state, name| Model.with_hosts(state, |desk| { ..desk, menu: if (desk.menu == name) "" else name, removing: "" })
+
+	## Opens the host dialog on a new host, or on the host `name` to change.
+	edit_host : State, Str -> State
+	edit_host = |state, name|
+		Model.with_hosts(
+			state,
+			|desk| {
+				editor = if (name.is_empty()) { ..HostDesk.closed, open: Bool.True } else HostDesk.shown(desk).find_first(|host| host.name == name).map_ok(HostDesk.edit) ?? HostDesk.closed
+				{ ..desk, editor, menu: "", removing: "" }
+			},
+		)
+
+	## The host dialog changed by `change`.
+	with_host_editor : State, (HostDesk.Editor -> HostDesk.Editor) -> State
+	with_host_editor = |state, change| Model.with_hosts(state, |desk| { ..desk, editor: change(desk.editor) })
+
+	## Switches the host `name` off, or on again, shown at once.
+	switch_host : State, Str -> State
+	switch_host = |state, name|
+		match HostDesk.shown(state.hosts).find_first(|host| host.name == name) {
+			Ok(host) => Model.ask_hosts(state, SetEnabled({ name, enabled: !host.enabled }))
+			Err(_) => state
+		}
+
+	## Asks to confirm removing the host `name`, or, `sure`, removes
+	## it, gone at once.
+	remove_host : State, Str, Bool -> State
+	remove_host = |state, name, sure| if (sure) Model.ask_hosts(state, RemoveHost({ name: name })) else Model.with_hosts(state, |desk| { ..desk, removing: name, menu: "" })
+
+	## The host that offers what `provider` names, while items come from
+	## more than one place, the daemon's own providers counting as one: ""
+	## when they don't, or for the daemon's own (`HostDesk.host_of`).
+	host_badge : State, Str -> Str
+	host_badge = |state, provider| {
+		known = state.hosts.listed.keep_if(|host| host.enabled)
+		places = state.providers.keep_if(|listed| listed.capabilities.contains(Capability.chat_v1) or listed.capabilities.contains(Capability.workspaces_v1)).map(|listed| HostDesk.host_of(known, listed.id)).fold([], |found, origin| if (found.contains(origin)) found else found.append(origin))
+		if (places.len() > 1) HostDesk.host_of(known, provider) else ""
 	}
 
 	## Opens a schedule in place, showing its runs and actions, or closes it.
