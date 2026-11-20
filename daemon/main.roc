@@ -110,8 +110,10 @@ import Sha256
 ## What each request is answered from: the database, the hosts it answers,
 ## when it must come from a paired device,
 ## the providers and transformers configured, the model Paseo's summaries
-## are written with ("" for the agent's smallest), and the setup it offers.
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered }
+## are written with ("" for the agent's smallest), the setup it offers, and
+## whether answering may ask Paseo and the remotes when due (`Ask`), or
+## only reads what the daemon keeps (`Cached`, a cached poll's).
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached] }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -161,7 +163,7 @@ init! = || {
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	summary_model = if (env_or!("LITON_SUMMARY", "on") == "off") Err(Off) else Ok(env_or!("LITON_SUMMARY_MODEL", ""))
 	auth = checked!(Auth.mode(env_or!("LITON_AUTH", ""), host))?
-	context = { db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup) }
+	context = { db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask }
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	for endpoint in remotes {
@@ -275,6 +277,7 @@ routed! = |context, request, headers| {
 		(_, GET, "/liton/v1/manifest") => manifest!(context)
 		(_, POST, "/liton/v1/call") => call!(context, request)
 		(_, POST, "/liton/v1/poll") => polled_topics!(context, request)
+		(_, POST, "/liton/v1/refresh") => refreshed!(context)
 		(_, POST, "/liton/v1/pair") => paired!(context, request, headers)
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
 		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
@@ -586,14 +589,16 @@ call_failed = |error| Err(error)
 
 ## Answers a /liton/v1/poll: notes what all its topics watch, so that one
 ## Paseo cycle asks about them all, then answers each, a topic it can't
-## follow with why.
+## follow with why. A cached poll asks no provider, and says which topics
+## are refreshing (see `refreshing!`).
 polled_topics! : Context, Server.Request => Try(Response, _)
-polled_topics! = |context, request| {
+polled_topics! = |context0, request| {
 	decoded : Try(Protocol.Poll, _)
 	decoded = Json.parse(read_json!(request)?)
 	match decoded {
 		Err(_) => Ok(text(400, "expected a poll, such as {\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"after\":\"\"}]}"))
-		Ok({ topics }) => {
+		Ok({ topics, cached }) => {
+			context = if (cached == Ok(Bool.True)) { ..context0, upstream: Cached } else context0
 			manifest = offered!(context)?
 			for { capability, topic, .. } in topics {
 				watched!(context, manifest, { capability, topic })?
@@ -602,14 +607,41 @@ polled_topics! = |context, request| {
 			remotes_cycle!(context)?
 			var $updates = []
 			for wanted in topics {
-				$updates = $updates.append(topic_update!(context, manifest, wanted)?)
+				update = topic_update!(context, manifest, wanted)?
+				$updates = $updates.append(if (context.upstream == Cached and refreshing!(context, manifest, wanted)?) { ..update, refreshing: Ok(Bool.True) } else update)
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates }
+			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
 			Ok(json(Json.to_str(polled)))
 		}
 	}
 }
+
+## Answers a /liton/v1/refresh: asks Paseo and the remotes, when due, about
+## what polls watch, as a poll that isn't cached does before answering. A
+## poll that watches something new meanwhile makes the next cycle due at
+## once (see `wanted!`), which this then runs too, up to three in all.
+refreshed! : Context => Try(Response, _)
+refreshed! = |context| {
+	for _cycle in [1, 2, 3] {
+		paseo_cycle!(context)?
+		remotes_cycle!(context)?
+	}
+	Ok(json("{}"))
+}
+
+## Whether a topic's provider hasn't been asked about it since a poll first
+## watched it: a Paseo session's timeline, until a cycle fetched it.
+refreshing! : Context, Manifest.Offered, Protocol.Wanted => Try(Bool, _)
+refreshing! = |context, manifest, wanted|
+	match Protocol.subject(manifest, wanted) {
+		Ok(Timeline(session_id)) => {
+			pending : List({ kind : Str })
+			pending = Sqlite.query_many!({ db: context.db, query: "SELECT kind FROM paseo_pending WHERE kind = 'timeline' AND subject = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+			Ok(!pending.is_empty())
+		}
+		_ => Ok(Bool.False)
+	}
 
 ## Notes that a poll watches a topic's subject, so the next cycle asks Paseo
 ## about it.
@@ -723,7 +755,7 @@ update! = |context, wanted, subject| {
 				Err(_) if context.paseo.is_ok() =>
 					match paseo_runs!(context, schedule_id)? {
 						Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
-						Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing) })
+						Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing), refreshing: Err(Missing) })
 					}
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
@@ -757,7 +789,7 @@ remote_update! = |context, wanted, endpoint, theirs| {
 		_ =>
 			match event {
 				Ok(answered) => Ok(Protocol.snapshot(wanted, Remote.event(endpoint.name, answered)))
-				Err(_) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing) })
+				Err(_) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing), refreshing: Err(Missing) })
 			}
 	}
 }
@@ -1764,6 +1796,7 @@ create_tables! = |db| {
 		Sqlite.execute!({ db, query: "DROP TABLE attention_asides;", params: {} })?
 	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_pending (kind TEXT NOT NULL, subject TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_history (id TEXT PRIMARY KEY, listed TEXT NOT NULL);", params: {} })?
@@ -1999,14 +2032,19 @@ importable_interval_ms = 60_000
 ## "timeline" (a session id), "workspace",
 ## "uncommitted" or "base" (a directory), "commit_file", or "tree" or "file"
 ## (a directory and a path in it). What no poll watched within `interest_ms`
-## is asked about in a cycle at once.
+## is asked about in a cycle at once, and is pending until a cycle did.
 wanted! : Sqlite.Db, Str, Str => Try({}, _)
 wanted! = |db, kind, subject| {
 	now = now_ms!()
 	watched : List({ kind : Str })
 	watched = Sqlite.query_many!({ db, query: "SELECT kind FROM paseo_interests WHERE kind = :kind AND subject = :subject AND wanted_at > :since;", params: { kind, subject, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
 	Sqlite.execute!({ db, query: "INSERT INTO paseo_interests (kind, subject, wanted_at) VALUES (:kind, :subject, :now) ON CONFLICT (kind, subject) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { kind, subject, now } })?
-	if (watched.is_empty()) forget_check!(db, "cycle") else Ok({})
+	if watched.is_empty() {
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_pending (kind, subject, since) VALUES (:kind, :subject, :now) ON CONFLICT (kind, subject) DO NOTHING;", params: { kind, subject, now } })?
+		forget_check!(db, "cycle")
+	} else {
+		Ok({})
+	}
 }
 
 ## Whether `what` ran within `interval_ms`: a cycle ("cycle"), every
@@ -2145,17 +2183,21 @@ store! = |db, session_id, stored, { state, events }| {
 ## `PaseoFiles.lifetime_ms` ago or never, then the summaries due (see
 ## `summarized!`). Nothing watched, no connection. A
 ## question that fails is logged and the next asked; a lost connection ends
-## the cycle.
+## the cycle. What was pending (see `wanted!`) when it began no longer is.
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
+## A cached poll's (`Cached`) runs none.
 paseo_cycle! : Context => Try({}, _)
-paseo_cycle! = |{ db, paseo, summary_model, .. }|
+paseo_cycle! = |{ db, paseo, summary_model, upstream, .. }|
 	match paseo {
 		Err(Disabled) => Ok({})
+		Ok(_) if upstream == Cached => Ok({})
 		Ok(daemon) =>
 			if recently_checked!(db, "cycle", paseo_interval_ms)? or (refusal!(db)?.map_ok(|{ at, .. }| at + refused_wait_ms) ?? 0) > now_ms!() {
 				Ok({})
 			} else {
-				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: now_ms!() - interest_ms } })?
+				began = now_ms!()
+				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: began - interest_ms } })?
+				Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE NOT EXISTS (SELECT 1 FROM paseo_interests i WHERE i.kind = paseo_pending.kind AND i.subject = paseo_pending.subject);", params: {} })?
 				Sqlite.execute!({ db, query: "DELETE FROM file_cache WHERE fetched_at <= :since;", params: { since: now_ms!() - file_cache_ms } })?
 				watched : List({ kind : Str, subject : Str })
 				watched = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
@@ -2170,6 +2212,7 @@ paseo_cycle! = |{ db, paseo, summary_model, .. }|
 							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
 							ordered = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, ordered, 1)
+							Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE since <= :began;", params: { began } })?
 							match summary_model {
 								Ok(configured) if features.background_agents =>
 									match summarized!(db, connection, configured) {
@@ -2739,9 +2782,12 @@ remote_token = |tokens, name|
 
 expect remote_token("peer=abc.def, team=123.456", "team") == Ok("123.456") and remote_token("peer=abc.def", "team") == Err(NoToken)
 
-## Runs each remote's cycle that is due.
+## Runs each remote's cycle that is due, unless a cached poll's (`Cached`).
 remotes_cycle! : Context => Try({}, _)
 remotes_cycle! = |context| {
+	if context.upstream == Cached {
+		return Ok({})
+	}
 	for endpoint in context.remotes {
 		remote_cycle!(context, endpoint)?
 	}
@@ -2803,7 +2849,7 @@ asked_remote! = |context, endpoint, remote| {
 	wanted : List(Protocol.Wanted)
 	wanted = Sqlite.query_many!({ db, query: "SELECT capability, topic, cursor AS after FROM remote_topics WHERE remote = :name AND wanted_at > :since;", params: { name: endpoint.name, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
 	poll : Protocol.Poll
-	poll = { topics: wanted.keep_if(|topic| Capability.from_str(topic.capability).map_ok(|id| offers.contains(id)) ?? Bool.False) }
+	poll = { topics: wanted.keep_if(|topic| Capability.from_str(topic.capability).map_ok(|id| offers.contains(id)) ?? Bool.False), cached: Err(Missing) }
 	if poll.topics.is_empty() {
 		return Ok({})
 	}

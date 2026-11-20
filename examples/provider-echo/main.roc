@@ -115,7 +115,7 @@ polled! = |db, request| {
 	poll = Json.parse(read!(request)?)
 	match poll {
 		Err(_) => Ok(Response.from_status(400))
-		Ok({ topics }) => {
+		Ok({ topics, .. }) => {
 			var $updates = []
 			for wanted in topics {
 				session_id = wanted.topic.drop_prefix("timeline/")
@@ -128,7 +128,7 @@ polled! = |db, request| {
 				$updates = $updates.append(update)
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates }
+			polled = { topics: $updates, refresh: Err(Missing) }
 			Ok(json(Json.to_str(polled)))
 		}
 	}

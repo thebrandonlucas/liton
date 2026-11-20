@@ -5243,7 +5243,7 @@ expect {
 expect {
 	sent = Model.poll({ ..Model.initial(""), focus: [Session("a")] })
 	entry = Entry({ sequence: 1, event: StatusChanged(Running) })
-	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing) }]
+	answer = [{ capability: "chat.v1", topic: "sessions", cursor: "s", events: [], error: Err(Missing), refreshing: Err(Missing) }, { capability: "chat.v1", topic: "timeline/a", cursor: "1", events: [entry, entry], error: Err(Missing), refreshing: Err(Missing) }]
 	answered = Model.polled(sent, sent.poll, answer)
 	again = Model.poll(answered)
 	Model.entries(answered, "a").len() == 1 and again.poll.topics.take_first(2) == [{ capability: "chat.v1", topic: "sessions", after: "s" }, { capability: "chat.v1", topic: "timeline/a", after: "1" }]
