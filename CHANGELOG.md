@@ -6,6 +6,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Added
 
+- The Developer, Inbox, Rooms, Review and Board surfaces show their panes joined: one frame, the panes apart by thin lines you drag to resize them. Settings → Surface (Joined) and each surface in Settings → Deck switch a surface between joined and separate tiles, as Tiling shows them; a snapshot keeps it.
 - A browser the daemon doesn't answer as it isn't paired shows "Pair this browser", with a box for a pairing code, in place of errors; a link ending `#pair=CODE` pairs it at once. Settings → Devices lists the devices paired, with when each was paired and last seen, revokes one (revoking this browser signs it out), and makes a code and link to pair another device.
 - `liton pair`, run on the daemon's machine with `LITON_DB` set as the daemon's, prints a pairing code for a new device and a link that pairs a browser with it; `liton login <code>` pairs the command line itself, keeping its token readable by you alone.
 - `zig build run` serves liton at http://127.0.0.1:8095 (`LITON_HOST` and `LITON_PORT` change it): panes, each a widget bound to a capability the daemon advertises. Add panes from Settings; a widget whose capability no provider supplies shows what it needs.
@@ -141,6 +142,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Changed
 
+- **Breaking:** a preset's snapshot in a Litonfile names its frame, `frame: Joined` or `frame: Tiles`, beside its `shell`. Setups and snapshots saved before name none, and read as joined for a Workbench and tiles for Tiling.
 - **Breaking:** the daemon answers only paired devices at `/liton/v1`, unless it listens on loopback alone and no proxy forwarded the request (docs/protocol.md, Authentication). A device pairs with a one-time code at `POST /liton/v1/pair`, a browser keeping its token as an HttpOnly cookie and other clients sending it as `Authorization: Bearer`; give a federating daemon its remotes' tokens with `LITON_PROVIDER_TOKENS`. `LITON_AUTH=required` asks for pairing on loopback too, as a proxy on the same machine needs, and `LITON_AUTH=off` turns it off.
 - liton's development environment has one Roc compiler, nightly-2026-11-15, for the daemon and the UI alike: `roc-ui` is gone, and `zig build`'s `-Droc-ui` defaults to the `-Droc` compiler. A release build of the daemon takes minutes rather than about twenty.
 - **Breaking:** the daemon refuses a request from a page of another site, so a website open in your browser can't send your agents work: one whose `Origin` isn't the daemon's own address, a POST not sent as `application/json`, and one to a host name other than `LITON_HOST`, `localhost` or one `LITON_ALLOWED_HOSTS` lists. Behind a proxy or a domain of its own, set `LITON_ALLOWED_HOSTS` to its name, such as `LITON_ALLOWED_HOSTS=liton.example`. A client of the protocol sends its calls and polls with `Content-Type: application/json`.

@@ -148,6 +148,7 @@ Liton := [].{
 							[
 								Engine.class_s(laid.map(|state| "grid ${if (state.shell == Workbench) "workbench" else "tiling"}${if (Model.panes(state).any(|pane| pane.id == state.focused_pane)) " focusing" else ""}${if (Model.threads_apart(state)) " threads-apart" else ""}${Liton.slide_class(state)}")),
 								Engine.attr_s("style", laid.map(Liton.grid_style)),
+								Engine.attr_s("data-frame", laid.map(|state| if (state.frame == Joined) "joined" else "tiles")),
 								Engine.test_id("grid"),
 							],
 							[Engine.each(laid.map(Model.tiles_in_order), |tile| tile.id, |row| Liton.tile_view(model, drag, laid, row))],
@@ -899,8 +900,9 @@ Liton := [].{
 	supplied_by : List(Str) -> Str
 	supplied_by = |names| if (names.is_empty()) "" else "from ${Str.join_with(names, ", ")}"
 
-	## The deck: its surfaces in order, each to move toward its start or
-	## end or to remove, and the surfaces the daemon offers to add.
+	## The deck: its surfaces in order, each to join its panes or not, to
+	## move toward its start or end or to remove, and the surfaces the
+	## daemon offers to add.
 	deck_section : State(Ctx, Model.State) -> Elem(Ctx)
 	deck_section = |model| {
 		button = |named, text, disabled, handler| Engine.element("button", [Engine.attr("type", "button"), Engine.class("deck-move"), Html.aria_label_s(named), Engine.attr_s("title", named), Html.boolean("disabled", disabled), Engine.on_click(handler)], [Engine.text(text)])
@@ -928,6 +930,7 @@ Liton := [].{
 												Html.span_s(title, [Engine.class("settings-row-title")]),
 												Html.span_s(index.map2(rows.signal(), |at, state| Liton.supplied_by(Model.surface_providers(state, at))), [Engine.class("help deck-from")]),
 												Html.span_s(row.field(|surface| if (surface.shown) "Shown here" else ""), [Engine.class("help deck-shown")]),
+												Engine.element("label", [Engine.class("toggle deck-joined")], [Html.checkbox(title.map(|name| "Join the panes of ${name}"), index.map2(rows.signal(), |at, state| Model.joined_at(state, at)), [], rows.set_value_by(index, |state, at, checked| Model.join_surface(state, { index: at, joined: checked }))), Engine.text("Joined")]),
 												button(title.map(|name| "Move ${name} up"), "↑", index.map(|at| at == 0), rows.update_by(index, |state, at| Model.move_surface(state, at, Up))),
 												button(title.map(|name| "Move ${name} down"), "↓", index.map2(rows.signal(), |at, state| at + 1 >= state.deck.len()), rows.update_by(index, |state, at| Model.move_surface(state, at, Down))),
 												button(title.map(|name| "Remove ${name}"), "Remove", rows.signal().map(|state| state.deck.len() < 2), rows.update_by(index, Model.remove_surface)),
@@ -1018,8 +1021,9 @@ Liton := [].{
 		)
 
 	## The surface open: the surfaces to open instead, those the daemon
-	## offers what they need; its tiles' panes to swap, move, remove or set
-	## the options of; and, once changed, a reset to the surface opened.
+	## offers what they need; whether its panes are joined; its tiles' panes
+	## to swap, move, remove or set the options of; and, once changed, a
+	## reset to the surface opened.
 	surface_section : State(Ctx, Model.State) -> Elem(Ctx)
 	surface_section = |model|
 		Html.div(
@@ -1041,6 +1045,18 @@ Liton := [].{
 											model.lift_row().update_by(row.key(), |state, name| Model.with_snapshot_text(Model.use_preset(state, name))),
 										),
 								),
+							],
+						),
+					],
+				),
+				Liton.settings_card(
+					"Frame",
+					[
+						Html.div(
+							"settings-row",
+							[
+								Engine.element("label", [Engine.class("toggle")], [Html.checkbox(Engine.const("Joined"), model.signal().map(|state| state.frame == Joined), [], model.set_value(|state, checked| Model.join_surface(state, { index: state.deck_shown, joined: checked }))), Engine.text("Joined")]),
+								Html.p("Shows this surface's panes in one frame under one header, apart by lines you drag to resize them. Off, each pane is a tile of its own, with the theme's gap between them.", "help"),
 							],
 						),
 					],
@@ -1198,6 +1214,7 @@ Liton := [].{
 				Engine.class_s(classes.map2(id.map2(over, Liton.tile_drop_class), Liton.joined_classes)),
 				Engine.test_id_s(id.map2(laid, |tile_id, state| "slot-${Model.tile_test_name(state, tile_id)}")),
 				Engine.attr_s("data-tile", id),
+				Engine.attr_s("data-lines", tile.map2(laid, |shown, state| Liton.tile_lines(state, shown))),
 				Engine.attr_s("style", tile.map(|shown| "grid-area: ${(shown.top + 1).to_str()} / ${(shown.left + 1).to_str()} / ${(shown.bottom + 1).to_str()} / ${(shown.right + 1).to_str()}")),
 				# Swiping shows no state, but using a panel says it is the one shown.
 				Engine.on("focus", model.set_value_by(id, |state, tile_id, value| Menu.focused({ ..state, active_tile: tile_id }, value))),
@@ -1553,6 +1570,16 @@ Liton := [].{
 	## Two class lists as one, either of them possibly "".
 	joined_classes : Str, Str -> Str
 	joined_classes = |first, second| Str.join_with([first, second].drop_if(Str.is_empty), " ")
+
+	## In a joined frame, the edges of a tile where a hairline parts it
+	## from the tiles beside it: "left" unless at the frame's edge or a hidden
+	## drawer's, and "top" unless at the frame's.
+	tile_lines : Model.State, Model.Tile -> Str
+	tile_lines = |state, tile| {
+		after_hidden_drawer = state.shell == Workbench and tile.left == 1 and state.collapsed.contains(Left)
+		lines = [if (tile.left > 0 and !after_hidden_drawer) "left" else "", if (tile.top > 0) "top" else ""]
+		if (state.frame == Joined) Str.join_with(lines.drop_if(Str.is_empty), " ") else ""
+	}
 
 	## A tile's classes: its slot's, `tabbed` while it shows more than one
 	## pane, `shown` while a narrow screen shows it, `collapsed` while its
