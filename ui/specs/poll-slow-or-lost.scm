@@ -1,0 +1,32 @@
+(test "Liton — a poll the daemon is slow to answer says it is waited for, a session picked meanwhile polls in its place, and a poll that fails says the daemon can't be reached until one answers"
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[{\"Sessions\":[{\"agent\":\"claude\",\"id\":\"s1\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Write docs\"},{\"agent\":\"claude\",\"id\":\"s2\",\"provider\":\"mock\",\"status\":\"Idle\",\"title\":\"Fix tests\"}]}]},{\"capability\":\"attention.v1\",\"topic\":\"items\",\"cursor\":\"\",\"events\":[]},{\"capability\":\"workspaces.v1\",\"topic\":\"list\",\"cursor\":\"w1\",\"events\":[{\"Listed\":{\"projects\":[{\"directory\":\"/src/app\",\"id\":\"p1\",\"name\":\"app\",\"provider\":\"mock\"}],\"workspaces\":[{\"branch\":{\"Branch\":\"main\"},\"changes\":\"Uncounted\",\"directory\":\"/src/app\",\"dirty\":false,\"id\":\"w1\",\"kind\":\"Checkout\",\"labels\":[],\"name\":\"main\",\"pinned\":false,\"project_id\":\"p1\",\"provider\":\"mock\",\"session_ids\":[\"s1\",\"s2\"],\"state\":\"Idle\"}]}}]}]}")
+    (run-effect 2)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 3)
+    (expect-absent (test-id "daemon-waited"))
+    (click (role tab :name "Fix tests"))
+    (expect-pending-effects 1)
+    ; Unanswered for three seconds, the daemon is waited for.
+    (tick-interval 1000)
+    (tick-interval 1000)
+    (expect-absent (test-id "daemon-waited"))
+    (tick-interval 1000)
+    (expect-text (test-id "daemon-waited") "Waiting for the daemon…")
+    ; A session picked now polls at once, in place of the poll waited for.
+    (click (role tab :name "Write docs"))
+    (expect-pending-effects 1)
+    (expect-absent (test-id "daemon-waited"))
+    ; A poll that fails says so, and the next tick polls again.
+    (stub-http "poll" :url "/liton/v1/poll" :status 500 :body "")
+    (run-effect 5)
+    (expect-text (test-id "daemon-waited") "Can't reach the daemon. Trying again…")
+    (tick-interval 1000)
+    (expect-pending-effects 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"chat.v1\",\"topic\":\"sessions\",\"cursor\":\"c1\",\"events\":[]},{\"capability\":\"chat.v1\",\"topic\":\"timeline/s1\",\"cursor\":\"\",\"events\":[]}]}")
+    (run-effect 6)
+    (expect-absent (test-id "daemon-waited"))
+  )
+)

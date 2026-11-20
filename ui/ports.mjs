@@ -142,22 +142,25 @@ const drag = ({ pointer, column, row }, { emit }) => {
 // what is under the pointer scrolls across, this becomes Roc in
 // ui/Liton.roc. A two-finger swipe across (`Ports.swipe`), more across than
 // down, not over something that scrolls across, reports "next" or
-// "previous" once 160 pixels have gone by, then nothing until the fingers
+// "previous" once 100 pixels have gone by, then nothing until the fingers
 // rest for a quarter second. A three-finger swipe is the system's, and no
-// page hears it.
+// page hears it. What is under the fingers is read once a swipe, as it
+// begins, not at each of its events, which go on through the slide.
 const swipe = (_, { emit }) => {
-  let travelled = 0, rest = 0, spent = false;
+  let travelled = 0, rest = 0, spent = false, over_scroller = false;
   const scrolls_across = (element) => {
     for (let at = element; at instanceof Element && at !== document.body; at = at.parentElement)
       if (/(auto|scroll)/.test(getComputedStyle(at).overflowX) && at.scrollWidth > at.clientWidth) return true;
     return false;
   };
   const wheel = (event) => {
-    if (event.ctrlKey || Math.abs(event.deltaX) <= Math.abs(event.deltaY) || scrolls_across(event.target)) return;
+    if (event.ctrlKey || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    if (travelled === 0 && !spent) over_scroller = scrolls_across(event.target);
+    if (over_scroller) return;
     clearTimeout(rest);
     rest = setTimeout(() => { travelled = 0; spent = false; }, 250);
     travelled += event.deltaX;
-    if (spent || Math.abs(travelled) < 160) return;
+    if (spent || Math.abs(travelled) < 100) return;
     spent = true;
     emit(travelled > 0 ? "next" : "previous");
   };
