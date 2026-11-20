@@ -397,7 +397,8 @@ Mock := [].{
 	}
 
 	## A workspace's git. fix-auth's has the login fix uncommitted and one
-	## commit ahead of main; main is clean.
+	## commit ahead of main, and against main a long diff too
+	## (`long_diff`); main is clean.
 	git : Str, WorkspaceGit.Scope, [Selected(Str), NoFile] -> WorkspaceGit.Found
 	git = |workspace_id, scope, file| {
 		directory = Mock.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "/mock/${workspace_id}"
@@ -410,7 +411,7 @@ Mock := [].{
 			diff =
 				match scope {
 					Uncommitted => [login_fix]
-					AgainstBase => [login_fix, login_test]
+					AgainstBase => [login_fix, login_test].concat(long_diff)
 					Commit(sha) => if (sha == commit.sha) [{ file: login_test.file, hunks: if (file == Selected(login_test.file.path)) login_test.hunks else [] }] else []
 				}
 			{ workspace, status: Status({ ..clean, branch: Branch("fix-auth"), dirty: Bool.True, ahead: 1 }), fingerprint: WorkspaceGit.fingerprint(scope, diff), diff, commits: [commit] }
@@ -485,6 +486,27 @@ login_fix = {
 	file: { path: "src/Auth.roc", change: Modified, additions: 1, deletions: 1, body: Text },
 	hunks: [WorkspaceGit.hunk({ old_start: 40, old_count: 3, new_start: 40, new_count: 3 }, [{ kind: Context, text: "login = |request|" }, { kind: Removed, text: "\tredirect_to = \"/login\"" }, { kind: Added, text: "\tredirect_to = request.came_from" }, { kind: Context, text: "\tSession.start(redirect_to)" }])],
 }
+
+## Six files of about 330 lines each, mostly added, which fix-auth's
+## branch has against main: a diff long enough to try the Review surface
+## on.
+long_diff : List(WorkspaceGit.FileDiff)
+long_diff = ["Parser", "Lexer", "Render", "Store", "Router", "Format"].map(
+	|name| {
+		lines = List.repeat(0, 330).map_with_index(
+			|_, at| {
+				text = "\t${name.with_ascii_lowercased()}_step_${at.to_str()} = |input| input.map(|value| value + ${at.to_str()})"
+				if (at % 40 == 7) { kind: Removed, text } else if (at % 10 == 3) { kind: Context, text } else { kind: Added, text }
+			},
+		)
+		added = lines.keep_if(|line| line.kind != Removed).len().to_u32_wrap()
+		removed = lines.keep_if(|line| line.kind != Added).len().to_u32_wrap()
+		{
+			file: { path: "src/long/${name}.roc", change: Modified, additions: lines.keep_if(|line| line.kind == Added).len().to_u32_wrap(), deletions: lines.keep_if(|line| line.kind == Removed).len().to_u32_wrap(), body: Text },
+			hunks: [WorkspaceGit.hunk({ old_start: 1, old_count: removed, new_start: 1, new_count: added }, lines)],
+		}
+	},
+)
 
 login_test : WorkspaceGit.FileDiff
 login_test = {
