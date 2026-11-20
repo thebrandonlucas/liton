@@ -1,6 +1,7 @@
 ## Values the golden JSON files in tests/ hold.
 import Chat
 import Manifest
+import Schedules
 import Tickets
 
 Fixtures := [].{
@@ -22,6 +23,9 @@ Fixtures := [].{
 		Archive({ session_id: "s1" }),
 		Configure({ session_id: "s1", model: Ok("claude-opus-4"), mode: Err(Missing), thinking: Ok("high") }),
 		Create({ place: Workspace("main"), agent: "claude", model: Err(Missing), mode: Ok("plan"), thinking: Ok("low"), prompt: "" }),
+		ListHistory({ search: "", cursor: Err(Missing), limit: 50 }),
+		ListHistory({ search: "login", cursor: Ok("c2"), limit: 50 }),
+		Unarchive({ session_id: "s1" }),
 	]
 
 	responses : List(Chat.Response)
@@ -29,6 +33,8 @@ Fixtures := [].{
 		Sessions([Chat.session({ id: "s1", provider: "mock", agent: "claude", title: "Fix tests", status: AwaitingPermission }), Fixtures.configured]),
 		Accepted,
 		Rejected("no session s2"),
+		History({ sessions: [{ ..Chat.session({ id: "s3", provider: "mock", agent: "claude", title: "Fix the login", status: Finished }), archived: Ok("2026-01-01T09:00:00.000Z") }], next: Ok("c2") }),
+		History({ sessions: [], next: Err(Missing) }),
 	]
 
 	## A session telling its mode, thinking level, modes, usage and summary.
@@ -97,4 +103,33 @@ Fixtures := [].{
 		Ticket(Fixtures.ticket),
 		Accepted,
 	]
+
+	## A heartbeat and a schedule of new sessions, a call of each request
+	## and each answer.
+	schedule_requests : List(Schedules.Request)
+	schedule_requests = [
+		ListSchedules,
+		Inspect({ schedule_id: "h1" }),
+		Create(Fixtures.heartbeat_draft),
+		Update({ schedule_id: "h1", draft: { ..Fixtures.heartbeat_draft, cadence: Cron({ expression: "0 9 * * 1-5", timezone: Ok("Europe/Berlin") }) } }),
+		Pause({ schedule_id: "h1" }),
+		Resume({ schedule_id: "h1" }),
+		RunOnce({ schedule_id: "h1" }),
+		Delete({ schedule_id: "h1" }),
+	]
+
+	heartbeat_draft : Schedules.Draft
+	heartbeat_draft = { name: "Check CI", prompt: "Is CI green?", cadence: Every(1_800_000), target: Session("fix-auth"), max_runs: Err(Missing), expires: Err(Missing) }
+
+	schedule_responses : List(Schedules.Response)
+	schedule_responses = {
+		nightly = { ..Schedules.drafted({ id: "n1", provider: "mock" }, { name: "", prompt: "Update the deps", cadence: Cron({ expression: "0 3 * * *", timezone: Err(Missing) }), target: NewSession({ place: Workspace("main"), agent: "claude", model: Ok("opus"), mode: Err(Missing), thinking: Err(Missing), isolation: Worktree, archive_on_finish: Bool.True }), max_runs: Ok(10), expires: Ok("2026-02-01T00:00:00.000Z") }), next_run: Ok("2026-01-02T03:00:00.000Z") }
+		[
+			Schedules([Schedules.drafted({ id: "h1", provider: "mock" }, Fixtures.heartbeat_draft), nightly]),
+			Inspected({ schedule: { ..nightly, status: Paused, last_run: Ok("2026-01-01T03:00:00.000Z") }, runs: [{ id: "r1", scheduled_for: "2026-01-01T03:00:00.000Z", started: "2026-01-01T03:00:01.000Z", ended: Ok("2026-01-01T03:04:00.000Z"), status: Succeeded, session_id: Ok("claude-1"), output: Ok("Updated 3 deps."), error: Err(Missing) }, { id: "r2", scheduled_for: "2026-01-01T04:00:00.000Z", started: "2026-01-01T04:00:00.000Z", ended: Err(Missing), status: Running, session_id: Err(Missing), output: Err(Missing), error: Err(Missing) }] }),
+			Created({ schedule_id: "h2" }),
+			Accepted,
+			Rejected("no schedule h9"),
+		]
+	}
 }

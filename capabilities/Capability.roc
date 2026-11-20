@@ -33,6 +33,10 @@ Capability := [].{
 	tickets_v1 : Id
 	tickets_v1 = { name: "tickets", version: 1 }
 
+	## Prompts that run on a cadence, and their runs.
+	schedules_v1 : Id
+	schedules_v1 = { name: "schedules", version: 1 }
+
 	## Speech to text, from audio the client sends in chunks.
 	voice_v1 : Id
 	voice_v1 = { name: "voice", version: 1 }

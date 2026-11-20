@@ -4,6 +4,9 @@
     (run-effect 1)
     (click (role button :name "Settings"))
     (click (role button :name "Deck"))
+    ; Beside each surface, who supplies what it shows.
+    (expect-visible (text "from Mock"))
+    (expect-visible (text "from Relay"))
     (click (label "Parts of Rooms"))
     (expect-visible (text "Mock"))
     (expect-visible (text "Relay"))

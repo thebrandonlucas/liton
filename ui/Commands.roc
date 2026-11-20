@@ -1,5 +1,6 @@
 ## Every action keys run, by name: what it is called, the group it is
 ## listed under, when it applies and what it does to the model.
+import cap.Capability
 import cap.Review
 import Model
 import TicketDesk
@@ -23,6 +24,10 @@ Commands := [].{
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: Commands.thread_open, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
+			{ id: "history.open", title: "Open the history", group: "Chat", applies: |shown| shown.capabilities.contains(Capability.chat_v1), run: |shown| Model.open_part(shown, "history") },
+			{ id: "schedules.open", title: "Open the schedules", group: "Schedules", applies: |shown| shown.capabilities.contains(Capability.schedules_v1), run: |shown| Model.open_part(shown, "schedules") },
+			{ id: "schedules.new", title: "New schedule…", group: "Schedules", applies: |shown| shown.capabilities.contains(Capability.schedules_v1), run: |shown| Model.new_schedule(shown, Err(Missing)) },
+			{ id: "schedules.heartbeat", title: "Heartbeat for the chat's session…", group: "Schedules", applies: |shown| shown.capabilities.contains(Capability.schedules_v1) and !Model.session_of(shown, Commands.chat(shown)).is_empty(), run: |shown| Model.new_schedule(shown, Ok(Model.session_of(shown, Commands.chat(shown)))) },
 			{ id: "rooms.focus", title: "Go to the rooms", group: "Rooms", applies: |shown| Model.panes(shown).any(|pane| pane.widget == "rooms"), run: Model.focus_rooms },
 			{ id: "agent.stop", title: "Stop the chat's agent", group: "Chat", applies: Commands.stops, run: |shown| Model.stop(shown, Commands.chat(shown).id) },
 			{ id: "workspace.previous", title: "Go to the workspace before", group: "Workspaces", applies: |shown| Commands.workspace_order(shown).len() > 1, run: |shown| Commands.step_workspace(shown, -1) },
