@@ -123,8 +123,8 @@ import Sha256
 ## only reads what the daemon keeps (`Cached`, a cached poll's).
 Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached] }
 
-## Where the Paseo daemon is, and its password.
-PaseoDaemon : { host : Str, port : U16, password : Str }
+## A Paseo host: its name (see `Hosts.named`), where its daemon is, and its password.
+PaseoDaemon : { name : Str, host : Str, port : U16, password : Str }
 
 ## The server: set up by `init!`, answering with `respond!`.
 program = { init!, respond!, shutdown! }
@@ -157,7 +157,7 @@ init! = || {
 		mock_rooms_seeded!(db) ? |_| Exit(4)
 	}
 	password = env_or!("PASEO_PASSWORD", "")
-	paseo = if (password == "") Err(Disabled) else Ok({ host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
+	paseo = if (password == "") Err(Disabled) else Ok({ name: "paseo", host: env_or!("PASEO_HOST", "127.0.0.1"), port: U16.from_str(env_or!("PASEO_PORT", "6767")) ?? 6767, password })
 	stt = env_or!("LITON_STT", "")
 	speech = if (stt == "") Err(Disabled) else Ok(checked!(LocalSpeech.engine(stt))?)
 	setup = checked!(setup!(env_or!("LITON_SETUP", "")))?
@@ -680,9 +680,9 @@ refreshing! = |context, manifest, wanted| {
 	# local effectful closure called with two record shapes as `params`, as
 	# both queries here once shared, passed `roc check` but failed each query
 	# with ParameterValueOutsideRecord. Each shape now has its own query.
-	paseo_pending! = |kinds, subject| {
+	paseo_pending! = |host, kinds, subject| {
 		rows : List({ subject : Str })
-		rows = Sqlite.query_many!({ db, query: "SELECT subject FROM paseo_pending WHERE subject = :subject AND kind IN (SELECT value FROM json_each(:kinds));", params: { subject, kinds: Json.to_str(kinds) }, limits: Sqlite.default_query_limits })?
+		rows = Sqlite.query_many!({ db, query: "SELECT subject FROM paseo_pending WHERE host = :host AND subject = :subject AND kind IN (SELECT value FROM json_each(:kinds));", params: { host, subject, kinds: Json.to_str(kinds) }, limits: Sqlite.default_query_limits })?
 		Ok(if (rows.is_empty()) Fresh else Refreshing)
 	}
 	match Protocol.subject(manifest, wanted).map_ok(|subject| (subject, Remote.routed(context.remotes, subject))) {
@@ -692,12 +692,16 @@ refreshing! = |context, manifest, wanted| {
 			rows = Sqlite.query_many!({ db, query: "SELECT topic FROM remote_pending WHERE remote = :remote AND capability = :capability AND topic = :topic;", params: { remote: endpoint.name, capability: named.capability, topic: named.topic }, limits: Sqlite.default_query_limits })?
 			Ok(if (rows.is_empty()) Fresh else Refreshing)
 		}
-		Ok((Timeline(session_id), Err(Merged))) => paseo_pending!(["timeline"], session_id)
+		Ok((Timeline(session_id), Err(Merged))) =>
+			match provider!(context, session_id)? {
+				PaseoSession(daemon) => paseo_pending!(daemon.name, ["timeline"], session_id)
+				_ => Ok(Fresh)
+			}
 		Ok((Changes({ context: focus, .. }), Err(Merged))) | Ok((File({ context: focus, .. }), Err(Merged))) =>
 			match located!(context, focus)? {
-				PaseoDirectory(directory) =>
-					match paseo_pending!(["workspace", "uncommitted", "base"], directory)? {
-						Refreshing if cached!(db, directory, "workspace")?.is_err() => Ok(Unanswered)
+				PaseoDirectory({ host, directory }) =>
+					match paseo_pending!(host, ["workspace", "uncommitted", "base"], directory)? {
+						Refreshing if cached!(db, host, directory, "workspace")?.is_err() => Ok(Unanswered)
 						pending => Ok(pending)
 					}
 				_ => Ok(Fresh)
@@ -723,36 +727,48 @@ interested! = |context, subject| {
 	match subject {
 		Timeline(session_id) =>
 			match provider!(context, session_id)? {
-				PaseoSession(_) => wanted!(db, "timeline", session_id)
+				PaseoSession(daemon) => wanted!(db, daemon.name, "timeline", session_id)
 				_ => Ok({})
 			}
 		Changes({ context: focus, scope }) => git_interested!(context, focus, { scope, file: NoFile })
 		File({ context: focus, scope, path }) => git_interested!(context, focus, { scope, file: Selected(path) })
 		Tree({ context: focus, path }) => files_interested!(context, focus, "tree", path)
 		Contents({ context: focus, path }) => files_interested!(context, focus, "file", path)
-		# The newest sessions' timelines too, so that one picked is usually kept.
-		Sessions if context.paseo.is_ok() => {
-			wanted!(db, "agent_list", "")?
-			wanted!(db, "newest", "")
-		}
-		Importable if context.paseo.is_ok() => wanted!(db, "importable", "")
-		Agents if context.paseo.is_ok() => wanted!(db, "agent_kinds", "")
-		WorkspaceList if context.paseo.is_ok() => {
-			wanted!(db, "agent_list", "")?
-			wanted!(db, "workspace_list", "")
-		}
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
-		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
-		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
-		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
+		_ =>
+			match context.paseo {
+				Ok(daemon) => paseo_interested!(db, daemon.name, subject)
+				Err(Disabled) => Ok({})
+			}
 	}
 }
+
+## Notes that a poll watches a list each Paseo host adds to, such as the
+## sessions, of the Paseo host `host`.
+paseo_interested! : Sqlite.Db, Str, Protocol.Subject => Try({}, _)
+paseo_interested! = |db, host, subject|
+	match subject {
+		# The newest sessions' timelines too, so that one picked is usually kept.
+		Sessions => {
+			wanted!(db, host, "agent_list", "")?
+			wanted!(db, host, "newest", "")
+		}
+		Importable => wanted!(db, host, "importable", "")
+		Agents => wanted!(db, host, "agent_kinds", "")
+		WorkspaceList => {
+			wanted!(db, host, "agent_list", "")?
+			wanted!(db, host, "workspace_list", "")
+		}
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) | Timeline(_) | Changes(_) | File(_) | Tree(_) | Contents(_) => Ok({})
+		ScheduleList => wanted!(db, host, "schedules", "")
+		ScheduleRuns(schedule_id) => wanted!(db, host, "schedule_runs", schedule_id)
+		_ => wanted!(db, host, "agent_list", "")
+	}
 
 ## Notes that a poll watches what is asked of a context's workspace.
 git_interested! : Context, Focus.Id, WorkspaceGit.Asked => Try({}, _)
 git_interested! = |context, focus, asked|
 	match located!(context, focus)? {
-		PaseoDirectory(directory) => git_wanted!(context.db, directory, asked)
+		PaseoDirectory({ host, directory }) => git_wanted!(context.db, host, directory, asked)
 		_ => Ok({})
 	}
 
@@ -761,7 +777,7 @@ git_interested! = |context, focus, asked|
 files_interested! : Context, Focus.Id, Str, Str => Try({}, _)
 files_interested! = |context, focus, kind, path|
 	match located!(context, focus)? {
-		PaseoDirectory(directory) => wanted!(context.db, kind, Json.to_str({ directory, path }))
+		PaseoDirectory({ host, directory }) => wanted!(context.db, host, kind, Json.to_str({ directory, path }))
 		_ => Ok({})
 	}
 
@@ -773,9 +789,10 @@ explored! = |context, what, focus, path| {
 	unknown = if (what == Tree) Tree({ path, listing: Unknown }) else Contents({ path, read: Unknown })
 	match located!(context, focus)? {
 		MockWorkspace(_) => Ok(if (what == Tree) Tree(Mock.tree(path)) else Contents(Mock.contents(path)))
-		PaseoDirectory(directory) => {
+		PaseoDirectory({ host, directory }) => {
 			cached : Try(Protocol.Event, _)
-			cached = Json.parse(file_cached!(context.db, directory, "${if (what == Tree) "tree" else "file"} ${path}")?.map_ok(|row| row.value) ?? "")
+			cached = Json.parse(file_cached!(context.db, host, directory, "${if (what == Tree) "tree" else "file"} ${path}")?.map_ok(|row| row.value) ?? "")
+
 			Ok(cached ?? unknown)
 		}
 		Nowhere => Ok(unknown)
@@ -820,12 +837,15 @@ update! = |context, wanted, subject| {
 		ScheduleRuns(schedule_id) =>
 			match schedules!(context)?.find_first(|kept| kept.schedule.id == schedule_id) {
 				Ok(kept) => Ok(Protocol.snapshot(wanted, Runs(kept.runs)))
-				Err(_) if context.paseo.is_ok() =>
-					match paseo_runs!(context, schedule_id)? {
-						Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
-						Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing), refreshing: Err(Missing) })
+				Err(_) =>
+					match context.paseo {
+						Ok(daemon) =>
+							match paseo_runs!(context.db, daemon, schedule_id)? {
+								Ok(runs) => Ok(Protocol.snapshot(wanted, Runs(runs)))
+								Err(NotCached) => Ok({ capability: wanted.capability, topic: wanted.topic, cursor: wanted.after, events: [], error: Err(Missing), refreshing: Err(Missing) })
+							}
+						Err(Disabled) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 					}
-				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
 	}
@@ -888,7 +908,7 @@ chat_call! = |context, provider, asked| {
 				PaseoSession(daemon) => {
 					request_id = "liton-send-${now_ms!().to_str()}"
 					outcome = written!(daemon, Paseo.send_request(session_id, message, while_running, request_id), request_id, Paseo.sent)
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -911,7 +931,7 @@ chat_call! = |context, provider, asked| {
 							known = state_of!(db, session_id)?
 							store!(db, session_id, known.stored, { state: Paseo.forget_answered(known.state, request_id), events: [PermissionAnswered({ request_id, allowed, choice })] })?
 						}
-						forget_check!(db, "cycle")?
+						forget_check!(db, daemon.name, "cycle")?
 						Ok(paseo_answer(outcome))
 					}
 					NoSession => Ok(no_session(session_id))
@@ -929,7 +949,7 @@ chat_call! = |context, provider, asked| {
 				PaseoSession(daemon) => {
 					request_id = "liton-cancel-${now_ms!().to_str()}"
 					outcome = written!(daemon, Paseo.cancel_request(session_id, request_id), request_id, Paseo.canceled)
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -943,7 +963,7 @@ chat_call! = |context, provider, asked| {
 				PaseoSession(daemon) => {
 					request_id = "liton-rename-${now_ms!().to_str()}"
 					outcome = written!(daemon, Paseo.rename_request(session_id, title, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "update_agent_response", id))
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -957,7 +977,7 @@ chat_call! = |context, provider, asked| {
 				PaseoSession(daemon) => {
 					request_id = "liton-archive-${now_ms!().to_str()}"
 					outcome = written!(daemon, Paseo.archive_request(session_id, request_id), request_id, Paseo.archived)
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -977,7 +997,7 @@ chat_call! = |context, provider, asked| {
 				PaseoSession(daemon) => {
 					request_id = "liton-unarchive-${now_ms!().to_str()}"
 					outcome = written!(daemon, Paseo.unarchive_request(session_id, request_id), request_id, Paseo.refreshed)
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -997,7 +1017,7 @@ chat_call! = |context, provider, asked| {
 				}
 				PaseoSession(daemon) => {
 					outcome = configured!(daemon, session_id, { model, mode, thinking }, "liton-configure-${now_ms!().to_str()}")
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
 				NoSession => Ok(no_session(session_id))
@@ -1074,7 +1094,7 @@ paseo_history! = |db, daemon, asked| {
 	_ = connection.write!(WebSocket.close(websocket_mask))
 	page = Paseo.history_answer(answered?, request_id)?
 	for { session, .. } in page.agents {
-		Sqlite.execute!({ db, query: "INSERT INTO paseo_history (id, listed) VALUES (:id, :listed) ON CONFLICT (id) DO UPDATE SET listed = excluded.listed;", params: { id: session.id, listed: Json.to_str(session) } })?
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_history (host, id, listed) VALUES (:host, :id, :listed) ON CONFLICT (id) DO UPDATE SET host = excluded.host, listed = excluded.listed;", params: { host: daemon.name, id: session.id, listed: Json.to_str(session) } })?
 	}
 	Ok(Ok(page))
 }
@@ -1085,7 +1105,11 @@ started! : Context, Try(Str, [Missing]), Chat.Create => Try(Protocol.Answer(Chat
 started! = |context, provider, { place, agent, model, mode, thinking, prompt }| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
-	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
+	paseo_listed =
+		match context.paseo {
+			Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.workspaces
+			_ => []
+		}
 	match (place, context.paseo) {
 		(Workspace(workspace_id), _) if mock_listed.any(|shown| shown.id == workspace_id) =>
 			match (Mock.agents.any(|kind| kind.agent == agent), Mock.configured(agent, { model: "", mode: "", thinking: "" }, { model, mode, thinking })) {
@@ -1118,7 +1142,7 @@ paseo_started! = |context, daemon, { agent, cwd, workspace_id, model, mode, thin
 	request_id = "liton-create-${now_ms!().to_str()}"
 	agent_id = Paseo.uuid("${request_id} ${cwd} ${agent} ${prompt}")
 	outcome = written!(daemon, Paseo.create_request({ agent_id, agent, cwd, workspace_id, model, mode, thinking, prompt, request_id }), request_id, Paseo.created)
-	forget_check!(context.db, "cycle")?
+	forget_check!(context.db, daemon.name, "cycle")?
 	match outcome {
 		Ok(session_id) => Ok(Ok(Started({ session_id: session_id })))
 		Err(err) => Ok(Err(paseo_error(err)))
@@ -1145,7 +1169,11 @@ workspaces_call! = |context, provider, asked| {
 		Archive({ workspace_id }) => workspace_changed!(context, provider, workspace_id, asked)
 		RenameProject({ project_id, name }) => {
 			mock_owns = context.mock.agents and Protocol.serves(provider, Mock.provider.id) and Mock.projects.any(|project| project.id == project_id)
-			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
+			paseo_projects =
+				match context.paseo {
+					Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.projects
+					_ => []
+				}
 			match (mock_owns, paseo_projects.any(|project| project.id == project_id), context.paseo) {
 				(Bool.True, _, _) => {
 					Sqlite.execute!({ db, query: "INSERT INTO mock_projects (id, name) VALUES (:id, :name) ON CONFLICT (id) DO UPDATE SET name = excluded.name;", params: { id: project_id, name } })?
@@ -1154,14 +1182,18 @@ workspaces_call! = |context, provider, asked| {
 				(_, Bool.True, Ok(daemon)) => {
 					request_id = "liton-project-${now_ms!().to_str()}"
 					outcome = written!(daemon, PaseoWorkspaces.rename_project_request(project_id, name, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "project.rename.response", id))
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					Ok(paseo_workspaces_answer(outcome))
 				}
 				_ => Ok(Err({ code: NotFound, message: "no project ${project_id}" }))
 			}
 		}
 		Create({ project_id, kind, branch }) => {
-			paseo_projects = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.projects else []
+			paseo_projects =
+				match context.paseo {
+					Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.projects
+					_ => []
+				}
 			match (Mock.projects.find_first(|project| project.id == project_id), paseo_projects.find_first(|project| project.id == project_id), context.paseo) {
 				(Ok(project), _, _) if context.mock.agents and Protocol.serves(provider, Mock.provider.id) => {
 					made : { count : I64 }
@@ -1175,7 +1207,7 @@ workspaces_call! = |context, provider, asked| {
 					request_id = "liton-workspace-${now_ms!().to_str()}"
 					workspace_id = "wks_${Paseo.hex("${request_id} ${project.directory}")}"
 					outcome = written!(daemon, PaseoWorkspaces.create_request({ workspace_id, project, kind, branch, request_id }), request_id, PaseoWorkspaces.created)
-					forget_check!(db, "cycle")?
+					forget_check!(db, daemon.name, "cycle")?
 					match outcome {
 						Ok(made_id) => Ok(Ok(Created({ workspace_id: made_id })))
 						Err(err) => Ok(Err(paseo_error(err)))
@@ -1193,7 +1225,11 @@ workspace_changed! : Context, Try(Str, [Missing]), Str, Workspaces.Request => Tr
 workspace_changed! = |context, provider, workspace_id, asked| {
 	db = context.db
 	mock_listed = if (context.mock.agents and Protocol.serves(provider, Mock.provider.id)) mock_workspaces!(db)? else []
-	paseo_listed = if (context.paseo.is_ok() and Protocol.serves(provider, Paseo.provider.id)) paseo_listed!(db)?.workspaces else []
+	paseo_listed =
+		match context.paseo {
+			Ok(daemon) if Protocol.serves(provider, Paseo.provider.id) => paseo_listed!(db, daemon.name)?.workspaces
+			_ => []
+		}
 	match (mock_listed.find_first(|shown| shown.id == workspace_id), paseo_listed.any(|shown| shown.id == workspace_id), context.paseo) {
 		(Ok(shown), _, _) => {
 			changed =
@@ -1213,7 +1249,7 @@ workspace_changed! = |context, provider, workspace_id, asked| {
 					Pin({ pinned, .. }) => written!(daemon, PaseoWorkspaces.pin_request(workspace_id, pinned, request_id), request_id, |answer_text, id| Paseo.accepted(answer_text, "workspace.pin.set.response", id))
 					_ => written!(daemon, PaseoWorkspaces.archive_request(workspace_id, request_id), request_id, PaseoWorkspaces.archived)
 				}
-			forget_check!(db, "cycle")?
+			forget_check!(db, daemon.name, "cycle")?
 			Ok(paseo_workspaces_answer(outcome))
 		}
 		_ => Ok(Err({ code: NotFound, message: "no workspace ${workspace_id}" }))
@@ -1230,11 +1266,13 @@ agents! = |context| {
 			_ => so_far
 		},
 	)
-	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
 	from_paseo : Try(List(Chat.Agent), _)
-	from_paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
-	Ok((if (context.mock.agents) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
+	from_paseo =
+		match context.paseo {
+			Ok(daemon) => Json.parse(listed!(context.db, daemon.name, "agent_kinds")?)
+			Err(Disabled) => Ok([])
+		}
+	Ok((if (context.mock.agents) Mock.agents else []).concat(from_paseo ?? []).concat(from_remotes))
 }
 
 ## tickets.v1's tickets: the mock's, as calls changed them.
@@ -1358,21 +1396,21 @@ schedule_prompted! = |context, { prompt, target, .. }|
 ## Paseo's schedules as the cycle last listed them, none before or with
 ## Paseo off.
 paseo_schedules! : Context => Try(List(Schedules.Schedule), _)
-paseo_schedules! = |context| {
-	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'schedules';", params: {}, limits: Sqlite.default_query_limits })?
-	kept : Try(List(Schedules.Schedule), _)
-	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
-	Ok(if (context.paseo.is_ok()) kept ?? [] else [])
-}
+paseo_schedules! = |context|
+	match context.paseo {
+		Ok(daemon) => {
+			kept : Try(List(Schedules.Schedule), _)
+			kept = Json.parse(listed!(context.db, daemon.name, "schedules")?)
+			Ok(kept ?? [])
+		}
+		Err(Disabled) => Ok([])
+	}
 
 ## The runs of a schedule of Paseo's as the cycle last inspected it.
-paseo_runs! : Context, Str => Try(Try(List(Schedules.Run), [NotCached]), _)
-paseo_runs! = |context, schedule_id| {
-	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = :what;", params: { what: "runs ${schedule_id}" }, limits: Sqlite.default_query_limits })?
+paseo_runs! : Sqlite.Db, PaseoDaemon, Str => Try(Try(List(Schedules.Run), [NotCached]), _)
+paseo_runs! = |db, daemon, schedule_id| {
 	kept : Try(List(Schedules.Run), _)
-	kept = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	kept = Json.parse(listed!(db, daemon.name, "runs ${schedule_id}")?)
 	Ok(kept.map_err(|_| NotCached))
 }
 
@@ -1385,7 +1423,7 @@ paseo_schedules_call! = |context, daemon, asked| {
 	cwd! = |target|
 		match target {
 			NewSession({ place: Directory(directory), .. }) => Ok(directory)
-			NewSession({ place: Workspace(workspace_id), .. }) => Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "")
+			NewSession({ place: Workspace(workspace_id), .. }) => Ok(paseo_listed!(context.db, daemon.name)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| shown.directory) ?? "")
 			Session(_) => Ok("")
 		}
 	schedule_id = Schedules.schedule_of(asked)
@@ -1400,7 +1438,7 @@ paseo_schedules_call! = |context, daemon, asked| {
 			RunOnce(_) => written!(daemon, PaseoSchedules.request("run-once", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "run-once", id)).map_ok(|_| Accepted)
 			Delete(_) => written!(daemon, PaseoSchedules.request("delete", schedule_id, request_id), request_id, |answer_text, id| PaseoSchedules.took(answer_text, "delete", id)).map_ok(|_| Accepted)
 		}
-	forget_check!(context.db, "cycle")?
+	forget_check!(context.db, daemon.name, "cycle")?
 	match answered {
 		Ok(response) => Ok(Ok(response))
 		Err(Refused(reason)) => Ok(Ok(Rejected(reason)))
@@ -1592,71 +1630,72 @@ git_found! : Context, Focus.Id, WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found
 git_found! = |context, focus, poll|
 	match located!(context, focus)? {
 		MockWorkspace(workspace_id) => Ok(Ok(Mock.git(workspace_id, poll.scope, poll.file)))
-		PaseoDirectory(directory) =>
-			match paseo_git!(context, directory, poll) {
+		PaseoDirectory({ host, directory }) =>
+			match paseo_git!(context, host, directory, poll) {
 				Ok(Ok(found)) => Ok(Ok(found))
 				Ok(Err(NothingCached)) => Ok(Err(Unknown))
 				Err(err) => {
-					logged!("Paseo: answering a git poll of ${directory} failed: ${Str.inspect(err)}")
+					logged!("Paseo ${host}: answering a git poll of ${directory} failed: ${Str.inspect(err)}")
 					Ok(Err(Unknown))
 				}
 			}
 		Nowhere => Ok(Err(Unknown))
 	}
 
-## Where a context's workspace is: a mock workspace, or a Paseo directory. A
-## session's is the one it works in; a room or a ticket has none.
-located! : Context, Focus.Id => Try([MockWorkspace(Str), PaseoDirectory(Str), Nowhere], _)
+## Where a context's workspace is: a mock workspace, or a directory of a
+## Paseo host. A session's is the one it works in; a room or a ticket has none.
+located! : Context, Focus.Id => Try([MockWorkspace(Str), PaseoDirectory({ host : Str, directory : Str }), Nowhere], _)
 located! = |context, focus|
 	match focus {
 		Session(session_id) =>
 			match provider!(context, session_id)? {
 				MockSession => Ok(mock_workspaces!(context.db)?.find_first(|shown| shown.session_ids.contains(session_id)).map_ok(|shown| MockWorkspace(shown.id)) ?? Nowhere)
-				PaseoSession(_) => {
+				PaseoSession(daemon) => {
 					rows : List({ directory : Str })
 					rows = Sqlite.query_many!({ db: context.db, query: "SELECT directory FROM sessions WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
-					Ok(rows.first().map_ok(|row| paseo_directory(row.directory)) ?? Nowhere)
+					Ok(rows.first().map_ok(|row| paseo_directory(daemon.name, row.directory)) ?? Nowhere)
 				}
 				NoSession => Ok(Nowhere)
 			}
 		Workspace(workspace_id) =>
 			if context.mock.agents and mock_workspaces!(context.db)?.any(|shown| shown.id == workspace_id) {
 				Ok(MockWorkspace(workspace_id))
-			} else if context.paseo.is_ok() {
-				Ok(paseo_listed!(context.db)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(shown.directory)) ?? Nowhere)
 			} else {
-				Ok(Nowhere)
+				match context.paseo {
+					Ok(daemon) => Ok(paseo_listed!(context.db, daemon.name)?.workspaces.find_first(|shown| shown.id == workspace_id).map_ok(|shown| paseo_directory(daemon.name, shown.directory)) ?? Nowhere)
+					Err(Disabled) => Ok(Nowhere)
+				}
 			}
 		Room(_) | Ticket(_) => Ok(Nowhere)
 	}
 
-## A directory Paseo can tell the git of. A remote agent's, such as a
-## sandboxed one's, is "/", which Paseo has nothing to tell of.
-paseo_directory : Str -> [PaseoDirectory(Str), Nowhere]
-paseo_directory = |directory| if (directory == "" or directory == "/") Nowhere else PaseoDirectory(directory)
+## A directory the Paseo host `host` can tell the git of. A remote agent's,
+## such as a sandboxed one's, is "/", which Paseo has nothing to tell of.
+paseo_directory : Str, Str -> [PaseoDirectory({ host : Str, directory : Str }), Nowhere]
+paseo_directory = |host, directory| if (directory == "" or directory == "/") Nowhere else PaseoDirectory({ host, directory })
 
-## A Paseo directory's workspace, from what the git cache holds of it once
-## the cycle asked Paseo what is due.
-paseo_git! : Context, Str, WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
-paseo_git! = |context, directory, poll| {
+## A Paseo host's directory's workspace, from what the git cache holds of it
+## once the cycle asked Paseo what is due.
+paseo_git! : Context, Str, Str, WorkspaceGit.Asked => Try(Try(WorkspaceGit.Found, [NothingCached]), _)
+paseo_git! = |context, host, directory, poll| {
 	db = context.db
-	git_wanted!(db, directory, poll)?
+	git_wanted!(db, host, directory, poll)?
 	selected = selected_commit_file(poll)
 	paseo_cycle!(context)?
 	known : Try({ workspace : WorkspaceGit.Workspace, status : [Status(WorkspaceGit.Status), NoStatus] }, _)
-	known = Json.parse(cached!(db, directory, "workspace")?.map_ok(|row| row.value) ?? "")
+	known = Json.parse(cached!(db, host, directory, "workspace")?.map_ok(|row| row.value) ?? "")
 	commits : Try(List(WorkspaceGit.Commit), _)
-	commits = Json.parse(cached!(db, directory, "commits")?.map_ok(|row| row.value) ?? "")
+	commits = Json.parse(cached!(db, host, directory, "commits")?.map_ok(|row| row.value) ?? "")
 	selected_hunks : Try(List(WorkspaceGit.Hunk), _)
 	selected_hunks =
 		match selected {
-			Ok({ what, .. }) => Json.parse(cached!(db, directory, what)?.map_ok(|row| row.value) ?? "")
+			Ok({ what, .. }) => Json.parse(cached!(db, host, directory, what)?.map_ok(|row| row.value) ?? "")
 			Err(NoFile) => Ok([])
 		}
 	scope_diff =
 		match poll.scope {
-			Uncommitted => cached!(db, directory, "uncommitted")?
-			AgainstBase => cached!(db, directory, "base")?
+			Uncommitted => cached!(db, host, directory, "uncommitted")?
+			AgainstBase => cached!(db, host, directory, "base")?
 			Commit(_) => Err(NothingCached)
 		}
 	cached_diff : Try(List(WorkspaceGit.FileDiff), _)
@@ -1675,15 +1714,15 @@ paseo_git! = |context, directory, poll| {
 	Ok(known.map_ok(|{ workspace, status }| { workspace, status, fingerprint, diff, commits: commits ?? [] }).map_err(|_| NothingCached))
 }
 
-## Notes that a poll watches a Paseo directory's workspace, the poll's scope
-## and, of a commit, the selected file not cached yet.
-git_wanted! : Sqlite.Db, Str, WorkspaceGit.Asked => Try({}, _)
-git_wanted! = |db, directory, poll| {
-	wanted!(db, "workspace", directory)?
+## Notes that a poll watches a Paseo host's directory's workspace, the
+## poll's scope and, of a commit, the selected file not cached yet.
+git_wanted! : Sqlite.Db, Str, Str, WorkspaceGit.Asked => Try({}, _)
+git_wanted! = |db, host, directory, poll| {
+	wanted!(db, host, "workspace", directory)?
 	match (poll.scope, selected_commit_file(poll)) {
-		(Uncommitted, _) => wanted!(db, "uncommitted", directory)
-		(AgainstBase, _) => wanted!(db, "base", directory)
-		(_, Ok({ sha, path, what })) => if (cached!(db, directory, what)?.is_err()) wanted!(db, "commit_file", Json.to_str({ directory, sha, path })) else Ok({})
+		(Uncommitted, _) => wanted!(db, host, "uncommitted", directory)
+		(AgainstBase, _) => wanted!(db, host, "base", directory)
+		(_, Ok({ sha, path, what })) => if (cached!(db, host, directory, what)?.is_err()) wanted!(db, host, "commit_file", Json.to_str({ directory, sha, path })) else Ok({})
 		_ => Ok({})
 	}
 }
@@ -1706,7 +1745,10 @@ watched! = |context, manifest, { capability, topic }|
 			for used in part.uses {
 				watched!(context, manifest, used)?
 			}
-			if (context.paseo.is_ok()) wanted!(context.db, "newest", "") else Ok({})
+			match context.paseo {
+				Ok(daemon) => wanted!(context.db, daemon.name, "newest", "")
+				Err(Disabled) => Ok({})
+			}
 		}
 		Err(_) =>
 			match Protocol.subject(manifest, { capability, topic, after: "" }) {
@@ -1785,14 +1827,20 @@ state_swapped! = |db, transformer, stored, state|
 workspaces! : Context => Try(Workspaces.Listed, _)
 workspaces! = |context| {
 	db = context.db
-	if context.paseo.is_ok() {
-		wanted!(db, "workspace_list", "")?
+	match context.paseo {
+		Ok(daemon) => wanted!(db, daemon.name, "workspace_list", "")?
+		Err(Disabled) => {}
 	}
 	sessions = sessions!(context)?
 	from_mock = if (context.mock.agents) { projects: mock_projects!(db)?, workspaces: mock_workspaces!(db)? } else { projects: [], workspaces: [] }
-	from_paseo = if (context.paseo.is_ok()) paseo_listed!(db)? else { projects: [], workspaces: [] }
+	from_paseo =
+		match context.paseo {
+			Ok(daemon) => paseo_listed!(db, daemon.name)?
+			Err(Disabled) => { projects: [], workspaces: [] }
+		}
 	placed : List({ id : Str, workspace_id : Str })
-	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+	placed = Sqlite.query_many!({ db, query: "SELECT id, workspace_id FROM sessions WHERE provider = 'paseo' OR provider LIKE '%/paseo' ORDER BY position;", params: {}, limits: Sqlite.default_query_limits })?
+
 	paseo_workspaces = from_paseo.workspaces.map(|shown| { ..shown, session_ids: placed.keep_if(|row| row.workspace_id == shown.id).map(|row| row.id) })
 	# A remote's workspaces come with the state it counted.
 	from_remotes = merged_events!(context, WorkspaceList)?.fold(
@@ -1835,11 +1883,11 @@ mock_projects! = |db| {
 	Ok(Mock.projects.map(|project| { ..project, name: named.find_first(|row| row.id == project.id and row.name != "").map_ok(|row| row.name) ?? project.name }))
 }
 
-## Paseo's projects and workspaces as the cycle last listed them, none before.
-paseo_listed! : Sqlite.Db => Try(Workspaces.Listed, _)
-paseo_listed! = |db| {
+## The Paseo host `host`'s projects and workspaces as the cycle last listed them, none before.
+paseo_listed! : Sqlite.Db, Str => Try(Workspaces.Listed, _)
+paseo_listed! = |db, host| {
 	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'workspaces';", params: {}, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE host = :host AND what = 'workspaces';", params: { host }, limits: Sqlite.default_query_limits })?
 	listed : Try(Workspaces.Listed, _)
 	listed = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
 	Ok(listed ?? { projects: [], workspaces: [] })
@@ -1852,10 +1900,21 @@ now_ms! = || (UnixTime.now!().nanos_since_epoch() // 1_000_000).to_i64_wrap()
 ## Creates the tables the daemon keeps, where they aren't yet.
 create_tables! : Sqlite.Db => Try({}, _)
 create_tables! = |db| {
+	# What Paseo's tables kept before there were several Paseo hosts is the
+	# host `paseo`'s: each such table is set aside, made again keyed by host,
+	# and filled from it.
+	hosted_tables = [("paseo_checks", "what, checked_at"), ("paseo_interests", "kind, subject, wanted_at"), ("paseo_pending", "kind, subject, since"), ("git_cache", "directory, what, status, fingerprint, fetched_at, value"), ("paseo_listings", "what, value"), ("paseo_history", "id, listed"), ("file_cache", "directory, what, fetched_at, value")]
+	for (table, _) in hosted_tables {
+		columns : List({ name : Str })
+		columns = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info(:table);", params: { table }, limits: Sqlite.default_query_limits })?
+		if !columns.is_empty() and !columns.any(|column| column.name == "host") {
+			Sqlite.execute!({ db, query: "ALTER TABLE ${table} RENAME TO ${table}_unhosted;", params: {} })?
+		}
+	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent TEXT NOT NULL, title TEXT NOT NULL, position INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS entries (session_id TEXT NOT NULL, sequence INTEGER NOT NULL, visible_at INTEGER NOT NULL, event TEXT NOT NULL, PRIMARY KEY (session_id, sequence));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_states (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_checks (what TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_checks (host TEXT NOT NULL, what TEXT NOT NULL, checked_at INTEGER NOT NULL, PRIMARY KEY (host, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS transformer_states (transformer TEXT PRIMARY KEY, state TEXT NOT NULL);", params: {} })?
 	# Settles and snoozes kept before transformers came are attention's state.
 	asides : List({ name : Str })
@@ -1864,12 +1923,12 @@ create_tables! = |db| {
 		Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO transformer_states (transformer, state) SELECT 'attention', json_group_array(json_object('session_id', session_id, 'signature', signature, 'snoozed_until', snoozed_until)) FROM attention_asides;", params: {} })?
 		Sqlite.execute!({ db, query: "DROP TABLE attention_asides;", params: {} })?
 	}
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_interests (host TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, wanted_at INTEGER NOT NULL, PRIMARY KEY (host, kind, subject));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_pending (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, PRIMARY KEY (remote, capability, topic));", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_pending (kind TEXT NOT NULL, subject TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (kind, subject));", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (what TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_history (id TEXT PRIMARY KEY, listed TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_pending (host TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (host, kind, subject));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS git_cache (host TEXT NOT NULL, directory TEXT NOT NULL, what TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (host, directory, what));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_listings (host TEXT NOT NULL, what TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (host, what));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS paseo_history (host TEXT NOT NULL, id TEXT PRIMARY KEY, listed TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_workspaces (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reviews (context TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
@@ -1878,7 +1937,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_schedules (id TEXT PRIMARY KEY, position INTEGER NOT NULL, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (host TEXT NOT NULL, directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (host, directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
@@ -1897,6 +1956,14 @@ create_tables! = |db| {
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
 			Sqlite.execute!({ db, query: "ALTER TABLE sessions ADD COLUMN ${column} ${definition};", params: {} })?
+		}
+	}
+	for (table, columns) in hosted_tables {
+		set_aside : List({ name : Str })
+		set_aside = Sqlite.query_many!({ db, query: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = :name;", params: { name: "${table}_unhosted" }, limits: Sqlite.default_query_limits })?
+		if !set_aside.is_empty() {
+			Sqlite.execute!({ db, query: "INSERT OR IGNORE INTO ${table} (host, ${columns}) SELECT 'paseo', ${columns} FROM ${table}_unhosted;", params: {} })?
+			Sqlite.execute!({ db, query: "DROP TABLE ${table}_unhosted;", params: {} })?
 		}
 	}
 	Ok({})
@@ -1972,7 +2039,7 @@ provider! : Context, Str => Try([MockSession, PaseoSession(PaseoDaemon), NoSessi
 provider! = |{ db, mock, paseo, .. }, session_id| {
 	rows : List({ provider : Str })
 	# An archived Paseo agent its history listed is Paseo's too.
-	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id UNION ALL SELECT 'paseo' AS provider FROM paseo_history WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT provider FROM sessions WHERE id = :session_id UNION ALL SELECT CASE WHEN host = 'paseo' THEN 'paseo' ELSE host || '/paseo' END AS provider FROM paseo_history WHERE id = :session_id;", params: { session_id }, limits: Sqlite.default_query_limits })?
 	Ok(
 		match (rows.first().map_ok(|row| row.provider), paseo) {
 			(Ok("mock"), _) => if (mock.agents) MockSession else NoSession
@@ -2027,11 +2094,14 @@ sessions! = |context| {
 	for row in if (mock.agents) rows else [] {
 		$sessions = $sessions.append(Mock.session({ id: row.id, agent: row.agent, title: row.title, settings: { model: row.model, mode: row.mode, thinking: row.thinking } }, mock_listed, timed!(db, row.id, now_ms!())?))
 	}
-	if paseo.is_ok() {
-		wanted!(db, "agent_list", "")?
-		paseo_cycle!(context)?
-		refused = refusal!(db)?.map_ok(|{ reason, .. }| [Paseo.refused_session(reason)]) ?? []
-		$sessions = $sessions.concat(refused).concat(registered!(db)?)
+	match paseo {
+		Ok(daemon) => {
+			wanted!(db, daemon.name, "agent_list", "")?
+			paseo_cycle!(context)?
+			refused = refusal!(db, daemon.name)?.map_ok(|{ reason, .. }| [Paseo.refused_session(reason)]) ?? []
+			$sessions = $sessions.concat(refused).concat(registered!(db, daemon.name)?)
+		}
+		Err(Disabled) => {}
 	}
 	remote_sessions = merged_events!(context, Sessions)?.fold(
 		[],
@@ -2043,13 +2113,14 @@ sessions! = |context| {
 	Ok($sessions.concat(remote_sessions))
 }
 
-## The Paseo agents the cycle last listed, as they were listed, or, listed
-## before that was kept, with their last synced status, each with its
-## summary once one was written.
-registered! : Sqlite.Db => Try(List(Chat.Session), _)
-registered! = |db| {
+## The agents of the Paseo host `host` the cycle last listed, as they were
+## listed, or, listed before that was kept, with their last synced status,
+## each with its summary once one was written.
+registered! : Sqlite.Db, Str => Try(List(Chat.Session), _)
+registered! = |db, host| {
+	provider = Hosts.paseo_provider(host)
 	rows : List({ id : Str, agent : Str, title : Str, listed : Str, summary : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS id, s.agent AS agent, s.title AS title, s.listed AS listed, coalesce(m.value, '') AS summary FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id WHERE s.provider = 'paseo' ORDER BY s.position;", params: {}, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS id, s.agent AS agent, s.title AS title, s.listed AS listed, coalesce(m.value, '') AS summary FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id WHERE s.provider = :provider ORDER BY s.position;", params: { provider }, limits: Sqlite.default_query_limits })?
 	var $sessions = []
 	for row in rows {
 		listed : Try(Chat.Session, _)
@@ -2057,7 +2128,7 @@ registered! = |db| {
 		session =
 			match listed {
 				Ok(known) => known
-				Err(_) => Chat.session({ id: row.id, provider: Paseo.provider.id, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
+				Err(_) => Chat.session({ id: row.id, provider, agent: row.agent, title: row.title, status: state_of!(db, row.id)?.state.status })
 			}
 		summary : Try(Chat.Summary, _)
 		summary = Json.parse(row.summary)
@@ -2100,40 +2171,40 @@ cycle_lease_ms = 30_000
 importable_interval_ms : I64
 importable_interval_ms = 60_000
 
-## Notes that a poll watches `subject` as `kind`: "agent_list",
+## Notes that a poll watches `subject` of the Paseo host `host` as `kind`: "agent_list",
 ## "workspace_list", "importable", "agent_kinds" or "newest" (no subject),
 ## "timeline" (a session id), "workspace",
 ## "uncommitted" or "base" (a directory), "commit_file", or "tree" or "file"
 ## (a directory and a path in it). What no poll watched within `interest_ms`
 ## is asked about in a cycle at once, and is pending until a cycle did.
-wanted! : Sqlite.Db, Str, Str => Try({}, _)
-wanted! = |db, kind, subject| {
+wanted! : Sqlite.Db, Str, Str, Str => Try({}, _)
+wanted! = |db, host, kind, subject| {
 	now = now_ms!()
 	watched : List({ kind : Str })
-	watched = Sqlite.query_many!({ db, query: "SELECT kind FROM paseo_interests WHERE kind = :kind AND subject = :subject AND wanted_at > :since;", params: { kind, subject, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
-	Sqlite.execute!({ db, query: "INSERT INTO paseo_interests (kind, subject, wanted_at) VALUES (:kind, :subject, :now) ON CONFLICT (kind, subject) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { kind, subject, now } })?
+	watched = Sqlite.query_many!({ db, query: "SELECT kind FROM paseo_interests WHERE host = :host AND kind = :kind AND subject = :subject AND wanted_at > :since;", params: { host, kind, subject, since: now - interest_ms }, limits: Sqlite.default_query_limits })?
+	Sqlite.execute!({ db, query: "INSERT INTO paseo_interests (host, kind, subject, wanted_at) VALUES (:host, :kind, :subject, :now) ON CONFLICT (host, kind, subject) DO UPDATE SET wanted_at = excluded.wanted_at;", params: { host, kind, subject, now } })?
 	if watched.is_empty() {
-		Sqlite.execute!({ db, query: "INSERT INTO paseo_pending (kind, subject, since) VALUES (:kind, :subject, :now) ON CONFLICT (kind, subject) DO NOTHING;", params: { kind, subject, now } })?
-		forget_check!(db, "cycle")
+		Sqlite.execute!({ db, query: "INSERT INTO paseo_pending (host, kind, subject, since) VALUES (:host, :kind, :subject, :now) ON CONFLICT (host, kind, subject) DO NOTHING;", params: { host, kind, subject, now } })?
+		forget_check!(db, host, "cycle")
 	} else {
 		Ok({})
 	}
 }
 
-## Whether `what` ran within `interval_ms`: a cycle ("cycle"), every
+## Whether `what` of the Paseo host `host` ran within `interval_ms`: a cycle ("cycle"), every
 ## `paseo_interval_ms`, or the importable sessions' listing ("importable"),
 ## every `importable_interval_ms`. If not, records that it runs now.
-recently_checked! : Sqlite.Db, Str, I64 => Try(Bool, _)
-recently_checked! = |db, what, interval_ms| {
+recently_checked! : Sqlite.Db, Str, Str, I64 => Try(Bool, _)
+recently_checked! = |db, host, what, interval_ms| {
 	now = now_ms!()
 	claimed : List({ what : Str })
-	claimed = Sqlite.query_many!({ db, query: "INSERT INTO paseo_checks (what, checked_at) VALUES (:what, :now) ON CONFLICT (what) DO UPDATE SET checked_at = excluded.checked_at WHERE paseo_checks.checked_at <= :since RETURNING what;", params: { what, now, since: now - interval_ms }, limits: Sqlite.default_query_limits })?
+	claimed = Sqlite.query_many!({ db, query: "INSERT INTO paseo_checks (host, what, checked_at) VALUES (:host, :what, :now) ON CONFLICT (host, what) DO UPDATE SET checked_at = excluded.checked_at WHERE paseo_checks.checked_at <= :since RETURNING what;", params: { host, what, now, since: now - interval_ms }, limits: Sqlite.default_query_limits })?
 	Ok(claimed.is_empty())
 }
 
-## Lets the next poll ask about `what` at once (after a send, say).
-forget_check! : Sqlite.Db, Str => Try({}, _)
-forget_check! = |db, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE what = :what;", params: { what } })
+## Lets the next poll ask the Paseo host `host` about `what` at once (after a send, say).
+forget_check! : Sqlite.Db, Str, Str => Try({}, _)
+forget_check! = |db, host, what| Sqlite.execute!({ db, query: "DELETE FROM paseo_checks WHERE host = :host AND what = :what;", params: { host, what } })
 
 ## Writes `line` to stderr.
 logged! : Str => {}
@@ -2207,11 +2278,11 @@ paseo_error = |err|
 refused_wait_ms : I64
 refused_wait_ms = 60_000
 
-## Why Paseo last refused liton, and when, until a connection succeeds.
-refusal! : Sqlite.Db => Try(Try({ reason : Str, at : I64 }, [NotRefused]), _)
-refusal! = |db| {
+## Why the Paseo host `host` last refused liton, and when, until a connection succeeds.
+refusal! : Sqlite.Db, Str => Try(Try({ reason : Str, at : I64 }, [NotRefused]), _)
+refusal! = |db, host| {
 	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'refusal';", params: {}, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE host = :host AND what = 'refusal';", params: { host }, limits: Sqlite.default_query_limits })?
 	refused : Try({ reason : Str, at : I64 }, _)
 	refused = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
 	Ok(refused.map_err(|_| NotRefused))
@@ -2261,66 +2332,71 @@ store! = |db, session_id, stored, { state, events }| {
 ## Once Paseo refuses liton's password, the cycle waits `refused_wait_ms`.
 ## A cached poll's (`Cached`) runs none.
 paseo_cycle! : Context => Try({}, _)
-paseo_cycle! = |{ db, paseo, summary_model, upstream, .. }|
-	match paseo {
+paseo_cycle! = |context|
+	match context.paseo {
 		Err(Disabled) => Ok({})
-		Ok(_) if upstream == Cached => Ok({})
-		Ok(daemon) =>
-			if recently_checked!(db, "cycle", paseo_interval_ms)? or (refusal!(db)?.map_ok(|{ at, .. }| at + refused_wait_ms) ?? 0) > now_ms!() {
-				Ok({})
-			} else {
-				began = now_ms!()
-				Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE wanted_at <= :since;", params: { since: began - interest_ms } })?
-				Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE NOT EXISTS (SELECT 1 FROM paseo_interests i WHERE i.kind = paseo_pending.kind AND i.subject = paseo_pending.subject);", params: {} })?
-				Sqlite.execute!({ db, query: "DELETE FROM file_cache WHERE fetched_at <= :since;", params: { since: now_ms!() - file_cache_ms } })?
-				watched : List({ kind : Str, subject : Str })
-				watched = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests;", params: {}, limits: Sqlite.default_query_limits })?
-				newest = if (watched.any(|item| item.kind == "newest")) Paseo.newest(registered!(db)?, newest_timelines).map(|session_id| { kind: "timeline", subject: session_id }) else []
-				# Summaries pick their models from the kinds of agent.
-				kinds = if (summary_model.is_ok() and !watched.is_empty()) [{ kind: "agent_kinds", subject: "" }] else []
-				wanted = watched.concat(newest.drop_if(|item| watched.contains(item))).concat(kinds.drop_if(|item| watched.contains(item)))
-				if !wanted.is_empty() {
-					held!(db, now_ms!() + cycle_lease_ms)?
-					match connected!(daemon, "liton-daemon") {
-						Ok({ connection, features }) => {
-							Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} })?
-							host_status!(db, "paseo", Online, features.version)?
-							# What a client waits for, pending, first.
-							pending : List({ kind : Str, subject : Str })
-							pending = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending;", params: {}, limits: Sqlite.default_query_limits })?
-							by_kind = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
-							asked_each!(db, connection, by_kind.keep_if(|item| pending.contains(item)).concat(by_kind.drop_if(|item| pending.contains(item))), 1, began)
-							match summary_model {
-								Ok(configured) if features.background_agents =>
-									match summarized!(db, connection, configured) {
-										Ok({}) => {}
-										Err(err) => logged!("Paseo: writing summaries failed: ${Str.inspect(err)}")
-									}
-								_ => {}
-							}
-							_ = connection.write!(WebSocket.close(websocket_mask))
-							{}
-						}
-						Err(HelloRejected(reason)) => {
-							logged!("Paseo: ${Paseo.refusal(reason)}. Asking again in ${(refused_wait_ms // 1000).to_str()} s.")
-							host_status!(db, "paseo", Error(Paseo.refusal(reason)), Err(Missing))?
-							Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('refusal', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str({ reason, at: now_ms!() }) } })?
-						}
-						Err(err) => {
-							logged!("Paseo: connecting to its WebSocket failed: ${Str.inspect(err)}")
-							host_status!(db, "paseo", Offline, Err(Missing))?
-						}
-					}
-					held!(db, now_ms!())?
-				}
-				Ok({})
-			}
+		Ok(_) if context.upstream == Cached => Ok({})
+		Ok(daemon) => paseo_host_cycle!(context, daemon)
 	}
 
-## Keeps the next cycle from starting before `until`, `paseo_interval_ms`
+## A cycle of one Paseo host (see `paseo_cycle!`).
+paseo_host_cycle! : Context, PaseoDaemon => Try({}, _)
+paseo_host_cycle! = |{ db, summary_model, .. }, daemon| {
+	host = daemon.name
+	if recently_checked!(db, host, "cycle", paseo_interval_ms)? or (refusal!(db, host)?.map_ok(|{ at, .. }| at + refused_wait_ms) ?? 0) > now_ms!() {
+		return Ok({})
+	}
+	began = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM paseo_interests WHERE host = :host AND wanted_at <= :since;", params: { host, since: began - interest_ms } })?
+	Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE host = :host AND NOT EXISTS (SELECT 1 FROM paseo_interests i WHERE i.host = paseo_pending.host AND i.kind = paseo_pending.kind AND i.subject = paseo_pending.subject);", params: { host } })?
+	Sqlite.execute!({ db, query: "DELETE FROM file_cache WHERE host = :host AND fetched_at <= :since;", params: { host, since: now_ms!() - file_cache_ms } })?
+	watched : List({ kind : Str, subject : Str })
+	watched = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_interests WHERE host = :host;", params: { host }, limits: Sqlite.default_query_limits })?
+	newest = if (watched.any(|item| item.kind == "newest")) Paseo.newest(registered!(db, host)?, newest_timelines).map(|session_id| { kind: "timeline", subject: session_id }) else []
+	# Summaries pick their models from the kinds of agent.
+	kinds = if (summary_model.is_ok() and !watched.is_empty()) [{ kind: "agent_kinds", subject: "" }] else []
+	wanted = watched.concat(newest.drop_if(|item| watched.contains(item))).concat(kinds.drop_if(|item| watched.contains(item)))
+	if wanted.is_empty() {
+		return Ok({})
+	}
+	held!(db, host, now_ms!() + cycle_lease_ms)?
+	match connected!(daemon, "liton-daemon") {
+		Ok({ connection, features }) => {
+			Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE host = :host AND what = 'refusal';", params: { host } })?
+			host_status!(db, host, Online, features.version)?
+			# What a client waits for, pending, first.
+			pending : List({ kind : Str, subject : Str })
+			pending = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending WHERE host = :host;", params: { host }, limits: Sqlite.default_query_limits })?
+			by_kind = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
+			asked_each!(db, host, connection, by_kind.keep_if(|item| pending.contains(item)).concat(by_kind.drop_if(|item| pending.contains(item))), 1, began)
+			match summary_model {
+				Ok(configured) if features.background_agents =>
+					match summarized!(db, host, connection, configured) {
+						Ok({}) => {}
+						Err(err) => logged!("Paseo ${host}: writing summaries failed: ${Str.inspect(err)}")
+					}
+				_ => {}
+			}
+			_ = connection.write!(WebSocket.close(websocket_mask))
+			{}
+		}
+		Err(HelloRejected(reason)) => {
+			logged!("Paseo ${host}: ${Paseo.refusal(reason)}. Asking again in ${(refused_wait_ms // 1000).to_str()} s.")
+			host_status!(db, host, Error(Paseo.refusal(reason)), Err(Missing))?
+			listing!(db, host, "refusal", Json.to_str({ reason, at: now_ms!() }))?
+		}
+		Err(err) => {
+			logged!("Paseo ${host}: connecting to its WebSocket failed: ${Str.inspect(err)}")
+			host_status!(db, host, Offline, Err(Missing))?
+		}
+	}
+	held!(db, host, now_ms!())
+}
+
+## Keeps the Paseo host `host`'s next cycle from starting before `until`, `paseo_interval_ms`
 ## after it.
-held! : Sqlite.Db, I64 => Try({}, _)
-held! = |db, until| Sqlite.execute!({ db, query: "UPDATE paseo_checks SET checked_at = :until WHERE what = 'cycle';", params: { until } })
+held! : Sqlite.Db, Str, I64 => Try({}, _)
+held! = |db, host, until| Sqlite.execute!({ db, query: "UPDATE paseo_checks SET checked_at = :until WHERE host = :host AND what = 'cycle';", params: { host, until } })
 
 ## A WebSocket connection to Paseo as `client_id`, once Paseo welcomed its
 ## hello. The password goes both in the WebSocket protocol and in the hello
@@ -2358,52 +2434,64 @@ greeted! = |connection|
 ## Asks about each of `wanted` in turn, the `number`th first, until the
 ## connection is lost, but first about what a poll first watched since the
 ## cycle `began`. Each asked is no longer pending (see `wanted!`).
-asked_each! : Sqlite.Db, Tcp.Connection, List({ kind : Str, subject : Str }), U64, I64 => {}
-asked_each! = |db, connection, wanted, number, began| {
+asked_each! : Sqlite.Db, Str, Tcp.Connection, List({ kind : Str, subject : Str }), U64, I64 => {}
+asked_each! = |db, host, connection, wanted, number, began| {
 	arrived : List({ kind : Str, subject : Str })
-	arrived = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending WHERE since > :began ORDER BY since;", params: { began }, limits: Sqlite.default_query_limits }) ?? []
+	arrived = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending WHERE host = :host AND since > :began ORDER BY since;", params: { host, began }, limits: Sqlite.default_query_limits }) ?? []
 	match arrived.concat(wanted).first() {
 		Err(_) => {}
 		Ok({ kind, subject }) =>
-			match asked!(db, connection, { kind, subject }, "liton-${number.to_str()}") {
-				Err(ConnectionLost(err)) => logged!("Paseo: its WebSocket failed, asking about the ${kind} ${subject}: ${err}")
+			match asked!(db, host, connection, { kind, subject }, "liton-${number.to_str()}") {
+				Err(ConnectionLost(err)) => logged!("Paseo ${host}: its WebSocket failed, asking about the ${kind} ${subject}: ${err}")
 				outcome => {
 					match outcome {
 						Ok({}) => {}
-						Err(err) => logged!("Paseo: asking about the ${kind} ${subject} failed: ${Str.inspect(err)}")
+						Err(err) => logged!("Paseo ${host}: asking about the ${kind} ${subject} failed: ${Str.inspect(err)}")
 					}
-					_ = Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE kind = :kind AND subject = :subject;", params: { kind, subject } })
-					asked_each!(db, connection, if (arrived.is_empty()) wanted.drop_first(1) else wanted, number + 1, began)
+					_ = Sqlite.execute!({ db, query: "DELETE FROM paseo_pending WHERE host = :host AND kind = :kind AND subject = :subject;", params: { host, kind, subject } })
+					asked_each!(db, host, connection, if (arrived.is_empty()) wanted.drop_first(1) else wanted, number + 1, began)
 				}
 			}
 	}
 }
 
-## Asks Paseo about one thing a poll watched, and keeps the answer.
-asked! : Sqlite.Db, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
-asked! = |db, connection, { kind, subject }, request_id|
+## Asks the Paseo host `host` about one thing a poll watched, and keeps the answer.
+asked! : Sqlite.Db, Str, Tcp.Connection, { kind : Str, subject : Str }, Str => Try({}, _)
+asked! = |db, host, connection, { kind, subject }, request_id|
 	match kind {
-		"agent_list" => listed_agents!(db, connection, request_id)
-		"workspace_list" => listed_workspaces!(db, connection, request_id)
-		"importable" => listed_importable!(db, connection, request_id)
-		"agent_kinds" => listed_agent_kinds!(db, connection, request_id)
+		"agent_list" => listed_agents!(db, host, connection, request_id)
+		"workspace_list" => listed_workspaces!(db, host, connection, request_id)
+		"importable" => listed_importable!(db, host, connection, request_id)
+		"agent_kinds" => listed_agent_kinds!(db, host, connection, request_id)
 		"schedules" => {
 			listed = PaseoSchedules.listed(exchange!(connection, PaseoSchedules.request("list", "", request_id), request_id)?, request_id)?
-			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('schedules', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+			listing!(db, host, "schedules", Json.to_str(listed))
 		}
 		"schedule_runs" => {
 			found = PaseoSchedules.inspected(exchange!(connection, PaseoSchedules.request("inspect", subject, request_id), request_id)?, "inspect", request_id)?
-			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES (:what, :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { what: "runs ${subject}", value: Json.to_str(found.runs) } })
+			listing!(db, host, "runs ${subject}", Json.to_str(found.runs))
 		}
 		"timeline" => fetch!(db, connection, subject, request_id, 10)
-		"workspace" => checked_out!(db, connection, subject, request_id)
-		"uncommitted" => diffed!(db, connection, subject, Uncommitted, request_id)
-		"base" => diffed!(db, connection, subject, AgainstBase, request_id)
-		"commit_file" => commit_file!(db, connection, subject, request_id)
-		"tree" => explored_by_paseo!(db, connection, kind, subject, request_id)
-		"file" => explored_by_paseo!(db, connection, kind, subject, request_id)
+		"workspace" => checked_out!(db, host, connection, subject, request_id)
+		"uncommitted" => diffed!(db, host, connection, subject, Uncommitted, request_id)
+		"base" => diffed!(db, host, connection, subject, AgainstBase, request_id)
+		"commit_file" => commit_file!(db, host, connection, subject, request_id)
+		"tree" => explored_by_paseo!(db, host, connection, kind, subject, request_id)
+		"file" => explored_by_paseo!(db, host, connection, kind, subject, request_id)
 		_ => Ok({})
 	}
+
+## Keeps what the Paseo host `host` listed as `what`, such as its workspaces.
+listing! : Sqlite.Db, Str, Str, Str => Try({}, _)
+listing! = |db, host, what, value| Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (host, what, value) VALUES (:host, :what, :value) ON CONFLICT (host, what) DO UPDATE SET value = excluded.value;", params: { host, what, value } })
+
+## What the Paseo host `host` last listed as `what`, "" before it did.
+listed! : Sqlite.Db, Str, Str => Try(Str, _)
+listed! = |db, host, what| {
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE host = :host AND what = :what;", params: { host, what }, limits: Sqlite.default_query_limits })?
+	Ok(rows.first().map_ok(|row| row.value) ?? "")
+}
 
 ## Writes the summaries of Paseo's sessions (see `PaseoSummaries`): keeps
 ## those their agents finished, gives up on those that failed or took
@@ -2411,17 +2499,18 @@ asked! = |db, connection, { kind, subject }, request_id|
 ## agent for each session due one. A session whose summary failed, or
 ## whose agent offers no small model, waits for its next turn; one whose
 ## agent's models Paseo doesn't list yet waits for them.
-summarized! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
-summarized! = |db, connection, configured| {
+summarized! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
+summarized! = |db, host, connection, configured| {
 	now = now_ms!()
+	provider = Hosts.paseo_provider(host)
 	writing : List({ session_id : Str, agent_id : Str, asking_through : I64, asking_at : Str, asked_at : I64 })
-	writing = Sqlite.query_many!({ db, query: "SELECT session_id, agent_id, asking_through, asking_at, asked_at FROM summaries WHERE agent_id != '';", params: {}, limits: Sqlite.default_query_limits })?
+	writing = Sqlite.query_many!({ db, query: "SELECT m.session_id AS session_id, m.agent_id AS agent_id, m.asking_through AS asking_through, m.asking_at AS asking_at, m.asked_at AS asked_at FROM summaries m JOIN sessions s ON s.id = m.session_id WHERE m.agent_id != '' AND s.provider = :provider;", params: { provider }, limits: Sqlite.default_query_limits })?
 	for job in writing {
 		request_id = "liton-summary-${job.agent_id}"
 		answered = PaseoSummaries.finished(exchange!(connection, PaseoSummaries.finished_request(job.agent_id, request_id), request_id)?, request_id)
 		done! = |value| Sqlite.execute!({ db, query: "UPDATE summaries SET value = :value, through = asking_through, agent_id = '' WHERE session_id = :session_id;", params: { session_id: job.session_id, value } })
 		given_up! = |why| {
-			logged!("Paseo: no summary of ${job.session_id}: ${why}")
+			logged!("Paseo ${host}: no summary of ${job.session_id}: ${why}")
 			archive_id = "${request_id}-archive"
 			_ = exchange!(connection, Paseo.archive_request(job.agent_id, archive_id), archive_id)
 			Sqlite.execute!({ db, query: "UPDATE summaries SET through = asking_through, agent_id = '' WHERE session_id = :session_id;", params: { session_id: job.session_id } })
@@ -2435,16 +2524,14 @@ summarized! = |db, connection, configured| {
 		}
 	}
 	rows : List({ session_id : Str, agent : Str, directory : Str, workspace_id : Str, listed : Str, value : Str, through : I64, agent_id : Str, ended_through : I64, ended_ms : I64, ended_event : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS session_id, s.agent AS agent, s.directory AS directory, s.workspace_id AS workspace_id, s.listed AS listed, coalesce(m.value, '') AS value, coalesce(m.through, 0) AS through, coalesce(m.agent_id, '') AS agent_id, coalesce(t.sequence, 0) AS ended_through, coalesce(t.visible_at, 0) AS ended_ms, coalesce(t.event, '') AS ended_event FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id LEFT JOIN (SELECT session_id, max(sequence) AS sequence, visible_at, event FROM entries WHERE event LIKE '{\"TurnEnded\"%' GROUP BY session_id) t ON t.session_id = s.id WHERE s.provider = 'paseo';", params: {}, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT s.id AS session_id, s.agent AS agent, s.directory AS directory, s.workspace_id AS workspace_id, s.listed AS listed, coalesce(m.value, '') AS value, coalesce(m.through, 0) AS through, coalesce(m.agent_id, '') AS agent_id, coalesce(t.sequence, 0) AS ended_through, coalesce(t.visible_at, 0) AS ended_ms, coalesce(t.event, '') AS ended_event FROM sessions s LEFT JOIN summaries m ON m.session_id = s.id LEFT JOIN (SELECT session_id, max(sequence) AS sequence, visible_at, event FROM entries WHERE event LIKE '{\"TurnEnded\"%' GROUP BY session_id) t ON t.session_id = s.id WHERE s.provider = :provider;", params: { provider }, limits: Sqlite.default_query_limits })?
 	status_of = |row| {
 		listed : Try(Chat.Session, _)
 		listed = Json.parse(row.listed)
 		listed.map_ok(|session| session.status) ?? Running
 	}
-	kinds_rows : List({ value : Str })
-	kinds_rows = Sqlite.query_many!({ db, query: "SELECT value FROM paseo_listings WHERE what = 'agent_kinds';", params: {}, limits: Sqlite.default_query_limits })?
 	kinds : Try(List(Chat.Agent), _)
-	kinds = Json.parse(kinds_rows.first().map_ok(|row| row.value) ?? "")
+	kinds = Json.parse(listed!(db, host, "agent_kinds")?)
 	candidates = rows
 		.drop_if(|row| PaseoSummaries.model(kinds ?? [], row.agent, configured) == Err(NotListed))
 		.map(|row| { session_id: row.session_id, status: status_of(row), ended_through: row.ended_through.to_u64_wrap(), ended_ms: row.ended_ms, summarized_through: row.through.to_u64_wrap(), writing: row.agent_id != "" })
@@ -2473,7 +2560,8 @@ summarized! = |db, connection, configured| {
 				match Paseo.created(exchange!(connection, asked, request_id)?, request_id) {
 					Ok(made) => started_writing!(made)?
 					Err(err) => {
-						logged!("Paseo: starting the summary of ${session_id} failed: ${Str.inspect(err)}")
+						logged!("Paseo ${host}: starting the summary of ${session_id} failed: ${Str.inspect(err)}")
+
 						skipped!()?
 					}
 				}
@@ -2483,58 +2571,61 @@ summarized! = |db, connection, configured| {
 	Ok({})
 }
 
-## Keeps the agents Paseo lists in the registry, in its order, with the
+## Keeps the agents the Paseo host `host` lists in the registry, in its order, with the
 ## title, status, directory and workspace of each, and drops those it no
 ## longer lists, such as archived ones.
-listed_agents! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
-listed_agents! = |db, connection, request_id| {
+listed_agents! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
+listed_agents! = |db, host, connection, request_id| {
+	provider = Hosts.paseo_provider(host)
 	listed = Paseo.agents_answer(exchange!(connection, Paseo.agents_request(request_id), request_id)?, request_id)?
 	for ({ session, directory, workspace_id }, position) in listed.map_with_index(|agent, position| (agent, position)) {
-		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, listed) VALUES (:id, 'paseo', :agent, :title, :position, :directory, :workspace_id, :listed) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, listed = excluded.listed;", params: { id: session.id, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, listed: Json.to_str(session) } })?
+		Sqlite.execute!({ db, query: "INSERT INTO sessions (id, provider, agent, title, position, directory, workspace_id, listed) VALUES (:id, :provider, :agent, :title, :position, :directory, :workspace_id, :listed) ON CONFLICT (id) DO UPDATE SET agent = excluded.agent, title = excluded.title, position = excluded.position, directory = excluded.directory, workspace_id = excluded.workspace_id, listed = excluded.listed;", params: { id: session.id, provider, agent: session.agent, title: session.title, position: position.to_i64_wrap(), directory, workspace_id, listed: Json.to_str(session) } })?
 	}
-	Sqlite.execute!({ db, query: "DELETE FROM sessions WHERE provider = 'paseo' AND id NOT IN (SELECT value FROM json_each(:ids));", params: { ids: Json.to_str(listed.map(|{ session, .. }| session.id)) } })
+	Sqlite.execute!({ db, query: "DELETE FROM sessions WHERE provider = :provider AND id NOT IN (SELECT value FROM json_each(:ids));", params: { provider, ids: Json.to_str(listed.map(|{ session, .. }| session.id)) } })
 }
 
 ## Keeps the projects and workspaces Paseo lists.
-listed_workspaces! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
-listed_workspaces! = |db, connection, request_id| {
+listed_workspaces! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
+listed_workspaces! = |db, host, connection, request_id| {
 	listed = PaseoWorkspaces.answer(exchange!(connection, PaseoWorkspaces.request(request_id), request_id)?, request_id)?
-	Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('workspaces', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+	listing!(db, host, "workspaces", Json.to_str(listed))
 }
 
 ## Keeps the sessions Paseo's providers keep, every `importable_interval_ms`
 ## at most.
-listed_importable! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
-listed_importable! = |db, connection, request_id|
-	if recently_checked!(db, "importable", importable_interval_ms)? {
+listed_importable! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
+listed_importable! = |db, host, connection, request_id|
+	if recently_checked!(db, host, "importable", importable_interval_ms)? {
 		Ok({})
 	} else {
 		listed = Paseo.importable_answer(exchange!(connection, Paseo.importable_request(request_id), request_id)?, request_id)?
-		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('importable', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+		listing!(db, host, "importable", Json.to_str(listed))
 	}
 
 ## Keeps the kinds of agent Paseo can start, every `importable_interval_ms`
 ## at most: Paseo checks each provider's command to answer. Each has its
 ## models and modes, as far as Paseo's providers snapshot lists them.
-listed_agent_kinds! : Sqlite.Db, Tcp.Connection, Str => Try({}, _)
-listed_agent_kinds! = |db, connection, request_id|
-	if recently_checked!(db, "agent_kinds", importable_interval_ms)? {
+listed_agent_kinds! : Sqlite.Db, Str, Tcp.Connection, Str => Try({}, _)
+listed_agent_kinds! = |db, host, connection, request_id|
+	if recently_checked!(db, host, "agent_kinds", importable_interval_ms)? {
 		Ok({})
 	} else {
 		kinds = Paseo.agent_kinds(exchange!(connection, Paseo.agent_kinds_request(request_id), request_id)?, request_id)?
 		snapshot_id = "${request_id}-providers"
 		listed = exchange!(connection, Paseo.providers_snapshot_request(snapshot_id), snapshot_id).map_ok(|answered| Paseo.with_choices(kinds, answered, snapshot_id) ?? kinds) ?? kinds
-		Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('agent_kinds', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(listed) } })
+		listing!(db, host, "agent_kinds", Json.to_str(listed))
 	}
 
 ## The sessions Paseo's providers keep that Paseo doesn't run, as the cycle
 ## last listed them (none before), then the remotes' importable sessions.
 importable! : Context => Try(List(Chat.Importable), _)
 importable! = |context| {
-	rows : List({ value : Str })
-	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'importable';", params: {}, limits: Sqlite.default_query_limits })?
 	listed : Try(List(Chat.Importable), _)
-	listed = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	listed =
+		match context.paseo {
+			Ok(daemon) => Json.parse(listed!(context.db, daemon.name, "importable")?)
+			Err(Disabled) => Ok([])
+		}
 	from_remotes = merged_events!(context, Importable)?.fold(
 		[],
 		|so_far, event| match event {
@@ -2542,7 +2633,7 @@ importable! = |context| {
 			_ => so_far
 		},
 	)
-	Ok((if (context.paseo.is_ok()) listed ?? [] else []).concat(from_remotes))
+	Ok((listed ?? []).concat(from_remotes))
 }
 
 ## Sends a request, and answers the message that answers it, skipping
@@ -2565,23 +2656,23 @@ reply! = |connection, request_id| {
 ## "commit <sha> <path>" (a file's hunks), with the status it was fetched at.
 Cached : { status : Str, fingerprint : Str, fetched_at : I64, value : Str }
 
-## What the git cache holds of `directory` (see `Cached`).
-cached! : Sqlite.Db, Str, Str => Try(Try(Cached, [NothingCached]), _)
-cached! = |db, directory, what| {
+## What the git cache holds of the Paseo host `host`'s `directory` (see `Cached`).
+cached! : Sqlite.Db, Str, Str, Str => Try(Try(Cached, [NothingCached]), _)
+cached! = |db, host, directory, what| {
 	rows : List(Cached)
-	rows = Sqlite.query_many!({ db, query: "SELECT status, fingerprint, fetched_at, value FROM git_cache WHERE directory = :directory AND what = :what;", params: { directory, what }, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT status, fingerprint, fetched_at, value FROM git_cache WHERE host = :host AND directory = :directory AND what = :what;", params: { host, directory, what }, limits: Sqlite.default_query_limits })?
 	Ok(rows.first().map_err(|_| NothingCached))
 }
 
 ## Keeps what was fetched of `directory`'s git, at its status.
-cache! : Sqlite.Db, Str, Str, { status : Str, fingerprint : Str, value : Str } => Try({}, _)
-cache! = |db, directory, what, { status, fingerprint, value }|
-	Sqlite.execute!({ db, query: "INSERT INTO git_cache (directory, what, status, fingerprint, fetched_at, value) VALUES (:directory, :what, :status, :fingerprint, :now, :value) ON CONFLICT (directory, what) DO UPDATE SET status = excluded.status, fingerprint = excluded.fingerprint, fetched_at = excluded.fetched_at, value = excluded.value;", params: { directory, what, status, fingerprint, now: now_ms!(), value } })
+cache! : Sqlite.Db, Str, Str, Str, { status : Str, fingerprint : Str, value : Str } => Try({}, _)
+cache! = |db, host, directory, what, { status, fingerprint, value }|
+	Sqlite.execute!({ db, query: "INSERT INTO git_cache (host, directory, what, status, fingerprint, fetched_at, value) VALUES (:host, :directory, :what, :status, :fingerprint, :now, :value) ON CONFLICT (host, directory, what) DO UPDATE SET status = excluded.status, fingerprint = excluded.fingerprint, fetched_at = excluded.fetched_at, value = excluded.value;", params: { host, directory, what, status, fingerprint, now: now_ms!(), value } })
 
 ## When the cached `what` was fetched, and at what status.
-fetched! : Sqlite.Db, Str, Str => Try(Try({ status : WorkspaceGit.Status, fetched_at : I64 }, [NothingCached]), _)
-fetched! = |db, directory, what|
-	match cached!(db, directory, what)? {
+fetched! : Sqlite.Db, Str, Str, Str => Try(Try({ status : WorkspaceGit.Status, fetched_at : I64 }, [NothingCached]), _)
+fetched! = |db, host, directory, what|
+	match cached!(db, host, directory, what)? {
 		Err(NothingCached) => Ok(Err(NothingCached))
 		Ok(row) => {
 			status : Try(WorkspaceGit.Status, _)
@@ -2591,32 +2682,32 @@ fetched! = |db, directory, what|
 	}
 
 ## Asks for a directory's status and keeps it, then its commits when due.
-checked_out! : Sqlite.Db, Tcp.Connection, Str, Str => Try({}, _)
-checked_out! = |db, connection, directory, request_id| {
+checked_out! : Sqlite.Db, Str, Tcp.Connection, Str, Str => Try({}, _)
+checked_out! = |db, host, connection, directory, request_id| {
 	checkout = PaseoGit.status_answer(exchange!(connection, PaseoGit.status_request(directory, request_id), request_id)?, directory, request_id)?
-	cache!(db, directory, "workspace", { status: "", fingerprint: "", value: Json.to_str(checkout) })?
+	cache!(db, host, directory, "workspace", { status: "", fingerprint: "", value: Json.to_str(checkout) })?
 	match checkout.status {
-		Status(status) if PaseoGit.refresh(Commits, fetched!(db, directory, "commits")?, status, now_ms!()) => {
+		Status(status) if PaseoGit.refresh(Commits, fetched!(db, host, directory, "commits")?, status, now_ms!()) => {
 			commits_id = "${request_id}-commits"
 			commits = PaseoGit.commits_answer(exchange!(connection, PaseoGit.commits_request(directory, commits_id), commits_id)?, commits_id)?
-			cache!(db, directory, "commits", { status: Json.to_str(status), fingerprint: "", value: Json.to_str(commits) })
+			cache!(db, host, directory, "commits", { status: Json.to_str(status), fingerprint: "", value: Json.to_str(commits) })
 		}
 		_ => Ok({})
 	}
 }
 
 ## Fetches a directory's diff when due by the status just asked for.
-diffed! : Sqlite.Db, Tcp.Connection, Str, WorkspaceGit.Scope, Str => Try({}, _)
-diffed! = |db, connection, directory, scope, request_id| {
+diffed! : Sqlite.Db, Str, Tcp.Connection, Str, WorkspaceGit.Scope, Str => Try({}, _)
+diffed! = |db, host, connection, directory, scope, request_id| {
 	what = if (scope == Uncommitted) "uncommitted" else "base"
 	known : Try({ status : [Status(WorkspaceGit.Status), NoStatus] }, _)
-	known = Json.parse(cached!(db, directory, "workspace")?.map_ok(|row| row.value) ?? "")
+	known = Json.parse(cached!(db, host, directory, "workspace")?.map_ok(|row| row.value) ?? "")
 	match known.map_ok(|{ status }| status) {
-		Ok(Status(status)) if PaseoGit.refresh(Diff, fetched!(db, directory, what)?, status, now_ms!()) => {
+		Ok(Status(status)) if PaseoGit.refresh(Diff, fetched!(db, host, directory, what)?, status, now_ms!()) => {
 			# A diff Paseo can't make, such as against a base it can't find, is
 			# kept empty, so it is asked for again only when a diff would be.
 			answered = PaseoGit.diff_answer(exchange!(connection, PaseoGit.diff_request(directory, scope, request_id), request_id)?, request_id)
-			cache!(db, directory, what, { status: Json.to_str(status), fingerprint: WorkspaceGit.fingerprint(scope, answered ?? []), value: Json.to_str(answered ?? []) })?
+			cache!(db, host, directory, what, { status: Json.to_str(status), fingerprint: WorkspaceGit.fingerprint(scope, answered ?? []), value: Json.to_str(answered ?? []) })?
 			answered.map_ok(|_| {})
 		}
 		_ => Ok({})
@@ -2626,15 +2717,15 @@ diffed! = |db, connection, directory, scope, request_id| {
 ## Fetches the hunks of a file in a commit, which never change, once. One
 ## Paseo failed to give is asked for again `commit_file_retry_ms` later,
 ## not at each cycle.
-commit_file! : Sqlite.Db, Tcp.Connection, Str, Str => Try({}, _)
-commit_file! = |db, connection, subject, request_id| {
+commit_file! : Sqlite.Db, Str, Tcp.Connection, Str, Str => Try({}, _)
+commit_file! = |db, host, connection, subject, request_id| {
 	decoded : Try({ directory : Str, sha : Str, path : Str }, _)
 	decoded = Json.parse(subject)
 	{ directory, sha, path } = decoded?
 	what = "commit ${sha} ${path}"
 	since = now_ms!() - commit_file_retry_ms
-	failed = cached!(db, directory, "failed ${what}")?.map_ok(|row| row.fetched_at > since) ?? Bool.False
-	if cached!(db, directory, what)?.is_ok() or failed {
+	failed = cached!(db, host, directory, "failed ${what}")?.map_ok(|row| row.fetched_at > since) ?? Bool.False
+	if cached!(db, host, directory, what)?.is_ok() or failed {
 		Ok({})
 	} else {
 		asked = exchange!(connection, PaseoGit.commit_file_request(directory, sha, path, request_id), request_id)
@@ -2643,10 +2734,10 @@ commit_file! = |db, connection, subject, request_id| {
 			Err(err) => Err(err)
 		}
 		match answered {
-			Ok(hunks) => cache!(db, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
+			Ok(hunks) => cache!(db, host, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
 			Err(ConnectionLost(lost)) => Err(ConnectionLost(lost))
 			Err(err) => {
-				cache!(db, directory, "failed ${what}", { status: "", fingerprint: "", value: Str.inspect(err) })?
+				cache!(db, host, directory, "failed ${what}", { status: "", fingerprint: "", value: Str.inspect(err) })?
 				Err(err)
 			}
 		}
@@ -2665,14 +2756,14 @@ file_cache_ms = 600_000
 ## Fetches a directory's listing ("tree") or a file ("file") a poll watched,
 ## unless it was fetched within `PaseoFiles.lifetime_ms`, and keeps it as its
 ## topic's event.
-explored_by_paseo! : Sqlite.Db, Tcp.Connection, Str, Str, Str => Try({}, _)
-explored_by_paseo! = |db, connection, kind, subject, request_id| {
+explored_by_paseo! : Sqlite.Db, Str, Tcp.Connection, Str, Str, Str => Try({}, _)
+explored_by_paseo! = |db, host, connection, kind, subject, request_id| {
 	decoded : Try({ directory : Str, path : Str }, _)
 	decoded = Json.parse(subject)
 	{ directory, path } = decoded?
 	what = "${kind} ${path}"
 	since = now_ms!() - PaseoFiles.lifetime_ms
-	if file_cached!(db, directory, what)?.map_ok(|row| row.fetched_at > since) ?? Bool.False {
+	if file_cached!(db, host, directory, what)?.map_ok(|row| row.fetched_at > since) ?? Bool.False {
 		Ok({})
 	} else {
 		event : Protocol.Event
@@ -2682,16 +2773,16 @@ explored_by_paseo! = |db, connection, kind, subject, request_id| {
 			} else {
 				Contents(PaseoFiles.contents_answer(exchange!(connection, PaseoFiles.contents_request(directory, path, request_id), request_id)?, path, request_id)?)
 			}
-		Sqlite.execute!({ db, query: "INSERT INTO file_cache (directory, what, fetched_at, value) VALUES (:directory, :what, :now, :value) ON CONFLICT (directory, what) DO UPDATE SET fetched_at = excluded.fetched_at, value = excluded.value;", params: { directory, what, now: now_ms!(), value: Json.to_str(event) } })
+		Sqlite.execute!({ db, query: "INSERT INTO file_cache (host, directory, what, fetched_at, value) VALUES (:host, :directory, :what, :now, :value) ON CONFLICT (host, directory, what) DO UPDATE SET fetched_at = excluded.fetched_at, value = excluded.value;", params: { host, directory, what, now: now_ms!(), value: Json.to_str(event) } })
 	}
 }
 
-## What the file cache holds of a directory: "tree <path>" or "file <path>",
+## What the file cache holds of the Paseo host `host`'s directory: "tree <path>" or "file <path>",
 ## a files.v1 topic's event.
-file_cached! : Sqlite.Db, Str, Str => Try(Try({ fetched_at : I64, value : Str }, [NothingCached]), _)
-file_cached! = |db, directory, what| {
+file_cached! : Sqlite.Db, Str, Str, Str => Try(Try({ fetched_at : I64, value : Str }, [NothingCached]), _)
+file_cached! = |db, host, directory, what| {
 	rows : List({ fetched_at : I64, value : Str })
-	rows = Sqlite.query_many!({ db, query: "SELECT fetched_at, value FROM file_cache WHERE directory = :directory AND what = :what;", params: { directory, what }, limits: Sqlite.default_query_limits })?
+	rows = Sqlite.query_many!({ db, query: "SELECT fetched_at, value FROM file_cache WHERE host = :host AND directory = :directory AND what = :what;", params: { host, directory, what }, limits: Sqlite.default_query_limits })?
 	Ok(rows.first().map_err(|_| NothingCached))
 }
 
@@ -3001,7 +3092,7 @@ hosted! = |context| {
 	remotes = rows.keep_if(|row| row.kind == "Liton").map(|row| { name: row.name, url: row.target })
 	paseo =
 		match rows.find_first(|row| row.kind == "Paseo" and row.name == "paseo").map_ok(|row| (Paseo.address(row.target), row.secret)) {
-			Ok((Ok({ host, port }), password)) => Ok({ host, port, password })
+			Ok((Ok({ host, port }), password)) => Ok({ name: "paseo", host, port, password })
 			_ => Err(Disabled)
 		}
 	Ok({ ..context, remotes, paseo })
@@ -3116,11 +3207,11 @@ host_status! = |db, name, status, version| {
 	Sqlite.execute!({ db, query: "UPDATE hosts SET status = :status, version = CASE WHEN :version = '' THEN version ELSE :version END, online_at = max(online_at, :online) WHERE name = :name;", params: { name, status: Json.to_str(status), version: version ?? "", online } })
 }
 
-## Forgets that the Paseo host `paseo` refused liton, when it changed, so
-## the next cycle asks it at once rather than waiting.
+## Forgets that a Paseo host refused liton, when it changed, so the next
+## cycle asks it at once rather than waiting.
 host_restarted! : Sqlite.Db, Hosts.Host, Bool => Try({}, _)
 host_restarted! = |db, host, changed|
-	if (changed and host.kind == Paseo) Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) else Ok({})
+	if (changed and host.kind == Paseo) Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE host = :host AND what = 'refusal';", params: { host: host.name } }) else Ok({})
 
 ## Makes the database `path`, with SQLite's journal beside it, readable and
 ## writable by the daemon's user alone (0600), as it keeps the hosts'
