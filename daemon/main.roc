@@ -2158,20 +2158,40 @@ diffed! = |db, connection, directory, scope, request_id| {
 	}
 }
 
-## Fetches the hunks of a file in a commit, which never change, once.
+## Fetches the hunks of a file in a commit, which never change, once. One
+## Paseo failed to give is asked for again `commit_file_retry_ms` later,
+## not at each cycle.
 commit_file! : Sqlite.Db, Tcp.Connection, Str, Str => Try({}, _)
 commit_file! = |db, connection, subject, request_id| {
 	decoded : Try({ directory : Str, sha : Str, path : Str }, _)
 	decoded = Json.parse(subject)
 	{ directory, sha, path } = decoded?
 	what = "commit ${sha} ${path}"
-	if cached!(db, directory, what)?.is_ok() {
+	since = now_ms!() - commit_file_retry_ms
+	failed = cached!(db, directory, "failed ${what}")?.map_ok(|row| row.fetched_at > since) ?? Bool.False
+	if cached!(db, directory, what)?.is_ok() or failed {
 		Ok({})
 	} else {
-		hunks = PaseoGit.commit_file_answer(exchange!(connection, PaseoGit.commit_file_request(directory, sha, path, request_id), request_id)?, request_id)?
-		cache!(db, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
+		asked = exchange!(connection, PaseoGit.commit_file_request(directory, sha, path, request_id), request_id)
+		answered = match asked {
+			Ok(answer) => PaseoGit.commit_file_answer(answer, request_id)
+			Err(err) => Err(err)
+		}
+		match answered {
+			Ok(hunks) => cache!(db, directory, what, { status: "", fingerprint: "", value: Json.to_str(hunks) })
+			Err(ConnectionLost(lost)) => Err(ConnectionLost(lost))
+			Err(err) => {
+				cache!(db, directory, "failed ${what}", { status: "", fingerprint: "", value: Str.inspect(err) })?
+				Err(err)
+			}
+		}
 	}
 }
+
+## How long the daemon waits before asking again for a commit's file Paseo
+## failed to give.
+commit_file_retry_ms : I64
+commit_file_retry_ms = 60_000
 
 ## How long the daemon keeps a listing or a file no poll watches any more.
 file_cache_ms : I64
