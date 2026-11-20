@@ -7,7 +7,7 @@ and the UI speaks.
 ## Capabilities
 
 A capability is a named, versioned interface: `chat.v1`, `workspace.git.v1`,
-`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`. Its types live in the `capabilities` Roc package,
+`attention.v1`, `workspaces.v1`, `files.v1`, `review.v1`, `rooms.v1`, `tickets.v1`, `schedules.v1`, `hosts.v1`, `usage.v1`. Its types live in the `capabilities` Roc package,
 which the daemon, the UI and the CLI all import, so a wire mismatch is a compile
 error. Each capability defines:
 
@@ -153,7 +153,8 @@ The calls: `chat.v1`'s `ListSessions`, `WatchSession`, `SendMessage`,
 `React`, `Unreact`, `Join` and `Leave` (Rooms, below); `tickets.v1`'s
 `ListTickets`, `GetTicket`, `Comment`, `SetStatus`, `SetAssignees`, `Link`
 and `Unlink` (Tickets, below); `schedules.v1`'s `ListSchedules`, `Inspect`, `Create`, `Update`,
-`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below).
+`Pause`, `Resume`, `RunOnce` and `Delete` (Schedules, below); `usage.v1`'s
+`Refresh` (Usage, below).
 
 `{"SendMessage": {"session_id", "text"}}` prompts a session's agent. While
 it works on a turn, the message interrupts it, or with `"while_running":
@@ -335,6 +336,7 @@ events when nothing changed:
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
 | `schedules.v1` | `schedules` | snapshot | `{"Schedules": [Schedule]}` |
 | `schedules.v1` | `runs/<schedule_id>` | snapshot | `{"Runs": [Run]}`, the latest first |
+| `usage.v1` | `reports` | snapshot | `{"Reports": [Report]}`, each account's windows and balances |
 
 `importable` lists the sessions a provider keeps but doesn't run, such as a
 sandboxed agent's, read only, each with the directory it worked in.
@@ -744,6 +746,37 @@ machine and network, so `hosts.v1` answers only paired devices
 leads: a paired device can point it at anything the daemon's machine
 reaches. Relay pairing links and SSH tunnels to a Paseo daemon are later
 work: today a Paseo host is reached directly.
+
+### Usage
+
+`usage.v1` tells what the accounts agents run under have used of their
+plans, as their providers' usage reports tell: one report per account,
+with its windows, such as a 5-hour and a weekly limit, and its balances.
+
+```json
+{ "provider": "paseo", "source": "claude", "account": "me@example.com", "plan": "Max", "status": "Available",
+  "windows": [{ "id": "five_hour", "label": "Session", "short": "5h", "used_pct": 12.5, "resets_at": "2026-01-01T14:00:00.000Z" },
+              { "id": "weekly", "label": "Weekly", "short": "wk", "used_pct": 41.0, "resets_at": "2026-01-05T09:00:00.000Z" }],
+  "balances": [{ "id": "extra_usage", "label": "Extra usage", "used": 4.2, "limit": 50.0, "unit": "usd" }] }
+{ "provider": "paseo", "source": "codex", "account": "", "plan": "", "status": { "Unavailable": "the login expired: run codex login" }, "windows": [], "balances": [] }
+```
+
+`source` is the kind of agent that runs under the account, as a session's
+`agent` names it, so a client finds a session's account by its provider and
+agent. A window's `id` is `weekly` for the week's; `short` is a label of a
+few characters where space is tight, `""` for none; `used_pct` is a
+percent, and it and `resets_at` are left out when not told. A balance's
+`unit` is `usd`, `credits`, `requests` or `tokens`, and its `used`,
+`remaining` and `limit` are left out when not told. `status` is
+`Available`, or `{"Unavailable": why}`, such as a login that expired.
+
+A provider asks its backend only while a poll follows `reports`, and not
+more often than its backend allows. `Refresh` asks again at once:
+
+```json
+{ "capability": "usage.v1", "request": "Refresh" }
+{ "Ok": "Accepted" }
+```
 
 ### Audio
 

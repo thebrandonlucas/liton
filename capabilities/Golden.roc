@@ -6,6 +6,7 @@ import Hosts
 import Manifest
 import Schedules
 import Tickets
+import Usage
 
 import "tests/manifest.json" as manifest_json : Str
 import "tests/requests.json" as requests_json : Str
@@ -14,6 +15,7 @@ import "tests/timeline.json" as timeline_json : Str
 import "tests/tickets.json" as tickets_json : Str
 import "tests/schedules.json" as schedules_json : Str
 import "tests/hosts.json" as hosts_json : Str
+import "tests/usage.json" as usage_json : Str
 
 Golden := [].{}
 
@@ -68,3 +70,10 @@ expect {
 }
 
 expect !Json.to_str(Fixtures.host_responses).contains("t0ken")
+
+expect {
+	usage = { requests: [Refresh], responses: [Accepted], reports: Fixtures.usage_reports }
+	decoded : Try({ requests : List(Usage.Request), responses : List(Usage.Response), reports : List(Usage.Report) }, _)
+	decoded = Json.parse(usage_json)
+	Json.to_str(usage) == usage_json.trim() and decoded == Ok(usage)
+}

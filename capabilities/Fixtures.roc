@@ -4,6 +4,7 @@ import Hosts
 import Manifest
 import Schedules
 import Tickets
+import Usage
 
 Fixtures := [].{
 	manifest : Manifest.Advertised
@@ -154,5 +155,25 @@ Fixtures := [].{
 		]),
 		Accepted,
 		Rejected("there is a host called team already"),
+	]
+
+	## A Claude account's report with its 5-hour and weekly windows and a
+	## balance, and one whose login expired, as usage.v1's `reports` holds
+	## them.
+	usage_reports : List(Usage.Report)
+	usage_reports = [
+		{
+			provider: "paseo",
+			source: "claude",
+			account: "me@example.com",
+			plan: "Max",
+			status: Available,
+			windows: [
+				{ id: "five_hour", label: "Session", short: "5h", used_pct: Ok(12.5), resets_at: Ok("2026-01-01T14:00:00.000Z") },
+				{ id: "weekly", label: "Weekly", short: "wk", used_pct: Ok(41), resets_at: Ok("2026-01-05T09:00:00.000Z") },
+			],
+			balances: [{ id: "extra_usage", label: "Extra usage", used: Ok(4.2), remaining: Err(Missing), limit: Ok(50), unit: "usd" }],
+		},
+		{ provider: "paseo", source: "codex", account: "", plan: "", status: Unavailable("the login expired: run codex login"), windows: [], balances: [] },
 	]
 }

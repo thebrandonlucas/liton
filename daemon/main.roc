@@ -760,6 +760,7 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
+		UsageReports => Ok(Protocol.failed(wanted, { code: Unsupported, message: "the daemon offers no usage.v1 yet" }))
 	}
 }
 
