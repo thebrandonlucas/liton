@@ -384,9 +384,10 @@ Liton := [].{
 		Engine.watch_changes(model.signal().map(|state| state.review_desk.scroll), |scroll| scroll.refs.map(|ref| Engine.command(Engine.scroll_into_view(ref, { block: Start }))), Engine.ignore({})),
 		Engine.watch(model.signal().map(|state| state.keys_typed), |typed| if (typed.keys.is_empty()) [] else [Engine.timer(1500)], model.on_result(|state, typed, _| Keymap.paused(state, typed.serial))),
 		Engine.watch(model.signal().map(Model.subjects), |_| [Engine.again({})], model.on_result(|state, _, _| Model.follow(state))),
-		Engine.watch_changes(
+		# The latest poll only: one replaced on its way is given up (see `Model.follow`).
+		Engine.watch_latest(
 			model.signal().map(|state| state.poll),
-			|poll| [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
+			|poll| if (poll.topics.is_empty()) [] else [Engine.http_body({ method: "POST", url: "/liton/v1/poll", headers: [("Content-Type", "application/json")], body: Json.to_str({ topics: poll.topics }), timeout: Ms(10000) })],
 			model.on_result(
 				|state, poll, res| {
 					decoded : Try(Protocol.Polled, _)
@@ -637,9 +638,25 @@ Liton := [].{
 			|| Engine.text(""),
 		)
 
-	## What went wrong last, over the tiles until dismissed or replaced.
+	## What went wrong last, over the tiles until dismissed or replaced; and
+	## while the daemon answers slowly or not at all, that it is waited for.
 	toast : State(Ctx, Model.State) -> Elem(Ctx)
 	toast = |model|
+		Html.div(
+			"toasts",
+			[
+				Engine.when(
+					model.signal().map(|state| Model.daemon_waited(state) != Answering),
+					|| Html.div_attrs([Engine.class("toast waiting"), Engine.attr("role", "status"), Engine.test_id("daemon-waited")], [Spinner.spinner("Connecting", Inline), Html.span_s(model.signal().map(|state| if (Model.daemon_waited(state) == Unreachable) "Can't reach the daemon. Trying again…" else "Waiting for the daemon…"), [])]),
+					|| Engine.text(""),
+				),
+				Liton.notice(model),
+			],
+		)
+
+	## What went wrong last, until dismissed or replaced.
+	notice : State(Ctx, Model.State) -> Elem(Ctx)
+	notice = |model|
 		Engine.when(
 			model.signal().map(|state| !state.notice.is_empty()),
 			|| Html.div_attrs([Engine.class("toast"), Engine.attr("role", "status")], [Html.span_s(model.signal().map(|state| state.notice), [Engine.test_id("notice")]), Liton.icon_button(Engine.const("Dismiss"), "icon dismiss", model.update(|state| { ..state, notice: "" }))]),
@@ -3366,7 +3383,6 @@ Liton := [].{
 	review_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	review_view = |model, id, pane| {
 		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
-		cards = shown.map(|{ pane: pane_shown, state }| Model.review_cards(state, pane_shown))
 		Html.div(
 			"review",
 			[
@@ -3385,17 +3401,30 @@ Liton := [].{
 									[
 										Engine.when(pane.map2(model.signal(), |shown_pane, state| Liton.review_bar_in_header(state, shown_pane)), || Engine.text(""), || Liton.review_bar(model, pane)),
 										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
-										Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
-										Engine.each(
-											cards.map(
-												|listed|
-													match listed {
-														Cards(found) => found
-														Loading => []
-													},
-											),
-											|card| card.path,
-											|card| Liton.review_card(model, id, pane, card),
+										# The cards are made again only when what they show changes,
+										# not at each key typed in the composer.
+										Engine.derive(
+											shown.map(|{ pane: pane_shown, state }| { pane: pane_shown, state: Model.review_source(state) }),
+											|source| {
+												cards = source.map(|{ pane: pane_shown, state }| Model.review_cards(state, pane_shown))
+												Html.div(
+													"review-card-list",
+													[
+														Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
+														Engine.each(
+															cards.map(
+																|listed|
+																	match listed {
+																		Cards(found) => found
+																		Loading => []
+																	},
+															),
+															|card| card.path,
+															|card| Liton.review_card(model.lift(), id.lift(), card),
+														),
+													],
+												)
+											},
 										),
 									],
 								)
@@ -3579,8 +3608,8 @@ Liton := [].{
 	## over its diff. Its coming on screen and leaving it
 	## tells the file in view (`Model.card_seen`). Top-level for the reason
 	## `scope_picker` is.
-	review_card : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Model.ReviewCard) -> Elem(Row(PaneCtx, Model.ReviewCard))
-	review_card = |model, id, pane, card| {
+	review_card : State(ctx, Model.State), Signal(ctx, Str), RowRef(ctx, Model.ReviewCard) -> Elem(Row(ctx, Model.ReviewCard))
+	review_card = |model, id, card| {
 		file = card.field(|shown| shown.file)
 		Html.div_attrs(
 			[Engine.class_s(card.field(|shown| if (shown.viewed) "review-card viewed" else "review-card")), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path))), Engine.on_seen({}, model.lift_row().set_value_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), |state, at, seen| Model.card_seen(state, at, seen.intersecting)))],
@@ -3595,7 +3624,18 @@ Liton := [].{
 					],
 				),
 				Spinner.or_text(card.field(|shown| shown.note), Inline, [Engine.class("missing")]),
-				Html.div("review-diff", [Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows))]),
+				# Its diff's rows are made again only when its diff changes, and
+				# annotated only when its annotation does.
+				Engine.derive(
+					card.field(|shown| shown.diff),
+					|diff| {
+						code = diff.map(|shown| Model.diff_code(shown.layout, shown.path, shown.hunks))
+						Engine.derive(
+							card.field(|shown| (shown.annotation, shown.focused_hunk)).lift(),
+							|annotation| Html.div("review-diff", [Liton.code_view(model.lift_row().lift().lift(), id.lift_row().lift().lift(), diff.map(|shown| if (shown.layout == "Split") "code-view split" else "code-view unified").lift(), code.lift().map2(annotation, |rows, (card_annotation, focused_hunk)| Model.hunk_marked(focused_hunk, Model.annotate(card_annotation, rows))))]),
+						)
+					},
+				),
 			],
 		)
 	}
@@ -3630,9 +3670,37 @@ Liton := [].{
 	## they end on, and the composer of a comment under the lines picked.
 	## Clicking a number picks its line (`Model.pick_line`).
 	code_view : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
-	code_view = |model0, id, class, rows|
+	code_view = |model, id, class, rows|
 		Html.div_attrs(
 			[Engine.class_s(class)],
+			[Engine.each(rows.map(Model.code_chunks), |chunk| chunk.key, |chunk| Liton.code_chunk(model, id, chunk))],
+		)
+
+	## A chunk of a code view's rows (`Model.code_chunks`), drawn once it
+	## comes within reach of the screen, or at once when `eager`; until then
+	## a blank of its height, so a long diff draws only what is read.
+	code_chunk : State(ctx, Model.State), Signal(ctx, Str), RowRef(ctx, Model.CodeChunk) -> Elem(Row(ctx, Model.CodeChunk))
+	code_chunk = |model, id, chunk|
+		Html.div(
+			"code-chunk",
+			[
+				Engine.state(
+					Bool.False,
+					|seen|
+						Engine.when(
+							chunk.field(|shown| shown.eager).lift().map2(seen.signal(), |eager, was_seen| eager or was_seen),
+							|| Liton.code_rows(model.lift_row().lift(), id.lift_row().lift(), chunk.field(|shown| shown.rows).lift()),
+							|| Html.div_attrs([Engine.class("code-chunk-blank"), Engine.attr_s("style", chunk.field(|shown| "--rows: ${shown.rows.len().to_str()}").lift()), Engine.on_seen({ ahead: Bool.True }, seen.set_value(|was_seen, at| was_seen or at.intersecting))], []),
+						),
+				),
+			],
+		)
+
+	## The rows of a code view, as `code_view` says.
+	code_rows : State(ctx, Model.State), Signal(ctx, Str), Signal(ctx, List(Model.CodeRow)) -> Elem(ctx)
+	code_rows = |model0, id, rows|
+		Html.div_attrs(
+			[Engine.class("code-rows")],
 			[
 				Engine.each(
 					rows,
