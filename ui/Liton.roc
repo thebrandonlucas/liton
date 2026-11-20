@@ -3024,6 +3024,8 @@ Liton := [].{
 					|| Liton.permission_card(model0, id.map(|pane_id| "${pane_id}/permission"), pending.map(|waiting| waiting ?? Liton.no_permission), Engine.const("")),
 					|| Engine.text(""),
 				),
+				# Near or past a limit, it says so, and past one offers a way on.
+				Liton.limit_bar(model0, id),
 				# An archived session's chat reads only, with Unarchive.
 				Engine.when(
 					shown.map(|{ pane, state }| Model.archived_at(state, Model.session_of(state, pane)).is_ok()),
@@ -3431,12 +3433,29 @@ Liton := [].{
 
 	## A ring in a chat pane's composer of how much of its session's context
 	## window the last turn filled, while its provider tells what it used,
-	## that opens a list of the tokens it read and wrote and what it cost.
+	## amber near its limit and red past it, that opens a list of the tokens
+	## it read and wrote and what it cost, and, while the daemon keeps
+	## limits, a slider of the session's limit and Compact.
 	context_meter : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	context_meter = |model, id| {
 		key = id.map(|pane_id| "${pane_id} context")
-		used = id.map2(model.signal(), |pane_id, state| Model.usage_shown(state, Model.session_of(state, Model.pane(state, pane_id))))
+		session_id = id.map2(model.signal(), |pane_id, state| Model.session_of(state, Model.pane(state, pane_id)))
+		used = session_id.map2(model.signal(), |session, state| Model.usage_shown(state, session))
 		shown = used.map(|told| told ?? { percent: 0, context: "", input: "", cached: "", output: "", cost: "" })
+		limit = session_id.map2(
+			model.signal(),
+			|session, state| {
+				limits = LimitDesk.limits(state.limits)
+				{
+					state: LimitDesk.session(state.limits, session).map_ok(|row| row.state) ?? Ok,
+					percent: Limits.session_limit(limits, session) ?? 0,
+					own: Limits.limit_of(limits, Session(session)).is_ok(),
+					pending: LimitDesk.pending(state.limits, Session(session)),
+					offered: state.capabilities.contains(Capability.limits_v1),
+					compacts: Model.compacts(Model.session(state, session)),
+				}
+			},
+		)
 		row = |named, value| Html.div_s(value.map(|said| if (said.is_empty()) "usage-row hidden" else "usage-row"), [Html.span_s(Engine.const(named), []), Html.span_s(value, [])])
 		Engine.when(
 			used.map(|told| told.is_ok()),
@@ -3446,10 +3465,10 @@ Liton := [].{
 					key,
 					"context-meter",
 					[
-						Engine.class("context-ring"),
+						Engine.class_s(limit.map(|shown_limit| Liton.limit_class("context-ring", shown_limit.state))),
 						Engine.attr_s("style", shown.map(|told| "--used: ${told.percent.to_str()}")),
 						Html.aria_label_s(shown.map(|told| "Context: ${told.percent.to_str()}% used")),
-						Engine.attr_s("title", shown.map(|told| if (told.context.is_empty()) "What the last turn used" else "Context: ${told.context}")),
+						Engine.attr_s("title", shown.map2(limit, |told, shown_limit| Str.join_with([if (told.context.is_empty()) "What the last turn used" else "Context: ${told.context}", if (shown_limit.percent == 0) "" else "limit ${shown_limit.percent.to_str()}%"].drop_if(Str.is_empty), " · "))),
 					],
 					"usage",
 					[Engine.test_id("context-usage")],
@@ -3460,9 +3479,73 @@ Liton := [].{
 						row("Cached input", shown.map(|told| told.cached)),
 						row("Output", shown.map(|told| told.output)),
 						row("Cost", shown.map(|told| told.cost)),
+						Engine.when(
+							limit.map(|shown_limit| shown_limit.offered),
+							||
+								Html.div(
+									"usage-limit",
+									[
+										Html.div_s(
+											limit.map(|shown_limit| if (shown_limit.pending) "usage-row pending" else "usage-row"),
+											[
+												Html.span_s(Engine.const("Limit"), []),
+												Html.span_s(limit.map(|shown_limit| "${LimitDesk.limit_text(shown_limit.percent)}${if (shown_limit.percent > 0 and !shown_limit.own) " (default)" else ""}"), [Engine.test_id("context-limit")]),
+											],
+										),
+										# Its own focus handler, nearer it than the tile's, keeps the menu open.
+										Html.div_attrs([Engine.on("focus", model.set_value(|state, _| state))], [Liton.limit_slider(Engine.const("Context limit"), limit.map(|shown_limit| shown_limit.percent), model.set_value_by(session_id, |state, session, text| Model.set_limit(state, Session(session), text)))]),
+										Engine.when(limit.map(|shown_limit| shown_limit.compacts), || Html.button("Compact", [Engine.class("usage-compact"), Html.aria_label("Compact the context"), Engine.attr("title", "Send /compact, which makes room in the context"), Engine.attr("value", Menu.inside)], model.update_by(id, Model.compact)), || Engine.text("")),
+									],
+								),
+							|| Engine.text(""),
+						),
 					],
 				),
 			|| Engine.text(""),
+		)
+	}
+
+	## Above a chat pane's composer, while its session nears or passed its
+	## context limit, or its account its weekly limit, how near, and past
+	## one, what the daemon refuses and the ways on: Compact, where its agent
+	## compacts, and Start fresh, a new agent in its workspace; or, past the
+	## weekly limit, Raise the limit, in Settings.
+	limit_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	limit_bar = |model, id| {
+		shown = id.map2(model.signal(), |pane_id, state| { limit: Model.limit_of_pane(state, pane_id), compacts: Model.compacts(Model.session(state, Model.session_of(state, Model.pane(state, pane_id)))) })
+		kind = shown.map(
+			|near|
+				match near.limit {
+					Context(row) if row.state == Over => ContextOver
+					Context(_) => ContextNear
+					Week(row) if row.state == Over => WeekOver
+					Week(_) => WeekNear
+					Clear => Clear
+				},
+		)
+		said = shown.map(
+			|near|
+				match near.limit {
+					Context(row) if row.state == Over => "Over its context limit: ${row.used_pct.to_str()}% of ${(row.limit_pct ?? 0).to_str()}%. New messages are refused until you compact it or start fresh."
+					Context(row) => "Near its context limit: ${row.used_pct.to_str()}% of ${(row.limit_pct ?? 0).to_str()}%."
+					Week(row) if row.state == Over => "The ${row.source} account is over its weekly limit: ${row.used_pct.to_str()}% of ${(row.limit_pct ?? 0).to_str()}%. New messages and agents on it are refused."
+					Week(row) => "The ${row.source} account is near its weekly limit: ${row.used_pct.to_str()}% of ${(row.limit_pct ?? 0).to_str()}%."
+					Clear => ""
+				},
+		)
+		compact = Engine.when(shown.map(|near| near.compacts), || Html.button("Compact", [Engine.attr("title", "Send /compact, which makes room in the context")], model.update_by(id, Model.compact)), || Engine.text(""))
+		warned = |class, actions| Html.div_attrs([Engine.class(class), Engine.attr("role", "status"), Engine.test_id("limit-bar")], [Html.span_s(said, [Engine.class("limit-said")])].concat(actions))
+		Engine.switch(
+			kind,
+			[Clear, ContextNear, ContextOver, WeekNear, WeekOver],
+			|which|
+				match which {
+					Clear => Engine.text("")
+					ContextNear => warned("limit-bar near", [compact])
+					ContextOver => warned("limit-bar over", [compact, Html.button("Start fresh", [Engine.attr("title", "Start an agent of its kind in its workspace")], model.update_by(id, Model.start_fresh))])
+					WeekNear => warned("limit-bar near", [])
+					WeekOver => warned("limit-bar over", [Html.button("Raise the limit", [], model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "usage"), menu: "" }))])
+				},
 		)
 	}
 

@@ -1032,8 +1032,17 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .composer .chip { max-width: 16ch; min-height: 24px; background-color: transparent; color: var(--muted); font-size: 12px; }
 .composer .chip:hover { background-color: var(--field); color: var(--text); }
 .composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
-  background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--accent) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
+  background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--ring, var(--accent)) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
+.composer .context-ring.near { --ring: var(--warn); }
+.composer .context-ring.over { --ring: var(--fail); }
+.usage-limit { display: grid; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--edge); }
+.usage-row.pending span:last-child { font-style: italic; color: var(--muted); }
 .limit-slider { width: 100%; margin: 0; accent-color: var(--accent); }
+.usage-compact { justify-self: start; }
+.limit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 6px; padding: 6px 10px; border-radius: var(--radius, 8px); background: var(--warn-tint); color: var(--warn); font-size: 13px; }
+.limit-bar.over { background: color-mix(in srgb, var(--fail) 14%, transparent); color: var(--fail); }
+.limit-bar .limit-said { flex: 1 1 auto; min-width: 0; }
+.limit-bar button { color: inherit; border-color: currentColor; }
 .context-meter { flex: none; display: flex; }
 .context-meter .usage { position-area: block-start span-inline-start; margin: 8px 0; min-width: 200px; padding: 8px 10px; font-size: 12px; }
 .usage-title { margin: 0 0 4px; color: var(--muted); }

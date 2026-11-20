@@ -4052,6 +4052,45 @@ Model := [].{
 		}
 	}
 
+	## Whether a session's agent makes room in its context when sent
+	## `/compact`, as Claude's and Codex's do.
+	compacts : Chat.Session -> Bool
+	compacts = |shown_session| ["claude", "codex"].contains(shown_session.agent)
+
+	## Sends `/compact` to the session a chat pane shows, shown as sent at
+	## once, and closes its menu.
+	compact : State, Str -> State
+	compact = |state, pane_id| {
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		if (session_id.is_empty()) state else { ..Model.send(state, SendMessage({ session_id, text: "/compact", while_running: Err(Missing) })), menu: "" }
+	}
+
+	## Opens the form to start an agent of the same kind as the session a
+	## chat pane shows, in its workspace, to start fresh.
+	start_fresh : State, Str -> State
+	start_fresh = |state, pane_id| {
+		shown_session = Model.session(state, Model.session_of(state, Model.pane(state, pane_id)))
+		opened = Model.navigator_form({ ..state, menu: "" }, shown_session.id)
+		if (opened.form.kind == Agent and Model.agent_kinds(opened, opened.form.place).contains(shown_session.agent)) { ..opened, form: { ..opened.form, agent: shown_session.agent } } else opened
+	}
+
+	## How near the session a chat pane shows is to its limits: its context
+	## (`Context`), or else its account's week (`Week`), the first Over, or
+	## else Near; `Clear` while neither is.
+	limit_of_pane : State, Str -> [Context(Limits.SessionStatus), Week(Limits.WeekStatus), Clear]
+	limit_of_pane = |state, pane_id| {
+		shown_session = Model.session(state, Model.session_of(state, Model.pane(state, pane_id)))
+		context = LimitDesk.session(state.limits, shown_session.id)
+		week = LimitDesk.week_of(state.limits, shown_session.provider, shown_session.agent)
+		match (context, week) {
+			(Ok(row), _) if row.state == Over => Context(row)
+			(_, Ok(row)) if row.state == Over => Week(row)
+			(Ok(row), _) if row.state == Near => Context(row)
+			(_, Ok(row)) if row.state == Near => Week(row)
+			_ => Clear
+		}
+	}
+
 	## Settings' Hosts changed by `change`: its menu, the removal it asks
 	## to confirm, or its dialog.
 	with_hosts : State, (HostDesk.State -> HostDesk.State) -> State
