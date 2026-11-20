@@ -218,6 +218,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Typing a comment in the Review view, and picking a line to comment on, no longer stall on a long diff: each key took most of a second on 2,000 lines, and now takes a frame or two.
 - A commit's file Paseo fails to give is asked for again a minute later, not every few seconds.
 - A Paseo session whose turn ended while Paseo was still starting no longer goes without a summary until its next turn: the summary waits until Paseo lists the agent's models.
 - In the rooms list, Leave no longer covers a room's unread count or @-count: while you point at a joined room, Leave takes the count's place.

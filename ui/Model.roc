@@ -204,10 +204,10 @@ Model := [].{
 
 		## What polls answered of each session's git: its workspace, status and
 		## commits, the changes of each scope asked for, and the hunks of each
-		## file shown.
+		## file shown, with their fingerprint (`as_viewed`'s).
 		git : List(Git),
 		git_changes : List({ context : Context.Id, changes : WorkspaceGit.Changes }),
-		git_hunks : List({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk) }),
+		git_hunks : List({ context : Context.Id, scope : WorkspaceGit.Scope, path : Str, hunks : List(WorkspaceGit.Hunk), fingerprint : Str }),
 
 		## What each Changes pane shows.
 		git_panes : List(GitPane),
@@ -2450,7 +2450,8 @@ Model := [].{
 					git_changes: state.git_changes.drop_if(|known| known.context == context and known.changes.scope == changes.scope).append({ context, changes }),
 				}
 			(File({ context, scope, .. }), File({ path, hunks })) =>
-				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks }) }
+			# Fingerprinted once here, not each time a file viewed is checked.
+				{ ..state, git_hunks: state.git_hunks.drop_if(|known| known.context == context and known.scope == scope and known.path == path).append({ context, scope, path, hunks, fingerprint: WorkspaceGit.fingerprint(scope, [{ file: { path, change: Modified, additions: 0, deletions: 0, body: Text }, hunks }]) }) }
 			(Threads(context), Threads(review)) => { ..state, reviews: state.reviews.drop_if(|known| known.context == context).append({ context, review }) }
 			(Tree({ context, .. }), Tree(tree)) => { ..state, trees: state.trees.drop_if(|known| known.context == context and known.tree.path == tree.path).append({ context, tree }) }
 			(Contents({ context, .. }), Contents(contents)) => {
@@ -3376,10 +3377,32 @@ Model := [].{
 	## The rows of the file or diff `path` in `scope`, annotated as
 	## `annotated` says.
 	annotated_on : State, Pane, { path : Str, scope : Review.Scope }, List(CodeRow) -> List(CodeRow)
-	annotated_on = |state, shown, { path, scope }, rows| {
+	annotated_on = |state, shown, file_shown, rows| Model.annotate(Model.annotation(state, shown, file_shown), rows)
+
+	## What annotates the rows of a file or diff: the review's threads shown
+	## on it, the composer if it is on it (else closed), without its text,
+	## and the thread focused, "" for none.
+	Annotation : { threads : List(Review.Thread), composer : Composer, focused_thread : Str }
+
+	## What annotates the rows of the file or diff `path` in `scope` a pane
+	## shows.
+	annotation : State, Pane, { path : Str, scope : Review.Scope } -> Annotation
+	annotation = |state, shown, { path, scope }| {
 		composer = state.composer
 		threads = Model.review_of(state, Model.context_of(state, shown)).threads.keep_if(|thread| Review.shows(thread.anchor, path, scope) and !thread.outdated)
 		composing_here = composer.pane == shown.id and composer.path == path and composer.scope == scope
+		focused_thread =
+			match state.sub_focus {
+				ReviewThread(thread_id) if threads.any(|thread| thread.id == thread_id) => thread_id
+				_ => ""
+			}
+		{ threads, composer: if (composing_here) { ..composer, text: "" } else Model.closed_composer, focused_thread }
+	}
+
+	## The rows with their annotation (`annotated`).
+	annotate : Annotation, List(CodeRow) -> List(CodeRow)
+	annotate = |{ threads, composer, focused_thread }, rows| {
+		composing_here = composer.pane != ""
 		on = |picks, side, start, end| picks.any(|picked| picked.side == side and picked.line >= start and picked.line <= end)
 		composer_row = { ..Model.code_row, key: "composer", kind: Composer }
 		notes = |thread| {
@@ -3387,7 +3410,7 @@ Model := [].{
 			listed = if (thread.resolved) thread.comments.take_first(1) else thread.comments
 			shown_notes = listed.map_with_index(
 				|comment, index| {
-					note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft, focused: state.sub_focus == ReviewThread(thread.id) }
+					note = { thread: thread.id, comment: comment.id, author: if (comment.author == Me) "You" else "Agent", state: comment_state(comment.state), text: comment.text, last: index == last or thread.resolved, resolved: thread.resolved, draft: comment.state == Draft, focused: focused_thread == thread.id }
 					if (composing_here and composer.editing == comment.id) composer_row else { ..Model.code_row, key: "${thread.id}/${comment.id}", kind: Comment, note }
 				},
 			)
@@ -3967,16 +3990,19 @@ Model := [].{
 	focused_hunk : State, Pane -> Try(ReviewHunk, [NotFound])
 	focused_hunk = |state, shown| Model.review_hunks(state, shown).find_first(|hunk| state.sub_focus == Lines({ path: hunk.path, start: hunk.start, end: hunk.end }))
 
-	## A Review card's rows, those of the hunk focused marked.
-	hunk_marked : State, Pane, Str, List(CodeRow) -> List(CodeRow)
-	hunk_marked = |state, shown, path, rows|
+	## The hunk of a Review card of `path` whose lines are focused, by its
+	## index, "" for none.
+	hunk_focused : State, Pane, Str -> Str
+	hunk_focused = |state, shown, path|
 		match Model.focused_hunk(state, shown) {
-			Ok(hunk) if hunk.path == path => {
-				at = hunk.index.to_str()
-				rows.map(|row| if (row.kind == Code and (row.key == at or row.key.starts_with("${at}/"))) { ..row, class: Str.join_with([row.class, "focused"].drop_if(Str.is_empty), " ") } else row)
-			}
-			_ => rows
+			Ok(hunk) if hunk.path == path => hunk.index.to_str()
+			_ => ""
 		}
+
+	## A Review card's rows, those of the hunk `at` marked focused.
+	hunk_marked : Str, List(CodeRow) -> List(CodeRow)
+	hunk_marked = |at, rows|
+		if (at.is_empty()) rows else rows.map(|row| if (row.kind == Code and (row.key == at or row.key.starts_with("${at}/"))) { ..row, class: Str.join_with([row.class, "focused"].drop_if(Str.is_empty), " ") } else row)
 
 	## Focuses the lines of the next hunk a Review view shows after the one
 	## focused, or the one before it, the first of the file in view when
@@ -4177,8 +4203,13 @@ Model := [].{
 		context = Model.context_of(state, shown)
 		scope = state.review_desk.scope
 		file = Model.git_changes_of(state, context, scope).map_ok(|changes| changes.files.find_first(|listed| listed.path == path) ?? { path, change: Modified, additions: 0, deletions: 0, body: Text }) ?? { path, change: Modified, additions: 0, deletions: 0, body: Text }
-		hunks = state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == path).map_ok(|known| known.hunks) ?? []
-		{ context: Context.to_str(context), scope, path, fingerprint: WorkspaceGit.fingerprint(scope, [{ file, hunks }]) }
+		# A commit's file never changes once listed; others by their hunks once known.
+		fingerprint =
+			match (scope, state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == path)) {
+				(Commit(_), _) | (_, Err(_)) => WorkspaceGit.fingerprint(scope, [{ file, hunks: [] }])
+				(_, Ok(known)) => known.fingerprint
+			}
+		{ context: Context.to_str(context), scope, path, fingerprint }
 	}
 
 	## Whether a file of a Review surface's scope is marked viewed, and
@@ -4235,9 +4266,41 @@ Model := [].{
 		{ ..state, review_desk: desk, sub_focus: if (in_view == was or in_view.is_empty()) state.sub_focus else File(in_view) }
 	}
 
-	## A file of a Review pane as a card: its diff's rows, annotated, or why
-	## it shows none (`note`), and whether it is marked viewed.
-	ReviewCard : { path : Str, file : WorkspaceGit.File, rows : List(CodeRow), note : [Loading, Said(Str)], viewed : Bool }
+	## The state as a Review view's cards read it: without what changes
+	## often and they never read, such as the text typed in the composer,
+	## the timelines, the polls and which cards are on screen, so the view
+	## makes its cards again only when something they show changes (see
+	## `Liton.review_view`).
+	review_source : State -> State
+	review_source = |state| {
+		desk = state.review_desk
+		{
+			..state,
+			composer: { ..state.composer, text: "" },
+			timelines: [],
+			texts: [],
+			now: 0,
+			poll: { serial: 0, subjects: [], topics: [] },
+			polling: Bool.False,
+			poll_again: Bool.False,
+			cursors: [],
+			drafts: [],
+			review_desk: { ..desk, seen: [], scroll: { serial: 0, refs: [] }, scrolling_to: "" },
+			sub_focus: match state.sub_focus {
+				File(_) => None
+				other => other
+			},
+		}
+	}
+
+	## A file of a Review pane as a card: what its diff's rows are made from,
+	## its diff's (`diff_code`) annotated (`annotate`) with the hunk focused
+	## marked (`hunk_marked`), or why it shows none (`note`), and whether it
+	## is marked viewed.
+	ReviewCard : { path : Str, file : WorkspaceGit.File, diff : CardDiff, annotation : Annotation, focused_hunk : Str, note : [Loading, Said(Str)], viewed : Bool }
+
+	## A Review card's diff, in a layout, "Split" or not.
+	CardDiff : { layout : Str, path : Str, hunks : List(WorkspaceGit.Hunk) }
 
 	## The files of a Review pane's scope as cards, in the order the scope
 	## lists them, once its poll answers.
@@ -4247,7 +4310,7 @@ Model := [].{
 		scope = state.review_desk.scope
 		card = |file| {
 			hunks = state.git_hunks.find_first(|known| known.context == context and known.scope == scope and known.path == file.path)
-			rows = hunks.map_ok(|known| Model.annotated_on(state, shown, { path: file.path, scope: Model.review_scope(scope) }, Model.diff_code(Model.option(shown, "diff_layout"), file.path, known.hunks))) ?? []
+			diff = { layout: Model.option(shown, "diff_layout"), path: file.path, hunks: hunks.map_ok(|known| known.hunks) ?? [] }
 			note =
 				match (file.body, hunks) {
 					(Binary, _) => Said("A binary file.")
@@ -4255,7 +4318,7 @@ Model := [].{
 					(Text, Err(_)) => Loading
 					(Text, Ok(_)) => Said("")
 				}
-			{ path: file.path, file, rows: Model.hunk_marked(state, shown, file.path, rows), note, viewed: Model.viewed_file(state, shown, file.path) }
+			{ path: file.path, file, diff, annotation: Model.annotation(state, shown, { path: file.path, scope: Model.review_scope(scope) }), focused_hunk: Model.hunk_focused(state, shown, file.path), note, viewed: Model.viewed_file(state, shown, file.path) }
 		}
 		match Model.review_files(state, shown) {
 			Files(files) => Cards(files.map(card))

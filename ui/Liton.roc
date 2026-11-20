@@ -3019,7 +3019,6 @@ Liton := [].{
 	review_view : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane) -> Elem(PaneCtx)
 	review_view = |model, id, pane| {
 		shown = pane.map2(model.signal(), |pane_shown, state| { pane: pane_shown, state })
-		cards = shown.map(|{ pane: pane_shown, state }| Model.review_cards(state, pane_shown))
 		Html.div(
 			"review",
 			[
@@ -3038,17 +3037,30 @@ Liton := [].{
 									[
 										Liton.review_bar(model, pane),
 										Html.p_s(shown.map(|{ pane: pane_shown, state }| Model.since_round_text(state, pane_shown)), [Engine.class("since-round-note"), Engine.test_id("since-round-note")]),
-										Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
-										Engine.each(
-											cards.map(
-												|listed|
-													match listed {
-														Cards(found) => found
-														Loading => []
-													},
-											),
-											|card| card.path,
-											|card| Liton.review_card(model, id, pane, card),
+										# The cards are made again only when what they show changes,
+										# not at each key typed in the composer.
+										Engine.derive(
+											shown.map(|{ pane: pane_shown, state }| { pane: pane_shown, state: Model.review_source(state) }),
+											|source| {
+												cards = source.map(|{ pane: pane_shown, state }| Model.review_cards(state, pane_shown))
+												Html.div(
+													"review-card-list",
+													[
+														Spinner.or_text(cards.map(|listed| if (listed == Loading) Loading else Said(if (listed == Cards([])) "No changes to review." else "")), Pane, [Engine.class("missing")]),
+														Engine.each(
+															cards.map(
+																|listed|
+																	match listed {
+																		Cards(found) => found
+																		Loading => []
+																	},
+															),
+															|card| card.path,
+															|card| Liton.review_card(model.lift(), id.lift(), card),
+														),
+													],
+												)
+											},
 										),
 									],
 								)
@@ -3227,8 +3239,8 @@ Liton := [].{
 	## over its diff. Its coming on screen and leaving it
 	## tells the file in view (`Model.card_seen`). Top-level for the reason
 	## `scope_picker` is.
-	review_card : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Model.Pane), RowRef(PaneCtx, Model.ReviewCard) -> Elem(Row(PaneCtx, Model.ReviewCard))
-	review_card = |model, id, pane, card| {
+	review_card : State(ctx, Model.State), Signal(ctx, Str), RowRef(ctx, Model.ReviewCard) -> Elem(Row(ctx, Model.ReviewCard))
+	review_card = |model, id, card| {
 		file = card.field(|shown| shown.file)
 		Html.div_attrs(
 			[Engine.class_s(card.field(|shown| if (shown.viewed) "review-card viewed" else "review-card")), Engine.attr("data-part", "file"), Engine.attr("role", "group"), Html.aria_label_s(card.key()), Engine.ref_s(card.key().map2(id.lift_row(), |path, pane_id| ReviewDesk.card_ref(pane_id, path))), Engine.on_seen({}, model.lift_row().set_value_by(card.key().map2(id.lift_row(), |path, pane_id| { pane_id, path }), |state, at, seen| Model.card_seen(state, at, seen.intersecting)))],
@@ -3243,7 +3255,18 @@ Liton := [].{
 					],
 				),
 				Spinner.or_text(card.field(|shown| shown.note), Inline, [Engine.class("missing")]),
-				Html.div("review-diff", [Liton.code_view(model.lift_row(), id.lift_row(), pane.lift_row().map(|shown| if (Model.option(shown, "diff_layout") == "Split") "code-view split" else "code-view unified"), card.field(|shown| shown.rows))]),
+				# Its diff's rows are made again only when its diff changes, and
+				# annotated only when its annotation does.
+				Engine.derive(
+					card.field(|shown| shown.diff),
+					|diff| {
+						code = diff.map(|shown| Model.diff_code(shown.layout, shown.path, shown.hunks))
+						Engine.derive(
+							card.field(|shown| (shown.annotation, shown.focused_hunk)).lift(),
+							|annotation| Html.div("review-diff", [Liton.code_view(model.lift_row().lift().lift(), id.lift_row().lift().lift(), diff.map(|shown| if (shown.layout == "Split") "code-view split" else "code-view unified").lift(), code.lift().map2(annotation, |rows, (card_annotation, focused_hunk)| Model.hunk_marked(focused_hunk, Model.annotate(card_annotation, rows))))]),
+						)
+					},
+				),
 			],
 		)
 	}
