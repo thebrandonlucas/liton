@@ -86,7 +86,9 @@ Model := [].{
 	## what each part shows and is doing, as its fields say.
 	State : {
 		## The daemon, "" before its manifest is read, and what it offers.
+		## `unreachable` while its manifest or last poll went unanswered.
 		daemon : { id : Str, name : Str },
+		unreachable : Bool,
 		capabilities : List(Capability.Id),
 		providers : List(Manifest.Provider),
 		transformers : List(Manifest.Transformer),
@@ -459,6 +461,7 @@ Model := [].{
 		Model.layout(
 			{
 				daemon: { id: "", name: "" },
+				unreachable: Bool.False,
 				capabilities: [],
 				providers: [],
 				transformers: [],
@@ -660,6 +663,55 @@ Model := [].{
 			{ ..returned, deck_slide: state.deck_slide, url_hash: state.url_hash, jump: state.jump, active_tile: state.active_tile, focused_pane: state.focused_pane, sub_focus: state.sub_focus }
 		}
 
+	## How the daemon is reached: connecting until its manifest is read,
+	## then connected, or unreachable while it doesn't answer.
+	connection : State -> [Connecting, Connected, Unreachable]
+	connection = |state|
+		if (state.unreachable) Unreachable else if (state.daemon.id.is_empty()) Connecting else Connected
+
+	## How a provider the daemon offers is doing, and why: as the daemon is
+	## reached, and a speech provider as its engine is (`Speech.State`).
+	provider_health : State, Manifest.Provider -> { health : [Ready, Starting, Down], why : Str }
+	provider_health = |state, provider|
+		if (Model.connection(state) == Unreachable)
+			{ health: Down, why: "the daemon doesn't answer" }
+		else if (provider.capabilities.contains(Capability.voice_v1))
+			match state.voice.engine {
+				Ready => { health: Ready, why: "its speech engine is ready" }
+				Loading => { health: Starting, why: "its speech engine is loading" }
+				Down(why) => { health: Down, why }
+			}
+		else
+			{ health: Ready, why: "connected" }
+
+	## What offers what a part needs: the first provider that offers all of
+	## it, else a transformer, else liton for a part needing nothing; or "Not
+	## offered".
+	offered_by : State, Widgets.Widget -> Str
+	offered_by = |state, widget|
+		match (Widgets.missing(widget, state.capabilities), state.providers.find_first(|provider| widget.needs.all(|need| provider.capabilities.contains(need)))) {
+			([_, ..], _) => "Not offered"
+			(_, Ok(provider)) => provider.name
+			_ if widget.needs.is_empty() => "liton"
+			_ => state.transformers.find_first(|transformer| widget.needs.contains(transformer.offers)).map_ok(|transformer| transformer.name) ?? "Several providers"
+		}
+
+	## The providers and transformers offering what the parts of the deck's
+	## surface at `index` need, each once, in the order its tiles list them.
+	surface_providers : State, U64 -> List(Str)
+	surface_providers = |state, index| {
+		laid = Model.deck(state).get(index).map_ok(|surface| surface.snapshot) ?? Model.snapshot(state)
+		laid.grid.tiles
+			.join_map(|tile| tile.panes)
+			.fold(
+				[],
+				|found, listed| {
+					by = Model.offered_by(state, Widgets.find(listed.widget))
+					if (found.contains(by) or by == "liton" or by == "Not offered") found else found.append(by)
+				},
+			)
+	}
+
 	## The parts the deck's surface at `index` may show, a heading over
 	## those of each provider offering what they need: the first that
 	## offers all of it, else a transformer, else liton for those needing
@@ -670,14 +722,7 @@ Model := [].{
 	surface_parts = |state, index| {
 		laid = Model.deck(state).get(index).map_ok(|surface| surface.snapshot) ?? Model.snapshot(state)
 		shown = |widget| laid.grid.tiles.any(|tile| !laid.collapsed.contains(Model.slot_in(laid.shell, laid.grid, tile.id)) and tile.panes.any(|listed| listed.widget == widget.id and !laid.hidden.contains(listed.id)))
-		offered_by = |widget|
-			match (Widgets.missing(widget, state.capabilities), state.providers.find_first(|provider| widget.needs.all(|need| provider.capabilities.contains(need)))) {
-				([_, ..], _) => "Not offered"
-				(_, Ok(provider)) => provider.name
-				_ if widget.needs.is_empty() => "liton"
-				_ => state.transformers.find_first(|transformer| widget.needs.contains(transformer.offers)).map_ok(|transformer| transformer.name) ?? "Several providers"
-			}
-		found = Widgets.all.fold([], |so_far, widget| if (so_far.contains(offered_by(widget))) so_far else so_far.append(offered_by(widget)))
+		found = Widgets.all.fold([], |so_far, widget| if (so_far.contains(Model.offered_by(state, widget))) so_far else so_far.append(Model.offered_by(state, widget)))
 		groups = found.drop_if(|group| group == "Not offered").concat(found.keep_if(|group| group == "Not offered"))
 		role = |widget|
 			match widget.role {
@@ -693,7 +738,7 @@ Model := [].{
 			}
 		groups.join_map(
 			|group| {
-				parts = Widgets.all.keep_if(|widget| offered_by(widget) == group).map(|widget| { key: widget.id, heading: Bool.False, title: widget.title, detail: "${role(widget)} · ${needs(widget)}", shown: shown(widget), available: group != "Not offered" })
+				parts = Widgets.all.keep_if(|widget| Model.offered_by(state, widget) == group).map(|widget| { key: widget.id, heading: Bool.False, title: widget.title, detail: "${role(widget)} · ${needs(widget)}", shown: shown(widget), available: group != "Not offered" })
 				parts.prepend({ key: "group:${group}", heading: Bool.True, title: group, detail: "", shown: Bool.False, available: Bool.True })
 			},
 		)
@@ -901,7 +946,7 @@ Model := [].{
 	## Keeps what the daemon's manifest offers: itself, its providers,
 	## transformers and capabilities.
 	advertise : State, Manifest.Offered -> State
-	advertise = |state, offered| { ..state, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
+	advertise = |state, offered| { ..state, unreachable: Bool.False, daemon: offered.daemon, providers: offered.providers, transformers: offered.transformers, capabilities: Manifest.offered(offered) }
 
 	## Offers the presets and themes the daemon's setup offers, if any, and
 	## shows the preset it starts with, in its theme or else the setup's
@@ -2491,7 +2536,7 @@ Model := [].{
 
 	## A poll that failed asks again with the next.
 	poll_failed : State -> State
-	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False }) else { ..state, polling: Bool.False }
+	poll_failed = |state| if (state.poll_again) Model.poll({ ..state, polling: Bool.False, unreachable: Bool.True }) else { ..state, polling: Bool.False, unreachable: Bool.True }
 
 	## Takes a topic's update from the poll numbered `serial`.
 	updated : State, U64, Protocol.Subject, Protocol.Update -> State
