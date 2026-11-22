@@ -156,6 +156,7 @@ All notable changes to liton are documented in this file. The format is based on
 - A device whose role is locked shows its surface as it is: no Settings, no deck strip or swipe, no pane menus and no dragging panes, and the keys and palette leave the layout, the deck, tabs and Settings alone. The manifest says so, as `access: { role, locked }`. It hides controls only: the daemon still refuses whatever the role isn't allowed.
 - Each person's inbox is their own: settling, snoozing or seeing an item on a device whose key holds a role sets it aside for that key alone. Devices paired without a key share one, as before.
 - `rooms.v1`'s `inbox` topic follows the relay's messages that mention the device's key, in every room it sees, so `liton watch rooms.v1 inbox` hears an agent's mentions.
+- examples/room-agent/agent.mjs gives an agent its own key in the rooms: `node agent.mjs join <invite link> <directory>` makes the key, redeems an invite made with `liton invite --role agent --rooms …`, names the agent a bot as the invite does, and writes its key and device token, readable by you alone, to keep as agenix secrets; `node agent.mjs send <room> <text> [<root>]` posts as the agent, signed with its key. A leaked key is revoked by removing the agent in Settings → People and joining a new invite.
 
 ### Changed
 
