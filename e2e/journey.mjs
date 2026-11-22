@@ -83,9 +83,12 @@ try {
     await tab(title);
     await (await page.evaluateHandle((title) => [...document.querySelectorAll('.workspace-tab button[role="tab"]')].find((b) => b.textContent.includes(title)), title)).click();
   };
+  // A step that fails says what the page logged as errors, such as an engine fault that left it blank.
   const step = async (name, run) => {
     check = name;
-    await run();
+    await run().catch((error) => {
+      throw page.errors.length ? new Error(`${error.message}; the page: ${page.errors.join("; ").replaceAll("\n", " ")}`) : error;
+    });
   };
 
   await step("the three preset panes render, with Capabilities left to Settings", async () => {
