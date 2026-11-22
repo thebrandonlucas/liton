@@ -81,8 +81,11 @@ Model := [].{
 	## asking for the manifest again; the devices last listed, and the
 	## listings asked for; the revocations on their way, as `revoke` sent
 	## them; and a code made for another device, while `asking` or once
-	## given, with the link that pairs a browser with it.
-	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str } }
+	## given, with the link that pairs a browser with it; the URL's `#invite=`
+	## secret, redeemed with this browser's key once the daemon refuses, as
+	## `redeem` sends it; and the profile, the invite's name, that this browser
+	## signs once it joined, then sends signed (`profile_event`).
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, redeem : { serial : U64, secret : Str, pubkey : Str, name : Str }, profile : { serial : U64, name : Str }, profile_event : { serial : U64, text : Str } }
 
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
@@ -565,7 +568,7 @@ Model := [].{
 				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
-				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" } },
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", pubkey: "", name: "" }, profile: { serial: 0, name: "" }, profile_event: { serial: 0, text: "" } },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -5308,9 +5311,10 @@ Model := [].{
 	signing_room : State, Str -> Bool
 	signing_room = |state, room_id| state.rooms.any(|room| room.id == room_id and room.signing == Ok(Bool.True))
 
-	## Whether this browser's key is wanted: once a signing room is listed.
+	## Whether this browser's key is wanted: once a signing room is listed, or
+	## an invite is to be redeemed.
 	wants_key : State -> Bool
-	wants_key = |state| state.rooms.any(|room| room.signing == Ok(Bool.True))
+	wants_key = |state| state.rooms.any(|room| room.signing == Ok(Bool.True)) or (state.pairing.invite != "" and state.pairing.unpaired)
 
 	## The event a request of a signing room makes, as docs/protocol.md
 	## (Rooms) says, before it is signed: a message (9) with NIP-10's marked

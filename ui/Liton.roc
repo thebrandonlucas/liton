@@ -484,7 +484,7 @@ Liton := [].{
 		Engine.watch(
 			model.signal().map(Model.wants_key),
 			|wanted| if (wanted) [Ports.key.ask({})] else [],
-			model.on_result(|state, _, res| { ..state, nostr_key: res ?? state.nostr_key }),
+			model.on_result(|state, _, res| Pairing.key_known(state, res ?? state.nostr_key)),
 		),
 		Engine.watch_changes(
 			model.signal().map(|state| state.nostr_key),
@@ -498,6 +498,24 @@ Liton := [].{
 				}),
 			],
 			Engine.ignore({}),
+		),
+		# Joined by an invite, this browser's profile, the invite's name, signed.
+		Engine.watch_changes(
+			model.signal().map(|state| state.pairing.profile),
+			|{ name, .. }| [
+				Ports.sign.ask({
+					kind: 0,
+					tags: [],
+					content: Json.to_str({ name: name }),
+				}),
+			],
+			model.on_result(
+				|state, { serial, .. }, res|
+					match res {
+						Ok(signed) => { ..state, pairing: { ..state.pairing, profile_event: { serial, text: Json.to_str(signed) } } }
+						Err(_) => state
+					},
+			),
 		),
 		# A signing room's request: its event signed, then the call carrying it.
 		Engine.watch_changes(
