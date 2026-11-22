@@ -146,6 +146,7 @@ All notable changes to liton are documented in this file. The format is based on
 - `zig build release` builds the release archives into zig-out/release, `liton-VERSION-x86_64-linux.tar.gz` and `liton-VERSION-aarch64-linux.tar.gz` with their SHA256SUMS: each the static `liton-daemon` and `liton` in bin/ and the UI in share/liton/www, for running liton without building it.
 - A Nix flake: `nix run github:thebrandonlucas/liton` runs the command line, and `packages.liton` is the release, fetched by the sha256 RELEASE_SHA256SUMS records for the version build.zig.zon gives.
 - `nixosModules.liton` runs the daemon as a NixOS service, `services.liton`: set `enable`, and `host`, `port`, `allowedHosts`, `auth` (`required` by default), `setupFile` (a `liton setup`'s liton.setup.json), `environmentFile` for secrets, `stt` and `extraEnvironment` for any other `LITON_*` setting. It runs as a user of its own, keeps its database in /var/lib/liton, serves the release's UI and puts `liton` on PATH.
+- examples/litonfile-kai-box/ sets up liton for a box of staff who only talk in rooms: a Litonfile offering the Rooms preset alone, in the Sky theme, and a NixOS module running the daemon with its setup behind Caddy at the box's tailnet name.
 
 ### Changed
 
