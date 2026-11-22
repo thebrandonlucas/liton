@@ -74,6 +74,22 @@ RelayRooms := [].{
 		done.entries
 	}
 
+	## The `inbox` topic's entries: the messages (kind 9) among `arrived`
+	## whose `p` tags mention `me` and that someone else posted, each as a
+	## room's entries post it.
+	inbox : List({ seq : U64, event : Nostr.Event }), Str -> List(Rooms.Entry)
+	inbox = |arrived, me|
+		arrived
+			.keep_if(|{ event, .. }| event.kind == 9 and event.pubkey != me)
+			.join_map(|posted| RelayRooms.step({ posted: [], reactions: [], entries: [] }, posted.seq, posted.event).entries)
+			.keep_if(
+				|entry|
+					match entry.event {
+						Posted(message) => message.mentions.contains(me)
+						_ => Bool.False
+					},
+			)
+
 	## What `event`, at place `seq`, adds to the room's entries so far.
 	step : { posted : List(Rooms.Message), reactions : List({ id : Str, target : Str, emoji : Str, by : Str }), entries : List(Rooms.Entry) }, U64, Nostr.Event -> { posted : List(Rooms.Message), reactions : List({ id : Str, target : Str, emoji : Str, by : Str }), entries : List(Rooms.Entry) }
 	step = |so_far, seq, event| {
@@ -176,4 +192,10 @@ expect {
 	arrived = [event("m1", "ada", 9, "hi", []), event("x1", "bo", 7, "+", [["e", "m1"]]), event("x2", "ada", 5, "+", [["e", "m1"], ["k", "7"]]), event("x3", "bo", 5, "+", [["e", "m1"], ["k", "7"]])]
 	shown = RelayRooms.entries(arrived.map_with_index(|given, index| { seq: index + 1, event: given }))
 	(Rooms.messages(shown).map(|message| message.reactions), shown.len()) == ([[]], 3)
+}
+expect {
+	event = |id, pubkey, room, tags| { id, pubkey, created_at: 0, kind: 9, tags: [["h", room]].concat(tags), content: id, sig: "" }
+	arrived = [event("m1", "ada", "general", [["p", "bo"]]), event("m2", "ada", "general", []), event("m3", "bo", "general", [["p", "bo"]]), event("m4", "ada", "dispatch", [["e", "m1", "", "root"], ["p", "bo"]])]
+	RelayRooms.inbox(arrived.map_with_index(|given, index| { seq: index + 1, event: given }), "bo").map(|entry| (entry.sequence, Rooms.messages([entry]).map(|message| (message.id, message.room_id))))
+		== [(8, [("m1", "general")]), (32, [("m4", "dispatch")])]
 }

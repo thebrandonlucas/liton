@@ -1140,7 +1140,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox | TicketList | TicketDetail(_) => Ok({})
 		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
 		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
@@ -1207,7 +1207,7 @@ update! = |context, wanted, subject| {
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
-		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) => rooms_update!(context, wanted, subject)
+		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox => rooms_update!(context, wanted, subject)
 		TicketList => Ok(Protocol.snapshot(wanted, Tickets(MockTickets.listing(tickets!(context)?))))
 		TicketDetail(ticket_id) =>
 			match tickets!(context)?.find_first(|shown| shown.summary.id == ticket_id) {
@@ -3942,7 +3942,8 @@ rooms_call! = |context, asked, signed| {
 
 ## A rooms.v1 topic: the rooms, a room's members, or the entries of a
 ## room's top level or of a thread after the cursor, of the relay's rooms
-## (`relay_update!`) and the mock's.
+## (`relay_update!`) and the mock's; or the inbox, the relay's messages
+## after the cursor that mention the device's key, in the rooms it sees.
 rooms_update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
 rooms_update! = |context, wanted, subject| {
 	relay = relay_rooms!(context)?
@@ -3962,6 +3963,15 @@ rooms_update! = |context, wanted, subject| {
 		RoomMembers(room_id) => Ok(if (known(room_id)) Protocol.snapshot(wanted, Members(MockRooms.members_of(room_id))) else missing(room_id))
 		RoomMessages(room_id) => if (known(room_id)) room_entries!(context.db, wanted, room_id, "") else Ok(missing(room_id))
 		RoomThread({ room_id, root }) => if (known(room_id)) room_entries!(context.db, wanted, room_id, root) else Ok(missing(room_id))
+		RoomInbox =>
+			match Protocol.sequence(wanted) {
+				Err(error) => Ok(Protocol.failed(wanted, error))
+				Ok(after) => {
+					rows : List(NostrRow)
+					rows = Sqlite.query_many!({ db: context.db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE kind = 9 AND room IN (SELECT value FROM json_each(:rooms)) AND seq * 8 > :after AND EXISTS (SELECT 1 FROM json_each(tags) WHERE json_extract(value, '$[0]') = 'p' AND json_extract(value, '$[1]') = :pubkey) ORDER BY seq;", params: { rooms: Json.to_str(relay.map(|room| room.kept.id)), after: after.to_i64_wrap(), pubkey: context.pubkey }, limits: Sqlite.default_query_limits })?
+					Ok(Protocol.room_appended(wanted, RelayRooms.inbox(rows.map(|row| { seq: row.seq.to_u64_wrap(), event: nostr_event_of(row) }), context.pubkey)))
+				}
+			}
 		_ => Ok(Protocol.snapshot(wanted, Rooms(relay.map(|room| room.shown).concat(rooms))))
 	}
 }

@@ -333,6 +333,7 @@ events when nothing changed:
 | `rooms.v1` | `members/<room_id>` | snapshot | `{"Members": [Member]}` |
 | `rooms.v1` | `messages/<room_id>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the room's top level and its threads' summaries |
 | `rooms.v1` | `thread/<room_id>/<root>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: a thread's replies |
+| `rooms.v1` | `inbox` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the relay's messages that mention the device's key, in every room it sees, each `Posted` |
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |

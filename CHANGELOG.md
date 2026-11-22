@@ -155,6 +155,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings → People, for operators and admins: invite someone by name into a role and the rooms that sign, shown as inviting at once, then the link that joins their device; cancel an invite not used; and remove a person, after asking, which revokes their devices. `people.v1`'s listing names the roles whoever asks may invite into.
 - A device whose role is locked shows its surface as it is: no Settings, no deck strip or swipe, no pane menus and no dragging panes, and the keys and palette leave the layout, the deck, tabs and Settings alone. The manifest says so, as `access: { role, locked }`. It hides controls only: the daemon still refuses whatever the role isn't allowed.
 - Each person's inbox is their own: settling, snoozing or seeing an item on a device whose key holds a role sets it aside for that key alone. Devices paired without a key share one, as before.
+- `rooms.v1`'s `inbox` topic follows the relay's messages that mention the device's key, in every room it sees, so `liton watch rooms.v1 inbox` hears an agent's mentions.
 
 ### Changed
 

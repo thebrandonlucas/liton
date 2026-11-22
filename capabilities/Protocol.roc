@@ -79,6 +79,7 @@ Protocol := [].{
 		RoomMembers(Str),
 		RoomMessages(Str),
 		RoomThread({ room_id : Str, root : Str }),
+		RoomInbox,
 		TicketList,
 		TicketDetail(Str),
 		TicketLinks,
@@ -98,7 +99,7 @@ Protocol := [].{
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
 		{ capability: Capability.voice_v1, patterns: ["status"] },
 		{ capability: Capability.review_v1, patterns: ["threads/<session_id>", "threads/workspace:<workspace_id>"] },
-		{ capability: Capability.rooms_v1, patterns: ["rooms", "members/<room_id>", "messages/<room_id>", "thread/<room_id>/<root>"] },
+		{ capability: Capability.rooms_v1, patterns: ["rooms", "members/<room_id>", "messages/<room_id>", "thread/<room_id>/<root>", "inbox"] },
 		{ capability: Capability.tickets_v1, patterns: ["list", "ticket/<ticket_id>", "links"] },
 		{ capability: Capability.schedules_v1, patterns: ["schedules", "runs/<schedule_id>"] },
 		{ capability: Capability.hosts_v1, patterns: ["hosts"] },
@@ -184,6 +185,7 @@ Protocol := [].{
 			RoomMembers(room_id) => { capability: "rooms.v1", topic: "members/${room_id}" }
 			RoomMessages(room_id) => { capability: "rooms.v1", topic: "messages/${room_id}" }
 			RoomThread({ room_id, root }) => { capability: "rooms.v1", topic: "thread/${room_id}/${root}" }
+			RoomInbox => { capability: "rooms.v1", topic: "inbox" }
 		}
 
 	## A snapshot topic's update: its value, cursored by its fingerprint,
@@ -228,6 +230,8 @@ room_subject = |topic| {
 	named = |prefix| if (topic.starts_with(prefix) and topic != prefix) Ok(topic.drop_prefix(prefix)) else Err(NoTopic)
 	if topic == "rooms" {
 		Ok(RoomList)
+	} else if topic == "inbox" {
+		Ok(RoomInbox)
 	} else if topic.starts_with("members/") {
 		named("members/").map_ok(|room_id| RoomMembers(room_id))
 	} else if topic.starts_with("messages/") {
@@ -332,7 +336,7 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1")), RoomList, RoomMembers("general"), RoomMessages("team/general"), RoomThread({ room_id: "team/general", root: "m1" }), TicketList, TicketDetail("thebrandonlucas/liton#3"), TicketLinks, ScheduleList, ScheduleRuns("h1"), HostList, PeopleList]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1")), RoomList, RoomMembers("general"), RoomMessages("team/general"), RoomThread({ room_id: "team/general", root: "m1" }), RoomInbox, TicketList, TicketDetail("thebrandonlucas/liton#3"), TicketLinks, ScheduleList, ScheduleRuns("h1"), HostList, PeopleList]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 
