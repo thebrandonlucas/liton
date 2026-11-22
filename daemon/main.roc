@@ -123,8 +123,10 @@ import Sha256
 ## the providers and transformers configured, the model Paseo's summaries
 ## are written with ("" for the agent's smallest), the setup it offers, and
 ## whether answering may ask Paseo and the remotes when due (`Ask`), or
-## only reads what the daemon keeps (`Cached`, a cached poll's).
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], pubkey : Str }
+## only reads what the daemon keeps (`Cached`, a cached poll's); the device asking,
+## its key, and what its role lets it do (`Access`), of the setup's owner
+## and roles.
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], pubkey : Str, owner : Str, roles : List(Setup.Role), access : Access }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -189,7 +191,7 @@ init! = || {
 		}
 	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
 	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
-	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, pubkey: "" }) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, pubkey: "", owner: setup.owner, roles: setup.roles, access: Operator }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
@@ -301,10 +303,14 @@ routed! = |started, request, headers| {
 		Device(id) => Sqlite.query_many!({ db: served.db, query: "SELECT pubkey FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
 		Open => []
 	}
-	context = { ..served, asking, pubkey: keys.first().map_ok(|key| key.pubkey) ?? "" }
+	pubkey = keys.first().map_ok(|key| key.pubkey) ?? ""
+	held : List({ role : Str })
+	held = if (pubkey == "" or pubkey == served.owner) [] else Sqlite.query_many!({ db: served.db, query: "SELECT role FROM key_roles WHERE pubkey = :pubkey;", params: { pubkey }, limits: Sqlite.default_query_limits })?
+	context = { ..served, asking, pubkey, access: access_of(served.roles, held.first().map_ok(|row| row.role)) }
 	match (seen, request.method(), path) {
 		(Err(Unpaired), _, _) =>
 			Ok(text(401, "this device isn't paired with the daemon: run `liton pair` on the daemon's machine, or open Settings → Devices on a paired one, for a pairing code").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
+		(_, _, _) if !route_allowed(context.access, path) => Ok(text(403, "this device's role can't use ${path}"))
 		(_, GET, "/") => Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
 		(_, GET, "/liton/v1/manifest") => manifest!(context)
 		(_, POST, "/liton/v1/call") => call!(context, request)
@@ -610,8 +616,76 @@ read_json! = |request| {
 manifest! : Context => Try(Response, _)
 manifest! = |context| {
 	remotes_cycle!(context)?
-	{ protocol, daemon, providers, transformers, topics } = offered!(context)?
-	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: context.setup })))
+	{ protocol, daemon, providers, transformers, topics } = offered_to(context.access, offered!(context)?)
+	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: setup_to(context.access, context.setup) })))
+}
+
+## What a device's role lets it do: everything, the owner's and any key's
+## that holds no role, or what the role it holds declares.
+Access : [Operator, Holding(Setup.Role)]
+
+## The access of a key holding the role `held`, if any, among `roles`: one
+## the setup no longer declares lets it do nothing.
+access_of : List(Setup.Role), Try(Str, _) -> Access
+access_of = |roles, held|
+	match held {
+		Ok(name) if name != "operator" => Holding(roles.find_first(|role| role.name == name) ?? { name, capabilities: [], presets: [], locked: Bool.True })
+		_ => Operator
+	}
+
+## Whether `access` lets a device call and poll `capability`.
+allows : Access, Str -> Bool
+allows = |access, capability|
+	match access {
+		Operator => Bool.True
+		Holding(role) => role.capabilities.contains(capability)
+	}
+
+## Whether `access` lets a device use the route `path`: an operator's alone
+## pair other devices and list and revoke them, the relay's routes are
+## rooms.v1's and voice's audio voice.v1's.
+route_allowed : Access, Str -> Bool
+route_allowed = |access, path|
+	if path.starts_with("/liton/v1/devices") {
+		access == Operator or path == "/liton/v1/devices/key"
+	} else if path.starts_with("/liton/v1/nostr/") {
+		allows(access, "rooms.v1")
+	} else if path.starts_with(audio_route) {
+		allows(access, "voice.v1")
+	} else {
+		Bool.True
+	}
+
+## The manifest as `access` sees it: the providers, transformers and topics
+## of the capabilities it allows.
+offered_to : Access, Manifest.Offered -> Manifest.Offered
+offered_to = |access, offered| {
+	allowed = |id| allows(access, Capability.to_str(id))
+	providers = offered.providers.map(|provider| { ..provider, capabilities: provider.capabilities.keep_if(allowed) }).drop_if(|provider| provider.capabilities.is_empty())
+	{ ..offered, providers, transformers: offered.transformers.keep_if(|part| allowed(part.offers)), topics: offered.topics.keep_if(|topics| allowed(topics.capability)) }
+}
+
+## The setup as `access` is offered it: the presets of its role, the
+## default one of them or else the first, and the deck of them.
+setup_to : Access, Setup.Offered -> Setup.Offered
+setup_to = |access, setup|
+	match access {
+		Operator => setup
+		Holding(role) => {
+			presets = setup.presets.keep_if(|preset| role.presets.contains(preset.name))
+			default_preset = if (presets.any(|preset| preset.name == setup.default_preset)) setup.default_preset else presets.first().map_ok(|preset| preset.name) ?? ""
+			{ ..setup, presets, default_preset, deck: setup.deck.keep_if(|name| role.presets.contains(name)) }
+		}
+	}
+
+## Why a device whose role is `access` may not call or poll `capability`.
+refusal : Access, Str -> Protocol.Error
+refusal = |access, capability| {
+	named = match access {
+		Operator => "operator"
+		Holding(role) => role.name
+	}
+	{ code: Refused, message: "this device's role, ${named}, can't use ${capability}" }
 }
 
 ## What the daemon offers, with the providers of the remotes that are up.
@@ -649,6 +723,14 @@ call! = |context, request| {
 			Ok(asked) => Protocol.routed(manifest, asked).map_ok(|id| (Capability.to_str(id), asked.provider))
 			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
 		}
+	match routed {
+		Ok((capability, _)) if !allows(context.access, capability) => {
+			refused : Protocol.Answer({})
+			refused = Err(refusal(context.access, capability))
+			return Ok(json(Json.to_str(refused)))
+		}
+		_ => {}
+	}
 	match routed.map_ok(|(capability, _)| transformer_of(context, manifest, capability)) {
 		Ok(Ok(part)) => return Ok(json(transformer_call!(context, manifest, part, body)?))
 		_ => {}
@@ -762,22 +844,26 @@ polled_topics! = |context0, request| {
 		Ok({ topics, cached }) => {
 			context = if (cached == Ok(Bool.True)) { ..context0, upstream: Cached } else context0
 			manifest = offered!(context)?
-			for { capability, topic, .. } in topics {
+			for { capability, topic, .. } in topics.keep_if(|wanted| allows(context.access, wanted.capability)) {
 				watched!(context, manifest, { capability, topic })?
 			}
 			paseo_cycle!(context)?
 			remotes_cycle!(context)?
 			var $updates = []
 			for wanted in topics {
-				update = topic_update!(context, manifest, wanted)?
-				$updates = $updates.append(
-					match if (context.upstream == Cached) refreshing!(context, manifest, wanted)? else Fresh {
-						Refreshing => { ..update, refreshing: Ok(Bool.True) }
-						# Not what the topic holds, which a client would show.
-						Unanswered => { ..update, events: [], cursor: wanted.after, refreshing: Ok(Bool.True) }
-						Fresh => update
-					},
-				)
+				if !allows(context.access, wanted.capability) {
+					$updates = $updates.append(Protocol.failed(wanted, refusal(context.access, wanted.capability)))
+				} else {
+					update = topic_update!(context, manifest, wanted)?
+					$updates = $updates.append(
+						match if (context.upstream == Cached) refreshing!(context, manifest, wanted)? else Fresh {
+							Refreshing => { ..update, refreshing: Ok(Bool.True) }
+							# Not what the topic holds, which a client would show.
+							Unanswered => { ..update, events: [], cursor: wanted.after, refreshing: Ok(Bool.True) }
+							Fresh => update
+						},
+					)
+				}
 			}
 			polled : Protocol.Polled
 			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
@@ -2019,6 +2105,8 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS nostr_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, pubkey TEXT NOT NULL, kind INTEGER NOT NULL, created_at INTEGER NOT NULL, tags TEXT NOT NULL, content TEXT NOT NULL, sig TEXT NOT NULL, room TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS nostr_events_by_room ON nostr_events (room, seq);", params: {} })?
+	# The roles of the setup's keys hold, as invites grant them.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS key_roles (pubkey TEXT PRIMARY KEY, role TEXT NOT NULL);", params: {} })?
 	# Devices paired before the relay came have no Nostr key.
 	keyed : List({ name : Str })
 	keyed = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('devices') WHERE name = 'pubkey';", params: {}, limits: Sqlite.default_query_limits })?
@@ -3713,4 +3801,26 @@ expect {
 		and asked("127.0.0.1", Present(8095), Bool.True, []).is_err()
 		and asked("127.0.0.1", Present(8095), Bool.False, []).is_ok()
 		and cross_site_refusal(allowed_hosts, { authority: Absent, posted: Bool.False, headers: [] }).is_err()
+}
+
+expect {
+	staff = { name: "staff", capabilities: ["rooms.v1", "attention.v1"], presets: ["Rooms"], locked: Bool.True }
+	held = access_of([staff], Ok("staff"))
+	(held == Holding(staff), access_of([staff], Err(NotFound)), access_of([staff], Ok("operator")), access_of([], Ok("staff")) == Holding({ ..staff, capabilities: [], presets: [] }))
+		== (Bool.True, Operator, Operator, Bool.True)
+		and [allows(held, "rooms.v1"), allows(held, "chat.v1"), allows(Operator, "chat.v1")] == [Bool.True, Bool.False, Bool.True]
+		and ["/liton/v1/devices", "/liton/v1/devices/code", "/liton/v1/devices/key", "/liton/v1/nostr/event", "/liton/v1/manifest"].map(|path| route_allowed(held, path)) == [Bool.False, Bool.False, Bool.True, Bool.True, Bool.True]
+		and route_allowed(Holding({ ..staff, capabilities: [] }), "/liton/v1/nostr/req") == Bool.False
+}
+
+expect {
+	staff = Holding({ name: "staff", capabilities: ["rooms.v1", "attention.v1"], presets: ["Rooms"], locked: Bool.True })
+	full = { protocol: 1, daemon: { id: "liton", name: "liton" }, providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.rooms_v1] }, { id: "hosts", name: "Hosts", capabilities: [Capability.hosts_v1] }], transformers: [AttentionTransformer.part, NeedsYou.part].map(Transformer.declared), topics: Protocol.topics }
+	seen = offered_to(staff, full)
+	shown = setup_to(staff, Setup.offered(Default.setup))
+	seen.providers == [{ id: "mock", name: "Mock", capabilities: [Capability.rooms_v1] }]
+		and seen.transformers.map(|part| part.id) == ["attention"]
+		and seen.topics.map(|topics| Capability.to_str(topics.capability)) == ["rooms.v1"]
+		and offered_to(Operator, full) == full
+		and shown.presets.map(|preset| preset.name) == ["Rooms"] and shown.default_preset == "Rooms" and shown.deck == ["Rooms"]
 }
