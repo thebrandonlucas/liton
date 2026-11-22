@@ -12,7 +12,13 @@ Ui := [].{
 	build! : Str, Str, List(Str), List(Str) => Try({}, _)
 	build! = |roc_ui, output, runtime_files, flags| {
 		Path.create_all!(Path.utf8(output))?
-		Exec.call!(".", roc_ui, ["build", "--opt=size"].concat(flags).concat(["--target=wasm32", "ui/main.roc", "--output=${output}/app.wasm"]))?
+		# FIXME: the LLVM backend never reuses a function's stack slots
+		# (roc-lang/roc#13320, #13094, #13319, #13321), so the UI's view
+		# functions have frames of up to 3 MB, and mounting the page needs
+		# more than wasm's default 8 MB stack: it traps with "memory access
+		# out of bounds". So the stack is 32 MB. Drop --wasm-stack-size once
+		# a Roc nightly fixes those and the page mounts on the default.
+		Exec.call!(".", roc_ui, ["build", "--opt=size", "--wasm-stack-size=33554432"].concat(flags).concat(["--target=wasm32", "ui/main.roc", "--output=${output}/app.wasm"]))?
 		for file in ["index.html", "style.css", "ports.mjs", "voice.mjs", "voice-worklet.js"].map(|name| "ui/${name}").concat(runtime_files) {
 			name = Path.display(Path.filename(Path.utf8(file)) ?? Path.utf8(file))
 			Path.copy!(Path.utf8(file), Path.utf8("${output}/${name}"))?
