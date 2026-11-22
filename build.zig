@@ -400,6 +400,34 @@ pub fn build(b: *std.Build) void {
     const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
     example_step.dependOn(&install_example.step);
 
+    // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
+    // and their SHA256SUMS, into zig-out/release: for each Linux system the
+    // daemon's and the command line's platforms build for, their static
+    // binaries in bin/ and the UI in share/liton/www, the same bytes from the
+    // same sources.
+    const release_step = b.step("release", "Build the release archives into zig-out/release");
+    const version = @import("build.zig.zon").version;
+    const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
+    for ([_][2][]const u8{ .{ "x86_64-linux", "x64musl" }, .{ "aarch64-linux", "arm64musl" } }) |release| {
+        const target = b.fmt("--target={s}", .{release[1]});
+        const tree = b.addWriteFiles();
+        _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "daemon/main.roc", "liton-daemon"), "bin/liton-daemon");
+        _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
+        _ = tree.addCopyDirectory(www, "share/liton/www", .{});
+        const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
+        const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
+        archive.addPrefixedDirectoryArg("--directory=", tree.getDirectory());
+        const packed_archive = archive.addPrefixedOutputFileArg("--file=", name);
+        archive.addArgs(&.{ "--create", "bin", "share" });
+        const install = b.addInstallFileWithDir(packed_archive, .{ .custom = "release" }, name);
+        release_step.dependOn(&install.step);
+        sums.addArg(name);
+        sums.step.dependOn(&install.step);
+    }
+    // In zig-out/release, so the sums name the archives alone.
+    sums.setCwd(.{ .cwd_relative = b.getInstallPath(.{ .custom = "release" }, "") });
+    release_step.dependOn(&b.addInstallFileWithDir(sums.captureStdOut(.{}), .{ .custom = "release" }, "SHA256SUMS").step);
+
     // Serves the UI, its API docs and the API at http://127.0.0.1:8095
     // (LITON_HOST and LITON_PORT to change it).
     const run_step = b.step("run", "Build the UI and the daemon, and run the daemon");
