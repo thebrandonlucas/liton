@@ -262,6 +262,14 @@ Model := [].{
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
+		## A signing room's request on its way: the event it makes, unsigned,
+		## to sign (`signing`), then the call carrying it signed
+		## (`signed_call`), numbered as its `room_asks` is; and this browser's
+		## key, asked for once a signing room is listed, "" until then.
+		signing : { serial : U64, unsigned : { kind : U32, tags : List(List(Str)), content : Str } },
+		signed_call : { serial : U64, text : Str },
+		nostr_key : Str,
+
 		## What is typed in Rooms panes' search, which narrows their rooms.
 		room_search : Str,
 
@@ -546,6 +554,9 @@ Model := [].{
 				room_members: [],
 				room_logs: [],
 				room_asks: [],
+				signing: { serial: 0, unsigned: { kind: 0, tags: [], content: "" } },
+				signed_call: { serial: 0, text: "" },
+				nostr_key: "",
 				room_search: "",
 				rooms_out_of_view: [],
 				themes: Default.setup.themes,
@@ -5271,12 +5282,77 @@ Model := [].{
 		}
 	}
 
-	## Sends a rooms.v1 request, shown at once until the daemon answers.
+	## Sends a rooms.v1 request, shown at once until the daemon answers. Of a
+	## signing room, the event it makes is signed first (`Model.room_signed`).
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
-		serial = state.call_outbox.serial + 1
-		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+		serial = U64.max(state.call_outbox.serial, U64.max(state.signing.serial, state.signed_call.serial)) + 1
+		asked = { ..state, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+		match Model.unsigned_event(request) {
+			Ok(unsigned) if Model.signing_room(state, Model.asked_room(request)) => { ..asked, signing: { serial, unsigned } }
+			_ => { ..asked, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) } }
+		}
 	}
+
+	## The room a rooms.v1 request is of, "" for none.
+	asked_room : Rooms.Request -> Str
+	asked_room = |request|
+		match request {
+			ListRooms => ""
+			Send({ room_id, .. }) => room_id
+			React({ room_id, .. }) | Unreact({ room_id, .. }) => room_id
+			Join({ room_id }) | Leave({ room_id }) => room_id
+		}
+
+	## Whether the room `room_id` takes the events its requests make, signed.
+	signing_room : State, Str -> Bool
+	signing_room = |state, room_id| state.rooms.any(|room| room.id == room_id and room.signing == Ok(Bool.True))
+
+	## Whether this browser's key is wanted: once a signing room is listed.
+	wants_key : State -> Bool
+	wants_key = |state| state.rooms.any(|room| room.signing == Ok(Bool.True))
+
+	## The event a request of a signing room makes, as docs/protocol.md
+	## (Rooms) says, before it is signed: a message (9) with NIP-10's marked
+	## `e` tags for its thread and `p` tags for its mentions, a reaction (7),
+	## a reaction taken back (5, marked `["k", "7"]`), or a join (9021) or
+	## leave (9022), each in the room.
+	unsigned_event : Rooms.Request -> Try({ kind : U32, tags : List(List(Str)), content : Str }, [Unsigned])
+	unsigned_event = |request| {
+		in_room = |room_id| [["h", room_id]]
+		match request {
+			ListRooms => Err(Unsigned)
+			Send({ room_id, text, place: sent_to, mentions }) => {
+				thread = match sent_to {
+					TopLevel => []
+					Reply({ root, parent }) => [["e", root, "", "root"], ["e", parent, "", "reply"]]
+				}
+				Ok({ kind: 9, tags: in_room(room_id).concat(thread).concat(mentions.map(|member| ["p", member])), content: text })
+			}
+			React({ room_id, message_id, emoji }) => Ok({ kind: 7, tags: in_room(room_id).append(["e", message_id]), content: emoji })
+			Unreact({ room_id, message_id, emoji }) => Ok({ kind: 5, tags: in_room(room_id).concat([["e", message_id], ["k", "7"]]), content: emoji })
+			Join({ room_id }) => Ok({ kind: 9021, tags: in_room(room_id), content: "" })
+			Leave({ room_id }) => Ok({ kind: 9022, tags: in_room(room_id), content: "" })
+		}
+	}
+
+	## A Nostr event (NIP-01) signed by this browser's key (ui/nostr.mjs).
+	Signed : { id : Str, pubkey : Str, created_at : U64, kind : U32, tags : List(List(Str)), content : Str, sig : Str }
+
+	## The event of the request numbered `serial`, signed, or why not: signed,
+	## it goes to the daemon with its request; unsigned, the request fails as
+	## a refused one does.
+	room_signed : State, U64, Try(Signed, _) -> State
+	room_signed = |state, serial, res|
+		match (res, state.room_asks.find_first(|asked| asked.serial == serial)) {
+			(Ok(signed), Ok(asked)) => { ..state, signed_call: { serial, text: Json.to_str({ capability: "rooms.v1", request: asked.request, signed }) } }
+			(Err(_), Ok(_)) => {
+				unsigned : Protocol.Answer(Rooms.Response)
+				unsigned = Err({ code: Unavailable, message: "This browser couldn't sign it." })
+				Model.rooms_answered(state, serial, Json.to_str(unsigned))
+			}
+			(_, Err(_)) => state
+		}
 
 	## Without the messages sent that a log has posted.
 	posted_sent : State -> State
