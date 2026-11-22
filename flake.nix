@@ -33,5 +33,12 @@
           meta.description = "Run liton's command line";
         };
       }) archives;
+
+      # services.liton, liton's daemon as a system service. Kai imports it
+      # with InputModules("liton", ["nix/module.nix"]).
+      nixosModules = {
+        liton = ./nix/module.nix;
+        default = self.nixosModules.liton;
+      };
     };
 }
