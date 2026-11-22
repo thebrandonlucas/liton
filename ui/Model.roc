@@ -300,6 +300,10 @@ Model := [].{
 		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
 		pairing : Pairing,
 
+		## Whether the daemon says this device's role locks its UI: its layout,
+		## its deck and Settings stay as they are, shown without their controls.
+		locked : Bool,
+
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
@@ -574,6 +578,7 @@ Model := [].{
 				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
+				locked: Bool.False,
 				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", pubkey: "", name: "" }, profile: { serial: 0, name: "" }, profile_event: { serial: 0, text: "" } },
 				focused_pane: "",
 				menu: "",
@@ -635,7 +640,7 @@ Model := [].{
 	show_surface = |state, index| {
 		kept = Model.deck(state)
 		match kept.get(index) {
-			Ok(surface) if index != state.deck_shown => {
+			Ok(surface) if index != state.deck_shown and !state.locked => {
 				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
 				panel = Model.slot_of(laid, laid.active_tile)
 				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
@@ -919,7 +924,7 @@ Model := [].{
 
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
-	toggle_settings = |state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+	toggle_settings = |state| if (state.locked and !state.show_settings) state else Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
 
 	## Shows a section of Settings, over its list on a phone.
 	## Opens Settings at what the daemon connects.

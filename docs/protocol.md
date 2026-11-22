@@ -98,13 +98,16 @@ capability as patterns:
     "default_theme": "Pastoral",
     "presets": [{ "name": "Developer", "snapshot": { "version": 6, "shell": "Workbench", "columns": […], "collapsed": [], "hidden": [], "theme": "" } }, …],
     "themes": [{ "name": "Pastoral", "scheme": "Dark", "accent": "#e8c872", … }, …]
-  }
+  },
+  "access": { "role": "operator", "locked": false }
 }
 ```
 
 A capability is offered when a provider supplies it or a transformer derives
 it. A client binds to capabilities, never to providers; it uses the manifest to
-show what is missing and who could supply it.
+show what is missing and who could supply it. `access` is the role of the
+device asking, `operator` unless its key holds another, and whether the role
+locks its UI, whose layout and Settings then stay as they are.
 
 `setup` holds what the daemon's setup (design.md, Setups) offers its
 clients: its presets, each a layout as a client saves it, a snapshot, with a

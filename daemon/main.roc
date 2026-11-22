@@ -780,12 +780,17 @@ read_json! = |request| {
 }
 
 ## Answers /liton/v1/manifest, once the remotes due are asked, with the
-## presets the setup offers clients.
+## presets the setup offers clients, as the device asking sees them, and
+## its `access`: its role, and whether its UI is locked.
 manifest! : Context => Try(Response, _)
 manifest! = |context| {
 	remotes_cycle!(context)?
 	{ protocol, daemon, providers, transformers, topics } = offered_to(context.access, offered!(context)?)
-	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: setup_to(context.access, context.setup) })))
+	access = match context.access {
+		Operator => { role: "operator", locked: Bool.False }
+		Holding(role) => { role: role.name, locked: role.locked }
+	}
+	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: setup_to(context.access, context.setup), access })))
 }
 
 ## What a device's role lets it do: everything, the owner's and any key's

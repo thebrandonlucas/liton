@@ -156,7 +156,7 @@ Keymap := [].{
 			cleared = { ..state, keys_typed: { ..state.keys_typed, keys: [] } }
 			commands = Commands.all(state)
 			exact = bindings.keep_if(|binding| binding.keys == typed).map(|binding| binding.command)
-			if exact.any(|id| commands.any(|command| command.id == id and (command.applies)(state))) {
+			if exact.any(|id| commands.any(|command| command.id == id and Commands.can_run(state, command))) {
 				Commands.run_first(cleared, exact)
 			} else if bindings.any(|binding| binding.keys.len() > typed.len() and binding.keys.take_first(typed.len()) == typed) {
 				{ ..state, keys_typed: { keys: typed, serial: state.keys_typed.serial + 1 } }

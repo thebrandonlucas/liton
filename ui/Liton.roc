@@ -199,7 +199,7 @@ Liton := [].{
 			[
 				Liton.connection(model),
 				Engine.when(
-					model.signal().map(|state| state.deck.len() > 1),
+					model.signal().map(|state| state.deck.len() > 1 and !state.locked),
 					||
 						Engine.element(
 							"nav",
@@ -315,7 +315,8 @@ Liton := [].{
 	drag_effects : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> List(Elem(Ctx))
 	drag_effects = |model, drag| [
 		Engine.watch_latest(
-			drag.signal().map(Drag.held),
+			# A locked UI's layout stays as it is: the pane held doesn't move.
+			drag.signal().map2(model.signal(), |gesture, state| if (state.locked) NotHolding else Drag.held(gesture)),
 			|held|
 				match held {
 					Holding({ pointer, column, row, .. }) => [Drag.pointer.ask({ pointer, column, row })]
@@ -397,7 +398,7 @@ Liton := [].{
 					# The setup's presets and themes, which a daemon may leave out.
 					match (res, decoded) {
 						(Err(Status(401)), _) => Pairing.refused(state)
-						(_, Ok(offered)) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
+						(_, Ok(offered)) => Model.set_up({ ..Model.advertise(state, offered), locked: Liton.locked_by(text) }, Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
 						(_, Err(_)) => { ..state, notice: "Could not read the daemon's manifest.", unreachable: Bool.True }
 					}
 				},
@@ -570,7 +571,7 @@ Liton := [].{
 		# A trackpad's swipe across the page goes to the deck's next or
 		# previous surface, while nothing covers it.
 		Engine.watch(
-			model.signal().map(|state| state.deck.len() > 1),
+			model.signal().map(|state| state.deck.len() > 1 and !state.locked),
 			|several| if (several) [Ports.swipe.ask({})] else [],
 			model.on_result(
 				|state, _, res|
@@ -622,9 +623,18 @@ Liton := [].{
 			],
 		)
 
-	## Opens or closes Settings.
+	## Whether a manifest's `access` says this device's UI is locked; one
+	## from before roles says nothing, so it isn't.
+	locked_by : Str -> Bool
+	locked_by = |text| {
+		said : Try({ access : { locked : Bool } }, _)
+		said = Json.parse(text)
+		said.map_ok(|{ access }| access.locked) ?? Bool.False
+	}
+
+	## Opens or closes Settings, shown unless the UI is locked.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings))
+	settings_toggle = |model, class| Engine.when(model.signal().map(|state| !state.locked), || Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings)), || Engine.text(""))
 
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
@@ -2072,9 +2082,15 @@ Liton := [].{
 
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, where it
 	## moves, and in Tiling Close; in a Workbench, Hide, and Show for each
-	## pane its tile hides. Each closes the menu.
+	## pane its tile hides. Each closes the menu. A locked UI shows none.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	pane_menu = |model, id, title, shown| {
+		Engine.when(model.signal().map(|state| !state.locked), || Liton.unlocked_pane_menu(model, id, title, shown), || Engine.text(""))
+	}
+
+	## A pane's ⋯ menu, as `pane_menu` shows it while the UI isn't locked.
+	unlocked_pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	unlocked_pane_menu = |model, id, title, shown| {
 		closing = |change| |state, pane_id| { ..change(state, pane_id), menu: "" }
 		Menu.menu(
 			model,
