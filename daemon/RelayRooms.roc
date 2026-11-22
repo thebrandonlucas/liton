@@ -34,6 +34,7 @@ RelayRooms := [].{
 			joined: kept.members.contains(me),
 			updated,
 			me: if (me == "") Err(Missing) else Ok(me),
+			signing: Ok(Bool.True),
 		}
 	}
 

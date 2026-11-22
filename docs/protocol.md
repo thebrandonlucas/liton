@@ -571,8 +571,8 @@ room is a group, a message its kind 9 with NIP-10's `root` and `reply` `e`
 tags for a thread and `p` tags for mentions, a reaction a kind 7, an edit a
 kind 40003 and a deletion a kind 5, or 9005 by an admin; a member is a key,
 named by its latest profile (kind 0), an `Agent` when the profile says
-`"bot": true`. A call of a relay room carries the event it makes beside its
-request, signed by the device's key: `Send` a kind 9, `React` a kind 7,
+`"bot": true`. A relay room is `"signing": true`: a call of it carries the
+event it makes beside its request, signed by the device's key: `Send` a kind 9, `React` a kind 7,
 `Unreact` a kind 5 marked `["k", "7"]` whose `e` names the message and whose
 content is the emoji, `Join` a 9021 and `Leave` a 9022, each in the room.
 The relay takes it as `POST /liton/v1/nostr/event` would, and the call
