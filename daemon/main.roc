@@ -441,9 +441,10 @@ profile_name = |profiles, pubkey| {
 
 ## The topic `people`: the owner, if the setup names one, and the keys
 ## holding a role, each named by its latest profile, else by its invite,
-## and the invites not used yet.
+## the invites not used yet, and the roles the device asking may invite
+## into: an operator any, an admin any but `operator`.
 people! : Context => Try(People.Listing, _)
-people! = |{ db, owner, .. }| {
+people! = |{ db, owner, roles, access, .. }| {
 	held : List({ pubkey : Str, role : Str, name : Str })
 	held = Sqlite.query_many!({ db, query: "SELECT pubkey, role, name FROM key_roles ORDER BY name, pubkey;", params: {}, limits: Sqlite.default_query_limits })?
 	rows : List(NostrRow)
@@ -455,6 +456,7 @@ people! = |{ db, owner, .. }| {
 	Ok({
 		people: owning.concat(held.map(|person| { ..person, name: profile_name(profiles, person.pubkey) ?? person.name })),
 		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at) }),
+		roles: (if (access == Operator) ["operator"] else []).concat(roles.map(|role| role.name)),
 	})
 }
 

@@ -6,6 +6,7 @@ import cap.Chat
 import cap.Context
 import cap.Files
 import cap.Hosts
+import cap.People
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -20,6 +21,7 @@ import setup.Setup
 import Highlight
 import History
 import HostDesk
+import PeopleDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -375,6 +377,10 @@ Model := [].{
 		## What Settings' Hosts shows (ui/HostDesk.roc), and the hosts.v1
 		## requests on their way (sent as `call_outbox`).
 		hosts : HostDesk.State,
+
+		## What Settings' People shows (ui/PeopleDesk.roc), and the people.v1
+		## requests on their way (sent as `call_outbox`).
+		people : PeopleDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -587,6 +593,7 @@ Model := [].{
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
 				hosts: HostDesk.initial,
+				people: PeopleDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -2512,7 +2519,9 @@ Model := [].{
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
 		# The hosts, for Settings' Hosts and the host badges.
 		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The people, and the rooms an invite may name, while Settings shows them.
+		people = if (state.capabilities.contains(Capability.people_v1) and state.show_settings and state.settings_page.section == "people") [PeopleList].concat(if (offered(Capability.rooms_v1)) [RoomList] else []) else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2596,7 +2605,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), people: PeopleDesk.settled(applied.people, sent.serial) }
 		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		# A timeline the daemon has yet to fetch is asked for at once.
 		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
@@ -2674,6 +2683,7 @@ Model := [].{
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
 			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
+			(_, People(listed)) => { ..state, people: { ..state.people, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -4044,6 +4054,40 @@ Model := [].{
 		match answered {
 			Ok(Ok(Rejected(reason))) => undone(reason)
 			Ok(Ok(_)) => Model.poll({ ..state, hosts: HostDesk.answered(state.hosts, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Sends a people.v1 request, shown at once until the daemon answers.
+	ask_people : State, People.Request -> State
+	ask_people = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "people.v1", text: Json.to_str({ capability: "people.v1", request }) }, people: PeopleDesk.asking(state.people, serial, request), notice: "" }
+	}
+
+	## Sends the invite Settings' People writes, or says why it can't.
+	invite : State -> State
+	invite = |state| {
+		desk = state.people
+		match PeopleDesk.request_of(desk.form) {
+			Err(why) => { ..state, people: { ..desk, form: { ..desk.form, failed: why } } }
+			Ok(request) => Model.ask_people({ ..state, people: { ..desk, form: PeopleDesk.blank, link: "" } }, request)
+		}
+	}
+
+	## Takes the daemon's answer to a people.v1 request: an invite made
+	## shows the link that redeems it; refused, a request is undone, with why.
+	people_answered : State, U64, Str -> State
+	people_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(People.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, people: PeopleDesk.answered(state.people, serial, Refused(reason)), notice: reason }
+		accepted = |desk| Model.poll({ ..state, people: PeopleDesk.answered(desk, serial, Accepted(state.poll.serial + 1)) })
+		match answered {
+			Ok(Ok(Invited({ secret, .. }))) => accepted({ ..state.people, link: "${state.people.page}#invite=${secret}" })
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => accepted(state.people)
 			Ok(Err({ message, .. })) => undone(message)
 			Err(_) => undone("The daemon did not answer.")
 		}

@@ -12,8 +12,9 @@ People := [].{
 	## expires, as 2026-01-01T09:00:00.000Z.
 	Invite : { id : Str, name : Str, role : Str, rooms : List(Str), expires : Str }
 
-	## What the topic `people` holds.
-	Listing : { people : List(Person), invites : List(Invite) }
+	## What the topic `people` holds, and the roles whoever asks may invite
+	## into.
+	Listing : { people : List(Person), invites : List(Invite), roles : List(Str) }
 
 	## `Invite` answers `Invited` with the invite's secret, which no answer
 	## holds again: `/ui/index.html#invite=<secret>` redeems it. `Remove`

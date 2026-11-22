@@ -31,6 +31,7 @@ import Wallpaper
 import Spinner
 import History
 import HostDesk
+import PeopleDesk
 import ScheduleDesk
 import InboxDesk
 import Menu
@@ -474,6 +475,7 @@ Liton := [].{
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
 						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
 						"hosts.v1" => Model.hosts_answered(state, outbox.serial, res ?? "")
+						"people.v1" => Model.people_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
@@ -822,7 +824,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices")])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices"), Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.people_v1)), || Liton.section_button(model, "people", "People"), || Engine.text(""))])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -842,6 +844,7 @@ Liton := [].{
 								shown("host", || Liton.host_section(model)),
 								shown("hosts", || Liton.hosts_section(model)),
 								shown("devices", || Pairing.section(model)),
+								shown("people", || Liton.people_section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
@@ -859,7 +862,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("people", "People"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -958,6 +961,114 @@ Liton := [].{
 	## with its status dot, version and when it was last online, and a ⋮
 	## menu to change, switch off or on, or remove it, a removal asking to be
 	## confirmed; and Add host, opening the dialog.
+	## Settings' People (ui/PeopleDesk.roc): an invite to write, into a role
+	## and the rooms that sign, its link once made; the invites not used,
+	## each to cancel; and the people holding a role, each to remove, once
+	## confirmed, as that revokes their devices.
+	people_section : State(Ctx, Model.State) -> Elem(Ctx)
+	people_section = |model| {
+		desk = model.signal().map(|state| state.people)
+		form = desk.map(|shown| shown.form)
+		set_form = |change| model.set_value(|state, text| { ..state, people: { ..state.people, form: change(state.people.form, text) } })
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Invite",
+					[
+						Html.div("settings-row", [Html.text_input(Engine.const("Who the invite is for"), "text", form.map(|shown| shown.name), [Engine.attr("placeholder", "Dana")], set_form(|shown, name| { ..shown, name }))]),
+						Html.div(
+							"settings-row people-roles",
+							[
+								Engine.each(
+									desk.map(|shown| shown.listed.roles),
+									|role| role,
+									|row| Html.button_s(row.key(), [Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |role, state| state.people.form.role == role))], model.lift_row().update_by(row.key(), |state, role| { ..state, people: { ..state.people, form: { ..state.people.form, role } } })),
+								),
+							],
+						),
+						Engine.each(
+							model.signal().map(|state| state.rooms.keep_if(|room| room.signing == Ok(Bool.True)).map(|room| room.id)),
+							|room_id| room_id,
+							|row|
+								Html.div(
+									"settings-row",
+									[
+										Engine.element(
+											"label",
+											[Engine.class("toggle")],
+											[
+												Html.checkbox(row.key().map(|room_id| "In #${room_id}"), row.key().map2(model.signal().lift_row(), |room_id, state| state.people.form.rooms.contains(room_id)), [], model.lift_row().set_value_by(row.key(), |state, room_id, wanted| { ..state, people: { ..state.people, form: PeopleDesk.picked(state.people.form, room_id, wanted) } })),
+												Engine.text_s(row.key().map(|room_id| "#${room_id}")),
+											],
+										),
+									],
+								),
+						),
+						Html.div(
+							"settings-row",
+							[
+								Html.button("Make the invite link", [Engine.class("primary")], model.update(Model.invite)),
+								Html.p_s(form.map(|shown| shown.failed), [Engine.class("help"), Engine.attr("role", "alert"), Engine.test_id("invite-failed")]),
+							],
+						),
+						Engine.when(
+							desk.map(|shown| !shown.link.is_empty()),
+							|| Html.div("settings-row", [Html.p_s(desk.map(|shown| shown.link), [Engine.class("help pair-link"), Engine.test_id("invite-link")]), Html.p("It joins one device, once, within 7 days: open it there. It isn't shown again.", "help")]),
+							|| Engine.text(""),
+						),
+					],
+				),
+				Liton.settings_card(
+					"Invites",
+					[
+						Engine.each(
+							desk.map(|shown| PeopleDesk.shown(shown).invites),
+							|invite| invite.id,
+							|row|
+								Html.div(
+									"settings-row",
+									[
+										Html.div(
+											"device-text",
+											[
+												Html.span_s(row.field(|invite| invite.name), [Engine.class("settings-row-title")]),
+												Html.p_s(row.field(|invite| Str.join_with([invite.role].concat(invite.rooms.map(|room| "#${room}")).append(if (invite.expires.is_empty()) "Inviting…" else "expires ${invite.expires}"), " · ")), [Engine.class("help")]),
+											],
+										),
+										Html.button_s(row.field(|invite| "Cancel the invite of ${invite.name}"), [], model.lift_row().update_by(row.key(), |state, id| Model.ask_people(state, Cancel({ id: id })))),
+									],
+								),
+						),
+					],
+				),
+				Liton.settings_card(
+					"People",
+					[
+						Engine.each(
+							desk.map(|shown| PeopleDesk.shown(shown).people),
+							|person| person.pubkey,
+							|row| {
+								removing = row.key().map2(model.signal().lift_row(), |pubkey, state| state.people.removing == pubkey)
+								Html.div(
+									"settings-row",
+									[
+										Html.div("device-text", [Html.span_s(row.field(|person| person.name), [Engine.class("settings-row-title")]), Html.p_s(row.field(|person| person.role), [Engine.class("help")])]),
+										Engine.when(
+											removing,
+											|| Html.button_s(row.field(|person| "Remove ${person.name} and revoke their devices"), [Engine.class("danger")], model.lift_row().update_by(row.key(), |state, pubkey| Model.ask_people(state, Remove({ pubkey: pubkey })))),
+											|| Html.button_s(row.field(|person| "Remove ${person.name}"), [], model.lift_row().update_by(row.key(), |state, pubkey| { ..state, people: { ..state.people, removing: pubkey } })),
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+			],
+		)
+	}
+
 	hosts_section : State(Ctx, Model.State) -> Elem(Ctx)
 	hosts_section = |model| {
 		desk = model.signal().map(|state| state.hosts)

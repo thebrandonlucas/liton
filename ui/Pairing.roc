@@ -9,13 +9,15 @@ import Model
 Pairing := [].{
 
 	## The state with the code the URL's `#pair=` gives, or the invite its
-	## `#invite=` does, tried once the daemon says this browser isn't paired.
+	## `#invite=` does, tried once the daemon says this browser isn't paired,
+	## and the page's address, which an invite's link names.
 	restored : Model.State, Str -> Model.State
 	restored = |state, url| {
 		hash = url.split_first("#").map_ok(|{ after, .. }| after) ?? ""
 		given = |name| hash.split_on("&").find_first(|part| part.starts_with("${name}=")).map_ok(|part| part.drop_prefix("${name}=")) ?? ""
 		code = given("pair")
-		{ ..state, pairing: { ..state.pairing, code, from_url: !code.is_empty(), invite: given("invite") } }
+		page = url.split_first("#").map_ok(|{ before, .. }| before) ?? url
+		{ ..state, pairing: { ..state.pairing, code, from_url: !code.is_empty(), invite: given("invite") }, people: { ..state.people, page } }
 	}
 
 	## The daemon refused a request as this browser isn't paired: the pair

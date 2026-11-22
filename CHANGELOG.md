@@ -152,6 +152,7 @@ All notable changes to liton are documented in this file. The format is based on
 - `people.v1`, offered by the daemon to operators and to the roles allowed it, its admins: the `people` topic lists the keys holding a role, named by their profiles, and the invites not used yet; `Invite({ name, role, rooms })` answers a secret that `/ui/index.html#invite=<secret>` redeems once within 7 days, `Remove({ pubkey })` takes a key's role, rooms and devices away, and `Cancel({ id })` an invite. Only an operator invites or removes an operator. `POST /liton/v1/invite` redeems an invite with the browser's key, pairing it as a new device whose key holds the invite's role, in its rooms.
 - `liton invite --role <role> [--rooms <room>,...] <name>` asks the daemon, as an operator or admin, for an invite and prints the link that redeems it, good once for 7 days.
 - Opening an invite's link, `…/ui/index.html#invite=<secret>`, in a browser not paired joins it: the browser makes its key, redeems the invite with it, shown as pairing, and signs its profile with the invite's name. A wrong, used or expired invite says so on the pair screen.
+- Settings → People, for operators and admins: invite someone by name into a role and the rooms that sign, shown as inviting at once, then the link that joins their device; cancel an invite not used; and remove a person, after asking, which revokes their devices. `people.v1`'s listing names the roles whoever asks may invite into.
 
 ### Changed
 
