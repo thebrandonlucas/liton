@@ -243,6 +243,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Revoke in Settings → Devices now revokes the device: it sent the bare id, which the daemon refused, rather than `{"id": …}`.
 - liton no longer looks frozen while its daemon is slow or unreachable: a note at the bottom says it is waiting for the daemon, or can't reach it and is trying again, until it answers. A session or scope picked while a poll is held up is polled for at once, in place of that poll.
 - A long diff in the Review view, or a long file in Files, opens at once and scrolls smoothly: lines are drawn as they come near the screen, not all at once.
 - Typing a comment in the Review view, and picking a line to comment on, no longer stall on a long diff: each key took most of a second on 2,000 lines, and now takes a frame or two.

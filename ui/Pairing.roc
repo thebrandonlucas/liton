@@ -307,11 +307,7 @@ Pairing := [].{
 					method: "POST",
 					url: "/liton/v1/devices/revoke",
 					headers: [("Content-Type", "application/json")],
-					body: Json.to_str(
-						{
-							id
-						},
-					),
+					body: Json.to_str({ id: id }),
 					timeout: Ms(5000),
 				}),
 			],
