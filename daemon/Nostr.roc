@@ -79,12 +79,14 @@ Nostr := [].{
 
 	## What `filter` asks the relay's table after the event `after` arrived,
 	## as the query's parameters: lists as JSON, or "" when not asked, and
-	## times not asked as -1.
-	parameters : Filter, I64 -> { after : I64, ids : Str, authors : Str, kinds : Str, tags : Str, since : I64, until : I64, limit : I64 }
+	## times not asked as -1. Asked after none, it takes the `latest` it
+	## matches; after one, the next, so a client polling misses none.
+	parameters : Filter, Try(I64, [Missing]) -> { after : I64, latest : I64, ids : Str, authors : Str, kinds : Str, tags : Str, since : I64, until : I64, limit : I64 }
 	parameters = |filter, after| {
 		listed = |asked| asked.map_ok(Json.to_str) ?? ""
 		{
-			after,
+			after: after ?? 0,
+			latest: if (after.is_ok()) 0 else 1,
 			ids: listed(filter.ids),
 			authors: listed(filter.authors),
 			kinds: listed(filter.kinds),
@@ -130,5 +132,5 @@ expect Nostr.answer("ab", Bool.False, "invalid: \"id\"") == "[\"OK\",\"ab\",fals
 expect {
 	asked : Try(Nostr.Filter, _)
 	asked = Json.parse("{\"kinds\":[9,7],\"tags\":[[\"h\",\"general\"]],\"limit\":900}")
-	asked.map_ok(|filter| Nostr.parameters(filter, 4)) == Ok({ after: 4, ids: "", authors: "", kinds: "[9,7]", tags: "[[\"h\",\"general\"]]", since: -1, until: -1, limit: 500 })
+	asked.map_ok(|filter| Nostr.parameters(filter, Ok(4))) == Ok({ after: 4, latest: 0, ids: "", authors: "", kinds: "[9,7]", tags: "[[\"h\",\"general\"]]", since: -1, until: -1, limit: 500 })
 }

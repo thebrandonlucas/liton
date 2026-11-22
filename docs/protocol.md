@@ -611,10 +611,10 @@ NIP-01 says, and whose pubkey is the device's; where the daemon needs no
 device (LITON_AUTH), any pubkey. It doesn't verify signatures yet: an
 event is trusted as its device's, which is why a key binds to one device.
 
-`POST /liton/v1/nostr/req` answers the events any of its filters matches,
-NIP-01's REQ asked once, after the event `after` names (0, or left out, for
-all), in the order they arrived, with `cursor`, the last one's place, to ask
-after next time:
+`POST /liton/v1/nostr/req` answers the events any of its filters matches
+in rooms the device sees (as `rooms.v1` lists them) or in none, NIP-01's REQ
+asked once, after the event `after` names, in the order they arrived, with
+`cursor`, the last one's place, to ask after next time:
 
 ```json
 { "filters": [{ "kinds": [9, 7], "tags": [["h", "general"]], "limit": 100 }], "after": 41 }
@@ -624,8 +624,10 @@ after next time:
 A filter has NIP-01's `ids`, `authors`, `kinds`, `since`, `until` and
 `limit`, and its tag conditions, NIP-01's `#h` and the like, as `tags`: a
 letter, then the values an event's tag of that letter must have one of. A
-filter answers the latest `limit` (by default 200, at most 500) of what it
-matches.
+filter answers at most `limit` (by default 200, at most 500) of what it
+matches: asked `after` an event, the first that arrived since, the cursor
+stopping at the last one a cut filter answered, so the next ask misses none;
+with no `after`, the latest.
 
 Its rooms are NIP-29 groups, each named by its events' `h` tag, made by
 their moderation events in the order they arrived: `9007` creates a room,

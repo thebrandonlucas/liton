@@ -506,33 +506,43 @@ nostr_event_of : NostrRow -> Nostr.Event
 nostr_event_of = |row| { id: row.id, pubkey: row.pubkey, kind: row.kind.to_u32_wrap(), created_at: row.created_at.to_u64_wrap(), tags: Json.parse(row.tags) ?? [], content: row.content, sig: row.sig }
 
 ## Answers /liton/v1/nostr/req: the events any of `filters` matches (NIP-01,
-## its tag conditions as `tags`) that arrived after `after`, in the order
-## they arrived, the latest of them when a filter's limit leaves some out,
-## and `cursor`, the last one's place, to ask after next time.
+## its tag conditions as `tags`) in rooms the device asking sees
+## (`relay_rooms!`) or in none, in the order they arrived, and `cursor`,
+## the last one's place, to ask after next time. Asked `after` one, each
+## filter's next, the cursor no further than the first filter its limit
+## cut, so asking again misses none; else each filter's latest.
 nostr_req! : Context, Server.Request => Try(Response, _)
-nostr_req! = |{ db, .. }, request| {
+nostr_req! = |context, request| {
+	db = context.db
 	given : Try({ filters : List(Nostr.Filter), after : Try(I64, [Missing]) }, _)
 	given = Json.parse(read_json!(request)?)
 	match given {
 		Err(_) => Ok(text(400, "a request is {\"filters\": [NIP-01 filters, tag conditions as \"tags\": [[\"h\", \"general\"]]], \"after\": 0}"))
 		Ok({ filters, after }) => {
 			var $found = []
+			var $cut = []
 			for filter in filters {
+				asked = Nostr.parameters(filter, after)
 				rows : List(NostrRow)
-				rows = Sqlite.query_many!({ db, query: nostr_matching, params: Nostr.parameters(filter, after ?? 0), limits: Sqlite.default_query_limits })?
+				rows = Sqlite.query_many!({ db, query: nostr_matching, params: asked, limits: Sqlite.default_query_limits })?
+				if after.is_ok() and rows.len().to_i64_wrap() >= asked.limit {
+					$cut = $cut.concat(rows.last().map_ok(|row| [row.seq]) ?? [])
+				}
 				$found = $found.concat(rows.drop_if(|row| $found.any(|kept| kept.seq == row.seq)))
 			}
-			arrived = $found.sort_with(|left, right| if (left.seq < right.seq) Before else if (left.seq > right.seq) After else Same)
+			through = $cut.first().map_ok(|first| $cut.fold(first, I64.min))
+			arrived = $found.keep_if(|row| through.map_ok(|last| row.seq <= last) ?? Bool.True).sort_with(|left, right| if (left.seq < right.seq) Before else if (left.seq > right.seq) After else Same)
+			seen = relay_rooms!(context)?.map(|room| room.kept.id)
 			events : List(Nostr.Event)
-			events = arrived.map(nostr_event_of)
+			events = arrived.map(nostr_event_of).keep_if(|event| Nostr.room(event) == "" or seen.contains(Nostr.room(event)))
 			cursor = arrived.last().map_ok(|row| row.seq) ?? (after ?? 0)
 			Ok(json(Json.to_str({ events, cursor })))
 		}
 	}
 }
 
-## The relay's events one filter matches (`Nostr.parameters`), the latest
-## `limit` that arrived after `after`.
+## The relay's events one filter matches (`Nostr.parameters`) that arrived
+## after `after`: the first `limit`, or the `latest`.
 nostr_matching : Str
 nostr_matching =
 	\\SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events
@@ -544,7 +554,7 @@ nostr_matching =
 	\\AND (:tags = '' OR NOT EXISTS (SELECT 1 FROM json_each(:tags) AS asked WHERE NOT EXISTS (
 	\\	SELECT 1 FROM json_each(nostr_events.tags) AS tag, json_each(asked.value) AS wanted
 	\\	WHERE json_extract(tag.value, '$[0]') = json_extract(asked.value, '$[0]') AND wanted.key > 0 AND json_extract(tag.value, '$[1]') = wanted.value)))
-	\\ORDER BY seq DESC LIMIT :limit;
+	\\ORDER BY CASE WHEN :latest = 1 THEN -seq ELSE seq END LIMIT :limit;
 
 ## Why the daemon refuses a request, if it does, so that a page of another
 ## site in the browser can't drive its agents: a host it isn't reached by,
