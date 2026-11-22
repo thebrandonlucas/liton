@@ -2140,9 +2140,9 @@ inputs! = |context, manifest, part| {
 derived! : Context, Manifest.Offered, Transformer.Part => Try({ state : Str, topics : List(Transformer.Derived) }, _)
 derived! = |context, manifest, part| {
 	inputs = inputs!(context, manifest, part)?
-	stored = transformer_state!(context.db, part.id)?
+	stored = transformer_state!(context.db, state_key(context, part))?
 	derived = (part.derive)(inputs, stored, now_ms!())
-	_ = state_swapped!(context.db, part.id, stored, derived.state)?
+	_ = state_swapped!(context.db, state_key(context, part), stored, derived.state)?
 	Ok(derived)
 }
 
@@ -2152,12 +2152,18 @@ transformer_call! : Context, Manifest.Offered, Transformer.Part, Str => Try(Str,
 transformer_call! = |context, manifest, part, body| {
 	inputs = inputs!(context, manifest, part)?
 	answered! = || {
-		stored = transformer_state!(context.db, part.id)?
+		stored = transformer_state!(context.db, state_key(context, part))?
 		called = (part.call)(inputs, stored, body, now_ms!())
-		if (state_swapped!(context.db, part.id, stored, called.state)?) Ok(called.answer) else answered!()
+		if (state_swapped!(context.db, state_key(context, part), stored, called.state)?) Ok(called.answer) else answered!()
 	}
 	answered!()
 }
+
+## What a transformer's state is stored under: its id, and a device bound to
+## a key's, so each person's settles, snoozes and marks seen are their own.
+## Devices bound to none, as the operator's paired ones are, share one.
+state_key : Context, Transformer.Part -> Str
+state_key = |{ pubkey, .. }, part| if (pubkey == "") part.id else "${part.id}/${pubkey}"
 
 ## A transformer's state as last stored, "" before.
 transformer_state! : Sqlite.Db, Str => Try(Str, _)
