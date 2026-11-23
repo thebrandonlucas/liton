@@ -14,6 +14,10 @@ All notable changes to liton are documented in this file. The format is based on
 
 - An operator sees every room of the box's relay, private ones they aren't a member of too, as they may invite anyone into them.
 
+### Fixed
+
+- The daemon exits 0 when stopped by SIGTERM, rather than 143, so stopping or restarting services.liton no longer leaves it failed; the module counts 143 as a stop too.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added

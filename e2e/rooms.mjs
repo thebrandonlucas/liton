@@ -47,7 +47,7 @@ const start = () => {
 const stop = () =>
   new Promise((resolve) => {
     daemon_process.removeAllListeners("exit");
-    daemon_process.on("exit", resolve);
+    daemon_process.on("exit", (code) => resolve(code));
     daemon_process.kill();
   });
 process.on("exit", () => {
@@ -84,9 +84,9 @@ try {
     const login = await liton(["login", pairing.stdout.split("\n")[0]]);
     assert.equal(login.code, 0, login.stderr);
   });
-  await step("the setup's rooms are there at start, and once after a restart", async () => {
+  await step("the setup's rooms are there at start, and once after a restart, the daemon stopping by SIGTERM with 0", async () => {
     assert.equal((await liton(["room", "list"])).stdout, "general\tGeneral\tChannel\n");
-    await stop();
+    assert.equal(await stop(), 0);
     start();
     await answering();
     assert.equal((await liton(["room", "list"])).stdout, "general\tGeneral\tChannel\n");

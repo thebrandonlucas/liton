@@ -104,6 +104,9 @@ in
         UMask = "0077";
         Restart = "always";
         RestartSec = 5;
+        # The daemon exits 0 on SIGTERM; 143, a release from before that, is a
+        # stop too, not a failure.
+        SuccessExitStatus = 143;
         NoNewPrivileges = true;
         PrivateDevices = true;
         ProtectHome = true;

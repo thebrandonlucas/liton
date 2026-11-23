@@ -259,9 +259,15 @@ checked! = |given|
 		}
 	}
 
-## Nothing to do at shutdown.
+## Nothing to do at shutdown. Stopped by SIGTERM, as systemd stops a
+## service, the daemon exits 0 rather than the platform's 143, which would
+## leave a service stopped or restarted as failed.
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
-shutdown! = |_reason, _context| Ok({})
+shutdown! = |reason, _context|
+	match reason {
+		Terminate => Err(Exit(0))
+		_ => Ok({})
+	}
 
 ## Answers a request: the UI's redirect, the protocol's manifest, calls
 ## and polls, voice's audio, and pairing and the devices paired, refusing
