@@ -459,6 +459,11 @@ pub fn build(b: *std.Build) void {
     run_auth.step.dependOn(&install_daemon.step);
     run_auth.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_auth.step);
+    const run_rooms = b.addSystemCommand(&.{ "node", "e2e/rooms.mjs" });
+    run_rooms.has_side_effects = true;
+    run_rooms.step.dependOn(&install_daemon.step);
+    run_rooms.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_rooms.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);
