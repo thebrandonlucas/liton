@@ -3825,10 +3825,10 @@ mock_rooms! = |db| {
 }
 
 ## The relay's rooms the device asking sees: those not deleted that are
-## public or that its key is a member of, or, where the daemon needs no
-## device, every one.
+## public or that its key is a member of, or, to an operator or where the
+## daemon needs no device, every one.
 relay_rooms! : Context => Try(List({ kept : NostrRooms.Room, shown : Rooms.Room }), _)
-relay_rooms! = |{ db, asking, pubkey, .. }| {
+relay_rooms! = |{ db, asking, pubkey, access, .. }| {
 	rows : List(NostrRow)
 	rows = Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE room != '' AND kind IN (${Str.join_with(NostrRooms.moderation_kinds.map(|kind| kind.to_str()), ", ")}) ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
 	latest : List({ room : Str, at : I64 })
@@ -3838,7 +3838,7 @@ relay_rooms! = |{ db, asking, pubkey, .. }| {
 	Ok(
 		ids
 			.keep_oks(|id| NostrRooms.of(events.keep_if(|event| Nostr.room(event) == id)))
-			.keep_if(|kept| !kept.deleted and (asking == Open or !kept.private or kept.members.contains(pubkey)))
+			.keep_if(|kept| !kept.deleted and (asking == Open or access == Operator or !kept.private or kept.members.contains(pubkey)))
 			.map(|kept| { kept, shown: RelayRooms.room(kept, latest.find_first(|row| row.room == kept.id).map_ok(|row| Chat.timestamp(row.at * 1000)).map_err(|_| Missing), pubkey) }),
 	)
 }
