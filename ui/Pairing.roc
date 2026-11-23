@@ -111,6 +111,16 @@ Pairing := [].{
 	device_name = |state|
 		if (state.coarse_pointer) "Phone or tablet" else if (state.operating_system == Mac) "Browser on a Mac" else "Browser"
 
+	## A device's key, as a setup's `Setup.with_owner` names it to make
+	## it the owner's, or that it has none yet: a browser binds its key once
+	## it sees a room of the relay.
+	key_shown : Model.Device -> Str
+	key_shown = |device|
+		match device.pubkey {
+			Ok(pubkey) if pubkey != "" => "Key ${pubkey}"
+			_ => "No key"
+		}
+
 	## The devices the daemon listed, or the pair screen if it refuses.
 	listed : Model.State, Try(Str, Engine.HttpError) -> Model.State
 	listed = |state, res| {
@@ -249,6 +259,7 @@ Pairing := [].{
 													[
 														Html.span_s(row.field(|device| if (device.current) "${device.name} · this browser" else device.name), [Engine.class("settings-row-title")]),
 														Html.p_s(row.field(|device| device).map2(model.signal().lift_row(), |device, state| "Paired ${Pairing.since(state, device.created_at)}, last seen ${Pairing.since(state, device.seen_at)}"), [Engine.class("help")]),
+														Html.p_s(row.field(Pairing.key_shown), [Engine.class("help device-key")]),
 													],
 												),
 												Html.action_button(

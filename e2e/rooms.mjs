@@ -101,12 +101,14 @@ try {
     assert.equal((await liton(["room", "list"])).stdout, "general\tGeneral\tChannel\nfront-desk\tFront desk\tForum\tprivate\n");
   });
   let keys;
+  let dana;
   await step("a staff key invited into the room posts there, and not in a room it isn't in", async () => {
     const invited = await liton(["invite", "--role", "staff", "--rooms", "front-desk", "Dana"]);
     assert.equal(invited.code, 0, invited.stderr);
     keys = path.join(scratch, "dana");
     const joined = await agent(["join", invited.stdout.split("\n")[0], keys]);
     assert.equal(joined.code, 0, joined.stderr);
+    dana = joined.stdout.match(/key ([0-9a-f]{64})/)[1];
     const env = { LITON_KEY_FILE: path.join(keys, "key"), LITON_TOKEN_FILE: path.join(keys, "token") };
     const sent = await agent(["send", "front-desk", "The 3 o'clock delivery is in."], env);
     assert.equal(sent.code, 0, sent.stdout + sent.stderr);
@@ -125,6 +127,12 @@ try {
     const [members, messages] = polled.topics.map((topic) => topic.events);
     assert.deepEqual(members.at(-1).Members.map((member) => [member.name, member.role]), [["aaaaaaaa", "Admin"], ["Dana", "Member"]]);
     assert.deepEqual(messages.flatMap(({ RoomEntry }) => (RoomEntry?.event.Posted ? [RoomEntry.event.Posted.text] : [])), ["The 3 o'clock delivery is in."]);
+  });
+  await step("the devices answer gives each device's key, as a setup's owner names one", async () => {
+    const kept = fs.readFileSync(path.join(scratch, "config/liton/tokens"), "utf8");
+    const token = kept.split("\n").find((line) => line.startsWith(`${daemon} `)).split(" ")[1];
+    const { devices } = await fetch(`${daemon}/liton/v1/devices`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+    assert.deepEqual(devices.map((device) => [device.name, device.pubkey]), [["liton command line", ""], ["Dana", dana]]);
   });
   await step("a staff key can't create rooms", async () => {
     const token = fs.readFileSync(path.join(keys, "token"), "utf8").trim();

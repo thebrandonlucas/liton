@@ -608,9 +608,9 @@ invited! = |context, request, headers| {
 ## asking marked `current`. A token is never shown.
 devices! : Context, [Device(Str), Open] => Try(Response, _)
 devices! = |{ db, .. }, asking| {
-	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64 })
-	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
-	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at }| { id, name, created_at, seen_at, current: asking == Device(id) }) })))
+	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64, pubkey : Str })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at, pubkey FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at, pubkey }| { id, name, created_at, seen_at, current: asking == Device(id), pubkey }) })))
 }
 
 ## Answers /liton/v1/devices/code: a new pairing code, for
