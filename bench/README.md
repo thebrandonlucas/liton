@@ -6,7 +6,7 @@ and writes `bench/results/<date>-<label>.json` (every sample) and `.md` (the
 tables).
 
 ```sh
-zig build daemon ui -Dspecialize           # liton as it ships, into zig-out/ (about an hour)
+zig build daemon ui                        # liton as it ships, into zig-out/ (-Dspecialize: specialized, about an hour)
 zig build devtool -- paseo cli --version   # once: installs Paseo 0.15.3's npm packages
 CHROME=/path/to/chromium node bench/bench.mjs
 ```

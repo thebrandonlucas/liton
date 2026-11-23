@@ -16,7 +16,7 @@
   general: never include personal information or details of the developer's
   machine, such as home-directory paths, hostnames, disk or store usage, or
   local setup. Describe problems as any contributor would meet them.
-- `zig build ui`, `run`, `e2e` and `bench` build the UI without
-  specialization, in about three minutes. Leave the specialized UI, which
-  takes about an hour and 20 GB of memory, to `zig build release`, and pass
-  `-Dspecialize` only to measure what ships.
+- `zig build ui`, `run`, `e2e`, `bench` and `release` build the UI without
+  specialization, in about three minutes. Pass `-Dspecialize` only to
+  measure what specialization buys: it takes about an hour and 20 GB of
+  memory.

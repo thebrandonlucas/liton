@@ -273,10 +273,13 @@ fn addDevtoolCommand(
 
 // The browser UI, its page and the runtime files of roc_signals's release
 // bundle, into a directory. Built for size: the wasm's download is most of a
-// cold load (bench/). Releases are specialized, whose input answers in about
-// half the time (a keystroke under a long timeline in 29 ms against 62 ms),
-// but whose module is 8 times the size, loads in 4 times as long, holds 10
-// times the memory, and takes about an hour and 20 GB of memory to build.
+// cold load (bench/). Without specialization unless asked, releases too:
+// specialized, input answers in about half the time (a keystroke under a
+// long timeline in 29 ms against 62 ms), but release 0.1.0's UI downloaded
+// 20 MB against 3.1 MB, held 1300 MB of the renderer's memory after loading
+// against 121 MB, and on a phone over a slow network hadn't drawn after
+// 240 s where the unspecialized one drew in about 18 s. It also takes about
+// an hour and 20 GB of memory to build.
 fn addUiBuild(
     b: *std.Build,
     sources: SourceTree,
@@ -303,9 +306,10 @@ pub fn build(b: *std.Build) void {
     // -Droc-ui tries the UI on another.
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
     const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse roc;
-    // The UI as zig build release builds it, with lambda-set specialization,
-    // to measure what ships (bench/): about an hour and 20 GB of memory.
-    const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, as releases do") orelse false;
+    // The UI with lambda-set specialization, for zig build ui, run and
+    // release alike, to measure what it buys (bench/): about an hour and
+    // 20 GB of memory.
+    const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, releases too") orelse false;
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -415,10 +419,10 @@ pub fn build(b: *std.Build) void {
     // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
     // and their SHA256SUMS, into zig-out/release: for each Linux system the
     // daemon's and the command line's platforms build for, their static
-    // binaries in bin/ and the specialized UI in share/liton/www, the same
-    // bytes from the same sources.
+    // binaries in bin/ and the UI in share/liton/www, without specialization
+    // unless -Dspecialize (addUiBuild says why), the same bytes from the
+    // same sources.
     const release_step = b.step("release", "Build the release archives into zig-out/release");
-    const release_www = if (specialize) www else addUiBuild(b, sources, devtool, roc_ui, roc_signals, true);
     const version = @import("build.zig.zon").version;
     const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
     for ([_][2][]const u8{ .{ "x86_64-linux", "x64musl" }, .{ "aarch64-linux", "arm64musl" } }) |release| {
@@ -426,7 +430,7 @@ pub fn build(b: *std.Build) void {
         const tree = b.addWriteFiles();
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "daemon/main.roc", "liton-daemon"), "bin/liton-daemon");
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
-        _ = tree.addCopyDirectory(release_www, "share/liton/www", .{});
+        _ = tree.addCopyDirectory(www, "share/liton/www", .{});
         const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
         const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
         archive.addPrefixedDirectoryArg("--directory=", tree.getDirectory());

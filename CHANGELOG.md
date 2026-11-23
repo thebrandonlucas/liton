@@ -4,6 +4,8 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-23
+
 ### Added
 
 - An operator or admin creates a room of the box's relay with people.v1's `CreateRoom`: its name, what it is about, a channel, forum, direct conversation or announcements, and whether it is private. The daemon creates it on their behalf, as it adds an invite's members, so an operator needs no key of their own; the setup's owner and the key asking, if any, are its admins. Its id is its name's letters and digits, lowercased and joined by hyphens, as `Front desk` is `front-desk`.
@@ -14,6 +16,7 @@ All notable changes to liton are documented in this file. The format is based on
 ### Changed
 
 - An operator sees every room of the box's relay, private ones they aren't a member of too, as they may invite anyone into them.
+- The release's UI is built without specialization, as `zig build ui` and `run` now build it, unless `zig build release -Dspecialize`. 0.1.0's specialized UI was a 20 MB download against 3.1 MB unspecialized, held 1300 MB of the browser's memory after loading against 121 MB, and on a phone over a slow network hadn't drawn after 240 s, where the unspecialized one draws in about 18 s. A keystroke under a long timeline takes about twice as long, 62 ms against 29 ms, until a fix in liton's source wins it back. A release now builds in minutes rather than about an hour.
 
 ### Fixed
 
