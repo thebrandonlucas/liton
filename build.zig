@@ -271,6 +271,31 @@ fn addDevtoolCommand(
     return run;
 }
 
+// The browser UI, its page and the runtime files of roc_signals's release
+// bundle, into a directory. Built for size: the wasm's download is most of a
+// cold load (bench/). Releases are specialized, whose input answers in about
+// half the time (a keystroke under a long timeline in 29 ms against 62 ms),
+// but whose module is 8 times the size, loads in 4 times as long, holds 10
+// times the memory, and takes about an hour and 20 GB of memory to build.
+fn addUiBuild(
+    b: *std.Build,
+    sources: SourceTree,
+    devtool: std.Build.LazyPath,
+    roc_ui: []const u8,
+    roc_signals: *std.Build.Dependency,
+    specialize: bool,
+) std.Build.LazyPath {
+    const build_ui = std.Build.Step.Run.create(b, if (specialize) "build the specialized browser UI" else "build the browser UI");
+    build_ui.addFileArg(devtool);
+    build_ui.addArgs(&.{ "ui", roc_ui });
+    const www = build_ui.addOutputDirectoryArg("www");
+    for ([_][]const u8{ "runtime.mjs", "environment.mjs", "startup.mjs", "worker.mjs" }) |file| build_ui.addFileArg(roc_signals.path(file));
+    if (!specialize) build_ui.addArg("--specialize=no");
+    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
+    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    return www;
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
@@ -278,10 +303,9 @@ pub fn build(b: *std.Build) void {
     // -Droc-ui tries the UI on another.
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
     const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse roc;
-    // For iterating: the UI built without specialization, in under a minute
-    // rather than about six, and slower to run. Never for the preview or a
-    // final e2e run, which drive what ships.
-    const fast = b.option(bool, "fast", "Build the browser UI without specialization, for iterating") orelse false;
+    // The UI as zig build release builds it, with lambda-set specialization,
+    // to measure what ships (bench/): about an hour and 20 GB of memory.
+    const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, as releases do") orelse false;
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -344,22 +368,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_specs.step);
 
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
-    // Built for size: the wasm's download is most of a cold load (bench/).
-    // Specialized still: --specialize=no makes it a quarter of the size, but
-    // a long chat (200 messages with code blocks) takes seconds to open or
-    // leave, against a third of a second. -Dfast trades that for build time.
+    // Without specialization unless -Dspecialize: about 9 MB, built in about
+    // three minutes, against 81 MB in about an hour.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const build_ui = std.Build.Step.Run.create(b, "build the browser UI");
-    build_ui.addFileArg(devtool);
-    build_ui.addArgs(&.{ "ui", roc_ui });
-    const www = build_ui.addOutputDirectoryArg("www");
-    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
-    build_ui.addFileArg(roc_signals.path("environment.mjs"));
-    build_ui.addFileArg(roc_signals.path("startup.mjs"));
-    build_ui.addFileArg(roc_signals.path("worker.mjs"));
-    if (fast) build_ui.addArg("--specialize=no");
-    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
-    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    const www = addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize);
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
@@ -403,9 +415,10 @@ pub fn build(b: *std.Build) void {
     // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
     // and their SHA256SUMS, into zig-out/release: for each Linux system the
     // daemon's and the command line's platforms build for, their static
-    // binaries in bin/ and the UI in share/liton/www, the same bytes from the
-    // same sources.
+    // binaries in bin/ and the specialized UI in share/liton/www, the same
+    // bytes from the same sources.
     const release_step = b.step("release", "Build the release archives into zig-out/release");
+    const release_www = if (specialize) www else addUiBuild(b, sources, devtool, roc_ui, roc_signals, true);
     const version = @import("build.zig.zon").version;
     const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
     for ([_][2][]const u8{ .{ "x86_64-linux", "x64musl" }, .{ "aarch64-linux", "arm64musl" } }) |release| {
@@ -413,7 +426,7 @@ pub fn build(b: *std.Build) void {
         const tree = b.addWriteFiles();
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "daemon/main.roc", "liton-daemon"), "bin/liton-daemon");
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
-        _ = tree.addCopyDirectory(www, "share/liton/www", .{});
+        _ = tree.addCopyDirectory(release_www, "share/liton/www", .{});
         const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
         const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
         archive.addPrefixedDirectoryArg("--directory=", tree.getDirectory());

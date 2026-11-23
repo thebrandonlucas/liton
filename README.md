@@ -16,7 +16,7 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 
 ## Running
 
-`zig build run` (in `kai shell`) builds the UI and the daemon and serves both at http://127.0.0.1:8095, with scripted mock agents. `LITON_HOST`, `LITON_PORT` and `LITON_DB` (default `liton.db`) configure the daemon. Reached by another name, such as a proxy's domain, it needs that name in `LITON_ALLOWED_HOSTS`, comma-separated.
+`zig build run` (in `kai shell`) builds the UI and the daemon and serves both at http://127.0.0.1:8095, with scripted mock agents. It builds the UI without specialization, in about three minutes; `-Dspecialize` builds it as `zig build release` does, in about an hour and 20 GB of memory. `LITON_HOST`, `LITON_PORT` and `LITON_DB` (default `liton.db`) configure the daemon. Reached by another name, such as a proxy's domain, it needs that name in `LITON_ALLOWED_HOSTS`, comma-separated.
 
 `LITON_MOCK=off` leaves out the mock provider. A comma-separated list of its parts keeps only those: `agents` (its scripted sessions, with their workspaces, git and files), `rooms` and `tickets`. `LITON_MOCK=rooms,tickets` shows the mock's rooms and tickets beside a real provider's agents, such as Paseo's (`PASEO_PASSWORD`).
 

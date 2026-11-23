@@ -20,7 +20,7 @@ Cli := [].{
 		\\                        build the browser UI into the directory output (zig build ui)
 		\\  spec <runner>         run the UI's specs in roc-signals's native runner (zig build spec)
 		\\  previews <cdp.mjs>    render each surface and part into ui/previews/*.webp in headless
-		\\                        Chrome (CHROME), against the mock daemon (zig build devtool -Dfast
+		\\                        Chrome (CHROME), against the mock daemon (zig build devtool
 		\\                        -- previews, which builds the UI and the daemon first)
 		\\  docs <roc> <roc-ui> <output>
 		\\                        the packages' and apps' API docs into the directory output (zig build docs)
