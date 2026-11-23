@@ -80,6 +80,27 @@ main! = |arguments| {
 				Err(why) => failed!(1, why)
 			}
 		}
+		CreateRoom(room) => {
+			request : People.Request
+			request = CreateRoom(room)
+			answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+			match Cli.created_room(answer) {
+				Ok(room_id) => Stdout.line!("${room_id}\n\nInvite into it with liton invite --role <role> --rooms ${room_id} <name>.")
+				Err(why) => failed!(1, why)
+			}
+		}
+		ListRooms => {
+			answer = asked!(POST, "${daemon}/liton/v1/call", Cli.call_body("rooms.v1", "\"ListRooms\""))?
+			match Cli.room_lines(answer) {
+				Ok(lines) => {
+					for line in lines {
+						Stdout.line!(line)?
+					}
+					Ok({})
+				}
+				Err(why) => failed!(1, why)
+			}
+		}
 		Setup(litonfile) => {
 			printed = match Cmd.capture!("roc", [OsStr.from_str(litonfile)]) {
 				Ok(text) => text

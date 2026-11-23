@@ -4,6 +4,21 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- An operator or admin creates a room of the box's relay with people.v1's `CreateRoom`: its name, what it is about, a channel, forum, direct conversation or announcements, and whether it is private. The daemon creates it on their behalf, as it adds an invite's members, so an operator needs no key of their own; the setup's owner and the key asking, if any, are its admins. Its id is its name's letters and digits, lowercased and joined by hyphens, as `Front desk` is `front-desk`.
+- `liton room create [--about <text>] [--type forum|direct|announce] [--private] <name>` creates a room of the box's relay and prints its id, for `liton invite --rooms` to name, and `liton room list` prints the relay's rooms, one per line.
+- A setup declares the rooms its relay starts with, `Setup.with_room` or its `rooms`: the daemon creates each at start unless the relay has a room of its id, so a box rebuilt from its Litonfile has its rooms again, ready for `liton invite --rooms`.
+- Settings → Devices shows each device's Nostr key, bound once its browser sees a room, so the operator copies their browser's key into a setup's `Setup.with_owner` to make it the owner's.
+
+### Changed
+
+- An operator sees every room of the box's relay, private ones they aren't a member of too, as they may invite anyone into them.
+
+### Fixed
+
+- The daemon exits 0 when stopped by SIGTERM, rather than 143, so stopping or restarting services.liton no longer leaves it failed; the module counts 143 as a stop too.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added

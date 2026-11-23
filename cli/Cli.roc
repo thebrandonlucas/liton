@@ -2,12 +2,13 @@
 ## JSON it sends the daemon and prints (docs/protocol.md, The CLI).
 import cap.People
 import cap.Protocol
+import cap.Rooms
 
 Cli := [].{
 
 	## What the arguments ask for. A call given no request, or `-`, reads it
 	## from stdin.
-	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Invite({ name : Str, role : Str, rooms : List(Str) }), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
+	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Invite({ name : Str, role : Str, rooms : List(Str) }), CreateRoom({ name : Str, about : Str, kind : Rooms.Kind, private : Bool }), ListRooms, Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
 
 	usage : Str
 	usage =
@@ -19,6 +20,8 @@ Cli := [].{
 		\\  liton pair
 		\\  liton login <pairing code>
 		\\  liton invite --role <role> [--rooms <room>,...] <name>
+		\\  liton room create [--about <text>] [--type forum|direct|announce] [--private] <name>
+		\\  liton room list
 		\\  liton help
 		\\
 		\\Speaks liton's capability protocol to the daemon at LITON_URL (default
@@ -40,6 +43,11 @@ Cli := [].{
 		\\`invite` asks the daemon, as an operator or admin, for an invite of the
 		\\person or agent called <name> into <role> and its rooms (people.v1), and
 		\\prints the link that redeems it, good once for 7 days.
+		\\
+		\\`room create` asks the daemon, as an operator or admin, to make a room of
+		\\its relay called <name>, a channel unless --type says otherwise (people.v1),
+		\\and prints its id, which invites name. `room list` prints the relay's
+		\\rooms, one per line: id, name, kind and whether it is private.
 
 	parse : List(Str) -> Command
 	parse = |arguments|
@@ -49,6 +57,8 @@ Cli := [].{
 			["pair"] => Pair
 			["login", code] => Login(code)
 			["invite", .. as rest] => invited(rest, { name: "", role: "", rooms: [] })
+			["room", "create", .. as rest] => room_created(rest, { name: "", about: "", kind: Channel, private: Bool.False })
+			["room", "list"] => ListRooms
 			["setup"] => Setup("Litonfile.roc")
 			["setup", path] => Setup(if (path.ends_with(".roc")) path else "${path.drop_suffix("/")}/Litonfile.roc")
 			["call", capability] | ["call", capability, "-"] => Call({ capability, request: Stdin })
@@ -69,6 +79,34 @@ Cli := [].{
 			Ok(Ok(Rejected(why))) => Err(why)
 			Ok(Err(error)) => Err(described(error))
 			_ => Err("the daemon's answer to an invite isn't one this liton reads")
+		}
+	}
+
+	## The id of the room people.v1's `answer` to `CreateRoom` says it made,
+	## or why it made none.
+	created_room : Str -> Try(Str, Str)
+	created_room = |answer| {
+		decoded : Try(Protocol.Answer(People.Response), _)
+		decoded = Json.parse(answer)
+		match decoded {
+			Ok(Ok(RoomCreated({ room_id }))) => Ok(room_id)
+			Ok(Ok(Rejected(why))) => Err(why)
+			Ok(Err(error)) => Err(described(error))
+			_ => Err("the daemon's answer to a new room isn't one this liton reads")
+		}
+	}
+
+	## The lines `room list` prints of rooms.v1's `answer` to `ListRooms`: each
+	## of the relay's rooms' id, name, kind and, if so, `private`, by tabs.
+	room_lines : Str -> Try(List(Str), Str)
+	room_lines = |answer| {
+		decoded : Try(Protocol.Answer(Rooms.Response), _)
+		decoded = Json.parse(answer)
+		line = |room| Str.join_with([room.id, room.name, Str.inspect(room.kind)].concat(if (room.private) ["private"] else []), "\t")
+		match decoded {
+			Ok(Ok(Rooms(rooms))) => Ok(rooms.keep_if(|room| room.provider == "relay").map(line))
+			Ok(Err(error)) => Err(described(error))
+			_ => Err("the daemon's answer to listing rooms isn't one this liton reads")
 		}
 	}
 
@@ -158,6 +196,37 @@ invited = |rest, so_far|
 
 expect Cli.parse(["invite", "--role", "staff", "--rooms", "dispatch, general", "Dana"]) == Invite({ name: "Dana", role: "staff", rooms: ["dispatch", "general"] }) and Cli.parse(["invite", "Dana"]) == Usage("invite needs --role") and Cli.parse(["invite", "--role", "staff"]) == Usage("invite needs the name of whom it is for")
 expect Cli.invite_link("http://box:8095", "{\"Ok\":{\"Invited\":{\"id\":\"i1\",\"secret\":\"s3\"}}}") == Ok("http://box:8095/ui/index.html#invite=s3") and Cli.invite_link("x", "{\"Ok\":{\"Rejected\":\"the setup declares no role chef\"}}") == Err("the setup declares no role chef")
+
+room_created : List(Str), { name : Str, about : Str, kind : Rooms.Kind, private : Bool } -> Cli.Command
+room_created = |rest, so_far|
+	match rest {
+		[] if so_far.name == "" => Usage("room create needs the room's name")
+		[] => CreateRoom(so_far)
+		["--about", about, .. as after] => room_created(after, { ..so_far, about })
+		["--type", "forum", .. as after] => room_created(after, { ..so_far, kind: Forum })
+		["--type", "direct", .. as after] => room_created(after, { ..so_far, kind: Direct })
+		["--type", "announce", .. as after] => room_created(after, { ..so_far, kind: Announce })
+		["--type", ..] => Usage("--type is forum, direct or announce; a room is a channel without it")
+		["--private", .. as after] => room_created(after, { ..so_far, private: Bool.True })
+		[option, ..] if option.starts_with("-") => Usage("unknown option ${option}")
+		[name, .. as after] if so_far.name == "" => room_created(after, { ..so_far, name })
+		_ => Usage("room create takes one name; quote one of several words")
+	}
+
+expect Cli.parse(["room", "create", "--type", "forum", "--private", "--about", "Orders", "Front desk"]) == CreateRoom({ name: "Front desk", about: "Orders", kind: Forum, private: Bool.True }) and Cli.parse(["room", "create", "Dispatch"]) == CreateRoom({ name: "Dispatch", about: "", kind: Channel, private: Bool.False }) and Cli.parse(["room", "list"]) == ListRooms
+expect [["room", "create"], ["room", "create", "--type", "stream", "x"], ["room", "create", "Front", "desk"], ["room"]].all(
+	|arguments| match Cli.parse(arguments) {
+		Usage(_) => Bool.True
+		_ => Bool.False
+	},
+)
+expect Cli.created_room("{\"Ok\":{\"RoomCreated\":{\"room_id\":\"front-desk\"}}}") == Ok("front-desk") and Cli.created_room("{\"Ok\":{\"Rejected\":\"duplicate: the room front-desk exists\"}}") == Err("duplicate: the room front-desk exists")
+expect {
+	rooms = [{ ..Rooms.room({ id: "front-desk", provider: "relay", name: "Front desk", kind: Forum }), private: Bool.True }, Rooms.room({ id: "dispatch", provider: "relay", name: "Dispatch", kind: Channel }), Rooms.room({ id: "m1", provider: "mock", name: "Mock", kind: Channel })]
+	answer : Protocol.Answer(Rooms.Response)
+	answer = Ok(Rooms(rooms))
+	Cli.room_lines(Json.to_str(answer)) == Ok(["front-desk\tFront desk\tForum\tprivate", "dispatch\tDispatch\tChannel"])
+}
 
 expect Cli.parse(["call", "chat.v1"]) == Call({ capability: "chat.v1", request: Stdin }) and Cli.parse(["call", "chat.v1", "-"]) == Call({ capability: "chat.v1", request: Stdin })
 expect Cli.parse(["call", "chat.v1", "\"ListSessions\""]) == Call({ capability: "chat.v1", request: Given("\"ListSessions\"") })

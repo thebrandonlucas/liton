@@ -1,14 +1,17 @@
-(test "Liton — Settings' Devices lists the devices paired, this browser marked; Revoke shows Revoking… at once and drops it, or brings it back with why; Pair another device shows Making a code… at once, then the code and its link"
+(test "Liton — Settings' Devices lists the devices paired, this browser marked, each with its key; Revoke shows Revoking… at once and drops it, or brings it back with why; Pair another device shows Making a code… at once, then the code and its link"
   (steps
     (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"}],\"transformers\":[],\"topics\":[]}")
     (run-effect 1)
     (click (role button :name "Settings"))
     (click (role button :name "Devices"))
     (expect-pending-effects 2)
-    (stub-http "devices" :url "/liton/v1/devices" :status 200 :body "{\"devices\":[{\"id\":\"d1\",\"name\":\"Browser on a Mac\",\"created_at\":0,\"seen_at\":0,\"current\":true},{\"id\":\"d2\",\"name\":\"Phone or tablet\",\"created_at\":0,\"seen_at\":0,\"current\":false},{\"id\":\"d3\",\"name\":\"liton command line\",\"created_at\":0,\"seen_at\":0,\"current\":false}]}")
+    (stub-http "devices" :url "/liton/v1/devices" :status 200 :body "{\"devices\":[{\"id\":\"d1\",\"name\":\"Browser on a Mac\",\"created_at\":0,\"seen_at\":0,\"current\":true,\"pubkey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"id\":\"d2\",\"name\":\"Phone or tablet\",\"created_at\":0,\"seen_at\":0,\"current\":false},{\"id\":\"d3\",\"name\":\"liton command line\",\"created_at\":0,\"seen_at\":0,\"current\":false,\"pubkey\":\"\"}]}")
     (run-effect 3)
     (expect-visible (text "Browser on a Mac · this browser"))
     (expect-visible (text "Phone or tablet"))
+    ; Each device's key, for a setup's owner, or that it has none.
+    (expect-visible (text "Key bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+    (expect-visible (text "No key"))
     (click (role button :name "Revoke Phone or tablet"))
     ; Revoking at once, before the daemon answers.
     (expect-pending-effects 2)

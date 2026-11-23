@@ -16,6 +16,16 @@ RelayRooms := [].{
 	provider : Str
 	provider = "relay"
 
+	## The `t` tag that makes a room of `kind`, as `room` reads it.
+	kind_tag : Rooms.Kind -> Str
+	kind_tag = |kind|
+		match kind {
+			Channel => "stream"
+			Forum => "forum"
+			Direct => "dm"
+			Announce => "announce"
+		}
+
 	## The room `kept` as `me`, a pubkey or "" for no one, sees it, last
 	## posted in at `updated`.
 	room : NostrRooms.Room, Try(Str, [Missing]), Str -> Rooms.Room

@@ -1515,6 +1515,7 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .pair-failed { margin: 0; min-height: 1.2em; color: var(--fail); font-size: 13px; }
 .settings-row.device-row { display: flex; align-items: center; gap: 10px; }
 .device-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.device-key { overflow-wrap: anywhere; font-family: var(--font-mono); user-select: all; }
 .device-row button:disabled, .settings-row > button:disabled { opacity: .6; }
 .settings-row > button { justify-self: start; }
 .pair-offered-code { font: 22px var(--font-mono); letter-spacing: .12em; color: var(--text); }

@@ -21,12 +21,21 @@ NostrRooms := [].{
 	moderation_kinds : List(U32)
 	moderation_kinds = [9000, 9001, 9002, 9005, 9007, 9008, 9021, 9022]
 
+	## The id of a room named `name`: its letters and digits, lowercased,
+	## each run of anything else a hyphen, as `Front desk` is `front-desk`.
+	id_of_name : Str -> Str
+	id_of_name = |name| {
+		spaced = name.with_ascii_lowercased().to_utf8().map(|byte| if ((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9')) byte else ' ')
+		Str.join_with(Str.from_utf8_lossy(spaced).split_on(" ").drop_if(|word| word == ""), "-")
+	}
+
 	## The room `events`, its moderation events in the order they arrived,
 	## make, if one was created.
 	of : List(Nostr.Event) -> Try(Room, [NoRoom])
 	of = |events| events.fold(Err(NoRoom), NostrRooms.applied)
 
-	## `found` after `event`, one the relay took.
+	## `found` after `event`, one the relay took. A room the relay creates
+	## itself has no admins or members until it adds them.
 	applied : Try(Room, [NoRoom]), Nostr.Event -> Try(Room, [NoRoom])
 	applied = |found, event| {
 		tagged = |name| event.tags.keep_if(|tag| tag.first() == Ok(name)).map(|tag| tag.get(1) ?? "")
@@ -36,8 +45,9 @@ NostrRooms := [].{
 			flag = |on, off, kept| if (event.tags.any(|tag| tag == [on])) Bool.True else if (event.tags.any(|tag| tag == [off])) Bool.False else kept
 			{ ..room, name: value("name", room.name), about: value("about", room.about), kind: value("t", room.kind), open: flag("open", "closed", room.open), private: flag("private", "public", room.private) }
 		}
+		creator = if (event.pubkey == NostrRooms.relay_pubkey) [] else [event.pubkey]
 		match (found, event.kind) {
-			(Err(NoRoom), 9007) => Ok(edited({ id: Nostr.room(event), name: Nostr.room(event), about: "", kind: "stream", open: Bool.False, private: Bool.False, deleted: Bool.False, admins: [event.pubkey], members: [event.pubkey] }))
+			(Err(NoRoom), 9007) => Ok(edited({ id: Nostr.room(event), name: Nostr.room(event), about: "", kind: "stream", open: Bool.False, private: Bool.False, deleted: Bool.False, admins: creator, members: creator }))
 			(Ok(room), 9000) => {
 				admins = event.tags.keep_if(|tag| tag.first() == Ok("p") and tag.drop_first(2).contains("admin")).map(|tag| tag.get(1) ?? "")
 				Ok({ ..room, members: room.members.concat(users.drop_if(|user| room.members.contains(user))), admins: room.admins.concat(admins.drop_if(|user| room.admins.contains(user))) })
@@ -88,3 +98,7 @@ expect {
 		== (Bool.True, Bool.False, Bool.True, Bool.True, Bool.True, Bool.True)
 }
 expect NostrRooms.refusal(Err(NoRoom), { id: "", pubkey: "a", created_at: 0, kind: 0, tags: [], content: "{}", sig: "" }) == Ok({})
+expect {
+	created = NostrRooms.of([{ id: "", pubkey: NostrRooms.relay_pubkey, created_at: 0, kind: 9007, tags: [["h", "front-desk"], ["name", "Front desk"], ["private"]], content: "", sig: "" }])
+	created.map_ok(|room| (room.name, room.private, room.admins, room.members)) == Ok(("Front desk", Bool.True, [], [])) and NostrRooms.id_of_name(" Front  desk! 2") == "front-desk-2" and NostrRooms.id_of_name("¡!") == ""
+}
