@@ -4,6 +4,10 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- An operator or admin creates a room of the box's relay with people.v1's `CreateRoom`: its name, what it is about, a channel, forum, direct conversation or announcements, and whether it is private. The daemon creates it on their behalf, as it adds an invite's members, so an operator needs no key of their own; the setup's owner and the key asking, if any, are its admins. Its id is its name's letters and digits, lowercased and joined by hyphens, as `Front desk` is `front-desk`.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added

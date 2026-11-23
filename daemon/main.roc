@@ -511,6 +511,34 @@ people_call! = |context, asked| {
 			cancelled = Sqlite.query_many!({ db, query: "DELETE FROM invites WHERE id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
 			if (cancelled.is_empty()) refused("there is no invite ${id}") else Ok(Ok(Accepted))
 		}
+		CreateRoom(room) =>
+			match room_created!(context, room)? {
+				Ok(room_id) => Ok(Ok(RoomCreated({ room_id: room_id })))
+				Err(why) => refused(why)
+			}
+	}
+}
+
+## Creates the room `room` on the relay, by its own key as an invite's
+## members are added, its id its name's (`NostrRooms.id_of_name`), and
+## makes the setup's owner and the key asking, if any, its admins: a box's
+## operator may have no key to sign a 9007 with.
+room_created! : Context, { name : Str, about : Str, kind : Rooms.Kind, private : Bool } => Try(Try(Str, Str), _)
+room_created! = |context, { name, about, kind, private }| {
+	room_id = NostrRooms.id_of_name(name)
+	if room_id == "" {
+		return Ok(Err("a room's name needs a letter or digit"))
+	}
+	described = if (about.trim() == "") [] else [["about", about.trim()]]
+	match relay_wrote!(context, 9007, room_id, [["name", name.trim()], ["t", RelayRooms.kind_tag(kind)], [if (private) "private" else "public"]].concat(described))? {
+		Err(why) => Ok(Err(why))
+		Ok(_) => {
+			admins = (if (context.pubkey == context.owner) [context.owner] else [context.owner, context.pubkey]).drop_if(|key| key == "")
+			if !admins.is_empty() {
+				_ = relay_wrote!(context, 9000, room_id, admins.map(|key| ["p", key, "admin"]))?
+			}
+			Ok(Ok(room_id))
+		}
 	}
 }
 
