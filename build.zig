@@ -273,10 +273,10 @@ fn addDevtoolCommand(
 
 // The browser UI, its page and the runtime files of roc_signals's release
 // bundle, into a directory. Built for size: the wasm's download is most of a
-// cold load (bench/). Releases are specialized: without it, a long chat (200
-// messages with code blocks) took seconds to open or leave, against a third
-// of a second, but the module is 8 times the size and takes about an hour and
-// 20 GB of memory to build.
+// cold load (bench/). Releases are specialized, whose input answers in about
+// half the time (a keystroke under a long timeline in 29 ms against 62 ms),
+// but whose module is 8 times the size, loads in 4 times as long, holds 10
+// times the memory, and takes about an hour and 20 GB of memory to build.
 fn addUiBuild(
     b: *std.Build,
     sources: SourceTree,
