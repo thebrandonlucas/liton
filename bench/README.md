@@ -6,7 +6,7 @@ and writes `bench/results/<date>-<label>.json` (every sample) and `.md` (the
 tables).
 
 ```sh
-zig build daemon ui                        # liton as it is now, into zig-out/
+zig build daemon ui                        # liton as it ships, into zig-out/ (-Dspecialize: specialized, about an hour)
 zig build devtool -- paseo cli --version   # once: installs Paseo 0.15.3's npm packages
 CHROME=/path/to/chromium node bench/bench.mjs
 ```
@@ -132,10 +132,10 @@ context on agent 0, then:
   input's, so it is reported, but only the tap's is budgeted.
 - **keystroke to frame**: each key typed in the composer under the long
   timeline, from the `keydown` to the frame after the composer holds it.
-- **liton's own controls, to frame**: the chat's ⋯ menu opened and closed,
-  Settings opened and closed, and on a desktop the right drawer's Files and
-  Changes tabs, each from the `pointerdown` to the frame after its result
-  shows.
+- **liton's own controls, to frame**: the ⋯ menu of the workspace shown
+  opened and closed, Settings opened and closed, and on a desktop the right
+  drawer's Files and Changes tabs, each from the `pointerdown` to the frame
+  after its result shows.
 - **scroll long timeline**: twice, a scroll gesture of the mouse wheel
   (`Input.synthesizeScrollGesture`) up 2500 px over long agent 0's timeline,
   while the page counts animation frames: the longest frame, the frames over

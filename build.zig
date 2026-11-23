@@ -271,6 +271,34 @@ fn addDevtoolCommand(
     return run;
 }
 
+// The browser UI, its page and the runtime files of roc_signals's release
+// bundle, into a directory. Built for size: the wasm's download is most of a
+// cold load (bench/). Without specialization unless asked, releases too:
+// specialized, input answers in about half the time (a keystroke under a
+// long timeline in 29 ms against 62 ms), but release 0.1.0's UI downloaded
+// 20 MB against 3.1 MB, held 1300 MB of the renderer's memory after loading
+// against 121 MB, and on a phone over a slow network hadn't drawn after
+// 240 s where the unspecialized one drew in about 18 s. It also takes about
+// an hour and 20 GB of memory to build.
+fn addUiBuild(
+    b: *std.Build,
+    sources: SourceTree,
+    devtool: std.Build.LazyPath,
+    roc_ui: []const u8,
+    roc_signals: *std.Build.Dependency,
+    specialize: bool,
+) std.Build.LazyPath {
+    const build_ui = std.Build.Step.Run.create(b, if (specialize) "build the specialized browser UI" else "build the browser UI");
+    build_ui.addFileArg(devtool);
+    build_ui.addArgs(&.{ "ui", roc_ui });
+    const www = build_ui.addOutputDirectoryArg("www");
+    for ([_][]const u8{ "runtime.mjs", "environment.mjs", "startup.mjs", "worker.mjs" }) |file| build_ui.addFileArg(roc_signals.path(file));
+    if (!specialize) build_ui.addArg("--specialize=no");
+    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
+    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    return www;
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
@@ -278,10 +306,10 @@ pub fn build(b: *std.Build) void {
     // -Droc-ui tries the UI on another.
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
     const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse roc;
-    // For iterating: the UI built without specialization, in under a minute
-    // rather than about six, and slower to run. Never for the preview or a
-    // final e2e run, which drive what ships.
-    const fast = b.option(bool, "fast", "Build the browser UI without specialization, for iterating") orelse false;
+    // The UI with lambda-set specialization, for zig build ui, run and
+    // release alike, to measure what it buys (bench/): about an hour and
+    // 20 GB of memory.
+    const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, releases too") orelse false;
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -344,22 +372,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_specs.step);
 
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
-    // Built for size: the wasm's download is most of a cold load (bench/).
-    // Specialized still: --specialize=no makes it a quarter of the size, but
-    // a long chat (200 messages with code blocks) takes seconds to open or
-    // leave, against a third of a second. -Dfast trades that for build time.
+    // Without specialization unless -Dspecialize: about 9 MB, built in about
+    // three minutes, against 81 MB in about an hour.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const build_ui = std.Build.Step.Run.create(b, "build the browser UI");
-    build_ui.addFileArg(devtool);
-    build_ui.addArgs(&.{ "ui", roc_ui });
-    const www = build_ui.addOutputDirectoryArg("www");
-    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
-    build_ui.addFileArg(roc_signals.path("environment.mjs"));
-    build_ui.addFileArg(roc_signals.path("startup.mjs"));
-    build_ui.addFileArg(roc_signals.path("worker.mjs"));
-    if (fast) build_ui.addArg("--specialize=no");
-    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
-    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    const www = addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize);
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
@@ -403,7 +419,8 @@ pub fn build(b: *std.Build) void {
     // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
     // and their SHA256SUMS, into zig-out/release: for each Linux system the
     // daemon's and the command line's platforms build for, their static
-    // binaries in bin/ and the UI in share/liton/www, the same bytes from the
+    // binaries in bin/ and the UI in share/liton/www, without specialization
+    // unless -Dspecialize (addUiBuild says why), the same bytes from the
     // same sources.
     const release_step = b.step("release", "Build the release archives into zig-out/release");
     const version = @import("build.zig.zon").version;
@@ -459,6 +476,11 @@ pub fn build(b: *std.Build) void {
     run_auth.step.dependOn(&install_daemon.step);
     run_auth.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_auth.step);
+    const run_rooms = b.addSystemCommand(&.{ "node", "e2e/rooms.mjs" });
+    run_rooms.has_side_effects = true;
+    run_rooms.step.dependOn(&install_daemon.step);
+    run_rooms.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_rooms.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);

@@ -4,6 +4,24 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-23
+
+### Added
+
+- An operator or admin creates a room of the box's relay with people.v1's `CreateRoom`: its name, what it is about, a channel, forum, direct conversation or announcements, and whether it is private. The daemon creates it on their behalf, as it adds an invite's members, so an operator needs no key of their own; the setup's owner and the key asking, if any, are its admins. Its id is its name's letters and digits, lowercased and joined by hyphens, as `Front desk` is `front-desk`.
+- `liton room create [--about <text>] [--type forum|direct|announce] [--private] <name>` creates a room of the box's relay and prints its id, for `liton invite --rooms` to name, and `liton room list` prints the relay's rooms, one per line.
+- A setup declares the rooms its relay starts with, `Setup.with_room` or its `rooms`: the daemon creates each at start unless the relay has a room of its id, so a box rebuilt from its Litonfile has its rooms again, ready for `liton invite --rooms`.
+- Settings → Devices shows each device's Nostr key, bound once its browser sees a room, so the operator copies their browser's key into a setup's `Setup.with_owner` to make it the owner's.
+
+### Changed
+
+- An operator sees every room of the box's relay, private ones they aren't a member of too, as they may invite anyone into them.
+- The release's UI is built without specialization, as `zig build ui` and `run` now build it, unless `zig build release -Dspecialize`. 0.1.0's specialized UI was a 20 MB download against 3.1 MB unspecialized, held 1300 MB of the browser's memory after loading against 121 MB, and on a phone over a slow network hadn't drawn after 240 s, where the unspecialized one draws in about 18 s. A keystroke under a long timeline takes about twice as long, 62 ms against 29 ms, until a fix in liton's source wins it back. A release now builds in minutes rather than about an hour.
+
+### Fixed
+
+- The daemon exits 0 when stopped by SIGTERM, rather than 143, so stopping or restarting services.liton no longer leaves it failed; the module counts 143 as a stop too.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added
@@ -127,7 +145,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Swipe between the deck's surfaces: across a trackpad with two fingers (not over something that scrolls sideways), or across the deck's strip on a phone, which still swipes between a surface's panels above it. A three-finger swipe belongs to the system and switches its desktops instead.
 - Settings' Deck lists the deck's surfaces in order: move one up or down, remove one, or add a surface the daemon offers what it needs for.
 - Each surface in Settings' Deck lists its parts under the provider offering what they need, with each part's role and needs, greyed with what is missing where no provider offers it. Uncheck a part to hide it from that surface, or check one to show it again or add it where it fits, without leaving the surface you are on.
-- Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -Dfast -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
+- Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
 - Docs in Settings → About opens liton's API docs at /docs/index.html, built from its packages' and apps' comments by `zig build docs` (which `zig build run` runs). `LITON_DOCS` (default `zig-out/docs`) is where the daemon serves them from.
 - chat.v1 sessions tell the mode their agent works in, its thinking level, the modes it can switch to and what its last turn used (`mode`, `thinking`, `modes`, `usage`), and the `agents` topic each kind's models with their thinking levels, and its modes. `Configure` switches a session's model, mode or thinking level, and `Create` starts an agent in a mode and at a thinking level.
 - The mock's agents offer two models each, with low, medium and high thinking, and modes such as Plan; their sessions switch them with `Configure` and tell what their last turn used, more with each message.

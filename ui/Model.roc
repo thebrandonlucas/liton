@@ -72,8 +72,9 @@ Model := [].{
 	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
 
 	## A device paired with the daemon, as /liton/v1/devices lists it, its
-	## times in milliseconds, `current` the one asking.
-	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool }
+	## times in milliseconds, `current` the one asking, and the Nostr key
+	## bound to it, "" for none, missing from a daemon from before keys.
+	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool, pubkey : Try(Str, [Missing]) }
 
 	## Pairing this browser with the daemon and the devices paired
 	## (ui/Pairing.roc): whether the daemon answered that it isn't paired;

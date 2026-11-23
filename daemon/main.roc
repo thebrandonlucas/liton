@@ -197,6 +197,10 @@ init! = || {
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
 	remotes_cycle!(context) ? |_| Exit(3)
+	# The setup's rooms the relay hasn't, as on a box rebuilt from its setup.
+	for room in setup.rooms {
+		_ = room_created!(context, room) ? |_| Exit(3)
+	}
 	Ok({ config, context })
 }
 
@@ -255,9 +259,15 @@ checked! = |given|
 		}
 	}
 
-## Nothing to do at shutdown.
+## Nothing to do at shutdown. Stopped by SIGTERM, as systemd stops a
+## service, the daemon exits 0 rather than the platform's 143, which would
+## leave a service stopped or restarted as failed.
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
-shutdown! = |_reason, _context| Ok({})
+shutdown! = |reason, _context|
+	match reason {
+		Terminate => Err(Exit(0))
+		_ => Ok({})
+	}
 
 ## Answers a request: the UI's redirect, the protocol's manifest, calls
 ## and polls, voice's audio, and pairing and the devices paired, refusing
@@ -511,6 +521,34 @@ people_call! = |context, asked| {
 			cancelled = Sqlite.query_many!({ db, query: "DELETE FROM invites WHERE id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
 			if (cancelled.is_empty()) refused("there is no invite ${id}") else Ok(Ok(Accepted))
 		}
+		CreateRoom(room) =>
+			match room_created!(context, room)? {
+				Ok(room_id) => Ok(Ok(RoomCreated({ room_id: room_id })))
+				Err(why) => refused(why)
+			}
+	}
+}
+
+## Creates the room `room` on the relay, by its own key as an invite's
+## members are added, its id its name's (`NostrRooms.id_of_name`), and
+## makes the setup's owner and the key asking, if any, its admins: a box's
+## operator may have no key to sign a 9007 with.
+room_created! : Context, { name : Str, about : Str, kind : Rooms.Kind, private : Bool } => Try(Try(Str, Str), _)
+room_created! = |context, { name, about, kind, private }| {
+	room_id = NostrRooms.id_of_name(name)
+	if room_id == "" {
+		return Ok(Err("a room's name needs a letter or digit"))
+	}
+	described = if (about.trim() == "") [] else [["about", about.trim()]]
+	match relay_wrote!(context, 9007, room_id, [["name", name.trim()], ["t", RelayRooms.kind_tag(kind)], [if (private) "private" else "public"]].concat(described))? {
+		Err(why) => Ok(Err(why))
+		Ok(_) => {
+			admins = (if (context.pubkey == context.owner) [context.owner] else [context.owner, context.pubkey]).drop_if(|key| key == "")
+			if !admins.is_empty() {
+				_ = relay_wrote!(context, 9000, room_id, admins.map(|key| ["p", key, "admin"]))?
+			}
+			Ok(Ok(room_id))
+		}
 	}
 }
 
@@ -570,9 +608,9 @@ invited! = |context, request, headers| {
 ## asking marked `current`. A token is never shown.
 devices! : Context, [Device(Str), Open] => Try(Response, _)
 devices! = |{ db, .. }, asking| {
-	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64 })
-	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
-	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at }| { id, name, created_at, seen_at, current: asking == Device(id) }) })))
+	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64, pubkey : Str })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at, pubkey FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at, pubkey }| { id, name, created_at, seen_at, current: asking == Device(id), pubkey }) })))
 }
 
 ## Answers /liton/v1/devices/code: a new pairing code, for
@@ -3797,10 +3835,10 @@ mock_rooms! = |db| {
 }
 
 ## The relay's rooms the device asking sees: those not deleted that are
-## public or that its key is a member of, or, where the daemon needs no
-## device, every one.
+## public or that its key is a member of, or, to an operator or where the
+## daemon needs no device, every one.
 relay_rooms! : Context => Try(List({ kept : NostrRooms.Room, shown : Rooms.Room }), _)
-relay_rooms! = |{ db, asking, pubkey, .. }| {
+relay_rooms! = |{ db, asking, pubkey, access, .. }| {
 	rows : List(NostrRow)
 	rows = Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE room != '' AND kind IN (${Str.join_with(NostrRooms.moderation_kinds.map(|kind| kind.to_str()), ", ")}) ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
 	latest : List({ room : Str, at : I64 })
@@ -3810,7 +3848,7 @@ relay_rooms! = |{ db, asking, pubkey, .. }| {
 	Ok(
 		ids
 			.keep_oks(|id| NostrRooms.of(events.keep_if(|event| Nostr.room(event) == id)))
-			.keep_if(|kept| !kept.deleted and (asking == Open or !kept.private or kept.members.contains(pubkey)))
+			.keep_if(|kept| !kept.deleted and (asking == Open or access == Operator or !kept.private or kept.members.contains(pubkey)))
 			.map(|kept| { kept, shown: RelayRooms.room(kept, latest.find_first(|row| row.room == kept.id).map_ok(|row| Chat.timestamp(row.at * 1000)).map_err(|_| Missing), pubkey) }),
 	)
 }
