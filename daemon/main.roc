@@ -197,6 +197,10 @@ init! = || {
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
 	remotes_cycle!(context) ? |_| Exit(3)
+	# The setup's rooms the relay hasn't, as on a box rebuilt from its setup.
+	for room in setup.rooms {
+		_ = room_created!(context, room) ? |_| Exit(3)
+	}
 	Ok({ config, context })
 }
 
