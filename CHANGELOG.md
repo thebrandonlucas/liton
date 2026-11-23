@@ -4,6 +4,8 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-23
+
 ### Added
 
 - The Developer, Inbox, Rooms, Review and Board surfaces show their panes joined: one frame under one band of headers, the panes apart by thin lines you drag to resize them, a drawer's tabs a compact control in its header that never wraps, and the Review view's branch, files viewed and Finish review in its header. Headers, tabs, buttons and labels are in the theme's text font, keeping monospace for code, paths, ids and line counts. Settings → Surface (Joined) and each surface in Settings → Deck switch a surface between joined and separate tiles, as Tiling shows them; a snapshot keeps it.
