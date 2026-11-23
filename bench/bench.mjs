@@ -431,9 +431,11 @@ async function interaction(name, profile) {
     }
     await page.evaluate(() => document.activeElement?.blur());
     if (name === "liton") {
-      // liton's own controls: the chat's ⋯ menu, Settings, and on a desktop
-      // the right drawer's tabs. On a phone, Settings is in the Workspaces
-      // panel's header, so the tab bar shows each panel first, untimed.
+      // liton's own controls: the ⋯ menu of the workspace shown, Settings,
+      // and on a desktop the right drawer's tabs. On a desktop, Settings is a
+      // page over the Workspaces gear and closes by its Back. On a phone, it
+      // closes by its toggle again, in the Workspaces panel's header, so the
+      // tab bar shows each panel first, untimed.
       const show = async (panel) => {
         if (!profile.touch) return;
         await press_at(page, profile, await center_of(page, `[data-testid="show-${panel}"]`));
@@ -444,15 +446,15 @@ async function interaction(name, profile) {
         out.control_paint.push(paint);
         return shown;
       };
-      const chat_menu = `document.querySelector('section[aria-label="Chat"] .menu')`;
+      const workspace_menu = `document.querySelector('.workspace-header .menu')`;
       const settings = `document.querySelector('section[aria-label="Settings"]')`;
       for (let k = 0; k < 3; k++) {
         await show("main");
-        out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `${chat_menu}`));
-        out.menu.push(await press('section[aria-label="Chat"] .menu-toggle', "", `!${chat_menu}`));
+        out.menu.push(await press(".workspace-header .menu-toggle", "", `${workspace_menu}`));
+        out.menu.push(await press(".workspace-header .menu-toggle", "", `!${workspace_menu}`));
         await show("left");
         out.settings.push(await press(".settings-toggle", "", `${settings}`));
-        out.settings.push(await press(".settings-toggle", "", `!${settings}`));
+        out.settings.push(await press(profile.touch ? ".settings-toggle" : ".settings-close", "", `!${settings}`));
         if (!profile.touch) {
           out.drawer_tab.push(await press('[data-testid="slot-right"] .tab', "Files", `document.querySelector('section[aria-label="Files"]:not(.hidden)')`));
           out.drawer_tab.push(await press('[data-testid="slot-right"] .tab', "Changes", `document.querySelector('section[aria-label="Changes"]:not(.hidden)')`));
