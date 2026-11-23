@@ -202,11 +202,19 @@ Commands := [].{
 		order.get(next.to_u64_wrap()).map_ok(|workspace_id| Model.open(state, Workspace(workspace_id))) ?? state
 	}
 
+	## Whether `command` can run now: a locked UI's layout, deck, tabs and
+	## Settings stay as they are, so their commands don't.
+	can_run : Model.State, Command -> Bool
+	can_run = |state, command| {
+		locks = ["Layout", "Surfaces", "Deck", "Tabs"].contains(command.group) or command.id == "settings"
+		!(state.locked and locks) and (command.applies)(state)
+	}
+
 	## Runs the first of the commands named that applies, if any does.
 	run_first : Model.State, List(Str) -> Model.State
 	run_first = |state, ids| {
 		commands = Commands.all(state)
-		match ids.join_map(|id| commands.keep_if(|command| command.id == id)).find_first(|command| (command.applies)(state)) {
+		match ids.join_map(|id| commands.keep_if(|command| command.id == id)).find_first(|command| Commands.can_run(state, command)) {
 			Ok(command) => (command.run)(state)
 			Err(NotFound) => state
 		}

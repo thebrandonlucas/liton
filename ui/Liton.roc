@@ -31,6 +31,7 @@ import Wallpaper
 import Spinner
 import History
 import HostDesk
+import PeopleDesk
 import ScheduleDesk
 import InboxDesk
 import Menu
@@ -198,7 +199,7 @@ Liton := [].{
 			[
 				Liton.connection(model),
 				Engine.when(
-					model.signal().map(|state| state.deck.len() > 1),
+					model.signal().map(|state| state.deck.len() > 1 and !state.locked),
 					||
 						Engine.element(
 							"nav",
@@ -314,7 +315,8 @@ Liton := [].{
 	drag_effects : State(Ctx, Model.State), State(Ctx, Drag.Gesture) -> List(Elem(Ctx))
 	drag_effects = |model, drag| [
 		Engine.watch_latest(
-			drag.signal().map(Drag.held),
+			# A locked UI's layout stays as it is: the pane held doesn't move.
+			drag.signal().map2(model.signal(), |gesture, state| if (state.locked) NotHolding else Drag.held(gesture)),
 			|held|
 				match held {
 					Holding({ pointer, column, row, .. }) => [Drag.pointer.ask({ pointer, column, row })]
@@ -396,7 +398,7 @@ Liton := [].{
 					# The setup's presets and themes, which a daemon may leave out.
 					match (res, decoded) {
 						(Err(Status(401)), _) => Pairing.refused(state)
-						(_, Ok(offered)) => Model.set_up(Model.advertise(state, offered), Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
+						(_, Ok(offered)) => Model.set_up({ ..Model.advertise(state, offered), locked: Liton.locked_by(text) }, Setup.offered_from_json(text) ?? Setup.offered(Setup.empty))
 						(_, Err(_)) => { ..state, notice: "Could not read the daemon's manifest.", unreachable: Bool.True }
 					}
 				},
@@ -474,10 +476,60 @@ Liton := [].{
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
 						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
 						"hosts.v1" => Model.hosts_answered(state, outbox.serial, res ?? "")
+						"people.v1" => Model.people_answered(state, outbox.serial, res ?? "")
 						"edit" => Model.edit_answered(state, outbox.serial, res ?? "")
 						_ => Model.created(state, outbox.serial, res ?? "")
 					},
 			),
+		),
+		# Once a signing room is listed, this browser's key, bound to this
+		# device; a 409, as the device has it already, binds nothing new.
+		Engine.watch(
+			model.signal().map(Model.wants_key),
+			|wanted| if (wanted) [Ports.key.ask({})] else [],
+			model.on_result(|state, _, res| Pairing.key_known(state, res ?? state.nostr_key)),
+		),
+		Engine.watch_changes(
+			model.signal().map(|state| state.nostr_key),
+			|pubkey| if (pubkey == "") [] else [
+				Engine.http_body({
+					method: "POST",
+					url: "/liton/v1/devices/key",
+					headers: [("Content-Type", "application/json")],
+					body: Json.to_str({ pubkey: pubkey }),
+					timeout: Ms(10000),
+				}),
+			],
+			Engine.ignore({}),
+		),
+		# Joined by an invite, this browser's profile, the invite's name, signed.
+		Engine.watch_changes(
+			model.signal().map(|state| state.pairing.profile),
+			|{ name, .. }| [
+				Ports.sign.ask({
+					kind: 0,
+					tags: [],
+					content: Json.to_str({ name: name }),
+				}),
+			],
+			model.on_result(
+				|state, { serial, .. }, res|
+					match res {
+						Ok(signed) => { ..state, pairing: { ..state.pairing, profile_event: { serial, text: Json.to_str(signed) } } }
+						Err(_) => state
+					},
+			),
+		),
+		# A signing room's request: its event signed, then the call carrying it.
+		Engine.watch_changes(
+			model.signal().map(|state| state.signing),
+			|signing| [Ports.sign.ask(signing.unsigned)],
+			model.on_result(|state, signing, res| Model.room_signed(state, signing.serial, res)),
+		),
+		Engine.watch_changes(
+			model.signal().map(|state| state.signed_call),
+			|signed| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: signed.text, timeout: Ms(60000) })],
+			model.on_result(|state, signed, res| Model.rooms_answered(state, signed.serial, res ?? "")),
 		),
 
 		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, command)| Engine.command(command)), Engine.ignore({})),
@@ -519,7 +571,7 @@ Liton := [].{
 		# A trackpad's swipe across the page goes to the deck's next or
 		# previous surface, while nothing covers it.
 		Engine.watch(
-			model.signal().map(|state| state.deck.len() > 1),
+			model.signal().map(|state| state.deck.len() > 1 and !state.locked),
 			|several| if (several) [Ports.swipe.ask({})] else [],
 			model.on_result(
 				|state, _, res|
@@ -571,9 +623,18 @@ Liton := [].{
 			],
 		)
 
-	## Opens or closes Settings.
+	## Whether a manifest's `access` says this device's UI is locked; one
+	## from before roles says nothing, so it isn't.
+	locked_by : Str -> Bool
+	locked_by = |text| {
+		said : Try({ access : { locked : Bool } }, _)
+		said = Json.parse(text)
+		said.map_ok(|{ access }| access.locked) ?? Bool.False
+	}
+
+	## Opens or closes Settings, shown unless the UI is locked.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings))
+	settings_toggle = |model, class| Engine.when(model.signal().map(|state| !state.locked), || Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings)), || Engine.text(""))
 
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
@@ -773,7 +834,7 @@ Liton := [].{
 								Html.h3("App", "settings-group"),
 							]
 								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices")])
+								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices"), Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.people_v1)), || Liton.section_button(model, "people", "People"), || Engine.text(""))])
 								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
 						),
 						Html.div(
@@ -793,6 +854,7 @@ Liton := [].{
 								shown("host", || Liton.host_section(model)),
 								shown("hosts", || Liton.hosts_section(model)),
 								shown("devices", || Pairing.section(model)),
+								shown("people", || Liton.people_section(model)),
 								shown("deck", || Liton.deck_section(model)),
 								shown("surface", || Liton.surface_section(model)),
 								shown("snapshot", || Liton.snapshot_section(model)),
@@ -810,7 +872,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("people", "People"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
@@ -909,6 +971,114 @@ Liton := [].{
 	## with its status dot, version and when it was last online, and a ⋮
 	## menu to change, switch off or on, or remove it, a removal asking to be
 	## confirmed; and Add host, opening the dialog.
+	## Settings' People (ui/PeopleDesk.roc): an invite to write, into a role
+	## and the rooms that sign, its link once made; the invites not used,
+	## each to cancel; and the people holding a role, each to remove, once
+	## confirmed, as that revokes their devices.
+	people_section : State(Ctx, Model.State) -> Elem(Ctx)
+	people_section = |model| {
+		desk = model.signal().map(|state| state.people)
+		form = desk.map(|shown| shown.form)
+		set_form = |change| model.set_value(|state, text| { ..state, people: { ..state.people, form: change(state.people.form, text) } })
+		Html.div(
+			"settings-section",
+			[
+				Liton.settings_card(
+					"Invite",
+					[
+						Html.div("settings-row", [Html.text_input(Engine.const("Who the invite is for"), "text", form.map(|shown| shown.name), [Engine.attr("placeholder", "Dana")], set_form(|shown, name| { ..shown, name }))]),
+						Html.div(
+							"settings-row people-roles",
+							[
+								Engine.each(
+									desk.map(|shown| shown.listed.roles),
+									|role| role,
+									|row| Html.button_s(row.key(), [Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |role, state| state.people.form.role == role))], model.lift_row().update_by(row.key(), |state, role| { ..state, people: { ..state.people, form: { ..state.people.form, role } } })),
+								),
+							],
+						),
+						Engine.each(
+							model.signal().map(|state| state.rooms.keep_if(|room| room.signing == Ok(Bool.True)).map(|room| room.id)),
+							|room_id| room_id,
+							|row|
+								Html.div(
+									"settings-row",
+									[
+										Engine.element(
+											"label",
+											[Engine.class("toggle")],
+											[
+												Html.checkbox(row.key().map(|room_id| "In #${room_id}"), row.key().map2(model.signal().lift_row(), |room_id, state| state.people.form.rooms.contains(room_id)), [], model.lift_row().set_value_by(row.key(), |state, room_id, wanted| { ..state, people: { ..state.people, form: PeopleDesk.picked(state.people.form, room_id, wanted) } })),
+												Engine.text_s(row.key().map(|room_id| "#${room_id}")),
+											],
+										),
+									],
+								),
+						),
+						Html.div(
+							"settings-row",
+							[
+								Html.button("Make the invite link", [Engine.class("primary")], model.update(Model.invite)),
+								Html.p_s(form.map(|shown| shown.failed), [Engine.class("help"), Engine.attr("role", "alert"), Engine.test_id("invite-failed")]),
+							],
+						),
+						Engine.when(
+							desk.map(|shown| !shown.link.is_empty()),
+							|| Html.div("settings-row", [Html.p_s(desk.map(|shown| shown.link), [Engine.class("help pair-link"), Engine.test_id("invite-link")]), Html.p("It joins one device, once, within 7 days: open it there. It isn't shown again.", "help")]),
+							|| Engine.text(""),
+						),
+					],
+				),
+				Liton.settings_card(
+					"Invites",
+					[
+						Engine.each(
+							desk.map(|shown| PeopleDesk.shown(shown).invites),
+							|invite| invite.id,
+							|row|
+								Html.div(
+									"settings-row",
+									[
+										Html.div(
+											"device-text",
+											[
+												Html.span_s(row.field(|invite| invite.name), [Engine.class("settings-row-title")]),
+												Html.p_s(row.field(|invite| Str.join_with([invite.role].concat(invite.rooms.map(|room| "#${room}")).append(if (invite.expires.is_empty()) "Inviting…" else "expires ${invite.expires}"), " · ")), [Engine.class("help")]),
+											],
+										),
+										Html.button_s(row.field(|invite| "Cancel the invite of ${invite.name}"), [], model.lift_row().update_by(row.key(), |state, id| Model.ask_people(state, Cancel({ id: id })))),
+									],
+								),
+						),
+					],
+				),
+				Liton.settings_card(
+					"People",
+					[
+						Engine.each(
+							desk.map(|shown| PeopleDesk.shown(shown).people),
+							|person| person.pubkey,
+							|row| {
+								removing = row.key().map2(model.signal().lift_row(), |pubkey, state| state.people.removing == pubkey)
+								Html.div(
+									"settings-row",
+									[
+										Html.div("device-text", [Html.span_s(row.field(|person| person.name), [Engine.class("settings-row-title")]), Html.p_s(row.field(|person| person.role), [Engine.class("help")])]),
+										Engine.when(
+											removing,
+											|| Html.button_s(row.field(|person| "Remove ${person.name} and revoke their devices"), [Engine.class("danger")], model.lift_row().update_by(row.key(), |state, pubkey| Model.ask_people(state, Remove({ pubkey: pubkey })))),
+											|| Html.button_s(row.field(|person| "Remove ${person.name}"), [], model.lift_row().update_by(row.key(), |state, pubkey| { ..state, people: { ..state.people, removing: pubkey } })),
+										),
+									],
+								)
+							},
+						),
+					],
+				),
+			],
+		)
+	}
+
 	hosts_section : State(Ctx, Model.State) -> Elem(Ctx)
 	hosts_section = |model| {
 		desk = model.signal().map(|state| state.hosts)
@@ -1912,9 +2082,15 @@ Liton := [].{
 
 	## A pane's ⋯ menu: the session it follows or is pinned to, Pin, where it
 	## moves, and in Tiling Close; in a Workbench, Hide, and Show for each
-	## pane its tile hides. Each closes the menu.
+	## pane its tile hides. Each closes the menu. A locked UI shows none.
 	pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
 	pane_menu = |model, id, title, shown| {
+		Engine.when(model.signal().map(|state| !state.locked), || Liton.unlocked_pane_menu(model, id, title, shown), || Engine.text(""))
+	}
+
+	## A pane's ⋯ menu, as `pane_menu` shows it while the UI isn't locked.
+	unlocked_pane_menu : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str), Signal(PaneCtx, { pane : Model.Pane, state : Model.State }) -> Elem(PaneCtx)
+	unlocked_pane_menu = |model, id, title, shown| {
 		closing = |change| |state, pane_id| { ..change(state, pane_id), menu: "" }
 		Menu.menu(
 			model,

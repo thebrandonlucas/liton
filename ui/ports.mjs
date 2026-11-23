@@ -171,6 +171,9 @@ const swipe = (_, { emit }) => {
 // Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
 const voice = () => import("./voice.mjs");
 
+// Signing (ui/nostr.mjs, ui/secp256k1.mjs) loads on first use only.
+const nostr = () => import("./nostr.mjs");
+
 export default {
   // Copies text, answering whether the browser let it. The clipboard API
   // needs a secure context; a page served over plain HTTP from another
@@ -203,4 +206,6 @@ export default {
   },
   "liton/voice/order": { command: (asked) => voice().then((v) => v.order(asked)) },
   "liton/voice/voices": { call: () => voice().then((v) => v.voices()) },
+  "liton/nostr/key": { call: () => nostr().then((n) => n.key()) },
+  "liton/nostr/sign": { call: (unsigned) => nostr().then((n) => n.sign(unsigned)) },
 };

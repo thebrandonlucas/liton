@@ -9,6 +9,7 @@ import Context
 import Files
 import Hosts
 import Manifest
+import People
 import Review
 import Rooms
 import Schedules
@@ -45,7 +46,7 @@ Protocol := [].{
 	Poll : { topics : List(Wanted), cached : Try(Bool, [Missing]) }
 
 	## An event of a topic. A snapshot topic's one event is its whole value.
-	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot), Rooms(List(Rooms.Room)), Members(List(Rooms.Member)), RoomEntry(Rooms.Entry), Tickets(Tickets.Listing), Ticket(Tickets.Ticket), Links(List(Tickets.Link)), Schedules(List(Schedules.Schedule)), Runs(List(Schedules.Run)), Hosts(List(Hosts.Host))]
+	Event : [Sessions(List(Chat.Session)), Entry(Chat.Entry), Importable(List(Chat.Importable)), Agents(List(Chat.Agent)), Items(List(Attention.Item)), Listed(Workspaces.Listed), Changes(WorkspaceGit.Snapshot), File(WorkspaceGit.FileHunks), Tree(Files.Tree), Contents(Files.Contents), Status(Voice.Status), Threads(Review.Snapshot), Rooms(List(Rooms.Room)), Members(List(Rooms.Member)), RoomEntry(Rooms.Entry), Tickets(Tickets.Listing), Ticket(Tickets.Ticket), Links(List(Tickets.Link)), Schedules(List(Schedules.Schedule)), Runs(List(Schedules.Run)), Hosts(List(Hosts.Host)), People(People.Listing)]
 
 	## A topic's new events and the cursor to ask after next. A topic that
 	## can't be followed has no events, its cursor unchanged and an `error`.
@@ -78,12 +79,14 @@ Protocol := [].{
 		RoomMembers(Str),
 		RoomMessages(Str),
 		RoomThread({ room_id : Str, root : Str }),
+		RoomInbox,
 		TicketList,
 		TicketDetail(Str),
 		TicketLinks,
 		ScheduleList,
 		ScheduleRuns(Str),
 		HostList,
+		PeopleList,
 	]
 
 	## The topics of each capability providers offer, as the manifest lists
@@ -96,10 +99,11 @@ Protocol := [].{
 		{ capability: Capability.files_v1, patterns: ["tree/<session_id>/<path>", "tree/workspace:<workspace_id>/<path>", "file/<session_id>/<path>", "file/workspace:<workspace_id>/<path>"] },
 		{ capability: Capability.voice_v1, patterns: ["status"] },
 		{ capability: Capability.review_v1, patterns: ["threads/<session_id>", "threads/workspace:<workspace_id>"] },
-		{ capability: Capability.rooms_v1, patterns: ["rooms", "members/<room_id>", "messages/<room_id>", "thread/<room_id>/<root>"] },
+		{ capability: Capability.rooms_v1, patterns: ["rooms", "members/<room_id>", "messages/<room_id>", "thread/<room_id>/<root>", "inbox"] },
 		{ capability: Capability.tickets_v1, patterns: ["list", "ticket/<ticket_id>", "links"] },
 		{ capability: Capability.schedules_v1, patterns: ["schedules", "runs/<schedule_id>"] },
 		{ capability: Capability.hosts_v1, patterns: ["hosts"] },
+		{ capability: Capability.people_v1, patterns: ["people"] },
 	]
 
 	## The capability a call or topic names, if the daemon offers it, and from
@@ -148,6 +152,7 @@ Protocol := [].{
 				"schedules.v1" if topic == "schedules" => Ok(ScheduleList)
 				"schedules.v1" if topic.starts_with("runs/") and topic != "runs/" => Ok(ScheduleRuns(topic.drop_prefix("runs/")))
 				"hosts.v1" if topic == "hosts" => Ok(HostList)
+				"people.v1" if topic == "people" => Ok(PeopleList)
 				_ => Err(NoTopic)
 			}
 		found.map_err(|_| { code: NotFound, message: "${capability} has no topic ${topic}" })
@@ -171,6 +176,7 @@ Protocol := [].{
 			ScheduleList => { capability: "schedules.v1", topic: "schedules" }
 			ScheduleRuns(schedule_id) => { capability: "schedules.v1", topic: "runs/${schedule_id}" }
 			HostList => { capability: "hosts.v1", topic: "hosts" }
+			PeopleList => { capability: "people.v1", topic: "people" }
 			Changes(scoped) => { capability: "workspace.git.v1", topic: "changes/${scoped_name(scoped)}" }
 			File({ context, scope, path }) => { capability: "workspace.git.v1", topic: "file/${scoped_name({ context, scope })}/${escaped(path)}" }
 			Tree({ context, path }) => { capability: "files.v1", topic: "tree/${Context.to_str(context)}/${escaped(path)}" }
@@ -179,6 +185,7 @@ Protocol := [].{
 			RoomMembers(room_id) => { capability: "rooms.v1", topic: "members/${room_id}" }
 			RoomMessages(room_id) => { capability: "rooms.v1", topic: "messages/${room_id}" }
 			RoomThread({ room_id, root }) => { capability: "rooms.v1", topic: "thread/${room_id}/${root}" }
+			RoomInbox => { capability: "rooms.v1", topic: "inbox" }
 		}
 
 	## A snapshot topic's update: its value, cursored by its fingerprint,
@@ -223,6 +230,8 @@ room_subject = |topic| {
 	named = |prefix| if (topic.starts_with(prefix) and topic != prefix) Ok(topic.drop_prefix(prefix)) else Err(NoTopic)
 	if topic == "rooms" {
 		Ok(RoomList)
+	} else if topic == "inbox" {
+		Ok(RoomInbox)
 	} else if topic.starts_with("members/") {
 		named("members/").map_ok(|room_id| RoomMembers(room_id))
 	} else if topic.starts_with("messages/") {
@@ -299,7 +308,7 @@ offered : Manifest.Offered
 offered = {
 	protocol: 1,
 	daemon: { id: "liton", name: "liton" },
-	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1, Capability.review_v1, Capability.rooms_v1, Capability.tickets_v1, Capability.schedules_v1, Capability.hosts_v1] }],
+	providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.files_v1, Capability.review_v1, Capability.rooms_v1, Capability.tickets_v1, Capability.schedules_v1, Capability.hosts_v1, Capability.people_v1] }],
 	transformers: [{ id: "attention", name: "Attention", offers: Capability.attention_v1, uses: [Capability.chat_v1] }],
 	topics: Protocol.topics,
 }
@@ -327,7 +336,7 @@ expect Protocol.serves(Err(Missing), "mock") and Protocol.serves(Ok("mock"), "mo
 
 # Each subject's topic name reads back as it, a session id with slashes too.
 expect {
-	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1")), RoomList, RoomMembers("general"), RoomMessages("team/general"), RoomThread({ room_id: "team/general", root: "m1" }), TicketList, TicketDetail("thebrandonlucas/liton#3"), TicketLinks, ScheduleList, ScheduleRuns("h1"), HostList]
+	subjects = [Sessions, Timeline("fix-auth"), Importable, Agents, Items, Changes({ context: Session("import:a/b"), scope: Commit("c1") }), Changes({ context: Workspace("w1"), scope: AgainstBase }), File({ context: Session("import:a/b"), scope: Uncommitted, path: "src/100%2F/a b.roc" }), Tree({ context: Session("peer/fix-auth"), path: "." }), Contents({ context: Workspace("w1"), path: "src/100%2F/a b.roc" }), Threads(Session("import:a/b")), Threads(Workspace("w1")), RoomList, RoomMembers("general"), RoomMessages("team/general"), RoomThread({ room_id: "team/general", root: "m1" }), RoomInbox, TicketList, TicketDetail("thebrandonlucas/liton#3"), TicketLinks, ScheduleList, ScheduleRuns("h1"), HostList, PeopleList]
 	subjects.all(|followed| Protocol.subject(offered, { capability: Protocol.named(followed).capability, topic: Protocol.named(followed).topic, after: "" }) == Ok(followed))
 }
 

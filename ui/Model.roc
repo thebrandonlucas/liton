@@ -6,6 +6,7 @@ import cap.Chat
 import cap.Context
 import cap.Files
 import cap.Hosts
+import cap.People
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -20,6 +21,7 @@ import setup.Setup
 import Highlight
 import History
 import HostDesk
+import PeopleDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -81,8 +83,11 @@ Model := [].{
 	## asking for the manifest again; the devices last listed, and the
 	## listings asked for; the revocations on their way, as `revoke` sent
 	## them; and a code made for another device, while `asking` or once
-	## given, with the link that pairs a browser with it.
-	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str } }
+	## given, with the link that pairs a browser with it; the URL's `#invite=`
+	## secret, redeemed with this browser's key once the daemon refuses, as
+	## `redeem` sends it; and the profile, the invite's name, that this browser
+	## signs once it joined, then sends signed (`profile_event`).
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, redeem : { serial : U64, secret : Str, pubkey : Str, name : Str }, profile : { serial : U64, name : Str }, profile_event : { serial : U64, text : Str } }
 
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
@@ -262,6 +267,14 @@ Model := [].{
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
 
+		## A signing room's request on its way: the event it makes, unsigned,
+		## to sign (`signing`), then the call carrying it signed
+		## (`signed_call`), numbered as its `room_asks` is; and this browser's
+		## key, asked for once a signing room is listed, "" until then.
+		signing : { serial : U64, unsigned : { kind : U32, tags : List(List(Str)), content : Str } },
+		signed_call : { serial : U64, text : Str },
+		nostr_key : Str,
+
 		## What is typed in Rooms panes' search, which narrows their rooms.
 		room_search : Str,
 
@@ -286,6 +299,10 @@ Model := [].{
 		## an image's URL, or "" for the theme's, and its dim in percent.
 		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
 		pairing : Pairing,
+
+		## Whether the daemon says this device's role locks its UI: its layout,
+		## its deck and Settings stay as they are, shown without their controls.
+		locked : Bool,
 
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
@@ -364,6 +381,10 @@ Model := [].{
 		## What Settings' Hosts shows (ui/HostDesk.roc), and the hosts.v1
 		## requests on their way (sent as `call_outbox`).
 		hosts : HostDesk.State,
+
+		## What Settings' People shows (ui/PeopleDesk.roc), and the people.v1
+		## requests on their way (sent as `call_outbox`).
+		people : PeopleDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -546,6 +567,9 @@ Model := [].{
 				room_members: [],
 				room_logs: [],
 				room_asks: [],
+				signing: { serial: 0, unsigned: { kind: 0, tags: [], content: "" } },
+				signed_call: { serial: 0, text: "" },
+				nostr_key: "",
 				room_search: "",
 				rooms_out_of_view: [],
 				themes: Default.setup.themes,
@@ -554,7 +578,8 @@ Model := [].{
 				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
-				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" } },
+				locked: Bool.False,
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", pubkey: "", name: "" }, profile: { serial: 0, name: "" }, profile_event: { serial: 0, text: "" } },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -573,6 +598,7 @@ Model := [].{
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
 				hosts: HostDesk.initial,
+				people: PeopleDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -614,7 +640,7 @@ Model := [].{
 	show_surface = |state, index| {
 		kept = Model.deck(state)
 		match kept.get(index) {
-			Ok(surface) if index != state.deck_shown => {
+			Ok(surface) if index != state.deck_shown and !state.locked => {
 				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
 				panel = Model.slot_of(laid, laid.active_tile)
 				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
@@ -898,7 +924,7 @@ Model := [].{
 
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
-	toggle_settings = |state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+	toggle_settings = |state| if (state.locked and !state.show_settings) state else Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
 
 	## Shows a section of Settings, over its list on a phone.
 	## Opens Settings at what the daemon connects.
@@ -2498,7 +2524,9 @@ Model := [].{
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
 		# The hosts, for Settings' Hosts and the host badges.
 		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The people, and the rooms an invite may name, while Settings shows them.
+		people = if (state.capabilities.contains(Capability.people_v1) and state.show_settings and state.settings_page.section == "people") [PeopleList].concat(if (offered(Capability.rooms_v1)) [RoomList] else []) else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2582,7 +2610,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), people: PeopleDesk.settled(applied.people, sent.serial) }
 		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		# A timeline the daemon has yet to fetch is asked for at once.
 		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
@@ -2660,6 +2688,7 @@ Model := [].{
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
 			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
+			(_, People(listed)) => { ..state, people: { ..state.people, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -4035,6 +4064,40 @@ Model := [].{
 		}
 	}
 
+	## Sends a people.v1 request, shown at once until the daemon answers.
+	ask_people : State, People.Request -> State
+	ask_people = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "people.v1", text: Json.to_str({ capability: "people.v1", request }) }, people: PeopleDesk.asking(state.people, serial, request), notice: "" }
+	}
+
+	## Sends the invite Settings' People writes, or says why it can't.
+	invite : State -> State
+	invite = |state| {
+		desk = state.people
+		match PeopleDesk.request_of(desk.form) {
+			Err(why) => { ..state, people: { ..desk, form: { ..desk.form, failed: why } } }
+			Ok(request) => Model.ask_people({ ..state, people: { ..desk, form: PeopleDesk.blank, link: "" } }, request)
+		}
+	}
+
+	## Takes the daemon's answer to a people.v1 request: an invite made
+	## shows the link that redeems it; refused, a request is undone, with why.
+	people_answered : State, U64, Str -> State
+	people_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(People.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, people: PeopleDesk.answered(state.people, serial, Refused(reason)), notice: reason }
+		accepted = |desk| Model.poll({ ..state, people: PeopleDesk.answered(desk, serial, Accepted(state.poll.serial + 1)) })
+		match answered {
+			Ok(Ok(Invited({ secret, .. }))) => accepted({ ..state.people, link: "${state.people.page}#invite=${secret}" })
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => accepted(state.people)
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
 	## Settings' Hosts changed by `change`: its menu, the removal it asks
 	## to confirm, or its dialog.
 	with_hosts : State, (HostDesk.State -> HostDesk.State) -> State
@@ -5271,12 +5334,78 @@ Model := [].{
 		}
 	}
 
-	## Sends a rooms.v1 request, shown at once until the daemon answers.
+	## Sends a rooms.v1 request, shown at once until the daemon answers. Of a
+	## signing room, the event it makes is signed first (`Model.room_signed`).
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
-		serial = state.call_outbox.serial + 1
-		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+		serial = U64.max(state.call_outbox.serial, U64.max(state.signing.serial, state.signed_call.serial)) + 1
+		asked = { ..state, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+		match Model.unsigned_event(request) {
+			Ok(unsigned) if Model.signing_room(state, Model.asked_room(request)) => { ..asked, signing: { serial, unsigned } }
+			_ => { ..asked, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) } }
+		}
 	}
+
+	## The room a rooms.v1 request is of, "" for none.
+	asked_room : Rooms.Request -> Str
+	asked_room = |request|
+		match request {
+			ListRooms => ""
+			Send({ room_id, .. }) => room_id
+			React({ room_id, .. }) | Unreact({ room_id, .. }) => room_id
+			Join({ room_id }) | Leave({ room_id }) => room_id
+		}
+
+	## Whether the room `room_id` takes the events its requests make, signed.
+	signing_room : State, Str -> Bool
+	signing_room = |state, room_id| state.rooms.any(|room| room.id == room_id and room.signing == Ok(Bool.True))
+
+	## Whether this browser's key is wanted: once a signing room is listed, or
+	## an invite is to be redeemed.
+	wants_key : State -> Bool
+	wants_key = |state| state.rooms.any(|room| room.signing == Ok(Bool.True)) or (state.pairing.invite != "" and state.pairing.unpaired)
+
+	## The event a request of a signing room makes, as docs/protocol.md
+	## (Rooms) says, before it is signed: a message (9) with NIP-10's marked
+	## `e` tags for its thread and `p` tags for its mentions, a reaction (7),
+	## a reaction taken back (5, marked `["k", "7"]`), or a join (9021) or
+	## leave (9022), each in the room.
+	unsigned_event : Rooms.Request -> Try({ kind : U32, tags : List(List(Str)), content : Str }, [Unsigned])
+	unsigned_event = |request| {
+		in_room = |room_id| [["h", room_id]]
+		match request {
+			ListRooms => Err(Unsigned)
+			Send({ room_id, text, place: sent_to, mentions }) => {
+				thread = match sent_to {
+					TopLevel => []
+					Reply({ root, parent }) => [["e", root, "", "root"], ["e", parent, "", "reply"]]
+				}
+				Ok({ kind: 9, tags: in_room(room_id).concat(thread).concat(mentions.map(|member| ["p", member])), content: text })
+			}
+			React({ room_id, message_id, emoji }) => Ok({ kind: 7, tags: in_room(room_id).append(["e", message_id]), content: emoji })
+			Unreact({ room_id, message_id, emoji }) => Ok({ kind: 5, tags: in_room(room_id).concat([["e", message_id], ["k", "7"]]), content: emoji })
+			Join({ room_id }) => Ok({ kind: 9021, tags: in_room(room_id), content: "" })
+			Leave({ room_id }) => Ok({ kind: 9022, tags: in_room(room_id), content: "" })
+		}
+	}
+
+	## A Nostr event (NIP-01) signed by this browser's key (ui/nostr.mjs).
+	Signed : { id : Str, pubkey : Str, created_at : U64, kind : U32, tags : List(List(Str)), content : Str, sig : Str }
+
+	## The event of the request numbered `serial`, signed, or why not: signed,
+	## it goes to the daemon with its request; unsigned, the request fails as
+	## a refused one does.
+	room_signed : State, U64, Try(Signed, _) -> State
+	room_signed = |state, serial, res|
+		match (res, state.room_asks.find_first(|asked| asked.serial == serial)) {
+			(Ok(signed), Ok(asked)) => { ..state, signed_call: { serial, text: Json.to_str({ capability: "rooms.v1", request: asked.request, signed }) } }
+			(Err(_), Ok(_)) => {
+				unsigned : Protocol.Answer(Rooms.Response)
+				unsigned = Err({ code: Unavailable, message: "This browser couldn't sign it." })
+				Model.rooms_answered(state, serial, Json.to_str(unsigned))
+			}
+			(_, Err(_)) => state
+		}
 
 	## Without the messages sent that a log has posted.
 	posted_sent : State -> State

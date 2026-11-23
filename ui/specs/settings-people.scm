@@ -1,0 +1,34 @@
+(test "Liton — Settings' People makes an invite into a role and rooms, shown as inviting at once, then its link; and removes a person after asking, at once"
+  (setup
+    (initial-location "/ui/index.html"))
+  (steps
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"liton\"},\"providers\":[{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"relay\",\"name\":\"Relay\"},{\"capabilities\":[{\"name\":\"people\",\"version\":1}],\"id\":\"people\",\"name\":\"People\"}],\"transformers\":[],\"topics\":[]}")
+    (run-effect 1)
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[]}")
+    (run-effect 2)
+    (click (role button :name "Settings"))
+    (click (role button :name "People"))
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"pubkey\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\"}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"relay\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"signing\":true}]}]}]}")
+    (run-effect 3)
+    ; A signing room listed, this browser's key is asked for and bound.
+    (answer-port 4 reply "\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"")
+    (stub-http "bind" :url "/liton/v1/devices/key" :status 200 :body "{}")
+    (run-effect 5)
+    (expect-visible (text "Dana"))
+    (click (role button :name "Make the invite link"))
+    (expect-text (test-id "invite-failed") "Name whom the invite is for.")
+    (fill (label "Who the invite is for") "Eli")
+    (click (role button :name "staff"))
+    (click (label "In #dispatch"))
+    (click (role button :name "Make the invite link"))
+    ; Shown before the daemon answers.
+    (expect-visible (text "staff · #dispatch · Inviting…"))
+    (stub-http "invite" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Invited\":{\"id\":\"i1\",\"secret\":\"s3\"}}}")
+    (run-effect 6)
+    (expect-text (test-id "invite-link") "/ui/index.html#invite=s3")
+    (click (role button :name "Remove Dana"))
+    (click (role button :name "Remove Dana and revoke their devices"))
+    ; Gone at once.
+    (expect-absent (text "Dana"))
+  )
+)

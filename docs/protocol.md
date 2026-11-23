@@ -98,13 +98,16 @@ capability as patterns:
     "default_theme": "Pastoral",
     "presets": [{ "name": "Developer", "snapshot": { "version": 6, "shell": "Workbench", "columns": […], "collapsed": [], "hidden": [], "theme": "" } }, …],
     "themes": [{ "name": "Pastoral", "scheme": "Dark", "accent": "#e8c872", … }, …]
-  }
+  },
+  "access": { "role": "operator", "locked": false }
 }
 ```
 
 A capability is offered when a provider supplies it or a transformer derives
 it. A client binds to capabilities, never to providers; it uses the manifest to
-show what is missing and who could supply it.
+show what is missing and who could supply it. `access` is the role of the
+device asking, `operator` unless its key holds another, and whether the role
+locks its UI, whose layout and Settings then stay as they are.
 
 `setup` holds what the daemon's setup (design.md, Setups) offers its
 clients: its presets, each a layout as a client saves it, a snapshot, with a
@@ -330,6 +333,7 @@ events when nothing changed:
 | `rooms.v1` | `members/<room_id>` | snapshot | `{"Members": [Member]}` |
 | `rooms.v1` | `messages/<room_id>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the room's top level and its threads' summaries |
 | `rooms.v1` | `thread/<room_id>/<root>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: a thread's replies |
+| `rooms.v1` | `inbox` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the relay's messages that mention the device's key, in every room it sees, each `Posted` |
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
@@ -565,6 +569,83 @@ room or no longer one. Each answers `Accepted`, or `Rejected` with why, such
 as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
 The mock provider keeps three rooms, one a forum, where its agents type and
 then answer when a message mentions them.
+
+The daemon's own relay (Relay, below) is the provider `relay` of rooms: a
+room is a group, a message its kind 9 with NIP-10's `root` and `reply` `e`
+tags for a thread and `p` tags for mentions, a reaction a kind 7, an edit a
+kind 40003 and a deletion a kind 5, or 9005 by an admin; a member is a key,
+named by its latest profile (kind 0), an `Agent` when the profile says
+`"bot": true`. A relay room is `"signing": true`: a call of it carries the
+event it makes beside its request, signed by the device's key: `Send` a kind 9, `React` a kind 7,
+`Unreact` a kind 5 marked `["k", "7"]` whose `e` names the message and whose
+content is the emoji, `Join` a 9021 and `Leave` a 9022, each in the room.
+The relay takes it as `POST /liton/v1/nostr/event` would, and the call
+answers `Rejected` with why it didn't:
+
+```json
+{ "capability": "rooms.v1", "request": { "Send": { "room_id": "dispatch", "text": "on it", "place": "TopLevel", "mentions": [] } },
+  "signed": { "id": "a7d4…", "pubkey": "c604…", "created_at": 1700000000, "kind": 9, "tags": [["h", "dispatch"]], "content": "on it", "sig": "…" } }
+```
+
+### Relay
+
+The daemon is a Nostr relay of its own, the store of its rooms: it keeps
+NIP-01 events in its database and takes them over HTTP, under
+`/liton/v1/nostr/`, from paired devices alone (Authentication). Each device
+is bound to one Nostr key, its pubkey 64 lowercase hex digits, once:
+
+```json
+POST /liton/v1/devices/key   { "pubkey": "79be667e…" }
+{}
+```
+
+answered `409` when the device has a key already or the key is another
+device's. `POST /liton/v1/nostr/event` takes an event, NIP-01's JSON, and
+answers as NIP-01's `OK` does, `["OK", <id>, <accepted>, <why>]`:
+
+```json
+["OK", "1d60156c…", true, ""]
+["OK", "1d60156c…", true, "duplicate: the relay has this event"]
+["OK", "1d60156c…", false, "invalid: the event's id isn't the SHA-256 of its fields"]
+["OK", "1d60156c…", false, "restricted: this device isn't bound to the event's pubkey"]
+```
+
+It takes an event whose id is the SHA-256 of its fields, serialized as
+NIP-01 says, and whose pubkey is the device's; where the daemon needs no
+device (LITON_AUTH), any pubkey. It doesn't verify signatures yet: an
+event is trusted as its device's, which is why a key binds to one device.
+
+`POST /liton/v1/nostr/req` answers the events any of its filters matches
+in rooms the device sees (as `rooms.v1` lists them) or in none, NIP-01's REQ
+asked once, after the event `after` names, in the order they arrived, with
+`cursor`, the last one's place, to ask after next time:
+
+```json
+{ "filters": [{ "kinds": [9, 7], "tags": [["h", "general"]], "limit": 100 }], "after": 41 }
+{ "events": [{ "id": "f1ec…", "pubkey": "79be…", "created_at": 1700000000, "kind": 9, "tags": [["h", "general"]], "content": "…", "sig": "fdc4…" }], "cursor": 42 }
+```
+
+A filter has NIP-01's `ids`, `authors`, `kinds`, `since`, `until` and
+`limit`, and its tag conditions, NIP-01's `#h` and the like, as `tags`: a
+letter, then the values an event's tag of that letter must have one of. A
+filter answers at most `limit` (by default 200, at most 500) of what it
+matches: asked `after` an event, the first that arrived since, the cursor
+stopping at the last one a cut filter answered, so the next ask misses none;
+with no `after`, the latest.
+
+Its rooms are NIP-29 groups, each named by its events' `h` tag, made by
+their moderation events in the order they arrived: `9007` creates a room,
+its author its first admin, with its `name`, `about`, `t` (`stream`,
+`forum`, `dm` or `announce`, as Buzz's) and the flags `open` or `closed`
+and `public` or `private`, which `9002` edits; `9000` adds the members its
+`p` tags name, an admin where the tag says `admin` after the key; `9001`
+removes them, `9005` deletes an event, `9008` the room; `9021` joins and
+`9022` leaves. The relay refuses, as `restricted:`, moderation but by a
+room's admins, a join of a room not `open` (its admins add its members), any
+other event in a room but by its members, in an `announce` room but by its
+admins, and outside a room any but a profile (kind 0). What the relay
+decides itself, such as the members an invite adds, it writes as events of
+its own, by the key of 64 zeros, unsigned until it can sign.
 
 ### Tickets
 

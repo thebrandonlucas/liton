@@ -30,6 +30,7 @@ import pf.Stdin
 import pf.Stdout
 import http.Method
 import http.Request
+import cap.People
 import cap.Protocol
 import setup.Setup
 import Cli
@@ -68,6 +69,15 @@ main! = |arguments| {
 					Stdout.line!("Paired with ${daemon}.")
 				}
 				Err(_) => failed!(2, "the daemon's answer to pairing isn't one this liton reads")
+			}
+		}
+		Invite({ name, role, rooms }) => {
+			request : People.Request
+			request = Invite({ name, role, rooms })
+			answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+			match Cli.invite_link(daemon, answer) {
+				Ok(link) => Stdout.line!("${link}\n\nOpen it on ${name}'s device to join, once, within 7 days.")
+				Err(why) => failed!(1, why)
 			}
 		}
 		Setup(litonfile) => {

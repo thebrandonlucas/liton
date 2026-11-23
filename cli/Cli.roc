@@ -1,12 +1,13 @@
 ## The `liton` command line's pure part: what its arguments ask for, and the
 ## JSON it sends the daemon and prints (docs/protocol.md, The CLI).
+import cap.People
 import cap.Protocol
 
 Cli := [].{
 
 	## What the arguments ask for. A call given no request, or `-`, reads it
 	## from stdin.
-	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
+	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Invite({ name : Str, role : Str, rooms : List(Str) }), Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
 
 	usage : Str
 	usage =
@@ -17,6 +18,7 @@ Cli := [].{
 		\\  liton setup [<Litonfile.roc or its directory>]
 		\\  liton pair
 		\\  liton login <pairing code>
+		\\  liton invite --role <role> [--rooms <room>,...] <name>
 		\\  liton help
 		\\
 		\\Speaks liton's capability protocol to the daemon at LITON_URL (default
@@ -34,6 +36,10 @@ Cli := [].{
 		\\with the daemon by such a code, and keeps its token, readable by you
 		\\alone, in $XDG_CONFIG_HOME/liton/tokens (default ~/.config). LITON_TOKEN,
 		\\if set, is used in place of the token kept.
+		\\
+		\\`invite` asks the daemon, as an operator or admin, for an invite of the
+		\\person or agent called <name> into <role> and its rooms (people.v1), and
+		\\prints the link that redeems it, good once for 7 days.
 
 	parse : List(Str) -> Command
 	parse = |arguments|
@@ -42,6 +48,7 @@ Cli := [].{
 			["manifest"] => Manifest
 			["pair"] => Pair
 			["login", code] => Login(code)
+			["invite", .. as rest] => invited(rest, { name: "", role: "", rooms: [] })
 			["setup"] => Setup("Litonfile.roc")
 			["setup", path] => Setup(if (path.ends_with(".roc")) path else "${path.drop_suffix("/")}/Litonfile.roc")
 			["call", capability] | ["call", capability, "-"] => Call({ capability, request: Stdin })
@@ -50,6 +57,20 @@ Cli := [].{
 			[] => Usage("no command given")
 			[command, ..] => Usage("unknown command or arguments for ${command}")
 		}
+
+	## The link to the UI at `daemon` that redeems the invite people.v1's
+	## `answer` gives, or why it gives none.
+	invite_link : Str, Str -> Try(Str, Str)
+	invite_link = |daemon, answer| {
+		decoded : Try(Protocol.Answer(People.Response), _)
+		decoded = Json.parse(answer)
+		match decoded {
+			Ok(Ok(Invited({ secret, .. }))) => Ok("${daemon}/ui/index.html#invite=${secret}")
+			Ok(Ok(Rejected(why))) => Err(why)
+			Ok(Err(error)) => Err(described(error))
+			_ => Err("the daemon's answer to an invite isn't one this liton reads")
+		}
+	}
 
 	## The body of a call: `request` is the request's JSON as given.
 	call_body : Str, Str -> Str
@@ -121,6 +142,22 @@ watched = |rest, so_far|
 		[capability, topic, .. as after] => watched(after, { ..so_far, topics: so_far.topics.append({ capability, topic, after: "" }) })
 		_ => Usage("watch takes a capability and a topic in pairs")
 	}
+
+invited : List(Str), { name : Str, role : Str, rooms : List(Str) } -> Cli.Command
+invited = |rest, so_far|
+	match rest {
+		[] if so_far.role == "" => Usage("invite needs --role")
+		[] if so_far.name == "" => Usage("invite needs the name of whom it is for")
+		[] => Invite(so_far)
+		["--role", role, .. as after] => invited(after, { ..so_far, role })
+		["--rooms", rooms, .. as after] => invited(after, { ..so_far, rooms: rooms.split_on(",").map(|room| room.trim()).drop_if(|room| room == "") })
+		[option, ..] if option.starts_with("-") => Usage("unknown option ${option}")
+		[name, .. as after] if so_far.name == "" => invited(after, { ..so_far, name })
+		_ => Usage("invite takes one name")
+	}
+
+expect Cli.parse(["invite", "--role", "staff", "--rooms", "dispatch, general", "Dana"]) == Invite({ name: "Dana", role: "staff", rooms: ["dispatch", "general"] }) and Cli.parse(["invite", "Dana"]) == Usage("invite needs --role") and Cli.parse(["invite", "--role", "staff"]) == Usage("invite needs the name of whom it is for")
+expect Cli.invite_link("http://box:8095", "{\"Ok\":{\"Invited\":{\"id\":\"i1\",\"secret\":\"s3\"}}}") == Ok("http://box:8095/ui/index.html#invite=s3") and Cli.invite_link("x", "{\"Ok\":{\"Rejected\":\"the setup declares no role chef\"}}") == Err("the setup declares no role chef")
 
 expect Cli.parse(["call", "chat.v1"]) == Call({ capability: "chat.v1", request: Stdin }) and Cli.parse(["call", "chat.v1", "-"]) == Call({ capability: "chat.v1", request: Stdin })
 expect Cli.parse(["call", "chat.v1", "\"ListSessions\""]) == Call({ capability: "chat.v1", request: Given("\"ListSessions\"") })
