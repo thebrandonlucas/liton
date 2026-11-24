@@ -2,8 +2,10 @@
 # /liton/v1 on host:port behind a proxy such as Caddy, which gives the
 # browser the secure context the microphone and crypto.subtle need. It
 # runs as a user of its own, keeping its database, liton.db, which holds
-# every room and the devices' tokens, in /var/lib/liton; `liton pair` run
-# as root with LITON_DB=/var/lib/liton/liton.db pairs a device.
+# every room, the people and their passkeys' public keys, and the devices'
+# token hashes, in /var/lib/liton; `liton pair` run as root with
+# LITON_DB=/var/lib/liton/liton.db prints the owner's pairing code, whose
+# link makes their passkey.
 {
   config,
   lib,
@@ -37,6 +39,20 @@ in
       default = [ ];
       example = [ "liton.example.ts.net" ];
       description = "The names the daemon is reached by besides host and localhost, such as the proxy's, LITON_ALLOWED_HOSTS.";
+    };
+    rpId = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = lib.head (cfg.allowedHosts ++ [ null ]);
+      defaultText = lib.literalExpression "the first of allowedHosts";
+      example = "liton.example.ts.net";
+      description = ''
+        The box's name, the site its passkeys are for, LITON_RP_ID: the full
+        name people open liton at over https, never a parent domain. Passkeys
+        are bound to it, so choose it before inviting people: when it changes,
+        set the new one, run `liton pair` on the box to make the owner's
+        passkey again, then `liton people relink --all` for a link per person.
+        null refuses passkeys.
+      '';
     };
     auth = lib.mkOption {
       type = lib.types.enum [
@@ -91,6 +107,7 @@ in
         LITON_DB = "/var/lib/liton/liton.db";
         LITON_UI = "${cfg.package}/share/liton/www";
       }
+      // lib.optionalAttrs (cfg.rpId != null) { LITON_RP_ID = cfg.rpId; }
       // lib.optionalAttrs (cfg.setupFile != null) { LITON_SETUP = "${cfg.setupFile}"; }
       // lib.optionalAttrs (cfg.stt != null) { LITON_STT = cfg.stt; }
       // cfg.extraEnvironment;

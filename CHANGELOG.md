@@ -17,6 +17,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings → Passkeys & devices (Devices before) lists your passkeys, each synced or for another name said so, to delete; makes a passkey on this device; adds a device of yours by a code and link; and signs out your devices, this browser too. A locked UI opens this page alone, from its Passkeys & devices button or the palette.
 - Each device signed in as you since this browser shows a notice for a day, "New sign-in: Phone. Not you?", to sign it out or say it was you: a poll's answer lists them as `sign_ins`.
 - people.v1's `RemoveMember` takes a person out of a room, as an operator or an admin of it, and `Rename` names a person, yourself, or anyone as an operator. Its topic `audit`, which operators alone follow, shows the latest 200 changes to people, passkeys, devices, invites, rooms and their members: who, from which device, when and what.
+- `services.liton.rpId` sets `LITON_RP_ID`, the box's name its passkeys are for, by default the first of `allowedHosts`. Choose it before inviting people: when it changes, set the new one, run `liton pair` on the box for the owner's passkey, then `liton people relink --all`.
 - The release archive and the Nix package ship `liton-verify` beside `liton-daemon`: a small program the daemon runs to check a passkey's signature (ES256 or Ed25519) when someone signs in.
 
 ### Changed
