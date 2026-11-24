@@ -9,6 +9,7 @@ All notable changes to liton are documented in this file. The format is based on
 - An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
 - A setup's room declares whether it is `open`: anyone whose role uses rooms joins an open room themselves, where a closed one's admins add its members. A room you can't join says why, such as that it is closed and you weren't invited.
 - The daemon keeps an audit of who changed what: people, devices, invites, rooms and their members.
+- The release archive and the Nix package ship `liton-verify` beside `liton-daemon`: a small program the daemon runs to check a passkey's signature (ES256 or Ed25519) when someone signs in.
 
 ### Changed
 
