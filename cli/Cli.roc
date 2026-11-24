@@ -45,8 +45,8 @@ Cli := [].{
 		\\prints the link that redeems it, good once for 7 days.
 		\\
 		\\`room create` asks the daemon, as an operator or admin, to make a room of
-		\\its relay called <name>, a channel unless --type says otherwise (people.v1),
-		\\and prints its id, which invites name. `room list` prints the relay's
+		\\the box called <name>, a channel unless --type says otherwise (people.v1),
+		\\and prints its id, which invites name. `room list` prints the box's
 		\\rooms, one per line: id, name, kind and whether it is private.
 
 	parse : List(Str) -> Command
@@ -97,14 +97,14 @@ Cli := [].{
 	}
 
 	## The lines `room list` prints of rooms.v1's `answer` to `ListRooms`: each
-	## of the relay's rooms' id, name, kind and, if so, `private`, by tabs.
+	## of the box's rooms' id, name, kind and, if so, `private`, by tabs.
 	room_lines : Str -> Try(List(Str), Str)
 	room_lines = |answer| {
 		decoded : Try(Protocol.Answer(Rooms.Response), _)
 		decoded = Json.parse(answer)
 		line = |room| Str.join_with([room.id, room.name, Str.inspect(room.kind)].concat(if (room.private) ["private"] else []), "\t")
 		match decoded {
-			Ok(Ok(Rooms(rooms))) => Ok(rooms.keep_if(|room| room.provider == "relay").map(line))
+			Ok(Ok(Rooms(rooms))) => Ok(rooms.keep_if(|room| room.provider == "rooms").map(line))
 			Ok(Err(error)) => Err(described(error))
 			_ => Err("the daemon's answer to listing rooms isn't one this liton reads")
 		}
@@ -222,7 +222,7 @@ expect [["room", "create"], ["room", "create", "--type", "stream", "x"], ["room"
 )
 expect Cli.created_room("{\"Ok\":{\"RoomCreated\":{\"room_id\":\"front-desk\"}}}") == Ok("front-desk") and Cli.created_room("{\"Ok\":{\"Rejected\":\"duplicate: the room front-desk exists\"}}") == Err("duplicate: the room front-desk exists")
 expect {
-	rooms = [{ ..Rooms.room({ id: "front-desk", provider: "relay", name: "Front desk", kind: Forum }), private: Bool.True }, Rooms.room({ id: "dispatch", provider: "relay", name: "Dispatch", kind: Channel }), Rooms.room({ id: "m1", provider: "mock", name: "Mock", kind: Channel })]
+	rooms = [{ ..Rooms.room({ id: "front-desk", provider: "rooms", name: "Front desk", kind: Forum }), private: Bool.True }, Rooms.room({ id: "dispatch", provider: "rooms", name: "Dispatch", kind: Channel }), Rooms.room({ id: "m1", provider: "mock", name: "Mock", kind: Channel })]
 	answer : Protocol.Answer(Rooms.Response)
 	answer = Ok(Rooms(rooms))
 	Cli.room_lines(Json.to_str(answer)) == Ok(["front-desk\tFront desk\tForum\tprivate", "dispatch\tDispatch\tChannel"])

@@ -972,7 +972,7 @@ Liton := [].{
 	## menu to change, switch off or on, or remove it, a removal asking to be
 	## confirmed; and Add host, opening the dialog.
 	## Settings' People (ui/PeopleDesk.roc): an invite to write, into a role
-	## and the rooms that sign, its link once made; the invites not used,
+	## and the box's rooms, its link once made; the invites not used,
 	## each to cancel; and the people holding a role, each to remove, once
 	## confirmed, as that revokes their devices.
 	people_section : State(Ctx, Model.State) -> Elem(Ctx)
@@ -998,7 +998,7 @@ Liton := [].{
 							],
 						),
 						Engine.each(
-							model.signal().map(|state| state.rooms.keep_if(|room| room.signing == Ok(Bool.True)).map(|room| room.id)),
+							model.signal().map(|state| state.rooms.keep_if(|room| room.provider == "rooms").map(|room| room.id)),
 							|room_id| room_id,
 							|row|
 								Html.div(
@@ -1057,17 +1057,17 @@ Liton := [].{
 					[
 						Engine.each(
 							desk.map(|shown| PeopleDesk.shown(shown).people),
-							|person| person.pubkey,
+							|person| person.id,
 							|row| {
-								removing = row.key().map2(model.signal().lift_row(), |pubkey, state| state.people.removing == pubkey)
+								removing = row.key().map2(model.signal().lift_row(), |id, state| state.people.removing == id)
 								Html.div(
 									"settings-row",
 									[
 										Html.div("device-text", [Html.span_s(row.field(|person| person.name), [Engine.class("settings-row-title")]), Html.p_s(row.field(|person| person.role), [Engine.class("help")])]),
 										Engine.when(
 											removing,
-											|| Html.button_s(row.field(|person| "Remove ${person.name} and revoke their devices"), [Engine.class("danger")], model.lift_row().update_by(row.key(), |state, pubkey| Model.ask_people(state, Remove({ pubkey: pubkey })))),
-											|| Html.button_s(row.field(|person| "Remove ${person.name}"), [], model.lift_row().update_by(row.key(), |state, pubkey| { ..state, people: { ..state.people, removing: pubkey } })),
+											|| Html.button_s(row.field(|person| "Remove ${person.name} and revoke their devices"), [Engine.class("danger")], model.lift_row().update_by(row.key(), |state, id| Model.ask_people(state, Remove({ person: id })))),
+											|| Html.button_s(row.field(|person| "Remove ${person.name}"), [], model.lift_row().update_by(row.key(), |state, id| { ..state, people: { ..state.people, removing: id } })),
 										),
 									],
 								)

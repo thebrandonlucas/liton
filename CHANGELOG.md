@@ -4,6 +4,18 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
+- A setup's room declares whether it is `open`: anyone whose role uses rooms joins an open room themselves, where a closed one's admins add its members. A room you can't join says why, such as that it is closed and you weren't invited.
+- The daemon keeps an audit of who changed what: people, devices, invites, rooms and their members.
+
+### Changed
+
+- **Breaking:** the box's rooms are kept in the daemon's own tables, offered as rooms.v1's provider `rooms` in place of `relay`, and its people are its own: each person holds a role, and every device belongs to one. The box's owner is a person the daemon makes at its first start, whose devices `liton pair` pairs; an invite makes a new person. Requests of rooms need no signed event, and attention is kept apart per person. Rooms and people of the relay are not carried over.
+- **Breaking:** people.v1 lists each person by their `id`, with whether they are the owner or an agent and how many devices they have, and `Remove` names a person: `{ "Remove": { "person": "…" } }`. A person removed keeps their name for their messages, and the owner can't be removed.
+- **Breaking:** a setup's rooms are closed unless declared `open`: `Setup.with_room` takes `open`, and a setup evaluated before reads its rooms as closed. The setup's owner key no longer names the owner; the daemon makes the owner an admin of each of the setup's rooms at start.
+
 ## [0.1.1] - 2026-11-23
 
 ### Added

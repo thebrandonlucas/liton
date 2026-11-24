@@ -117,6 +117,7 @@ import Auth
 import Nostr
 import NostrRooms
 import RelayRooms
+import RoomStore
 import Sha256
 
 ## What each request is answered from: the database, the hosts it answers,
@@ -125,9 +126,10 @@ import Sha256
 ## are written with ("" for the agent's smallest), the setup it offers, and
 ## whether answering may ask Paseo and the remotes when due (`Ask`), or
 ## only reads what the daemon keeps (`Cached`, a cached poll's); the device asking,
-## its key, and what its role lets it do (`Access`), of the setup's owner
-## and roles.
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], pubkey : Str, owner : Str, roles : List(Setup.Role), access : Access }
+## its key, the owner's id, the person asking (the owner where no device
+## need be), and what their role lets them do (`Access`), of the setup's
+## roles.
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], pubkey : Str, owner : Str, person : Str, roles : List(Setup.Role), access : Access }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -152,6 +154,7 @@ init! = || {
 	}
 	db = Sqlite.open!(Sqlite.default_config(Path.utf8(db_path))) ? |_| Exit(2)
 	create_tables!(db) ? |_| Exit(3)
+	owner = owner_made!(db) ? |_| Exit(3)
 	kept_private!(db_path) ? |_| Exit(2)
 	# A password Paseo refused may have been fixed since.
 	Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) ? |_| Exit(3)
@@ -192,16 +195,39 @@ init! = || {
 		}
 	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
 	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
-	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, pubkey: "", owner: setup.owner, roles: setup.roles, access: Operator }) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, pubkey: "", owner, person: owner, roles: setup.roles, access: Operator }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
 	remotes_cycle!(context) ? |_| Exit(3)
-	# The setup's rooms the relay hasn't, as on a box rebuilt from its setup.
-	for room in setup.rooms {
-		_ = room_created!(context, room) ? |_| Exit(3)
-	}
+	setup_rooms_kept!(context, setup.rooms) ? |_| Exit(3)
 	Ok({ config, context })
+}
+
+## The owner's id, the person called "Owner", an operator, made at the
+## first start; devices paired before people came are theirs.
+owner_made! : Sqlite.Db => Try(Str, _)
+owner_made! = |db| {
+	Sqlite.execute!({ db, query: "INSERT INTO persons (id, name, role, agent, owner, created_at) SELECT lower(hex(randomblob(8))), 'Owner', 'operator', 0, 1, :now WHERE NOT EXISTS (SELECT 1 FROM persons WHERE owner = 1);", params: { now: now_ms!() } })?
+	found : { id : Str }
+	found = Sqlite.query!({ db, query: "SELECT id FROM persons WHERE owner = 1;", params: {}, limits: Sqlite.default_query_limits })?
+	Sqlite.execute!({ db, query: "UPDATE devices SET person_id = :owner WHERE person_id = '';", params: { owner: found.id } })?
+	Ok(found.id)
+}
+
+## Keeps the setup's rooms: makes those the box hasn't, as on a box rebuilt
+## from its setup, keeps each open or closed as declared, and makes the
+## owner an admin of each.
+setup_rooms_kept! : Context, List(Setup.Room) => Try({}, _)
+setup_rooms_kept! = |context, declared| {
+	for room in declared {
+		_ = room_created!(context, room)?
+		Sqlite.execute!({ db: context.db, query: "UPDATE rooms SET open = :open WHERE id = :id;", params: { id: RoomStore.id_of_name(room.name), open: if (room.open) 1.I64 else 0 } })?
+		transaction = Sqlite.begin!(context.db, Immediate)?
+		member_added!(transaction, context, RoomStore.id_of_name(room.name), context.owner, Bool.True)?
+		transaction.commit!()?
+	}
+	Ok({})
 }
 
 ## The setup at `named`, or at liton.setup.json if `named` is "" and there
@@ -309,15 +335,15 @@ routed! = |started, request, headers| {
 		}
 	seen = if (path.starts_with("/liton/v1/") and path != "/liton/v1/pair" and path != "/liton/v1/invite") signed_in!(served, headers)? else Ok(Open)
 	asking = seen ?? Open
-	keys : List({ pubkey : Str })
-	keys = match asking {
-		Device(id) => Sqlite.query_many!({ db: served.db, query: "SELECT pubkey FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+	signing_in : List({ pubkey : Str, person_id : Str })
+	signing_in = match asking {
+		Device(id) => Sqlite.query_many!({ db: served.db, query: "SELECT pubkey, person_id FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
 		Open => []
 	}
-	pubkey = keys.first().map_ok(|key| key.pubkey) ?? ""
+	person = signing_in.first().map_ok(|row| row.person_id) ?? served.owner
 	held : List({ role : Str })
-	held = if (pubkey == "" or pubkey == served.owner) [] else Sqlite.query_many!({ db: served.db, query: "SELECT role FROM key_roles WHERE pubkey = :pubkey;", params: { pubkey }, limits: Sqlite.default_query_limits })?
-	context = { ..served, asking, pubkey, access: access_of(served.roles, held.first().map_ok(|row| row.role)) }
+	held = Sqlite.query_many!({ db: served.db, query: "SELECT role FROM persons WHERE id = :person;", params: { person }, limits: Sqlite.default_query_limits })?
+	context = { ..served, asking, pubkey: signing_in.first().map_ok(|row| row.pubkey) ?? "", person, access: access_of(served.roles, held.first().map_ok(|row| row.role) ?? "") }
 	match (seen, request.method(), path) {
 		(Err(Unpaired), _, _) =>
 			Ok(text(401, "this device isn't paired with the daemon: run `liton pair` on the daemon's machine, or open Settings → Devices on a paired one, for a pairing code").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
@@ -378,7 +404,8 @@ pairings_per_minute = 10
 ## reach; a client asking `token: true`, as the CLI or another daemon, in
 ## the answer too.
 paired! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-paired! = |{ db, .. }, request, headers| {
+paired! = |context, request, headers| {
+	db = context.db
 	if !attempt_allowed!(db)? {
 		return Ok(text(429, "too many pairing attempts; try again in a minute"))
 	}
@@ -392,7 +419,10 @@ paired! = |{ db, .. }, request, headers| {
 			if used.is_empty() {
 				return Ok(text(401, "that pairing code is wrong, used or expired"))
 			}
-			{ device, token } = device_made!(db, name ?? "", "")?
+			transaction = Sqlite.begin!(db, Immediate)?
+			{ device, token } = device_made!(transaction, name ?? "", context.owner)?
+			audited!(transaction, { ..context, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
+			transaction.commit!()?
 			body = if (wants_token == Ok(Bool.True)) Json.to_str({ device, token }) else Json.to_str({ device: device })
 			Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
 		}
@@ -414,21 +444,33 @@ attempt_allowed! = |db| {
 	Ok(Bool.True)
 }
 
-## A new device called `name`, bound to the Nostr key `pubkey` ("" for
-## none), and its token.
-device_made! : Sqlite.Db, Str, Str => Try({ device : { id : Str, name : Str }, token : Str }, _)
-device_made! = |db, name, pubkey| {
+## A new device of the person `person_id`, called `name`, and its token.
+device_made! : Sqlite.Transaction, Str, Str => Try({ device : { id : Str, name : Str }, token : Str }, _)
+device_made! = |transaction, name, person_id| {
 	now = now_ms!()
 	# SQLite's randomblob is its ChaCha20 generator, seeded from the system's.
 	random : { id : Str, secret : Str }
-	random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(32))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+	random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(32))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
 	trimmed = Str.from_utf8_lossy(name.trim().to_utf8().take_first(80))
 	device = { id: random.id, name: if (trimmed == "") "A device" else trimmed }
-	Sqlite.execute!({ db, query: "INSERT INTO devices (id, name, token_hash, created_at, seen_at, pubkey) VALUES (:id, :name, :token_hash, :now, :now, :pubkey);", params: { id: device.id, name: device.name, token_hash: Sha256.hex(random.secret.to_utf8()), now, pubkey } })?
+	transaction.execute!({ query: "INSERT INTO devices (id, name, token_hash, created_at, seen_at, person_id) VALUES (:id, :name, :token_hash, :now, :now, :person_id);", params: { id: device.id, name: device.name, token_hash: Sha256.hex(random.secret.to_utf8()), now, person_id } })?
 	Ok({ device, token: "${random.id}.${random.secret}" })
 }
 
-## The people whose keys hold a role, which the daemon offers itself.
+## Notes in the audit that the person and device asking in `context` did
+## `action` to `subject`, as the JSON `detail` tells.
+audited! : Sqlite.Transaction, Context, Str, Str, Str => Try({}, _)
+audited! = |transaction, context, action, subject, detail| {
+	device_id =
+		match context.asking {
+			Device(id) => id
+			Open => ""
+		}
+	transaction.execute!({ query: "INSERT INTO audit (at, person_id, device_id, action, subject, detail) VALUES (:at, :person_id, :device_id, :action, :subject, :detail);", params: { at: now_ms!(), person_id: context.person, device_id, action, subject, detail } })
+}
+
+## The people of the box and how they get in, which the daemon offers
+## itself.
 people_provider : Manifest.Provider
 people_provider = { id: "people", name: "People", capabilities: [Capability.people_v1] }
 
@@ -436,50 +478,34 @@ people_provider = { id: "people", name: "People", capabilities: [Capability.peop
 invite_ms : I64
 invite_ms = 604_800_000
 
-## The name the latest of `profiles` by `pubkey` gives (kind 0's
-## `display_name`, else its `name`), if any.
-profile_name : List(Nostr.Event), Str -> Try(Str, [Missing])
-profile_name = |profiles, pubkey| {
-	said : Try({ name : Try(Str, [Missing]), display_name : Try(Str, [Missing]) }, _)
-	said = Json.parse(profiles.keep_if(|profile| profile.pubkey == pubkey).last().map_ok(|profile| profile.content) ?? "")
-	match said {
-		Ok({ display_name: Ok(shown), .. }) if shown != "" => Ok(shown)
-		Ok({ name: Ok(shown), .. }) if shown != "" => Ok(shown)
-		_ => Err(Missing)
-	}
-}
-
-## The topic `people`: the owner, if the setup names one, and the keys
-## holding a role, each named by its latest profile, else by its invite,
-## the invites not used yet, and the roles the device asking may invite
-## into: an operator any, an admin any but `operator`.
+## The topic `people`: the owner first, then the people holding a role, by
+## name, the invites not used yet, and the roles the person asking may
+## invite into: an operator any, an admin any but `operator`.
 people! : Context => Try(People.Listing, _)
-people! = |{ db, owner, roles, access, .. }| {
-	held : List({ pubkey : Str, role : Str, name : Str })
-	held = Sqlite.query_many!({ db, query: "SELECT pubkey, role, name FROM key_roles ORDER BY name, pubkey;", params: {}, limits: Sqlite.default_query_limits })?
-	rows : List(NostrRow)
-	rows = Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE kind = 0 AND (pubkey = :owner OR pubkey IN (SELECT pubkey FROM key_roles)) ORDER BY seq;", params: { owner }, limits: Sqlite.default_query_limits })?
-	profiles = rows.map(nostr_event_of)
+people! = |{ db, roles, access, .. }| {
+	listed : List({ id : Str, name : Str, role : Str, agent : I64, owner : I64, devices : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, owner, (SELECT count(*) FROM devices WHERE devices.person_id = persons.id) AS devices FROM persons WHERE role != '' ORDER BY owner DESC, name, id;", params: {}, limits: Sqlite.default_query_limits })?
 	invites : List({ id : Str, name : Str, role : Str, rooms : Str, expires_at : I64 })
 	invites = Sqlite.query_many!({ db, query: "SELECT id, name, role, rooms, expires_at FROM invites WHERE expires_at > :now ORDER BY expires_at;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
-	owning = if (owner == "") [] else [{ pubkey: owner, name: profile_name(profiles, owner) ?? "Owner", role: "operator" }]
 	Ok({
-		people: owning.concat(held.map(|person| { ..person, name: profile_name(profiles, person.pubkey) ?? person.name })),
+		people: listed.map(|person| { id: person.id, name: person.name, role: person.role, agent: person.agent == 1, owner: person.owner == 1, devices: person.devices.to_u32_wrap() }),
 		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at) }),
 		roles: (if (access == Operator) ["operator"] else []).concat(roles.map(|role| role.name)),
 	})
 }
 
 ## Answers a people.v1 request. An invite is into a role the setup declares,
-## or `operator` by an operator alone, and into rooms the relay has. Taking
-## a key's role away takes it out of its rooms and revokes its devices, as
-## a key holding no role would be an operator's; the owner's stays, and
-## only an operator removes an operator.
+## or `operator` by an operator alone, and into rooms the box has. Removing
+## a person takes their devices and rooms away and leaves their name to
+## their messages; the owner stays, and only an operator removes an
+## operator. A room's members are added by an operator or an admin of it,
+## its admins by an operator alone.
 people_call! : Context, People.Request => Try(Protocol.Answer(People.Response), _)
 people_call! = |context, asked| {
 	db = context.db
 	refused = |why| Ok(Ok(Rejected(why)))
-	rooms = relay_rooms!({ ..context, asking: Open })?.map(|room| room.kept)
+	rooms : List({ id : Str })
+	rooms = Sqlite.query_many!({ db, query: "SELECT id FROM rooms WHERE archived = 0;", params: {}, limits: Sqlite.default_query_limits })?
 	match asked {
 		Invite({ name, role, rooms: named }) =>
 			if name.trim() == "" {
@@ -492,115 +518,147 @@ people_call! = |context, asked| {
 				match named.find_first(|room_id| !rooms.any(|room| room.id == room_id)) {
 					Ok(missing) => refused("there is no room ${missing}")
 					Err(_) => {
+						transaction = Sqlite.begin!(db, Immediate)?
 						random : { id : Str, secret : Str }
-						random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
-						Sqlite.execute!({ db, query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at) VALUES (:id, :secret_hash, :name, :role, :rooms, :expires_at);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: name.trim(), role, rooms: Json.to_str(named), expires_at: now_ms!() + invite_ms } })?
+						random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+						transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at) VALUES (:id, :secret_hash, :name, :role, :rooms, :expires_at);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: name.trim(), role, rooms: Json.to_str(named), expires_at: now_ms!() + invite_ms } })?
+						audited!(transaction, context, "invite.made", random.id, Json.to_str({ name: name.trim(), role, rooms: named }))?
+						transaction.commit!()?
 						Ok(Ok(Invited(random)))
 					}
 				}
 			}
-		Remove({ pubkey }) => {
-			held : List({ role : Str })
-			held = Sqlite.query_many!({ db, query: "SELECT role FROM key_roles WHERE pubkey = :pubkey;", params: { pubkey }, limits: Sqlite.default_query_limits })?
-			match held {
-				_ if pubkey == context.owner => refused("the owner's key keeps its role")
-				[{ role: "operator" }] if context.access != Operator => refused("only an operator removes an operator")
+		Remove({ person }) => {
+			found : List({ role : Str, owner : I64 })
+			found = Sqlite.query_many!({ db, query: "SELECT role, owner FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			match found {
+				[{ owner: 1, .. }] => refused("the owner can't be removed")
+				[{ role: "operator", .. }] if context.access != Operator => refused("only an operator removes an operator")
 				[_] => {
-					for room in rooms.keep_if(|room| room.members.contains(pubkey)) {
-						_ = relay_wrote!(context, 9001, room.id, [["p", pubkey]])?
-					}
-					Sqlite.execute!({ db, query: "DELETE FROM key_roles WHERE pubkey = :pubkey;", params: { pubkey } })?
-					Sqlite.execute!({ db, query: "DELETE FROM devices WHERE pubkey = :pubkey;", params: { pubkey } })?
+					transaction = Sqlite.begin!(db, Immediate)?
+					transaction.execute!({ query: "DELETE FROM devices WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "DELETE FROM members WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "UPDATE persons SET role = '' WHERE id = :person;", params: { person } })?
+					audited!(transaction, context, "person.removed", person, "{}")?
+					transaction.commit!()?
 					Ok(Ok(Accepted))
 				}
-				_ => refused("that key holds no role")
+				_ => refused("there is no person ${person}")
 			}
 		}
 		Cancel({ id }) => {
+			transaction = Sqlite.begin!(db, Immediate)?
 			cancelled : List({ id : Str })
-			cancelled = Sqlite.query_many!({ db, query: "DELETE FROM invites WHERE id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
-			if (cancelled.is_empty()) refused("there is no invite ${id}") else Ok(Ok(Accepted))
+			cancelled = transaction.query_many!({ query: "DELETE FROM invites WHERE id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
+			if cancelled.is_empty() {
+				return refused("there is no invite ${id}")
+			}
+			audited!(transaction, context, "invite.cancelled", id, "{}")?
+			transaction.commit!()?
+			Ok(Ok(Accepted))
 		}
 		CreateRoom(room) =>
-			match room_created!(context, room)? {
+			match room_created!(context, { name: room.name, about: room.about, kind: room.kind, private: room.private, open: Bool.False })? {
 				Ok(room_id) => Ok(Ok(RoomCreated({ room_id: room_id })))
 				Err(why) => refused(why)
 			}
-	}
-}
-
-## Creates the room `room` on the relay, by its own key as an invite's
-## members are added, its id its name's (`NostrRooms.id_of_name`), and
-## makes the setup's owner and the key asking, if any, its admins: a box's
-## operator may have no key to sign a 9007 with.
-room_created! : Context, { name : Str, about : Str, kind : Rooms.Kind, private : Bool } => Try(Try(Str, Str), _)
-room_created! = |context, { name, about, kind, private }| {
-	room_id = NostrRooms.id_of_name(name)
-	if room_id == "" {
-		return Ok(Err("a room's name needs a letter or digit"))
-	}
-	described = if (about.trim() == "") [] else [["about", about.trim()]]
-	match relay_wrote!(context, 9007, room_id, [["name", name.trim()], ["t", RelayRooms.kind_tag(kind)], [if (private) "private" else "public"]].concat(described))? {
-		Err(why) => Ok(Err(why))
-		Ok(_) => {
-			admins = (if (context.pubkey == context.owner) [context.owner] else [context.owner, context.pubkey]).drop_if(|key| key == "")
-			if !admins.is_empty() {
-				_ = relay_wrote!(context, 9000, room_id, admins.map(|key| ["p", key, "admin"]))?
+		AddMember({ room, person, admin }) => {
+			admins : List({ admin : I64 })
+			admins = Sqlite.query_many!({ db, query: "SELECT admin FROM members WHERE room_id = :room AND person_id = :person AND admin = 1;", params: { room, person: context.person }, limits: Sqlite.default_query_limits })?
+			known : List({ id : Str })
+			known = Sqlite.query_many!({ db, query: "SELECT id FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			if !rooms.any(|kept| kept.id == room) {
+				refused("there is no room ${room}")
+			} else if known.is_empty() {
+				refused("there is no person ${person}")
+			} else if admin and context.access != Operator {
+				refused("only an operator makes a room's admins")
+			} else if context.access != Operator and admins.is_empty() {
+				refused("only an operator or an admin of the room adds its members")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				member_added!(transaction, context, room, person, admin)?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
 			}
-			Ok(Ok(room_id))
 		}
 	}
 }
 
-## Takes into the relay an event of its own, by its key and unsigned until
-## it can sign: what the daemon decides itself, such as the members an
-## invite adds (9000) or a removal takes out (9001) of the room `room`.
-relay_wrote! : Context, U32, Str, List(List(Str)) => Try(Try({ duplicate : Bool }, Str), _)
-relay_wrote! = |context, kind, room, tags| {
-	unsigned = { id: "", pubkey: NostrRooms.relay_pubkey, created_at: (now_ms!() // 1000).to_u64_wrap(), kind, tags: [["h", room]].concat(tags), content: "", sig: Str.repeat("0", 128) }
-	nostr_taken!({ ..context, asking: Open }, { ..unsigned, id: Nostr.id_of(unsigned) })
+## Makes `person` a member of the room `room_id`, its admin if `admin`, or
+## no longer if not, noted in the audit if that changes anything.
+member_added! : Sqlite.Transaction, Context, Str, Str, Bool => Try({}, _)
+member_added! = |transaction, context, room_id, person, admin| {
+	changed : List({ room_id : Str })
+	changed = transaction.query_many!({ query: "INSERT INTO members (room_id, person_id, admin, added_by, added_at) VALUES (:room_id, :person, :admin, :added_by, :now) ON CONFLICT (room_id, person_id) DO UPDATE SET admin = excluded.admin WHERE members.admin != excluded.admin RETURNING room_id;", params: { room_id, person, admin: if (admin) 1.I64 else 0, added_by: context.person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	if changed.is_empty() {
+		return Ok({})
+	}
+	audited!(transaction, context, "member.added", room_id, Json.to_str({ person, admin }))
+}
+
+## Makes the room `room`, its id its name's (`RoomStore.id_of_name`), and
+## the owner and the person asking its admins, or says why not: a room of
+## that id was made already, even if archived since. Joined freely if `open`.
+room_created! : Context, { name : Str, about : Str, kind : Rooms.Kind, private : Bool, open : Bool } => Try(Try(Str, Str), _)
+room_created! = |context, { name, about, kind, private, open }| {
+	room_id = RoomStore.id_of_name(name)
+	if room_id == "" {
+		return Ok(Err("a room's name needs a letter or digit"))
+	}
+	transaction = Sqlite.begin!(context.db, Immediate)?
+	made : List({ id : Str })
+	made = transaction.query_many!({ query: "INSERT INTO rooms (id, name, about, kind, private, open, created_by, created_at) VALUES (:id, :name, :about, :kind, :private, :open, :created_by, :now) ON CONFLICT (id) DO NOTHING RETURNING id;", params: { id: room_id, name: name.trim(), about: about.trim(), kind: RoomStore.kind_text(kind), private: if (private) 1.I64 else 0, open: if (open) 1.I64 else 0, created_by: context.person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	if made.is_empty() {
+		return Ok(Err("there is a room ${room_id} already"))
+	}
+	audited!(transaction, context, "room.made", room_id, Json.to_str({ name: name.trim(), kind: RoomStore.kind_text(kind), private, open }))?
+	for admin in if (context.person == context.owner) [context.owner] else [context.owner, context.person] {
+		member_added!(transaction, context, room_id, admin, Bool.True)?
+	}
+	transaction.commit!()?
+	Ok(Ok(room_id))
 }
 
 ## Answers /liton/v1/invite: an invite's secret, used once within its 7
-## days, with the Nostr key this browser made, for a token of a new device
-## bound to that key, which then holds the invite's role and is a member of
-## its rooms. As pairing does, a browser gets the token as a cookie, and a
-## client asking `token: true` in the answer too, with the invite's name
-## and role. A key bound to a device or holding a role already is refused.
+## days, for a token of a new device of a new person, named as the invite
+## and holding its role, a member of its rooms. As pairing does, a browser
+## gets the token as a cookie, and a client asking `token: true` in the
+## answer too, with the invite's name and role.
 invited! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
 invited! = |context, request, headers| {
 	db = context.db
 	if !attempt_allowed!(db)? {
 		return Ok(text(429, "too many pairing attempts; try again in a minute"))
 	}
-	given : Try({ secret : Str, pubkey : Str, name : Try(Str, [Missing]), token : Try(Bool, [Missing]) }, _)
+	given : Try({ secret : Str, name : Try(Str, [Missing]), token : Try(Bool, [Missing]) }, _)
 	given = Json.parse(read_json!(request)?)
 	match given {
-		Ok({ secret, pubkey, name, token: wants_token }) if Nostr.hex(pubkey, 64) => {
-			bound : List({ id : Str })
-			bound = Sqlite.query_many!({ db, query: "SELECT id FROM devices WHERE pubkey = :pubkey UNION SELECT pubkey FROM key_roles WHERE pubkey = :pubkey;", params: { pubkey }, limits: Sqlite.default_query_limits })?
-			if !bound.is_empty() or pubkey == context.owner {
-				return Ok(text(409, "that key is another device's or holds a role already"))
-			}
-			used : List({ name : Str, role : Str, rooms : Str })
-			used = Sqlite.query_many!({ db, query: "DELETE FROM invites WHERE secret_hash = :secret_hash AND expires_at > :now RETURNING name, role, rooms;", params: { secret_hash: Sha256.hex(secret.to_utf8()), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+		Ok({ secret, name, token: wants_token }) => {
+			transaction = Sqlite.begin!(db, Immediate)?
+			used : List({ id : Str, name : Str, role : Str, rooms : Str })
+			used = transaction.query_many!({ query: "DELETE FROM invites WHERE secret_hash = :secret_hash AND expires_at > :now RETURNING id, name, role, rooms;", params: { secret_hash: Sha256.hex(secret.to_utf8()), now: now_ms!() }, limits: Sqlite.default_query_limits })?
 			match used {
 				[invite] => {
-					{ device, token } = device_made!(db, name ?? invite.name, pubkey)?
-					Sqlite.execute!({ db, query: "INSERT INTO key_roles (pubkey, role, name) VALUES (:pubkey, :role, :name);", params: { pubkey, role: invite.role, name: invite.name } })?
+					made : { id : Str }
+					made = transaction.query!({ query: "INSERT INTO persons (id, name, role, created_at) VALUES (lower(hex(randomblob(8))), :name, :role, :now) RETURNING id;", params: { name: invite.name, role: invite.role, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+					{ device, token } = device_made!(transaction, name ?? invite.name, made.id)?
+					joining = { ..context, person: made.id, asking: Device(device.id) }
+					audited!(transaction, joining, "invite.redeemed", invite.id, Json.to_str({ person: made.id, name: invite.name, role: invite.role }))?
 					rooms : List(Str)
 					rooms = Json.parse(invite.rooms) ?? []
 					for room in rooms {
-						_ = relay_wrote!(context, 9000, room, [["p", pubkey]])?
+						member_added!(transaction, joining, room, made.id, Bool.False)?
 					}
-					person = { name: invite.name, role: invite.role }
+					transaction.commit!()?
+					person = { id: made.id, name: invite.name, role: invite.role }
 					body = if (wants_token == Ok(Bool.True)) Json.to_str({ device, person, token }) else Json.to_str({ device, person })
 					Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
 				}
 				_ => Ok(text(401, "that invite is wrong, used or expired"))
 			}
 		}
-		_ => Ok(text(400, "an invite is redeemed with {\"secret\": \"…\", \"pubkey\": \"this browser's key, 64 lowercase hex digits\"}"))
+		_ => Ok(text(400, "an invite is redeemed with {\"secret\": \"…\"}"))
 	}
 }
 
@@ -835,13 +893,15 @@ manifest! = |context| {
 ## that holds no role, or what the role it holds declares.
 Access : [Operator, Holding(Setup.Role)]
 
-## The access of a key holding the role `held`, if any, among `roles`: one
-## the setup no longer declares lets it do nothing.
-access_of : List(Setup.Role), Try(Str, _) -> Access
+## The access of a person holding the role `held` among `roles`: one the
+## setup no longer declares, or none, as a person removed holds, lets them
+## do nothing.
+access_of : List(Setup.Role), Str -> Access
 access_of = |roles, held|
-	match held {
-		Ok(name) if name != "operator" => Holding(roles.find_first(|role| role.name == name) ?? { name, capabilities: [], presets: [], locked: Bool.True })
-		_ => Operator
+	if held == "operator" {
+		Operator
+	} else {
+		Holding(roles.find_first(|role| role.name == held) ?? { name: held, capabilities: [], presets: [], locked: Bool.True })
 	}
 
 ## Whether `access` lets a device call and poll `capability`.
@@ -911,7 +971,7 @@ offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
 	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
-	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(relay_provider).append(hosts_provider).append(people_provider)
+	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(rooms_provider).append(hosts_provider).append(people_provider)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -983,11 +1043,9 @@ call! = |context, request| {
 			Ok(("rooms.v1", _)) => {
 				decoded : Try(Protocol.Call(Rooms.Request), _)
 				decoded = Json.parse(body)
-				signing : Try({ signed : Nostr.Event }, _)
-				signing = Json.parse(body)
 				answer : Protocol.Answer(Rooms.Response)
 				answer = match decoded {
-					Ok({ request: asked, .. }) => rooms_call!(context, asked, signing.map_ok(|{ signed }| signed).map_err(|_| Missing))?
+					Ok({ request: asked, .. }) => rooms_call!(context, asked)?
 					Err(_) => Err(unanswered("rooms.v1"))
 				}
 				Json.to_str(answer)
@@ -2197,11 +2255,10 @@ transformer_call! = |context, manifest, part, body| {
 	answered!()
 }
 
-## What a transformer's state is stored under: its id, and a device bound to
-## a key's, so each person's settles, snoozes and marks seen are their own.
-## Devices bound to none, as the operator's paired ones are, share one.
+## What a transformer's state is stored under: its id and the person's
+## asking, so each person's settles, snoozes and marks seen are their own.
 state_key : Context, Transformer.Part -> Str
-state_key = |{ pubkey, .. }, part| if (pubkey == "") part.id else "${part.id}/${pubkey}"
+state_key = |{ person, .. }, part| "${part.id}/${person}"
 
 ## A transformer's state as last stored, "" before.
 transformer_state! : Sqlite.Db, Str => Try(Str, _)
@@ -2337,11 +2394,33 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS key_roles (pubkey TEXT PRIMARY KEY, role TEXT NOT NULL, name TEXT NOT NULL DEFAULT '');", params: {} })?
 	# The invites not used yet, each kept by its secret's SHA-256.
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL);", params: {} })?
-	# Devices paired before the relay came have no Nostr key.
-	keyed : List({ name : Str })
-	keyed = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('devices') WHERE name = 'pubkey';", params: {}, limits: Sqlite.default_query_limits })?
-	if keyed.is_empty() {
-		Sqlite.execute!({ db, query: "ALTER TABLE devices ADD COLUMN pubkey TEXT NOT NULL DEFAULT '';", params: {} })?
+	# The people of the box, humans and agents, its owner one of them: what
+	# they can do is their role's, `operator` or one the setup declares, and
+	# a person removed keeps a row with no role, which old messages name.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, agent INTEGER NOT NULL DEFAULT 0, owner INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE UNIQUE INDEX IF NOT EXISTS persons_one_owner ON persons (owner) WHERE owner = 1;", params: {} })?
+	# The rooms, their members, and what is said in them: a room's id is its
+	# name's, a reply has its thread's root and its parent, and each change
+	# a room's messages topic shows is an entry, with the thread it is in.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, about TEXT NOT NULL, kind TEXT NOT NULL, private INTEGER NOT NULL, open INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS members (room_id TEXT NOT NULL, person_id TEXT NOT NULL, admin INTEGER NOT NULL DEFAULT 0, added_by TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (room_id, person_id));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, root TEXT NOT NULL DEFAULT '', parent TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, edited_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS messages_by_root ON messages (room_id, root);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mentions (message_id TEXT NOT NULL, person_id TEXT NOT NULL, PRIMARY KEY (message_id, person_id));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reactions (message_id TEXT NOT NULL, person_id TEXT NOT NULL, emoji TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (message_id, person_id, emoji));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, thread TEXT NOT NULL, event TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS room_entries_by_thread ON room_entries (room_id, thread, seq);", params: {} })?
+	# Who changed the people, their devices, the invites, the rooms and their
+	# members, and how, the latest last.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, person_id TEXT NOT NULL, device_id TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL, detail TEXT NOT NULL);", params: {} })?
+	# Devices paired before the relay came have no Nostr key, and those
+	# paired before people came are the owner's (`owner_made!`).
+	for column in ["pubkey", "person_id"] {
+		existing : List({ name : Str })
+		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('devices') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
+		if existing.is_empty() {
+			Sqlite.execute!({ db, query: "ALTER TABLE devices ADD COLUMN ${column} TEXT NOT NULL DEFAULT '';", params: {} })?
+		}
 	}
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS hosts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', online_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
@@ -3447,10 +3526,6 @@ kept! = |db, remote, update| {
 hosts_provider : Manifest.Provider
 hosts_provider = { id: "hosts", name: "Hosts", capabilities: [Capability.hosts_v1] }
 
-## The daemon's relay, whose rooms it offers itself.
-relay_provider : Manifest.Provider
-relay_provider = { id: RelayRooms.provider, name: "Relay", capabilities: [Capability.rooms_v1] }
-
 ## The context with the hosts enabled now: the liton hosts as its remotes,
 ## and the Paseo host `paseo` as its Paseo, so a host added, changed or
 ## switched off counts from the next request.
@@ -3853,41 +3928,159 @@ relay_rooms! = |{ db, asking, pubkey, access, .. }| {
 	)
 }
 
-## Answers a rooms.v1 request of a relay room by the event `signed` beside
-## it, which must be the request's, of its kind in its room: a message (9),
-## a reaction (7), a reaction taken back (5, marked `["k", "7"]`), or a join
-## (9021) or leave (9022), signed by the device's key.
-relay_call! : Context, Str, Rooms.Request, Try(Nostr.Event, [Missing]) => Try(Protocol.Answer(Rooms.Response), _)
-relay_call! = |context, room_id, asked, signed| {
-	kind =
-		match asked {
-			Send(_) => 9
-			React(_) => 7
-			Unreact(_) => 5
-			Join(_) => 9021
-			Leave(_) => 9022
-			ListRooms => 0
-		}
-	match signed {
-		Err(Missing) => Ok(Ok(Rejected("a relay room's request carries the event it makes as `signed`, signed by this device's key")))
-		Ok(event) if event.kind != kind or Nostr.room(event) != room_id => Ok(Ok(Rejected("the event signed isn't the request's: one of kind ${kind.to_str()} in ${room_id}")))
-		Ok(event) =>
-			match nostr_taken!(context, event)? {
-				Err(why) => Ok(Ok(Rejected(why)))
-				Ok(_) => Ok(Ok(if (kind == 9) Sent({ message_id: event.id }) else Accepted))
+## The rooms the daemon keeps in its tables (`RoomStore`).
+rooms_provider : Manifest.Provider
+rooms_provider = { id: RoomStore.provider, name: "Rooms", capabilities: [Capability.rooms_v1] }
+
+## A room's row.
+RoomRow : { id : Str, name : Str, about : Str, kind : Str, private : I64, open : I64, archived : I64 }
+
+## A message's row.
+MessageRow : { id : Str, room_id : Str, author : Str, text : Str, root : Str, parent : Str, created_at : I64 }
+
+## The room a row keeps.
+kept_of : RoomRow -> RoomStore.Kept
+kept_of = |row| { id: row.id, name: row.name, about: row.about, kind: row.kind, private: row.private == 1, open: row.open == 1, archived: row.archived == 1 }
+
+## The room of the id `room_id`, if the daemon keeps one.
+kept_room! : Sqlite.Db, Str => Try(Try(RoomStore.Kept, [NoRoom]), _)
+kept_room! = |db, room_id| {
+	found : List(RoomRow)
+	found = Sqlite.query_many!({ db, query: "SELECT id, name, about, kind, private, open, archived FROM rooms WHERE id = :room_id;", params: { room_id }, limits: Sqlite.default_query_limits })?
+	Ok(found.first().map_ok(kept_of).map_err(|_| NoRoom))
+}
+
+## The rooms the person asking sees, as they see them: those not archived
+## that are public or that they are a member of, or every one to an
+## operator.
+kept_rooms! : Context => Try(List(Rooms.Room), _)
+kept_rooms! = |{ db, person, access, .. }| {
+	rows : List({ id : Str, name : Str, about : Str, kind : Str, private : I64, open : I64, archived : I64, joined : I64, updated : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, name, about, kind, private, open, archived, EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND person_id = :person) AS joined, coalesce((SELECT max(created_at) FROM messages WHERE messages.room_id = rooms.id), 0) AS updated FROM rooms WHERE archived = 0 AND (private = 0 OR :operator = 1 OR EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND person_id = :person)) ORDER BY created_at, id;", params: { person, operator: if (access == Operator) 1.I64 else 0 }, limits: Sqlite.default_query_limits })?
+	Ok(rows.map(|row| RoomStore.room(kept_of({ id: row.id, name: row.name, about: row.about, kind: row.kind, private: row.private, open: row.open, archived: row.archived }), { joined: row.joined == 1, updated: if (row.updated == 0) Err(Missing) else Ok(Chat.timestamp(row.updated)), me: person })))
+}
+
+## What the person asking is of the room `room_id`: an operator of the box,
+## a member, an admin.
+asker! : Context, Str => Try(RoomStore.Asker, _)
+asker! = |context, room_id| {
+	membership : List({ admin : I64 })
+	membership = Sqlite.query_many!({ db: context.db, query: "SELECT admin FROM members WHERE room_id = :room_id AND person_id = :person;", params: { room_id, person: context.person }, limits: Sqlite.default_query_limits })?
+	Ok({ operator: context.access == Operator, member: !membership.is_empty(), admin: membership.any(|row| row.admin == 1) })
+}
+
+## Adds to a room's messages topic the entry of `event`, in the thread
+## `RoomStore.thread_of` says, of a message in the thread of `root`.
+room_entry_added! : Sqlite.Transaction, Str, Rooms.Event, Str => Try({}, _)
+room_entry_added! = |transaction, room_id, event, root|
+	transaction.execute!({ query: "INSERT INTO room_entries (room_id, thread, event) VALUES (:room_id, :thread, :event);", params: { room_id, thread: RoomStore.thread_of(event, root), event: Json.to_str(event) } })
+
+## Answers a rooms.v1 request of the room `room`, one the daemon keeps, by
+## the person asking, unless `RoomStore.refusal` refuses it. Each change and
+## its entry are written together.
+kept_call! : Context, RoomStore.Kept, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
+kept_call! = |context, room, asked| {
+	db = context.db
+	person = context.person
+	refused = |why| Ok(Ok(Rejected(why)))
+	match RoomStore.refusal(Ok(room), room.id, asker!(context, room.id)?, asked) {
+		Err(why) => return refused(why)
+		Ok({}) => {}
+	}
+	match asked {
+		Send({ text: said, place, mentions, .. }) => {
+			{ root, parent } =
+				match place {
+					TopLevel => { root: "", parent: "" }
+					Reply(reply) => reply
+				}
+			roots : List({ id : Str })
+			roots = Sqlite.query_many!({ db, query: "SELECT id FROM messages WHERE room_id = :room_id AND ((id = :root AND root = '') OR (id = :parent AND (id = :root OR root = :root)));", params: { room_id: room.id, root, parent }, limits: Sqlite.default_query_limits })?
+			known : List({ id : Str })
+			known = Sqlite.query_many!({ db, query: "SELECT id FROM persons WHERE id IN (SELECT value FROM json_each(:mentions));", params: { mentions: Json.to_str(mentions) }, limits: Sqlite.default_query_limits })?
+			mentioned = mentions.fold([], |so_far, id| if (so_far.contains(id) or !known.any(|row| row.id == id)) so_far else so_far.append(id))
+			if said.trim() == "" {
+				refused("a message says something")
+			} else if root != "" and roots.len() != (if (root == parent) 1 else 2) {
+				refused("there is no thread ${root} to reply to ${parent} in")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				now = now_ms!()
+				made : { id : Str }
+				made = transaction.query!({ query: "INSERT INTO messages (id, room_id, author, text, root, parent, created_at) VALUES (lower(hex(randomblob(8))), :room_id, :author, :text, :root, :parent, :now) RETURNING id;", params: { room_id: room.id, author: person, text: said, root, parent, now }, limits: Sqlite.default_query_limits })?
+				for mention in mentioned {
+					transaction.execute!({ query: "INSERT INTO mentions (message_id, person_id) VALUES (:message_id, :person_id);", params: { message_id: made.id, person_id: mention } })?
+				}
+				room_entry_added!(transaction, room.id, Posted(RoomStore.message({ id: made.id, room_id: room.id, author: person, text: said, root, parent, created_at: now }, mentioned)), root)?
+				if root != "" {
+					replies : List(MessageRow)
+					replies = transaction.query_many!({ query: "SELECT id, room_id, author, text, root, parent, created_at FROM messages WHERE room_id = :room_id AND root = :root ORDER BY created_at, rowid;", params: { room_id: room.id, root }, limits: Sqlite.default_query_limits })?
+					room_entry_added!(transaction, room.id, Threaded(Rooms.thread(replies.map(|row| RoomStore.message(row, [])), root)), "")?
+				}
+				transaction.commit!()?
+				Ok(Ok(Sent({ message_id: made.id })))
 			}
+		}
+		React({ message_id, emoji, .. }) | Unreact({ message_id, emoji, .. }) => {
+			added =
+				match asked {
+					React(_) => Bool.True
+					_ => Bool.False
+				}
+			target : List({ root : Str })
+			target = Sqlite.query_many!({ db, query: "SELECT root FROM messages WHERE room_id = :room_id AND id = :message_id AND deleted_at = 0;", params: { room_id: room.id, message_id }, limits: Sqlite.default_query_limits })?
+			match target {
+				[{ root }] if emoji != "" => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					changed : List({ emoji : Str })
+					changed =
+						if added {
+							transaction.query_many!({ query: "INSERT INTO reactions (message_id, person_id, emoji, created_at) VALUES (:message_id, :person, :emoji, :now) ON CONFLICT DO NOTHING RETURNING emoji;", params: { message_id, person, emoji, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+						} else {
+							transaction.query_many!({ query: "DELETE FROM reactions WHERE message_id = :message_id AND person_id = :person AND emoji = :emoji RETURNING emoji;", params: { message_id, person, emoji }, limits: Sqlite.default_query_limits })?
+						}
+					if !changed.is_empty() {
+						room_entry_added!(transaction, room.id, Reacted({ id: message_id, emoji, by: person, added }), root)?
+					}
+					transaction.commit!()?
+					Ok(Ok(Accepted))
+				}
+				_ => refused("there is no message ${message_id} to react to")
+			}
+		}
+		Join(_) | Leave(_) => {
+			transaction = Sqlite.begin!(db, Immediate)?
+			changed : List({ room_id : Str })
+			changed =
+				match asked {
+					Join(_) => transaction.query_many!({ query: "INSERT INTO members (room_id, person_id, admin, added_by, added_at) VALUES (:room_id, :person, 0, :person, :now) ON CONFLICT DO NOTHING RETURNING room_id;", params: { room_id: room.id, person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+					_ => transaction.query_many!({ query: "DELETE FROM members WHERE room_id = :room_id AND person_id = :person RETURNING room_id;", params: { room_id: room.id, person }, limits: Sqlite.default_query_limits })?
+				}
+			if !changed.is_empty() {
+				audited!(transaction, context, if (asked == Join({ room_id: room.id })) "member.joined" else "member.left", room.id, "{}")?
+			}
+			transaction.commit!()?
+			Ok(Ok(Accepted))
+		}
+		ListRooms => Ok(Ok(Rooms(kept_rooms!(context)?)))
 	}
 }
 
-## A relay room's topic: its members, or the entries of its top level ("")
+## A topic of the room `room`, one the daemon keeps, unless the person
+## asking can't see it: its members, or the entries of its top level ("")
 ## or of a thread after the cursor.
-relay_update! : Context, Protocol.Wanted, NostrRooms.Room, Protocol.Subject => Try(Protocol.Update, _)
-relay_update! = |{ db, .. }, wanted, kept, subject|
+kept_update! : Context, Protocol.Wanted, RoomStore.Kept, Protocol.Subject => Try(Protocol.Update, _)
+kept_update! = |context, wanted, room, subject| {
+	db = context.db
+	match RoomStore.refusal(Ok(room), room.id, asker!(context, room.id)?, ListRooms) {
+		Err(why) => return Ok(Protocol.failed(wanted, { code: NotFound, message: why }))
+		Ok({}) => {}
+	}
 	match subject {
 		RoomMembers(_) => {
-			profiles : List(NostrRow)
-			profiles = Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE kind = 0 AND pubkey IN (SELECT value FROM json_each(:members)) ORDER BY seq;", params: { members: Json.to_str(kept.members) }, limits: Sqlite.default_query_limits })?
-			Ok(Protocol.snapshot(wanted, Members(RelayRooms.members(kept, profiles.map(nostr_event_of)))))
+			rows : List({ id : Str, name : Str, agent : I64, owner : I64, admin : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT persons.id, persons.name, persons.agent, persons.owner, members.admin FROM members JOIN persons ON persons.id = members.person_id WHERE members.room_id = :room_id ORDER BY members.added_at, persons.name;", params: { room_id: room.id }, limits: Sqlite.default_query_limits })?
+			Ok(Protocol.snapshot(wanted, Members(rows.map(|row| RoomStore.member({ id: row.id, name: row.name, agent: row.agent == 1, owner: row.owner == 1, admin: row.admin == 1 })))))
 		}
 		_ =>
 			match Protocol.sequence(wanted) {
@@ -3898,14 +4091,24 @@ relay_update! = |{ db, .. }, wanted, kept, subject|
 							RoomThread({ root, .. }) => root
 							_ => ""
 						}
-					rows : List(NostrRow)
-					rows = Sqlite.query_many!({ db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE room = :room AND kind IN (9, 7, 5, 9005, 40003) ORDER BY seq;", params: { room: kept.id }, limits: Sqlite.default_query_limits })?
-					log = RelayRooms.entries(rows.map(|row| { seq: row.seq.to_u64_wrap(), event: nostr_event_of(row) }))
-					posted = Rooms.messages(log)
-					Ok(Protocol.room_appended(wanted, log.keep_if(|entry| entry.sequence > after and Rooms.place_of(posted, entry.event) == thread)))
+					rows : List({ seq : I64, event : Str })
+					rows = Sqlite.query_many!({ db, query: "SELECT seq, event FROM room_entries WHERE room_id = :room_id AND thread = :thread AND seq > :after ORDER BY seq;", params: { room_id: room.id, thread, after: after.to_i64_wrap() }, limits: Sqlite.default_query_limits })?
+					Ok(Protocol.room_appended(wanted, room_entries_of(rows)))
 				}
 			}
 	}
+}
+
+## The entries of rows of `room_entries`.
+room_entries_of : List({ seq : I64, event : Str }) -> List(Rooms.Entry)
+room_entries_of = |rows|
+	rows.keep_oks(
+		|row| {
+			event : Try(Rooms.Event, _)
+			event = Json.parse(row.event)
+			event.map_ok(|shown| { sequence: row.seq.to_u64_wrap(), event: shown })
+		},
+	)
 
 ## The room a rooms.v1 request is of, "" for none.
 asked_room : Rooms.Request -> Str
@@ -3917,15 +4120,15 @@ asked_room = |asked|
 		Join({ room_id }) | Leave({ room_id }) => room_id
 	}
 
-## Answers a rooms.v1 request, of a relay room (`relay_call!`, by the event
-## `signed` beside it) or of the mock's rooms.
-rooms_call! : Context, Rooms.Request, Try(Nostr.Event, [Missing]) => Try(Protocol.Answer(Rooms.Response), _)
-rooms_call! = |context, asked, signed| {
+## Answers a rooms.v1 request, of a room the daemon keeps (`kept_call!`)
+## or of the mock's.
+rooms_call! : Context, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
+rooms_call! = |context, asked| {
 	db = context.db
-	relay = relay_rooms!(context)?
 	rooms = if (context.mock.rooms) mock_rooms!(db)? else []
-	if relay.any(|room| room.kept.id == asked_room(asked)) {
-		return relay_call!(context, asked_room(asked), asked, signed)
+	match kept_room!(db, asked_room(asked))? {
+		Ok(room) => return kept_call!(context, room, asked)
+		Err(NoRoom) => {}
 	}
 	room_of = |room_id| rooms.find_first(|room| room.id == room_id).map_err(|_| { code: NotFound, message: "no room ${room_id}" })
 	# A room's next events follow its last, even one still to come.
@@ -3938,7 +4141,7 @@ rooms_call! = |context, asked, signed| {
 	joined! = |room_id, joined| Sqlite.execute!({ db, query: "INSERT INTO room_joins (room_id, joined) VALUES (:room_id, :joined) ON CONFLICT (room_id) DO UPDATE SET joined = excluded.joined;", params: { room_id, joined: if (joined) 1.I64 else 0 } })
 	refused = |why| Ok(Ok(Rejected(why)))
 	match asked {
-		ListRooms => Ok(Ok(Rooms(relay.map(|room| room.shown).concat(rooms))))
+		ListRooms => Ok(Ok(Rooms(kept_rooms!(context)?.concat(rooms))))
 		Send(sending) =>
 			match room_of(sending.room_id) {
 				Err(error) => Ok(Err(error))
@@ -3979,21 +4182,21 @@ rooms_call! = |context, asked, signed| {
 }
 
 ## A rooms.v1 topic: the rooms, a room's members, or the entries of a
-## room's top level or of a thread after the cursor, of the relay's rooms
-## (`relay_update!`) and the mock's; or the inbox, the relay's messages
-## after the cursor that mention the device's key, in the rooms it sees.
+## room's top level or of a thread after the cursor, of the rooms the daemon
+## keeps (`kept_update!`) and the mock's; or the inbox, the messages posted
+## after the cursor that mention the person asking, by someone else, in the
+## rooms they are a member of.
 rooms_update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
 rooms_update! = |context, wanted, subject| {
-	relay = relay_rooms!(context)?
 	rooms = if (context.mock.rooms) mock_rooms!(context.db)? else []
 	asked = match subject {
 		RoomMembers(room_id) | RoomMessages(room_id) => room_id
 		RoomThread({ room_id, .. }) => room_id
 		_ => ""
 	}
-	match relay.find_first(|room| room.kept.id == asked) {
-		Ok(room) => return relay_update!(context, wanted, room.kept, subject)
-		Err(_) => {}
+	match kept_room!(context.db, asked)? {
+		Ok(room) => return kept_update!(context, wanted, room, subject)
+		Err(NoRoom) => {}
 	}
 	missing = |room_id| Protocol.failed(wanted, { code: NotFound, message: "no room ${room_id}" })
 	known = |room_id| rooms.any(|room| room.id == room_id)
@@ -4005,12 +4208,12 @@ rooms_update! = |context, wanted, subject| {
 			match Protocol.sequence(wanted) {
 				Err(error) => Ok(Protocol.failed(wanted, error))
 				Ok(after) => {
-					rows : List(NostrRow)
-					rows = Sqlite.query_many!({ db: context.db, query: "SELECT seq, id, pubkey, kind, created_at, tags, content, sig FROM nostr_events WHERE kind = 9 AND room IN (SELECT value FROM json_each(:rooms)) AND seq * 8 > :after AND EXISTS (SELECT 1 FROM json_each(tags) WHERE json_extract(value, '$[0]') = 'p' AND json_extract(value, '$[1]') = :pubkey) ORDER BY seq;", params: { rooms: Json.to_str(relay.map(|room| room.kept.id)), after: after.to_i64_wrap(), pubkey: context.pubkey }, limits: Sqlite.default_query_limits })?
-					Ok(Protocol.room_appended(wanted, RelayRooms.inbox(rows.map(|row| { seq: row.seq.to_u64_wrap(), event: nostr_event_of(row) }), context.pubkey)))
+					rows : List({ seq : I64, event : Str })
+					rows = Sqlite.query_many!({ db: context.db, query: "SELECT seq, event FROM room_entries JOIN mentions ON mentions.message_id = json_extract(event, '$.Posted.id') AND mentions.person_id = :person WHERE seq > :after AND json_extract(event, '$.Posted.author') != :person AND room_id IN (SELECT room_id FROM members WHERE person_id = :person) ORDER BY seq;", params: { person: context.person, after: after.to_i64_wrap() }, limits: Sqlite.default_query_limits })?
+					Ok(Protocol.room_appended(wanted, room_entries_of(rows)))
 				}
 			}
-		_ => Ok(Protocol.snapshot(wanted, Rooms(relay.map(|room| room.shown).concat(rooms))))
+		_ => Ok(Protocol.snapshot(wanted, Rooms(kept_rooms!(context)?.concat(rooms))))
 	}
 }
 
@@ -4045,9 +4248,9 @@ expect {
 
 expect {
 	staff = { name: "staff", capabilities: ["rooms.v1", "attention.v1"], presets: ["Rooms"], locked: Bool.True }
-	held = access_of([staff], Ok("staff"))
-	(held == Holding(staff), access_of([staff], Err(NotFound)), access_of([staff], Ok("operator")), access_of([], Ok("staff")) == Holding({ ..staff, capabilities: [], presets: [] }))
-		== (Bool.True, Operator, Operator, Bool.True)
+	held = access_of([staff], "staff")
+	(held == Holding(staff), access_of([staff], "") == Holding({ ..staff, name: "", capabilities: [], presets: [] }), access_of([staff], "operator"), access_of([], "staff") == Holding({ ..staff, capabilities: [], presets: [] }))
+		== (Bool.True, Bool.True, Operator, Bool.True)
 		and [allows(held, "rooms.v1"), allows(held, "chat.v1"), allows(Operator, "chat.v1")] == [Bool.True, Bool.False, Bool.True]
 		and ["/liton/v1/devices", "/liton/v1/devices/code", "/liton/v1/devices/key", "/liton/v1/nostr/event", "/liton/v1/manifest"].map(|path| route_allowed(held, path)) == [Bool.False, Bool.False, Bool.True, Bool.True, Bool.True]
 		and route_allowed(Holding({ ..staff, capabilities: [] }), "/liton/v1/nostr/req") == Bool.False

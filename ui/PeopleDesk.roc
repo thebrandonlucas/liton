@@ -17,8 +17,8 @@ PeopleDesk := [].{
 
 	## The listing as polls answered it, the requests on their way, the
 	## invite being written, the link that redeems the last one made, and the
-	## page's address, before its `#`, which links name; and the key asked to
-	## confirm its removal ("" for none).
+	## page's address, before its `#`, which links name; and the person
+	## asked to confirm their removal ("" for none).
 	State : { listed : People.Listing, asked : List(Asked), form : Form, link : Str, page : Str, removing : Str }
 
 	initial : State
@@ -36,9 +36,9 @@ PeopleDesk := [].{
 			|so_far, { request, serial, .. }|
 				match request {
 					Invite({ name, role, rooms }) => { ..so_far, invites: so_far.invites.append({ id: "asking:${serial.to_str()}", name, role, rooms, expires: "" }) }
-					Remove({ pubkey }) => { ..so_far, people: so_far.people.drop_if(|person| person.pubkey == pubkey) }
+					Remove({ person }) => { ..so_far, people: so_far.people.drop_if(|listed| listed.id == person) }
 					Cancel({ id }) => { ..so_far, invites: so_far.invites.drop_if(|invite| invite.id == id) }
-					CreateRoom(_) => so_far
+					CreateRoom(_) | AddMember(_) => so_far
 				},
 		)
 
@@ -87,8 +87,8 @@ PeopleDesk := [].{
 }
 
 expect {
-	listed = { people: [{ pubkey: "ab", name: "Dana", role: "staff" }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x" }], roles: ["staff"] }
-	desk = PeopleDesk.asking(PeopleDesk.asking({ ..PeopleDesk.initial, listed }, 1, Remove({ pubkey: "ab" })), 2, Invite({ name: "Fay", role: "staff", rooms: ["dispatch"] }))
+	listed = { people: [{ id: "ab", name: "Dana", role: "staff", agent: Bool.False, owner: Bool.False, devices: 1 }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x" }], roles: ["staff"] }
+	desk = PeopleDesk.asking(PeopleDesk.asking({ ..PeopleDesk.initial, listed }, 1, Remove({ person: "ab" })), 2, Invite({ name: "Fay", role: "staff", rooms: ["dispatch"] }))
 	shown = PeopleDesk.shown(desk)
 	shown.people == []
 		and shown.invites.map(|invite| (invite.name, invite.expires)) == [("Eli", "x"), ("Fay", "")]

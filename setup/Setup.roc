@@ -85,8 +85,9 @@ Setup := [].{
 	## at start unless the relay has one of its id, its name's letters and
 	## digits, lowercased and joined by hyphens, even one deleted since, so a
 	## box rebuilt from its setup has its rooms again. A channel, a forum, a
-	## direct conversation or announcements.
-	Room : { name : Str, about : Str, kind : [Channel, Forum, Direct, Announce], private : Bool }
+	## direct conversation or announcements; `open`, a key whose role uses
+	## rooms joins it itself, else its admins add its members.
+	Room : { name : Str, about : Str, kind : [Channel, Forum, Direct, Announce], private : Bool, open : Bool }
 
 	## The remotes the daemon connects, the transformers it hosts by id, the
 	## presets and themes its clients offer and the ones they start with,
@@ -246,15 +247,16 @@ Setup := [].{
 	## panes hides none; one from before setups held themes offers none, and
 	## its presets keep the theme shown; one from before setups declared a
 	## deck declares none; one from before roles, no owner and no roles; one
-	## from before rooms, no rooms.
+	## from before rooms, no rooms; one from before rooms were open, closed
+	## rooms.
 	from_json : Str -> Try(Declared, [Invalid])
 	from_json = |text| Setup.declared_from_json(text).map_ok(
 		|setup| {
 			owning : Try({ owner : Str, roles : List(Role) }, _)
 			owning = Json.parse(text)
-			roomed : Try({ rooms : List(Room) }, _)
+			roomed : Try({ rooms : List({ name : Str, about : Str, kind : [Channel, Forum, Direct, Announce], private : Bool, open : Try(Bool, [Missing]) }) }, _)
 			roomed = Json.parse(text)
-			rooms = roomed.map_ok(|saved| saved.rooms) ?? []
+			rooms = roomed.map_ok(|saved| saved.rooms.map(|room| { name: room.name, about: room.about, kind: room.kind, private: room.private, open: room.open ?? Bool.False })) ?? []
 			match owning {
 				Ok({ owner, roles }) => { ..setup, owner, roles, rooms }
 				Err(_) => { ..setup, rooms }
@@ -395,8 +397,11 @@ expect {
 # Roles, rooms and the owner merge, the later in place of the earlier, and read back.
 expect {
 	staff = { name: "staff", capabilities: ["rooms.v1"], presets: ["Chat"], locked: Bool.True }
-	desk = { name: "Front desk", about: "", kind: Forum, private: Bool.True }
+	desk = { name: "Front desk", about: "", kind: Forum, private: Bool.True, open: Bool.True }
 	owner = Str.repeat("a", 64)
 	merged = Setup.merge(Setup.with_room(Setup.with_role(Setup.with_owner(Setup.empty, owner), { ..staff, locked: Bool.False }), { ..desk, kind: Channel }), Setup.with_room(Setup.with_role(Setup.empty, staff), desk))
 	merged.owner == owner and merged.roles == [staff] and merged.rooms == [desk] and Setup.from_json(Setup.to_json(merged)) == Ok(merged)
 }
+
+# A setup's rooms from before they were open read as closed.
+expect Setup.from_json(Setup.to_json(Setup.empty).replace_first("\"rooms\":[]", "\"rooms\":[{\"name\":\"Desk\",\"about\":\"\",\"kind\":\"Channel\",\"private\":false}]")).map_ok(|setup| setup.rooms) == Ok([{ name: "Desk", about: "", kind: Channel, private: Bool.False, open: Bool.False }])

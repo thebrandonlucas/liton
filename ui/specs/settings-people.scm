@@ -8,7 +8,7 @@
     (run-effect 2)
     (click (role button :name "Settings"))
     (click (role button :name "People"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"pubkey\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\"}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"relay\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"signing\":true}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"devices\":1}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"rooms\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"signing\":true}]}]}]}")
     (run-effect 3)
     ; A signing room listed, this browser's key is asked for and bound.
     (answer-port 4 reply "\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"")
