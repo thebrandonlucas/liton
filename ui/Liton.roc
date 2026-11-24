@@ -482,55 +482,6 @@ Liton := [].{
 					},
 			),
 		),
-		# Once a signing room is listed, this browser's key, bound to this
-		# device; a 409, as the device has it already, binds nothing new.
-		Engine.watch(
-			model.signal().map(Model.wants_key),
-			|wanted| if (wanted) [Ports.key.ask({})] else [],
-			model.on_result(|state, _, res| Pairing.key_known(state, res ?? state.nostr_key)),
-		),
-		Engine.watch_changes(
-			model.signal().map(|state| state.nostr_key),
-			|pubkey| if (pubkey == "") [] else [
-				Engine.http_body({
-					method: "POST",
-					url: "/liton/v1/devices/key",
-					headers: [("Content-Type", "application/json")],
-					body: Json.to_str({ pubkey: pubkey }),
-					timeout: Ms(10000),
-				}),
-			],
-			Engine.ignore({}),
-		),
-		# Joined by an invite, this browser's profile, the invite's name, signed.
-		Engine.watch_changes(
-			model.signal().map(|state| state.pairing.profile),
-			|{ name, .. }| [
-				Ports.sign.ask({
-					kind: 0,
-					tags: [],
-					content: Json.to_str({ name: name }),
-				}),
-			],
-			model.on_result(
-				|state, { serial, .. }, res|
-					match res {
-						Ok(signed) => { ..state, pairing: { ..state.pairing, profile_event: { serial, text: Json.to_str(signed) } } }
-						Err(_) => state
-					},
-			),
-		),
-		# A signing room's request: its event signed, then the call carrying it.
-		Engine.watch_changes(
-			model.signal().map(|state| state.signing),
-			|signing| [Ports.sign.ask(signing.unsigned)],
-			model.on_result(|state, signing, res| Model.room_signed(state, signing.serial, res)),
-		),
-		Engine.watch_changes(
-			model.signal().map(|state| state.signed_call),
-			|signed| [Engine.http_body({ method: "POST", url: "/liton/v1/call", headers: [("Content-Type", "application/json")], body: signed.text, timeout: Ms(60000) })],
-			model.on_result(|state, signed, res| Model.rooms_answered(state, signed.serial, res ?? "")),
-		),
 
 		Engine.watch(model.signal().map(|state| state.jump), |jump| [(jump.replace, Replace(jump.replace)), (jump.push, Push(jump.push)), (jump.panel, Focus(jump.panel))].keep_if(|(text, _)| !text.is_empty()).map(|(_, command)| Engine.command(command)), Engine.ignore({})),
 		# The browser's back and forward show the panel the URL names.

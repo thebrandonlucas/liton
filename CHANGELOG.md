@@ -15,6 +15,13 @@ All notable changes to liton are documented in this file. The format is based on
 - **Breaking:** the box's rooms are kept in the daemon's own tables, offered as rooms.v1's provider `rooms` in place of `relay`, and its people are its own: each person holds a role, and every device belongs to one. The box's owner is a person the daemon makes at its first start, whose devices `liton pair` pairs; an invite makes a new person. Requests of rooms need no signed event, and attention is kept apart per person. Rooms and people of the relay are not carried over.
 - **Breaking:** people.v1 lists each person by their `id`, with whether they are the owner or an agent and how many devices they have, and `Remove` names a person: `{ "Remove": { "person": "…" } }`. A person removed keeps their name for their messages, and the owner can't be removed.
 - **Breaking:** a setup's rooms are closed unless declared `open`: `Setup.with_room` takes `open`, and a setup evaluated before reads its rooms as closed. The setup's owner key no longer names the owner; the daemon makes the owner an admin of each of the setup's rooms at start.
+- **Breaking:** the daemon refuses to start on a database from liton 0.1, saying so: 0.2 starts fresh, so move `liton.db` aside, then pair the owner again with `liton pair` and invite people and agents again.
+- The room agent example (`examples/room-agent/agent.mjs`) joins with its invite and posts with the token that gives it, kept in one file readable by its owner alone; it holds no key.
+
+### Removed
+
+- **Breaking:** Nostr. The daemon is no longer a relay: `/liton/v1/nostr/event`, `/liton/v1/nostr/req` and `/liton/v1/devices/key` are gone, a rooms.v1 call carries no `signed` event, rooms.v1's `signing` is gone, and the browser makes and keeps no key. Settings → Devices no longer shows a key per device.
+- **Breaking:** `Setup.with_owner` and a setup's `owner`: the daemon makes the owner itself, who signs in with `liton pair` on the box.
 
 ## [0.1.1] - 2026-11-23
 

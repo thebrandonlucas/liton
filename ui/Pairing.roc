@@ -47,43 +47,26 @@ Pairing := [].{
 		}
 	}
 
-	## Redeems the URL's invite with this browser's key, shown as pairing at
-	## once, or once the key is known (`key_known`).
+	## Redeems the URL's invite, shown as pairing at once.
 	redeem : Model.State -> Model.State
 	redeem = |state| {
 		pairing = state.pairing
-		if state.nostr_key == "" {
-			{ ..state, pairing: { ..pairing, sending: Bool.True, failed: "" } }
-		} else {
-			{ ..state, pairing: { ..pairing, invite: "", sending: Bool.True, failed: "", redeem: { serial: pairing.redeem.serial + 1, secret: pairing.invite, pubkey: state.nostr_key, name: Pairing.device_name(state) } } }
-		}
-	}
-
-	## This browser's key, once the page made or read it: an invite waiting
-	## for it is redeemed.
-	key_known : Model.State, Str -> Model.State
-	key_known = |state, pubkey| {
-		known = { ..state, nostr_key: pubkey }
-		if (pubkey != "" and state.pairing.invite != "" and state.pairing.unpaired) Pairing.redeem(known) else known
+		{ ..state, pairing: { ..pairing, invite: "", sending: Bool.True, failed: "", redeem: { serial: pairing.redeem.serial + 1, secret: pairing.invite, name: Pairing.device_name(state) } } }
 	}
 
 	## The daemon's answer to the invite redeemed as `serial`: joined, the
-	## manifest is asked for again and this browser signs its profile, the
-	## invite's name; else why not.
+	## manifest is asked for again; else why not.
 	redeemed : Model.State, U64, Try(Str, Engine.HttpError) -> Model.State
 	redeemed = |state, serial, res| {
 		pairing = state.pairing
-		joined : Try({ person : { name : Str } }, _)
-		joined = Json.parse(res ?? "")
 		failed = |why| { ..state, pairing: { ..pairing, sending: Bool.False, failed: why } }
 		if serial != pairing.redeem.serial {
 			state
 		} else {
-			match (res, joined) {
-				(Ok(_), Ok({ person })) => { ..state, pairing: { ..pairing, unpaired: Bool.False, sending: Bool.False, failed: "", paired: pairing.paired + 1, profile: { serial: pairing.profile.serial + 1, name: person.name } } }
-				(Err(Status(401)), _) => failed("That invite is wrong, used or expired. Ask for a new one.")
-				(Err(Status(409)), _) => failed("This browser's key is another device's already.")
-				(Err(Status(429)), _) => failed("Too many tries. Wait a minute, then reload the invite.")
+			match res {
+				Ok(_) => { ..state, pairing: { ..pairing, unpaired: Bool.False, sending: Bool.False, failed: "", paired: pairing.paired + 1 } }
+				Err(Status(401)) => failed("That invite is wrong, used or expired. Ask for a new one.")
+				Err(Status(429)) => failed("Too many tries. Wait a minute, then reload the invite.")
 				_ => failed("The daemon didn't answer. Reload the invite to try again.")
 			}
 		}
@@ -110,16 +93,6 @@ Pairing := [].{
 	device_name : Model.State -> Str
 	device_name = |state|
 		if (state.coarse_pointer) "Phone or tablet" else if (state.operating_system == Mac) "Browser on a Mac" else "Browser"
-
-	## A device's key, as a setup's `Setup.with_owner` names it to make
-	## it the owner's, or that it has none yet: a browser binds its key once
-	## it sees a room of the relay.
-	key_shown : Model.Device -> Str
-	key_shown = |device|
-		match device.pubkey {
-			Ok(pubkey) if pubkey != "" => "Key ${pubkey}"
-			_ => "No key"
-		}
 
 	## The devices the daemon listed, or the pair screen if it refuses.
 	listed : Model.State, Try(Str, Engine.HttpError) -> Model.State
@@ -259,7 +232,6 @@ Pairing := [].{
 													[
 														Html.span_s(row.field(|device| if (device.current) "${device.name} · this browser" else device.name), [Engine.class("settings-row-title")]),
 														Html.p_s(row.field(|device| device).map2(model.signal().lift_row(), |device, state| "Paired ${Pairing.since(state, device.created_at)}, last seen ${Pairing.since(state, device.seen_at)}"), [Engine.class("help")]),
-														Html.p_s(row.field(Pairing.key_shown), [Engine.class("help device-key")]),
 													],
 												),
 												Html.action_button(
@@ -280,19 +252,14 @@ Pairing := [].{
 		)
 	}
 
-	## The requests: the invite redeemed, its profile sent signed, the devices while Settings shows
+	## The requests: the invite redeemed, the devices while Settings shows
 	## them, a code for another device, and each revocation.
 	effects : State(ctx, Model.State) -> List(Elem(ctx))
 	effects = |model| [
 		Engine.watch_changes(
 			model.signal().map(|state| state.pairing.redeem),
-			|{ secret, pubkey, name, .. }| [Engine.http_body({ method: "POST", url: "/liton/v1/invite", headers: [("Content-Type", "application/json")], body: Json.to_str({ secret, pubkey, name }), timeout: Ms(10000) })],
+			|{ secret, name, .. }| [Engine.http_body({ method: "POST", url: "/liton/v1/invite", headers: [("Content-Type", "application/json")], body: Json.to_str({ secret, name }), timeout: Ms(10000) })],
 			model.on_result(|state, { serial, .. }, res| Pairing.redeemed(state, serial, res)),
-		),
-		Engine.watch_changes(
-			model.signal().map(|state| state.pairing.profile_event),
-			|{ text, .. }| [Engine.http_body({ method: "POST", url: "/liton/v1/nostr/event", headers: [("Content-Type", "application/json")], body: text, timeout: Ms(10000) })],
-			Engine.ignore({}),
 		),
 		Engine.watch_changes(
 			model.signal().map(|state| state.pairing.sent),

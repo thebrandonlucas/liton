@@ -8,12 +8,8 @@
     (run-effect 2)
     (click (role button :name "Settings"))
     (click (role button :name "People"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"devices\":1}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"rooms\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[],\"signing\":true}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"devices\":1}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"rooms\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[]}]}]}]}")
     (run-effect 3)
-    ; A signing room listed, this browser's key is asked for and bound.
-    (answer-port 4 reply "\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"")
-    (stub-http "bind" :url "/liton/v1/devices/key" :status 200 :body "{}")
-    (run-effect 5)
     (expect-visible (text "Dana"))
     (click (role button :name "Make the invite link"))
     (expect-text (test-id "invite-failed") "Name whom the invite is for.")
@@ -24,7 +20,7 @@
     ; Shown before the daemon answers.
     (expect-visible (text "staff · #dispatch · Inviting…"))
     (stub-http "invite" :url "/liton/v1/call" :status 200 :body "{\"Ok\":{\"Invited\":{\"id\":\"i1\",\"secret\":\"s3\"}}}")
-    (run-effect 6)
+    (run-effect 4)
     (expect-text (test-id "invite-link") "/ui/index.html#invite=s3")
     (click (role button :name "Remove Dana"))
     (click (role button :name "Remove Dana and revoke their devices"))

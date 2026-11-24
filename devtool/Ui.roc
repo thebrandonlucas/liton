@@ -19,7 +19,7 @@ Ui := [].{
 		# out of bounds". So the stack is 32 MB. Drop --wasm-stack-size once
 		# a Roc nightly fixes those and the page mounts on the default.
 		Exec.call!(".", roc_ui, ["build", "--opt=size", "--wasm-stack-size=33554432"].concat(flags).concat(["--target=wasm32", "ui/main.roc", "--output=${output}/app.wasm"]))?
-		for file in ["index.html", "style.css", "ports.mjs", "voice.mjs", "voice-worklet.js", "nostr.mjs", "secp256k1.mjs"].map(|name| "ui/${name}").concat(runtime_files) {
+		for file in ["index.html", "style.css", "ports.mjs", "voice.mjs", "voice-worklet.js"].map(|name| "ui/${name}").concat(runtime_files) {
 			name = Path.display(Path.filename(Path.utf8(file)) ?? Path.utf8(file))
 			Path.copy!(Path.utf8(file), Path.utf8("${output}/${name}"))?
 		}

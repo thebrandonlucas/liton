@@ -72,9 +72,8 @@ Model := [].{
 	Sent : { serial : U64, session_id : Str, request : Chat.Request, after : U64, failed : Str }
 
 	## A device paired with the daemon, as /liton/v1/devices lists it, its
-	## times in milliseconds, `current` the one asking, and the Nostr key
-	## bound to it, "" for none, missing from a daemon from before keys.
-	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool, pubkey : Try(Str, [Missing]) }
+	## times in milliseconds, `current` the one asking.
+	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool }
 
 	## Pairing this browser with the daemon and the devices paired
 	## (ui/Pairing.roc): whether the daemon answered that it isn't paired;
@@ -85,10 +84,8 @@ Model := [].{
 	## listings asked for; the revocations on their way, as `revoke` sent
 	## them; and a code made for another device, while `asking` or once
 	## given, with the link that pairs a browser with it; the URL's `#invite=`
-	## secret, redeemed with this browser's key once the daemon refuses, as
-	## `redeem` sends it; and the profile, the invite's name, that this browser
-	## signs once it joined, then sends signed (`profile_event`).
-	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, redeem : { serial : U64, secret : Str, pubkey : Str, name : Str }, profile : { serial : U64, name : Str }, profile_event : { serial : U64, text : Str } }
+	## secret, redeemed once the daemon refuses, as `redeem` sends it.
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, redeem : { serial : U64, secret : Str, name : Str } }
 
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
@@ -267,14 +264,6 @@ Model := [].{
 		room_members : List({ room_id : Str, members : List(Rooms.Member) }),
 		room_logs : List({ room_id : Str, root : Str, entries : List(Rooms.Entry) }),
 		room_asks : List({ serial : U64, request : Rooms.Request, accepted : U64, message_id : Str, failed : Str }),
-
-		## A signing room's request on its way: the event it makes, unsigned,
-		## to sign (`signing`), then the call carrying it signed
-		## (`signed_call`), numbered as its `room_asks` is; and this browser's
-		## key, asked for once a signing room is listed, "" until then.
-		signing : { serial : U64, unsigned : { kind : U32, tags : List(List(Str)), content : Str } },
-		signed_call : { serial : U64, text : Str },
-		nostr_key : Str,
 
 		## What is typed in Rooms panes' search, which narrows their rooms.
 		room_search : Str,
@@ -568,9 +557,6 @@ Model := [].{
 				room_members: [],
 				room_logs: [],
 				room_asks: [],
-				signing: { serial: 0, unsigned: { kind: 0, tags: [], content: "" } },
-				signed_call: { serial: 0, text: "" },
-				nostr_key: "",
 				room_search: "",
 				rooms_out_of_view: [],
 				themes: Default.setup.themes,
@@ -580,7 +566,7 @@ Model := [].{
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				locked: Bool.False,
-				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", pubkey: "", name: "" }, profile: { serial: 0, name: "" }, profile_event: { serial: 0, text: "" } },
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", name: "" } },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -5335,16 +5321,11 @@ Model := [].{
 		}
 	}
 
-	## Sends a rooms.v1 request, shown at once until the daemon answers. Of a
-	## signing room, the event it makes is signed first (`Model.room_signed`).
+	## Sends a rooms.v1 request, shown at once until the daemon answers.
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
-		serial = U64.max(state.call_outbox.serial, U64.max(state.signing.serial, state.signed_call.serial)) + 1
-		asked = { ..state, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
-		match Model.unsigned_event(request) {
-			Ok(unsigned) if Model.signing_room(state, Model.asked_room(request)) => { ..asked, signing: { serial, unsigned } }
-			_ => { ..asked, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) } }
-		}
+		serial = state.call_outbox.serial + 1
+		{ ..state, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "", call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) } }
 	}
 
 	## The room a rooms.v1 request is of, "" for none.
@@ -5355,57 +5336,6 @@ Model := [].{
 			Send({ room_id, .. }) => room_id
 			React({ room_id, .. }) | Unreact({ room_id, .. }) => room_id
 			Join({ room_id }) | Leave({ room_id }) => room_id
-		}
-
-	## Whether the room `room_id` takes the events its requests make, signed.
-	signing_room : State, Str -> Bool
-	signing_room = |state, room_id| state.rooms.any(|room| room.id == room_id and room.signing == Ok(Bool.True))
-
-	## Whether this browser's key is wanted: once a signing room is listed, or
-	## an invite is to be redeemed.
-	wants_key : State -> Bool
-	wants_key = |state| state.rooms.any(|room| room.signing == Ok(Bool.True)) or (state.pairing.invite != "" and state.pairing.unpaired)
-
-	## The event a request of a signing room makes, as docs/protocol.md
-	## (Rooms) says, before it is signed: a message (9) with NIP-10's marked
-	## `e` tags for its thread and `p` tags for its mentions, a reaction (7),
-	## a reaction taken back (5, marked `["k", "7"]`), or a join (9021) or
-	## leave (9022), each in the room.
-	unsigned_event : Rooms.Request -> Try({ kind : U32, tags : List(List(Str)), content : Str }, [Unsigned])
-	unsigned_event = |request| {
-		in_room = |room_id| [["h", room_id]]
-		match request {
-			ListRooms => Err(Unsigned)
-			Send({ room_id, text, place: sent_to, mentions }) => {
-				thread = match sent_to {
-					TopLevel => []
-					Reply({ root, parent }) => [["e", root, "", "root"], ["e", parent, "", "reply"]]
-				}
-				Ok({ kind: 9, tags: in_room(room_id).concat(thread).concat(mentions.map(|member| ["p", member])), content: text })
-			}
-			React({ room_id, message_id, emoji }) => Ok({ kind: 7, tags: in_room(room_id).append(["e", message_id]), content: emoji })
-			Unreact({ room_id, message_id, emoji }) => Ok({ kind: 5, tags: in_room(room_id).concat([["e", message_id], ["k", "7"]]), content: emoji })
-			Join({ room_id }) => Ok({ kind: 9021, tags: in_room(room_id), content: "" })
-			Leave({ room_id }) => Ok({ kind: 9022, tags: in_room(room_id), content: "" })
-		}
-	}
-
-	## A Nostr event (NIP-01) signed by this browser's key (ui/nostr.mjs).
-	Signed : { id : Str, pubkey : Str, created_at : U64, kind : U32, tags : List(List(Str)), content : Str, sig : Str }
-
-	## The event of the request numbered `serial`, signed, or why not: signed,
-	## it goes to the daemon with its request; unsigned, the request fails as
-	## a refused one does.
-	room_signed : State, U64, Try(Signed, _) -> State
-	room_signed = |state, serial, res|
-		match (res, state.room_asks.find_first(|asked| asked.serial == serial)) {
-			(Ok(signed), Ok(asked)) => { ..state, signed_call: { serial, text: Json.to_str({ capability: "rooms.v1", request: asked.request, signed }) } }
-			(Err(_), Ok(_)) => {
-				unsigned : Protocol.Answer(Rooms.Response)
-				unsigned = Err({ code: Unavailable, message: "This browser couldn't sign it." })
-				Model.rooms_answered(state, serial, Json.to_str(unsigned))
-			}
-			(_, Err(_)) => state
 		}
 
 	## Without the messages sent that a log has posted.

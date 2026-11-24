@@ -3,7 +3,7 @@
 // requires pairing: the setup's rooms at start, `liton room create` and
 // `liton room list` from the owner's command line, and a staff member
 // invited into a room, by token, talking there.
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
@@ -68,6 +68,7 @@ const run = (program, args, env = {}) =>
     );
   });
 const liton = (args) => run(path.join(repo, "zig-out/bin/liton"), args);
+const agent = (args, env = {}) => run("node", [path.join(repo, "examples/room-agent/agent.mjs"), ...args], env);
 const step = async (name, test) => {
   check = name;
   await test();
@@ -86,6 +87,14 @@ const polled = async (token, ...topics) => (await ask("poll", { topics: topics.m
 const posted = (events) => events.flatMap(({ RoomEntry }) => (RoomEntry?.event.Posted ? [RoomEntry.event.Posted.text] : []));
 
 try {
+  await step("a database from liton 0.1 is refused, saying to move it aside", async () => {
+    const old = path.join(scratch, "old.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    new DatabaseSync(old).exec("CREATE TABLE key_roles (role TEXT)");
+    const refused = spawnSync(path.join(repo, "zig-out/bin/liton-daemon"), { env: { ...process.env, PASEO_PASSWORD: "", LITON_PORT: String(port), LITON_DB: old, LITON_UI: path.join(scratch, "www"), LITON_MOCK: "off" }, encoding: "utf8", timeout: 10000 });
+    assert.equal(refused.status, 3);
+    assert.match(refused.stderr, /is from liton 0\.1; 0\.2 starts fresh: move liton\.db aside/);
+  });
   start();
   await answering();
   let owner_token;
@@ -157,6 +166,18 @@ try {
     const [after] = await polled(dana, ["rooms.v1", "messages/front-desk"]);
     assert.deepEqual(after.flatMap((e) => (e.RoomEntry?.event.Reacted ? [e.RoomEntry.event.Reacted.added] : [])), [true, false]);
   });
+  await step("an agent joins by its invite's link and posts with its token (examples/room-agent)", async () => {
+    const invited = await liton(["invite", "--role", "staff", "--rooms", "front-desk", "Dispatch bot"]);
+    const file = path.join(scratch, "agent-token");
+    const joined = await agent(["join", invited.stdout.split("\n")[0], file]);
+    assert.equal(joined.code, 0, joined.stderr);
+    assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600");
+    const sent = await agent(["send", "front-desk", "On my way."], { LITON_TOKEN_FILE: file });
+    assert.equal(sent.code, 0, sent.stdout + sent.stderr);
+    const refused = await agent(["send", "general", "Hello?"], { LITON_TOKEN_FILE: file });
+    assert.equal(refused.code, 1);
+    assert.match(refused.stdout, /you aren't a member of this room/);
+  });
   await step("a staff member can't create rooms", async () => {
     const answer = await call(dana, "people.v1", { CreateRoom: { name: "Back room", about: "", kind: "Channel", private: false } });
     assert.ok(answer.Err, "the call is refused");
@@ -169,7 +190,7 @@ try {
     assert.deepEqual(await call(owner_token, "people.v1", { Remove: { person: dana_id } }), { Ok: "Accepted" });
     assert.equal((await ask("poll", { topics: [] }, dana)).status, 401);
     const [members] = await polled(owner_token, ["rooms.v1", "members/front-desk"]);
-    assert.deepEqual(members.at(-1).Members.map((member) => member.name), ["Owner"]);
+    assert.deepEqual(members.at(-1).Members.map((member) => member.name), ["Owner", "Dispatch bot"]);
   });
 } catch (error) {
   fail(error);
