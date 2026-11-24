@@ -116,6 +116,7 @@ import transformers.Transformer
 import Auth
 import RoomStore
 import Sha256
+import WebAuthn
 
 ## What each request is answered from: the database, the hosts it answers,
 ## when it must come from a paired device,
