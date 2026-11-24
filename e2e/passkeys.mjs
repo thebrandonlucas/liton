@@ -4,7 +4,8 @@
 // free port with a fresh database that requires pairing, its site
 // LITON_RP_ID=localhost. Without LITON_RP_ID, passkeys are refused.
 // CDP is roc-signals's DevTools client, which `zig build e2e` passes; CHROME
-// names the browser (default `chromium` on PATH).
+// names the browser (default `chromium` on PATH). It stays within the 10
+// pairing and sign-in attempts the daemon takes a minute.
 import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,7 +25,7 @@ const port = await new Promise((resolve) => {
 });
 let check = "the daemon answers";
 const fail = (error) => {
-  console.log(`FAIL ${check}: ${String(error?.message ?? error).split("\n")[0]}`);
+  console.log(`FAIL ${check}: ${String(error?.message ?? error).split("\n").slice(0, 6).join(" ")}`);
   process.exit(1);
 };
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "liton-passkeys-"));
@@ -81,8 +82,8 @@ const helpers = `
   };
   window.liton = {
     post,
-    register: async (name) => {
-      const begun = await post("passkeys/register/begin", {});
+    register: async (name, code, person_name) => {
+      const begun = await post("passkeys/register/begin", code ? { code } : {});
       if (begun.status !== 200) return begun;
       const o = begun.body;
       const made = await navigator.credentials.create({ publicKey: {
@@ -91,7 +92,7 @@ const helpers = `
         pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -8 }],
         authenticatorSelection: { residentKey: "required", userVerification: "required" }, attestation: "none",
         excludeCredentials: o.exclude.map((id) => ({ type: "public-key", id: bytes(id) })) } });
-      return post("passkeys/register/finish", { challenge: o.challenge, id: b64(made.rawId), public_key: b64(made.response.getPublicKey()), alg: made.response.getPublicKeyAlgorithm(), authenticator_data: b64(made.response.getAuthenticatorData()), client_data: b64(made.response.clientDataJSON), name });
+      return post("passkeys/register/finish", { challenge: o.challenge, id: b64(made.rawId), public_key: b64(made.response.getPublicKey()), alg: made.response.getPublicKeyAlgorithm(), authenticator_data: b64(made.response.getAuthenticatorData()), client_data: b64(made.response.clientDataJSON), name, person_name });
     },
     answer: async () => {
       const begun = await post("login/begin", {});
@@ -127,20 +128,42 @@ try {
     assert.match(await elsewhere.text(), /passkeys are for localhost/);
   });
   browser = await launch({ executablePath: process.env.CHROME || "chromium" });
-  const page = await browser.newPage();
-  await page.send("WebAuthn.enable", {});
-  await page.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true } });
-  await page.goto(`${daemon}/ui/index.html`);
-  await page.evaluate(helpers);
-  const poll = () => page.evaluate(`liton.post("poll", { topics: [] }).then((r) => r.status)`);
-  await step("a browser paired as the owner registers a passkey, which the owner's listing counts", async () => {
+  // A browser of its own, with an authenticator of its own.
+  const opened = async (context) => {
+    const page = await context.newPage();
+    await page.send("WebAuthn.enable", {});
+    await page.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true } });
+    await page.goto(`${daemon}/ui/index.html`);
+    await page.evaluate(helpers);
+    return page;
+  };
+  const page = await opened(browser);
+  const phone = await opened(await browser.createBrowserContext());
+  const poll = (on = page) => on.evaluate(`liton.post("poll", { topics: [] }).then((r) => r.status)`);
+  await step("on a fresh box, liton pair's code makes the owner's first passkey, names them and signs them in; the code is spent", async () => {
+    assert.equal(await poll(), 401);
     const code = (await liton(["pair"])).stdout.split("\n")[0];
-    assert.equal((await page.evaluate(`liton.post("pair", { code: ${JSON.stringify(code)}, name: "Browser" }).then((r) => r.status)`)), 200);
-    const registered = await page.evaluate(`liton.register("Laptop")`);
+    const registered = await page.evaluate(`liton.register("Laptop", ${JSON.stringify(code)}, "Ada")`);
     assert.equal(registered.status, 200, registered.body);
-    assert.equal(registered.body.passkey.name, "Laptop");
+    assert.deepEqual([registered.body.passkey.name, registered.body.person.name, registered.body.person.role], ["Laptop", "Ada", "operator"]);
+    assert.equal(await poll(), 200);
+    assert.equal((await phone.evaluate(`liton.post("passkeys/register/begin", { code: ${JSON.stringify(code)} })`)).status, 401);
+  });
+  await step("the owner adds a second device with a code of their own, which registers a passkey there", async () => {
+    const offered = await page.evaluate(`liton.post("devices/code", {})`);
+    assert.equal(offered.status, 200);
+    const registered = await phone.evaluate(`liton.register("Phone", ${JSON.stringify(offered.body.code)})`);
+    assert.equal(registered.status, 200, registered.body);
+    assert.equal(registered.body.person.name, "Ada");
+    assert.equal(await poll(phone), 200);
     const people = await page.evaluate(`liton.post("poll", { topics: [{ capability: "people.v1", topic: "people", after: "" }] }).then((r) => r.body.topics[0].events.at(-1).People.people)`);
-    assert.deepEqual(people.map((person) => [person.name, person.passkeys, person.devices]), [["Owner", 1, 1]]);
+    assert.deepEqual(people.map((person) => [person.name, person.passkeys, person.devices]), [["Ada", 2, 2]]);
+  });
+  await step("a person lists and revokes their own devices", async () => {
+    const { devices } = await page.evaluate(`fetch("/liton/v1/devices").then((r) => r.json())`);
+    assert.deepEqual(devices.map((device) => [device.name, device.current, device.expires_at > Date.now() + 29 * 86400000]), [["Laptop", true, true], ["Phone", false, true]]);
+    assert.equal(await page.evaluate(`liton.post("devices/revoke", { id: ${JSON.stringify(devices[1].id)} }).then((r) => r.status)`), 200);
+    assert.equal(await poll(phone), 401);
   });
   await step("signing out ends the browser's session", async () => {
     assert.equal(await page.evaluate(`liton.post("logout", {}).then((r) => r.status)`), 200);
@@ -150,11 +173,11 @@ try {
   await step("the passkey signs the browser in, a session of 30 days, and the passkey shows as this browser's", async () => {
     const signed = await page.evaluate(`liton.sign_in()`);
     assert.equal(signed.finished.status, 200, signed.finished.body);
-    assert.deepEqual([signed.finished.body.person.name, signed.finished.body.person.role], ["Owner", "operator"]);
+    assert.deepEqual([signed.finished.body.person.name, signed.finished.body.person.role], ["Ada", "operator"]);
     answer = signed.answer;
     assert.equal(await poll(), 200);
     const listed = await page.evaluate(`fetch("/liton/v1/passkeys").then((r) => r.json())`);
-    assert.deepEqual(listed.passkeys.map((passkey) => [passkey.name, passkey.rp_id, passkey.current]), [["Laptop", "localhost", true]]);
+    assert.deepEqual(listed.passkeys.map((passkey) => [passkey.name, passkey.rp_id, passkey.current]), [["Laptop", "localhost", true], ["Phone", "localhost", false]]);
     assert.equal(listed.rp_id, "localhost");
   });
   await step("an answer is used once: replayed, it is refused", async () => {

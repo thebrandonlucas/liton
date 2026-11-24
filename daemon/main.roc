@@ -363,6 +363,8 @@ routed! = |started, request, headers| {
 	held = Sqlite.query_many!({ db: served.db, query: "SELECT role FROM persons WHERE id = :person;", params: { person }, limits: Sqlite.default_query_limits })?
 	context = { ..served, asking, person, access: access_of(served.roles, held.first().map_ok(|row| row.role) ?? "") }
 	match (seen, request.method(), path) {
+		(_, POST, "/liton/v1/passkeys/register/begin") => register_begun!(context, request, headers, seen.is_ok())
+		(_, POST, "/liton/v1/passkeys/register/finish") => register_finished!(context, request, headers)
 		(Err(Unpaired), _, _) =>
 			Ok(text(401, "this device isn't paired with the daemon: run `liton pair` on the daemon's machine, or open Settings → Devices on a paired one, for a pairing code").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
 		(_, _, _) if !route_allowed(context.access, path) => Ok(text(403, "this device's role can't use ${path}"))
@@ -376,8 +378,6 @@ routed! = |started, request, headers| {
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
 		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
 		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
-		(_, POST, "/liton/v1/passkeys/register/begin") => register_begun!(context, request, headers)
-		(_, POST, "/liton/v1/passkeys/register/finish") => register_finished!(context, request, headers)
 		(_, GET, "/liton/v1/passkeys") => passkeys!(context)
 		(_, POST, "/liton/v1/passkeys/delete") => passkey_deleted!(context, request)
 		(_, POST, "/liton/v1/login/begin") => login_begun!(context, request, headers)
@@ -424,7 +424,7 @@ pairings_per_minute : I64
 pairings_per_minute = 10
 
 ## Answers /liton/v1/pair: a pairing code, used once, for a token of a new
-## device. A browser gets it as an HttpOnly cookie, out of its scripts'
+## device of the person it is for, the owner's from `liton pair`. A browser gets it as an HttpOnly cookie, out of its scripts'
 ## reach; a client asking `token: true`, as the CLI or another daemon, in
 ## the answer too.
 paired! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
@@ -438,14 +438,15 @@ paired! = |context, request, headers| {
 	match given {
 		Err(_) => Ok(text(400, "a pairing is {\"code\": \"ABCD-EFGH\", \"name\": \"this device's name\"}"))
 		Ok({ code, name, token: wants_token }) => {
-			used : List({ code : Str })
-			used = Sqlite.query_many!({ db, query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: Auth.typed_code(code), now: now_ms!() }, limits: Sqlite.default_query_limits })?
-			if used.is_empty() {
+			used : List({ person_id : Str })
+			used = Sqlite.query_many!({ db, query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING person_id;", params: { code: Auth.typed_code(code), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			person = used.first().map_ok(|row| if (row.person_id == "") context.owner else row.person_id) ?? ""
+			if person == "" {
 				return Ok(text(401, "that pairing code is wrong, used or expired"))
 			}
 			transaction = Sqlite.begin!(db, Immediate)?
-			{ device, token } = device_made!(transaction, name ?? "", context.owner)?
-			audited!(transaction, { ..context, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
+			{ device, token } = device_made!(transaction, name ?? "", person)?
+			audited!(transaction, { ..context, person, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
 			transaction.commit!()?
 			body = if (wants_token == Ok(Bool.True)) Json.to_str({ device, token }) else Json.to_str({ device: device })
 			Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
@@ -687,27 +688,29 @@ invited! = |context, request, headers| {
 	}
 }
 
-## Answers /liton/v1/devices: the devices paired, the oldest first, the one
-## asking marked `current`. A token is never shown.
+## Answers /liton/v1/devices: the devices of the person asking, the oldest
+## first, the one asking marked `current`, each with when its session ends
+## (0 for a token device, which doesn't). A token is never shown.
 devices! : Context, [Device(Str), Open] => Try(Response, _)
-devices! = |{ db, .. }, asking| {
-	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64 })
-	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
-	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at }| { id, name, created_at, seen_at, current: asking == Device(id) }) })))
+devices! = |{ db, person, .. }, asking| {
+	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64, expires_at : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at, expires_at FROM devices WHERE person_id = :person ORDER BY created_at, id;", params: { person }, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at, expires_at }| { id, name, created_at, seen_at, expires_at, current: asking == Device(id) }) })))
 }
 
-## Answers /liton/v1/devices/code: a new pairing code, for
-## `pairing_code_ms`, when it expires, and the link to the UI that pairs a
-## browser with it, at the address the request came to.
+## Answers /liton/v1/devices/code: a new pairing code for another device of
+## the person asking, for `pairing_code_ms`, when it expires, and the link
+## to the UI that pairs a browser with it, at the address the request came
+## to.
 pairing_code! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-pairing_code! = |{ db, .. }, request, headers| {
+pairing_code! = |{ db, person, .. }, request, headers| {
 	now = now_ms!()
 	Sqlite.execute!({ db, query: "DELETE FROM pairing_codes WHERE expires_at <= :now;", params: { now } })?
 	random : { bytes : Sqlite.Blob }
 	random = Sqlite.query!({ db, query: "SELECT randomblob(8) AS bytes;", params: {}, limits: Sqlite.default_query_limits })?
 	code = Auth.code(random.bytes.to_bytes())
 	expires_at = now + pairing_code_ms
-	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at) VALUES (:code, :expires_at);", params: { code, expires_at } })?
+	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at, person_id) VALUES (:code, :expires_at, :person);", params: { code, expires_at, person } })?
 	served =
 		match request.authority() {
 			Present(named) =>
@@ -721,16 +724,24 @@ pairing_code! = |{ db, .. }, request, headers| {
 	Ok(json(Json.to_str({ code, expires_at, link })))
 }
 
-## Answers /liton/v1/devices/revoke: forgets the device `id` names, so its
-## token is refused from then on. The device revoking itself is signed out.
+## Answers /liton/v1/devices/revoke: forgets the device `id` names, one of
+## the person asking, so its token is refused from then on. The device
+## revoking itself is signed out.
 revoked! : Context, Server.Request, [Device(Str), Open] => Try(Response, _)
-revoked! = |{ db, .. }, request, asking| {
+revoked! = |context, request, asking| {
+	db = context.db
 	given : Try({ id : Str }, _)
 	given = Json.parse(read_json!(request)?)
 	match given {
 		Err(_) => Ok(text(400, "a revocation is {\"id\": \"the device's id\"}"))
 		Ok({ id }) => {
-			Sqlite.execute!({ db, query: "DELETE FROM devices WHERE id = :id;", params: { id } })?
+			transaction = Sqlite.begin!(db, Immediate)?
+			revoked : List({ id : Str })
+			revoked = transaction.query_many!({ query: "DELETE FROM devices WHERE id = :id AND person_id = :person RETURNING id;", params: { id, person: context.person }, limits: Sqlite.default_query_limits })?
+			if !revoked.is_empty() {
+				audited!(transaction, context, "device.revoked", id, "{}")?
+			}
+			transaction.commit!()?
 			Ok(if (asking == Device(id)) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
 		}
 	}
@@ -792,23 +803,60 @@ challenge_taken! = |transaction, challenge, purpose| {
 	Ok(taken.first().map_err(|_| NoChallenge))
 }
 
-## Answers /liton/v1/passkeys/register/begin: a challenge for the person
-## asking to make a passkey for this box with, and what the browser asks
-## for it: the site, the person, and the passkeys they have, not to make
-## twice.
-register_begun! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-register_begun! = |context, request, headers|
-	match passkey_site(context, request, headers) {
-		Err(refused) => Ok(refused)
-		Ok({ rp_id, .. }) => {
-			person : { name : Str }
-			person = Sqlite.query!({ db: context.db, query: "SELECT name FROM persons WHERE id = :id;", params: { id: context.person }, limits: Sqlite.default_query_limits })?
-			kept : List({ id : Str })
-			kept = Sqlite.query_many!({ db: context.db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person: context.person, rp_id }, limits: Sqlite.default_query_limits })?
-			challenge = challenge_made!(context.db, "register", context.person, "")?
-			Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(context.person.to_utf8()), user_name: "${person.name} (${rp_id})", display_name: person.name, exclude: kept.map(|row| row.id) })))
+## Answers /liton/v1/passkeys/register/begin: a challenge to make a
+## passkey for this box with, for the person signed in, or the one a
+## pairing `code` is for, which the passkey made spends; and what the
+## browser asks for it: the site, the person, and the passkeys they have,
+## not to make twice, and whether they are the owner still called "Owner",
+## to be named.
+register_begun! : Context, Server.Request, List({ name : Str, value : Str }), Bool => Try(Response, _)
+register_begun! = |context, request, headers, signed| {
+	given : Try({ code : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	db = context.db
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a passkey is asked for with {}, or {\"code\": \"ABCD-EFGH\"} for a pairing code's person"))
+		(Ok({ rp_id, .. }), Ok({ code })) => {
+			granted : Try({ person : Str, grant : Str }, Str)
+			granted =
+				match code {
+					Ok(typed) => {
+						if !attempt_allowed!(db)? {
+							return Ok(text(429, "too many pairing attempts; try again in a minute"))
+						}
+						codes : List({ person_id : Str })
+						codes = Sqlite.query_many!({ db, query: "SELECT person_id FROM pairing_codes WHERE code = :code AND expires_at > :now;", params: { code: Auth.typed_code(typed), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+						codes.first().map_ok(|row| { person: if (row.person_id == "") context.owner else row.person_id, grant: "pair:${Auth.typed_code(typed)}" }).map_err(|_| "that pairing code is wrong, used or expired")
+					}
+					Err(Missing) if signed => Ok({ person: context.person, grant: "" })
+					Err(Missing) => Err("sign in first, or make a passkey with a pairing code")
+				}
+			match granted {
+				Err(why) => Ok(text(401, why))
+				Ok({ person, grant }) => {
+					named : { name : Str, owner : I64 }
+					named = Sqlite.query!({ db, query: "SELECT name, owner FROM persons WHERE id = :id;", params: { id: person }, limits: Sqlite.default_query_limits })?
+					kept : List({ id : Str })
+					kept = Sqlite.query_many!({ db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person, rp_id }, limits: Sqlite.default_query_limits })?
+					challenge = challenge_made!(db, "register", person, grant)?
+					Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(person.to_utf8()), user_name: "${named.name} (${rp_id})", display_name: named.name, exclude: kept.map(|row| row.id), unnamed: named.owner == 1 and named.name == "Owner" })))
+				}
+			}
 		}
 	}
+}
+
+## A new session of the person `person_id` on a device called `name`,
+## signed in by the passkey `passkey_id`, lasting `session_ms` from its last
+## use, noted in the audit, and its token.
+session_made! : Sqlite.Transaction, Context, Str, Str, Str => Try({ device : { id : Str, name : Str }, token : Str }, _)
+session_made! = |transaction, context, person_id, passkey_id, name| {
+	{ device, token } = device_made!(transaction, name, person_id)?
+	transaction.execute!({ query: "UPDATE devices SET passkey_id = :passkey_id, expires_at = :expires_at WHERE id = :id;", params: { id: device.id, passkey_id, expires_at: now_ms!() + session_ms } })?
+	audited!(transaction, { ..context, person: person_id, asking: Device(device.id) }, "device.signed_in", device.id, Json.to_str({ name: device.name, passkey: passkey_id }))?
+	Ok({ device, token })
+}
 
 ## Answers /liton/v1/passkeys/register/finish: the new passkey of the person
 ## the challenge is for, once the browser's answer is checked
@@ -817,7 +865,7 @@ register_begun! = |context, request, headers|
 ## base64url, and a name for it.
 register_finished! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
 register_finished! = |context, request, headers| {
-	given : Try({ challenge : Str, id : Str, public_key : Str, alg : I64, authenticator_data : Str, client_data : Str, name : Try(Str, [Missing]) }, _)
+	given : Try({ challenge : Str, id : Str, public_key : Str, alg : I64, authenticator_data : Str, client_data : Str, name : Try(Str, [Missing]), person_name : Try(Str, [Missing]) }, _)
 	given = Json.parse(read_json!(request)?)
 	match (passkey_site(context, request, headers), given) {
 		(Err(refused), _) => Ok(refused)
@@ -828,7 +876,7 @@ register_finished! = |context, request, headers| {
 					transaction = Sqlite.begin!(context.db, Immediate)?
 					match challenge_taken!(transaction, made.challenge, "register")? {
 						Err(NoChallenge) => Ok(text(401, "that passkey request expired or was used; try again"))
-						Ok({ person_id, .. }) =>
+						Ok({ person_id, grant }) =>
 							match (WebAuthn.checked({ type: "webauthn.create", challenge: made.challenge, origin, rp_id }, client_data, authenticator_data), WebAuthn.public_key(made.alg, spki)) {
 								(Err(why), _) => Ok(text(400, why))
 								(_, Err(Unsupported)) => Ok(text(400, "liton takes passkeys of ES256 or Ed25519 alone"))
@@ -840,9 +888,28 @@ register_finished! = |context, request, headers| {
 									if stored.is_empty() {
 										return Ok(text(409, "that passkey is registered already"))
 									}
-									audited!(transaction, { ..context, person: person_id }, "passkey.added", made.id, Json.to_str({ name, rp_id, backed_up: data.backed_up }))?
+									as_person = { ..context, person: person_id }
+									audited!(transaction, as_person, "passkey.added", made.id, Json.to_str({ name, rp_id, backed_up: data.backed_up }))?
+									if grant == "" {
+										transaction.commit!()?
+										return Ok(json(Json.to_str({ passkey: { id: made.id, name } })))
+									}
+									spent : List({ code : Str })
+									spent = transaction.query_many!({ query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: grant.drop_prefix("pair:"), now }, limits: Sqlite.default_query_limits })?
+									if spent.is_empty() {
+										return Ok(text(401, "that pairing code was used or expired meanwhile"))
+									}
+									person_name = Str.from_utf8_lossy((made.person_name ?? "").trim().to_utf8().take_first(80))
+									renamed : List({ id : Str })
+									renamed = if (person_name == "") [] else transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :id AND owner = 1 AND name = 'Owner' RETURNING id;", params: { id: person_id, name: person_name }, limits: Sqlite.default_query_limits })?
+									if !renamed.is_empty() {
+										audited!(transaction, as_person, "person.renamed", person_id, Json.to_str({ name: person_name }))?
+									}
+									{ device, token } = session_made!(transaction, context, person_id, made.id, if (name == "") "A device" else name)?
+									person : { id : Str, name : Str, role : Str }
+									person = transaction.query!({ query: "SELECT id, name, role FROM persons WHERE id = :id;", params: { id: person_id }, limits: Sqlite.default_query_limits })?
 									transaction.commit!()?
-									Ok(json(Json.to_str({ passkey: { id: made.id, name } })))
+									Ok(json(Json.to_str({ passkey: { id: made.id, name }, device, person })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
 								}
 							}
 					}
@@ -891,9 +958,7 @@ login_finished! = |context, request, headers| {
 								Ok(data) => {
 									now = now_ms!()
 									transaction.execute!({ query: "UPDATE passkeys SET sign_count = :sign_count, backed_up = :backed_up, used_at = :now WHERE id = :id;", params: { id: answered.id, sign_count: data.sign_count.to_i64(), backed_up: if (data.backed_up) 1.I64 else 0, now } })?
-									{ device, token } = device_made!(transaction, answered.name ?? "", passkey.person_id)?
-									transaction.execute!({ query: "UPDATE devices SET passkey_id = :passkey_id, expires_at = :expires_at WHERE id = :id;", params: { id: device.id, passkey_id: answered.id, expires_at: now + session_ms } })?
-									audited!(transaction, { ..context, person: passkey.person_id, asking: Device(device.id) }, "device.signed_in", device.id, Json.to_str({ name: device.name, passkey: answered.id }))?
+									{ device, token } = session_made!(transaction, context, passkey.person_id, answered.id, answered.name ?? "")?
 									transaction.commit!()?
 									person = { id: passkey.person_id, name: passkey.name, role: passkey.role }
 									Ok(json(Json.to_str({ device, person })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
@@ -1055,14 +1120,11 @@ allows = |access, capability|
 		Holding(role) => role.capabilities.contains(capability)
 	}
 
-## Whether `access` lets a device use the route `path`: an operator's alone
-## pair other devices and list and revoke them, and voice's audio is
+## Whether `access` lets a device use the route `path`: voice's audio is
 ## voice.v1's.
 route_allowed : Access, Str -> Bool
 route_allowed = |access, path|
-	if path.starts_with("/liton/v1/devices") {
-		access == Operator
-	} else if path.starts_with(audio_route) {
+	if path.starts_with(audio_route) {
 		allows(access, "voice.v1")
 	} else {
 		Bool.True
@@ -2532,7 +2594,7 @@ create_tables! = |db| {
 	# each used once within 5 minutes.
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, rp_id TEXT NOT NULL, alg INTEGER NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL, backed_up INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, used_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, purpose TEXT NOT NULL, person_id TEXT NOT NULL DEFAULT '', grant TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, person_id TEXT NOT NULL DEFAULT '');", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
 	# The invites not used yet, each kept by its secret's SHA-256.
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL);", params: {} })?
@@ -4366,7 +4428,7 @@ expect {
 	(held == Holding(staff), access_of([staff], "") == Holding({ ..staff, name: "", capabilities: [], presets: [] }), access_of([staff], "operator"), access_of([], "staff") == Holding({ ..staff, capabilities: [], presets: [] }))
 		== (Bool.True, Bool.True, Operator, Bool.True)
 		and [allows(held, "rooms.v1"), allows(held, "chat.v1"), allows(Operator, "chat.v1")] == [Bool.True, Bool.False, Bool.True]
-		and ["/liton/v1/devices", "/liton/v1/devices/code", "/liton/v1/manifest", audio_route].map(|path| route_allowed(held, path)) == [Bool.False, Bool.False, Bool.True, Bool.False]
+		and ["/liton/v1/devices", "/liton/v1/devices/code", "/liton/v1/manifest", audio_route].map(|path| route_allowed(held, path)) == [Bool.True, Bool.True, Bool.True, Bool.False]
 }
 
 expect {

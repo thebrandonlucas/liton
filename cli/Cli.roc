@@ -34,8 +34,10 @@ Cli := [].{
 		\\prints to liton.setup.json.
 		\\
 		\\`pair`, run on the daemon's machine, prints a pairing code for a new
-		\\device, good once for 10 minutes, which it writes in the daemon's
-		\\database at LITON_DB (default liton.db). `login` pairs this command line
+		\\device of the box's owner, good once for 10 minutes, which it writes in
+		\\the daemon's database at LITON_DB (default liton.db): its link makes the
+		\\owner's passkey on a fresh box, or after they lost every one, and signs
+		\\them in. `login` pairs this command line
 		\\with the daemon by such a code, and keeps its token, readable by you
 		\\alone, in $XDG_CONFIG_HOME/liton/tokens (default ~/.config). LITON_TOKEN,
 		\\if set, is used in place of the token kept.
