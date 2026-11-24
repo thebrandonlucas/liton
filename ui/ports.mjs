@@ -171,6 +171,33 @@ const swipe = (_, { emit }) => {
 // Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
 const voice = () => import("./voice.mjs");
 
+// Bytes as base64url, and back, as the daemon's passkey routes take them.
+const base64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+const bytes = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
+
+// A passkey made, or used to sign in, as the daemon's options ask
+// (ui/Ports.roc), and the body its finish route takes, as JSON.
+const passkey = async ({ create, options, name, person_name }) => {
+  const o = JSON.parse(options);
+  if (!create) {
+    const got = await navigator.credentials.get({ publicKey: { challenge: bytes(o.challenge), rpId: o.rp_id, userVerification: "required", allowCredentials: [] } });
+    return JSON.stringify({ challenge: o.challenge, id: base64url(got.rawId), authenticator_data: base64url(got.response.authenticatorData), client_data: base64url(got.response.clientDataJSON), signature: base64url(got.response.signature), name });
+  }
+  const made = await navigator.credentials.create({
+    publicKey: {
+      challenge: bytes(o.challenge),
+      rp: { id: o.rp_id, name: o.rp_id },
+      user: { id: bytes(o.user_id), name: o.user_name, displayName: o.display_name },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -8 }],
+      authenticatorSelection: { residentKey: "required", userVerification: "required" },
+      attestation: "none",
+      excludeCredentials: o.exclude.map((id) => ({ type: "public-key", id: bytes(id) })),
+    },
+  });
+  const r = made.response;
+  return JSON.stringify({ challenge: o.challenge, id: base64url(made.rawId), public_key: base64url(r.getPublicKey()), alg: r.getPublicKeyAlgorithm(), authenticator_data: base64url(r.getAuthenticatorData()), client_data: base64url(r.clientDataJSON), name, person_name });
+};
+
 export default {
   // Copies text, answering whether the browser let it. The clipboard API
   // needs a secure context; a page served over plain HTTP from another
@@ -203,4 +230,5 @@ export default {
   },
   "liton/voice/order": { command: (asked) => voice().then((v) => v.order(asked)) },
   "liton/voice/voices": { call: () => voice().then((v) => v.voices()) },
+  "liton/passkey": { call: passkey },
 };

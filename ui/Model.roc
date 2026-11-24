@@ -75,6 +75,28 @@ Model := [].{
 	## times in milliseconds, `current` the one asking.
 	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool }
 
+	## No passkey being made or used.
+	ceremony_idle : Ceremony
+	ceremony_idle = { serial: 0, purpose: SignIn, options: "", unnamed: Bool.False, person_name: "", invited: "", busy: Bool.False, failed: "", begin: { serial: 0, ceremony: 0, route: "", body: "" }, ask: { serial: 0, ceremony: 0, create: Bool.False, options: "", name: "", person_name: "" }, finish: { serial: 0, ceremony: 0, route: "", body: "" } }
+
+	## A passkey of the person signed in, as /liton/v1/passkeys lists it: the
+	## site it is for, whether it is backed up, as a synced one is, its times
+	## in milliseconds, and whether this browser signed in with it.
+	Passkey : { id : Str, name : Str, rp_id : Str, backed_up : Bool, created_at : I64, used_at : I64, current : Bool }
+
+	## What a passkey is wanted for: signing in, one more for the person
+	## signed in, or one a pairing code or an invite's secret grants.
+	Purpose : [SignIn, Register, Pair(Str), Invite(Str)]
+
+	## A passkey being made or used (ui/Pairing.roc), numbered by `serial`:
+	## what for; the daemon's challenge and what the browser is asked, once
+	## it answered; whether the owner it is for still has no name, and the
+	## name typed; whom an invite is for; whether it waits on the daemon or
+	## the browser, and why it failed; and the requests, the challenge
+	## asked for (`begin`), the browser asked (`ask`), and its answer sent
+	## (`finish`), each of the ceremony numbered `ceremony`.
+	Ceremony : { serial : U64, purpose : Purpose, options : Str, unnamed : Bool, person_name : Str, invited : Str, busy : Bool, failed : Str, begin : { serial : U64, ceremony : U64, route : Str, body : Str }, ask : { serial : U64, ceremony : U64, create : Bool, options : Str, name : Str, person_name : Str }, finish : { serial : U64, ceremony : U64, route : Str, body : Str } }
+
 	## Pairing this browser with the daemon and the devices paired
 	## (ui/Pairing.roc): whether the daemon answered that it isn't paired;
 	## the code typed or the URL's `#pair=` gave, and whether that one is to
@@ -84,8 +106,10 @@ Model := [].{
 	## listings asked for; the revocations on their way, as `revoke` sent
 	## them; and a code made for another device, while `asking` or once
 	## given, with the link that pairs a browser with it; the URL's `#invite=`
-	## secret, redeemed once the daemon refuses, as `redeem` sends it.
-	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, redeem : { serial : U64, secret : Str, name : Str } }
+	## secret, redeemed once the daemon refuses; the passkeys last listed and
+	## the site they are for, those being deleted, as `delete` sent them; the
+	## passkey being made or used; and the sign-outs of this browser asked.
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, passkeys : List(Passkey), rp_id : Str, deleting : List(Str), delete : { serial : U64, id : Str }, ceremony : Ceremony, logout : U64 }
 
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
@@ -566,7 +590,7 @@ Model := [].{
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				locked: Bool.False,
-				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", redeem: { serial: 0, secret: "", name: "" } },
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", passkeys: [], rp_id: "", deleting: [], delete: { serial: 0, id: "" }, ceremony: Model.ceremony_idle, logout: 0 },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -912,6 +936,10 @@ Model := [].{
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
 	toggle_settings = |state| if (state.locked and !state.show_settings) state else Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+
+	## Opens Settings at Passkeys & devices, a locked UI's too.
+	open_passkeys : State -> State
+	open_passkeys = |state| { ..state, show_settings: Bool.True, settings_page: { section: "devices", pushed: Bool.True } }
 
 	## Shows a section of Settings, over its list on a phone.
 	## Opens Settings at what the daemon connects.

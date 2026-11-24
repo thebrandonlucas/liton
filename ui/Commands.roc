@@ -21,6 +21,7 @@ Commands := [].{
 			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
 			{ id: "palette", title: "Open or close the palette", group: "View", applies: always, run: |shown| if (shown.palette.open) Commands.close(shown) else Commands.open_palette(shown) },
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: Model.toggle_settings },
+			{ id: "passkeys", title: "Passkeys & devices", group: "Account", applies: always, run: Model.open_passkeys },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: Commands.thread_open, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },

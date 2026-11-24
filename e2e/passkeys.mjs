@@ -33,6 +33,7 @@ const fail = (error) => {
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "liton-passkeys-"));
 fs.mkdirSync(path.join(scratch, "www"));
 fs.writeFileSync(path.join(scratch, "www/index.html"), "<!doctype html><title>liton</title>");
+fs.copyFileSync(path.join(repo, "ui/ports.mjs"), path.join(scratch, "www/ports.mjs"));
 const database = path.join(scratch, "liton.db");
 let daemon_process;
 const start = (env = {}) => {
@@ -121,11 +122,16 @@ try {
     assert.equal(await poll(), 401);
   });
   let answer;
-  await step("the passkey signs the browser in, a session of 30 days, and the passkey shows as this browser's", async () => {
-    const signed = await page.evaluate(`liton.sign_in()`);
+  await step("the passkey signs the browser in through the UI's port (ui/ports.mjs), and shows as this browser's", async () => {
+    const signed = await page.evaluate(`(async () => {
+      const port = (await import("/ui/ports.mjs")).default["liton/passkey"];
+      const begun = await liton.post("login/begin", {});
+      const body = await port.call({ create: false, options: JSON.stringify(begun.body), name: "Browser", person_name: "" });
+      return { body, finished: await liton.post("login/finish", JSON.parse(body)) };
+    })()`);
     assert.equal(signed.finished.status, 200, signed.finished.body);
     assert.deepEqual([signed.finished.body.person.name, signed.finished.body.person.role], ["Ada", "operator"]);
-    answer = signed.answer;
+    answer = JSON.parse(signed.body);
     assert.equal(await poll(), 200);
     const listed = await page.evaluate(`fetch("/liton/v1/passkeys").then((r) => r.json())`);
     assert.deepEqual(listed.passkeys.map((passkey) => [passkey.name, passkey.rp_id, passkey.current]), [["Laptop", "localhost", true], ["Phone", "localhost", false]]);

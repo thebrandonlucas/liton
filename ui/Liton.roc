@@ -583,9 +583,10 @@ Liton := [].{
 		said.map_ok(|{ access }| access.locked) ?? Bool.False
 	}
 
-	## Opens or closes Settings, shown unless the UI is locked.
+	## Opens or closes Settings; in a locked UI, opens its Passkeys & devices
+	## alone.
 	settings_toggle : State(ctx, Model.State), Str -> Elem(ctx)
-	settings_toggle = |model, class| Engine.when(model.signal().map(|state| !state.locked), || Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings)), || Engine.text(""))
+	settings_toggle = |model, class| Engine.when(model.signal().map(|state| !state.locked), || Html.button("", [Engine.class(class), Html.aria_label("Settings"), Engine.attr_s("title", model.signal().map(|state| "Settings (${Keymap.text_of(state.operating_system, Keymap.defaults, "settings")})")), Html.flag("aria-expanded", model.signal().map(|state| state.show_settings))], model.update(Model.toggle_settings)), || Html.button("Passkeys & devices", [Engine.class("account-toggle")], model.update(Model.open_passkeys)))
 
 	## The palette over everything, which a click outside closes: a box to
 	## type in, and the entries what is typed matches, each with its group
@@ -768,8 +769,9 @@ Liton := [].{
 	## covers it until its ← goes back.
 	settings : State(Ctx, Model.State) -> Elem(Ctx)
 	settings = |model| {
-		picked = model.signal().map(|state| state.settings_page.section)
+		picked = model.signal().map(|state| if (state.locked) "devices" else state.settings_page.section)
 		shown = |section, view| Engine.when(picked.map(|id| id == section), view, || Engine.text(""))
+		unlocked = |view| Engine.when(model.signal().map(|state| !state.locked), view, || Engine.text(""))
 		Engine.when(
 			model.signal().map(|state| state.show_settings),
 			||
@@ -782,11 +784,11 @@ Liton := [].{
 							[Engine.class("settings-rail"), Html.aria_label("Sections")],
 							[
 								Html.button("← Back", [Engine.class("settings-close"), Html.aria_label("Close settings")], model.update(Model.toggle_settings)),
-								Html.h3("App", "settings-group"),
+								unlocked(|| Html.h3("App", "settings-group")),
 							]
-								.concat(Liton.settings_sections.map(|(section, title)| Liton.section_button(model, section, title)))
-								.concat([Html.h3("Host", "settings-group"), Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host"))), Liton.section_button(model, "hosts", "Hosts"), Liton.section_button(model, "devices", "Devices"), Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.people_v1)), || Liton.section_button(model, "people", "People"), || Engine.text(""))])
-								.concat([Html.h3("Surface", "settings-group"), Liton.section_button(model, "deck", "Deck"), Liton.section_button(model, "surface", "Surface"), Liton.section_button(model, "snapshot", "Snapshot")]),
+								.concat(Liton.settings_sections.map(|(section, title)| unlocked(|| Liton.section_button(model, section, title))))
+								.concat([unlocked(|| Html.h3("Host", "settings-group")), unlocked(|| Html.button_s(model.signal().map(|state| if (state.daemon.name.is_empty()) "This daemon" else state.daemon.name), [Html.flag("aria-pressed", model.signal().map(|state| state.settings_page.section == "host"))], model.update(|state| Model.show_section(state, "host")))), unlocked(|| Liton.section_button(model, "hosts", "Hosts")), Liton.section_button(model, "devices", "Passkeys & devices"), Engine.when(model.signal().map(|state| state.capabilities.contains(Capability.people_v1) and !state.locked), || Liton.section_button(model, "people", "People"), || Engine.text(""))])
+								.concat([unlocked(|| Html.h3("Surface", "settings-group")), unlocked(|| Liton.section_button(model, "deck", "Deck")), unlocked(|| Liton.section_button(model, "surface", "Surface")), unlocked(|| Liton.section_button(model, "snapshot", "Snapshot"))]),
 						),
 						Html.div(
 							"settings-detail",
@@ -823,7 +825,7 @@ Liton := [].{
 
 	## The title of Settings' section `section`.
 	section_title : Str -> Str
-	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Devices"), ("people", "People"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
+	section_title = |section| Liton.settings_sections.concat([("hosts", "Hosts"), ("devices", "Passkeys & devices"), ("people", "People"), ("deck", "Deck"), ("surface", "Surface"), ("snapshot", "Snapshot")]).find_first(|(id, _)| id == section).map_ok(|(_, title)| title) ?? section
 
 	## A section in Settings' rail, pressed while shown.
 	section_button : State(Ctx, Model.State), Str, Str -> Elem(Ctx)
