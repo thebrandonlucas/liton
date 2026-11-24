@@ -4,6 +4,8 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 ### Added
 
 - An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
