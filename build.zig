@@ -499,6 +499,14 @@ pub fn build(b: *std.Build) void {
     run_rooms.step.dependOn(&install_daemon.step);
     run_rooms.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_rooms.step);
+    // Registers a passkey and signs in with it, in headless Chrome with a
+    // virtual authenticator.
+    const run_passkeys = b.addSystemCommand(&.{ "node", "e2e/passkeys.mjs" });
+    run_passkeys.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_passkeys.has_side_effects = true;
+    run_passkeys.step.dependOn(&install_daemon.step);
+    run_passkeys.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_passkeys.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);

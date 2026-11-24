@@ -9,6 +9,7 @@ All notable changes to liton are documented in this file. The format is based on
 - An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
 - A setup's room declares whether it is `open`: anyone whose role uses rooms joins an open room themselves, where a closed one's admins add its members. A room you can't join says why, such as that it is closed and you weren't invited.
 - The daemon keeps an audit of who changed what: people, devices, invites, rooms and their members.
+- People sign in with passkeys. With `LITON_RP_ID` set to the box's name, such as `box.example.ts.net`, a signed-in person registers a passkey (`/liton/v1/passkeys/register/begin` and `finish`), and signs in with it on any browser that has it, synced passkeys and a phone's QR code included (`/liton/v1/login/begin` and `finish`), for a session that lasts 30 days from its last use. `/liton/v1/logout` signs a device out, `GET /liton/v1/passkeys` lists your passkeys and `/liton/v1/passkeys/delete` forgets one, signing out the devices it signed in. Without `LITON_RP_ID`, passkeys are refused with why; a request to another name is told the one to use. people.v1 counts each person's passkeys.
 - The release archive and the Nix package ship `liton-verify` beside `liton-daemon`: a small program the daemon runs to check a passkey's signature (ES256 or Ed25519) when someone signs in.
 
 ### Changed

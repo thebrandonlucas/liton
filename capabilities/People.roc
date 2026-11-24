@@ -9,9 +9,9 @@ import Rooms
 People := [].{
 
 	## A person and the role they hold: `owner` the box's owner, an
-	## operator always; `agent` an agent rather than a human; `devices` how
-	## many devices they are signed in on.
-	Person : { id : Str, name : Str, role : Str, agent : Bool, owner : Bool, devices : U32 }
+	## operator always; `agent` an agent rather than a human; `passkeys` how
+	## many passkeys they sign in with, and `devices` on how many devices.
+	Person : { id : Str, name : Str, role : Str, agent : Bool, owner : Bool, passkeys : U32, devices : U32 }
 
 	## An invite not used yet: for whom, its role, its rooms and when it
 	## expires, as 2026-01-01T09:00:00.000Z.

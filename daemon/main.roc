@@ -23,6 +23,12 @@
 ## LITON_HOST is loopback and no proxy forwarded the request; `required`
 ## always; `off` never.
 ##
+## LITON_RP_ID is the box's name, such as box.example.ts.net, the site its
+## passkeys are for: people sign in with them at https://<LITON_RP_ID>, or
+## at http://localhost:<port> where it is `localhost`. Unset, passkeys are
+## refused. LITON_VERIFY names liton-verify, which checks their signatures
+## (by default, beside the daemon).
+##
 ## LITON_SETUP names the setup a Litonfile evaluates to (`liton setup`), by
 ## default liton.setup.json if there is one, or else liton's own
 ## (setup/Default.roc). It declares the remotes, the transformers and the
@@ -127,7 +133,7 @@ import WebAuthn
 ## the owner's id, the person asking (the owner where no device
 ## need be), and what their role lets them do (`Access`), of the setup's
 ## roles.
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], owner : Str, person : Str, roles : List(Setup.Role), access : Access }
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], owner : Str, person : Str, rp_id : Str, verify : Str, roles : List(Setup.Role), access : Access }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -200,13 +206,21 @@ init! = || {
 		}
 	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
 	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
-	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, owner, person: owner, roles: setup.roles, access: Operator }) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, owner, person: owner, rp_id: env_or!("LITON_RP_ID", "").trim(), verify: env_or!("LITON_VERIFY", verify_beside!()), roles: setup.roles, access: Operator }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
 	remotes_cycle!(context) ? |_| Exit(3)
 	setup_rooms_kept!(context, setup.rooms) ? |_| Exit(3)
 	Ok({ config, context })
+}
+
+## liton-verify beside the daemon's program, as a release ships it.
+verify_beside! : () => Str
+verify_beside! = || {
+	daemon_path = Env.exe_path!().map_ok(Path.display) ?? ""
+	directory = daemon_path.split_last("/").map_ok(|{ before, .. }| before) ?? "."
+	"${directory}/liton-verify"
 }
 
 ## The owner's id, the person called "Owner", an operator, made at the
@@ -337,7 +351,7 @@ routed! = |started, request, headers| {
 			Resource({ raw_path, .. }) => raw_path
 			_ => ""
 		}
-	seen = if (path.starts_with("/liton/v1/") and path != "/liton/v1/pair" and path != "/liton/v1/invite") signed_in!(served, headers)? else Ok(Open)
+	seen = if (path.starts_with("/liton/v1/") and !["/liton/v1/pair", "/liton/v1/invite", "/liton/v1/login/begin", "/liton/v1/login/finish"].contains(path)) signed_in!(served, headers)? else Ok(Open)
 	asking = seen ?? Open
 	signing_in : List({ person_id : Str })
 	signing_in = match asking {
@@ -362,13 +376,21 @@ routed! = |started, request, headers| {
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
 		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
 		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
+		(_, POST, "/liton/v1/passkeys/register/begin") => register_begun!(context, request, headers)
+		(_, POST, "/liton/v1/passkeys/register/finish") => register_finished!(context, request, headers)
+		(_, GET, "/liton/v1/passkeys") => passkeys!(context)
+		(_, POST, "/liton/v1/passkeys/delete") => passkey_deleted!(context, request)
+		(_, POST, "/liton/v1/login/begin") => login_begun!(context, request, headers)
+		(_, POST, "/liton/v1/login/finish") => login_finished!(context, request, headers)
+		(Ok(Device(id)), POST, "/liton/v1/logout") => logged_out!(context, id)
 		(_, POST, _) if path.starts_with(audio_route) => audio_chunk!(context, request, path.drop_prefix(audio_route))
 		_ => Ok(text(404, "Not found"))
 	}
 }
 
 ## The device a request comes from, by the token it shows (`Auth.credential`):
-## `Device(id)` when the token is one paired, else `Open` when this request
+## `Device(id)` when the token is one paired and its session hasn't ended
+## (`session_ms`, kept to the day), else `Open` when this request
 ## needn't be paired (`Auth.required`), or else `Unpaired`. A device's last
 ## use is kept to the minute.
 signed_in! : Context, List({ name : Str, value : Str }) => Try(Try([Device(Str), Open], [Unpaired]), _)
@@ -376,12 +398,13 @@ signed_in! = |context, headers| {
 	unknown = if (Auth.required(context.auth, headers)) Err(Unpaired) else Ok(Open)
 	match Auth.credential(headers) {
 		Ok({ id, secret }) => {
+			now = now_ms!()
 			kept : List({ token_hash : Str })
-			kept = Sqlite.query_many!({ db: context.db, query: "SELECT token_hash FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+			kept = Sqlite.query_many!({ db: context.db, query: "SELECT token_hash FROM devices WHERE id = :id AND (expires_at = 0 OR expires_at > :now);", params: { id, now }, limits: Sqlite.default_query_limits })?
 			match kept {
 				[{ token_hash }] if Auth.same(Sha256.hex(secret.to_utf8()), token_hash) => {
-					now = now_ms!()
 					Sqlite.execute!({ db: context.db, query: "UPDATE devices SET seen_at = :now WHERE id = :id AND seen_at < :since;", params: { id, now, since: now - 60_000 } })?
+					Sqlite.execute!({ db: context.db, query: "UPDATE devices SET expires_at = :expires_at WHERE id = :id AND expires_at != 0 AND expires_at < :since;", params: { id, expires_at: now + session_ms, since: now + session_ms - 86_400_000 } })?
 					Ok(Ok(Device(id)))
 				}
 				_ => Ok(unknown)
@@ -484,12 +507,12 @@ invite_ms = 604_800_000
 ## invite into: an operator any, an admin any but `operator`.
 people! : Context => Try(People.Listing, _)
 people! = |{ db, roles, access, .. }| {
-	listed : List({ id : Str, name : Str, role : Str, agent : I64, owner : I64, devices : I64 })
-	listed = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, owner, (SELECT count(*) FROM devices WHERE devices.person_id = persons.id) AS devices FROM persons WHERE role != '' ORDER BY owner DESC, name, id;", params: {}, limits: Sqlite.default_query_limits })?
+	listed : List({ id : Str, name : Str, role : Str, agent : I64, owner : I64, passkeys : I64, devices : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, owner, (SELECT count(*) FROM passkeys WHERE passkeys.person_id = persons.id) AS passkeys, (SELECT count(*) FROM devices WHERE devices.person_id = persons.id) AS devices FROM persons WHERE role != '' ORDER BY owner DESC, name, id;", params: {}, limits: Sqlite.default_query_limits })?
 	invites : List({ id : Str, name : Str, role : Str, rooms : Str, expires_at : I64 })
 	invites = Sqlite.query_many!({ db, query: "SELECT id, name, role, rooms, expires_at FROM invites WHERE expires_at > :now ORDER BY expires_at;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
 	Ok({
-		people: listed.map(|person| { id: person.id, name: person.name, role: person.role, agent: person.agent == 1, owner: person.owner == 1, devices: person.devices.to_u32_wrap() }),
+		people: listed.map(|person| { id: person.id, name: person.name, role: person.role, agent: person.agent == 1, owner: person.owner == 1, passkeys: person.passkeys.to_u32_wrap(), devices: person.devices.to_u32_wrap() }),
 		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at) }),
 		roles: (if (access == Operator) ["operator"] else []).concat(roles.map(|role| role.name)),
 	})
@@ -538,6 +561,7 @@ people_call! = |context, asked| {
 				[_] => {
 					transaction = Sqlite.begin!(db, Immediate)?
 					transaction.execute!({ query: "DELETE FROM devices WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "DELETE FROM passkeys WHERE person_id = :person;", params: { person } })?
 					transaction.execute!({ query: "DELETE FROM members WHERE person_id = :person;", params: { person } })?
 					transaction.execute!({ query: "UPDATE persons SET role = '' WHERE id = :person;", params: { person } })?
 					audited!(transaction, context, "person.removed", person, "{}")?
@@ -708,6 +732,239 @@ revoked! = |{ db, .. }, request, asking| {
 		Ok({ id }) => {
 			Sqlite.execute!({ db, query: "DELETE FROM devices WHERE id = :id;", params: { id } })?
 			Ok(if (asking == Device(id)) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
+		}
+	}
+}
+
+## How long a session a passkey opens lasts unused: 30 days from its last
+## use.
+session_ms : I64
+session_ms = 2_592_000_000
+
+## How long a passkey's challenge lasts: 5 minutes.
+challenge_ms : I64
+challenge_ms = 300_000
+
+## The site passkeys are for, LITON_RP_ID, and the origin a browser on it
+## shows, when the request came to it; else why passkeys can't be used.
+passkey_site : Context, Server.Request, List({ name : Str, value : Str }) -> Try({ rp_id : Str, origin : Str }, Response)
+passkey_site = |{ rp_id, .. }, request, headers| {
+	(host, port) =
+		match request.authority() {
+			Present(named) =>
+				match named.port() {
+					Present(number) => (named.host(), ":${number.to_str()}")
+					Absent => (named.host(), "")
+				}
+			Absent => ("", "")
+		}
+	if rp_id == "" {
+		Err(text(503, "passkeys need the box's name: set LITON_RP_ID, such as box.example.ts.net"))
+	} else if !host.caseless_ascii_equals(rp_id) {
+		Err(text(403, "passkeys are for ${rp_id}: open https://${rp_id}/ui/index.html to use them"))
+	} else if rp_id == "localhost" and !Auth.secure(headers) {
+		Ok({ rp_id, origin: "http://localhost${port}" })
+	} else {
+		Ok({ rp_id, origin: "https://${rp_id}${port}" })
+	}
+}
+
+## A new challenge, to `purpose` (`register` or `login`), for the person
+## `person_id` ("" for whoever answers it), given by `grant`, an invite or a
+## pairing code ("" for none), as base64url.
+challenge_made! : Sqlite.Db, Str, Str, Str => Try(Str, _)
+challenge_made! = |db, purpose, person_id, grant| {
+	now = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM challenges WHERE expires_at <= :now;", params: { now } })?
+	random : { id : Str, bytes : Sqlite.Blob }
+	random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, randomblob(32) AS bytes;", params: {}, limits: Sqlite.default_query_limits })?
+	challenge = WebAuthn.base64url(random.bytes.to_bytes())
+	Sqlite.execute!({ db, query: "INSERT INTO challenges (id, challenge, purpose, person_id, grant, expires_at) VALUES (:id, :challenge, :purpose, :person_id, :grant, :expires_at);", params: { id: random.id, challenge, purpose, person_id, grant, expires_at: now + challenge_ms } })?
+	Ok(challenge)
+}
+
+## The challenge `challenge` to `purpose`, used up, if it is one not
+## expired: whom it is for, and what grants it.
+challenge_taken! : Sqlite.Transaction, Str, Str => Try(Try({ person_id : Str, grant : Str }, [NoChallenge]), _)
+challenge_taken! = |transaction, challenge, purpose| {
+	taken : List({ person_id : Str, grant : Str })
+	taken = transaction.query_many!({ query: "DELETE FROM challenges WHERE challenge = :challenge AND purpose = :purpose AND expires_at > :now RETURNING person_id, grant;", params: { challenge, purpose, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	Ok(taken.first().map_err(|_| NoChallenge))
+}
+
+## Answers /liton/v1/passkeys/register/begin: a challenge for the person
+## asking to make a passkey for this box with, and what the browser asks
+## for it: the site, the person, and the passkeys they have, not to make
+## twice.
+register_begun! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+register_begun! = |context, request, headers|
+	match passkey_site(context, request, headers) {
+		Err(refused) => Ok(refused)
+		Ok({ rp_id, .. }) => {
+			person : { name : Str }
+			person = Sqlite.query!({ db: context.db, query: "SELECT name FROM persons WHERE id = :id;", params: { id: context.person }, limits: Sqlite.default_query_limits })?
+			kept : List({ id : Str })
+			kept = Sqlite.query_many!({ db: context.db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person: context.person, rp_id }, limits: Sqlite.default_query_limits })?
+			challenge = challenge_made!(context.db, "register", context.person, "")?
+			Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(context.person.to_utf8()), user_name: "${person.name} (${rp_id})", display_name: person.name, exclude: kept.map(|row| row.id) })))
+		}
+	}
+
+## Answers /liton/v1/passkeys/register/finish: the new passkey of the person
+## the challenge is for, once the browser's answer is checked
+## (`WebAuthn.checked`): its credential id, its public key as SPKI, its
+## algorithm, ES256 or Ed25519, the authenticator data and client data, each
+## base64url, and a name for it.
+register_finished! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+register_finished! = |context, request, headers| {
+	given : Try({ challenge : Str, id : Str, public_key : Str, alg : I64, authenticator_data : Str, client_data : Str, name : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a passkey is {\"challenge\", \"id\", \"public_key\", \"alg\", \"authenticator_data\", \"client_data\", \"name\"}, its bytes base64url"))
+		(Ok({ rp_id, origin }), Ok(made)) =>
+			match (WebAuthn.from_base64url(made.public_key), WebAuthn.from_base64url(made.authenticator_data), WebAuthn.from_base64url(made.client_data)) {
+				(Ok(spki), Ok(authenticator_data), Ok(client_data)) => {
+					transaction = Sqlite.begin!(context.db, Immediate)?
+					match challenge_taken!(transaction, made.challenge, "register")? {
+						Err(NoChallenge) => Ok(text(401, "that passkey request expired or was used; try again"))
+						Ok({ person_id, .. }) =>
+							match (WebAuthn.checked({ type: "webauthn.create", challenge: made.challenge, origin, rp_id }, client_data, authenticator_data), WebAuthn.public_key(made.alg, spki)) {
+								(Err(why), _) => Ok(text(400, why))
+								(_, Err(Unsupported)) => Ok(text(400, "liton takes passkeys of ES256 or Ed25519 alone"))
+								(Ok(data), Ok(key)) => {
+									now = now_ms!()
+									name = Str.from_utf8_lossy((made.name ?? "").trim().to_utf8().take_first(80))
+									stored : List({ id : Str })
+									stored = transaction.query_many!({ query: "INSERT INTO passkeys (id, person_id, rp_id, alg, public_key, sign_count, backed_up, name, created_at, used_at) VALUES (:id, :person_id, :rp_id, :alg, :public_key, :sign_count, :backed_up, :name, :now, 0) ON CONFLICT (id) DO NOTHING RETURNING id;", params: { id: made.id, person_id, rp_id, alg: made.alg, public_key: Sqlite.Blob.from_bytes(key), sign_count: data.sign_count.to_i64(), backed_up: if (data.backed_up) 1.I64 else 0, name: if (name == "") "A passkey" else name, now }, limits: Sqlite.default_query_limits })?
+									if stored.is_empty() {
+										return Ok(text(409, "that passkey is registered already"))
+									}
+									audited!(transaction, { ..context, person: person_id }, "passkey.added", made.id, Json.to_str({ name, rp_id, backed_up: data.backed_up }))?
+									transaction.commit!()?
+									Ok(json(Json.to_str({ passkey: { id: made.id, name } })))
+								}
+							}
+					}
+				}
+				_ => Ok(text(400, "a passkey's public_key, authenticator_data and client_data are base64url"))
+			}
+	}
+}
+
+## Answers /liton/v1/login/begin: a challenge any passkey of this box
+## answers, the person being whom it is for.
+login_begun! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+login_begun! = |context, request, headers|
+	match passkey_site(context, request, headers) {
+		Err(refused) => Ok(refused)
+		Ok(_) if !attempt_allowed!(context.db)? => Ok(text(429, "too many sign-in attempts; try again in a minute"))
+		Ok({ rp_id, .. }) => Ok(json(Json.to_str({ challenge: challenge_made!(context.db, "login", "", "")?, rp_id })))
+	}
+
+## Answers /liton/v1/login/finish: a passkey's answer to a challenge, its
+## credential id, authenticator data, client data and signature, each
+## base64url, checked (`WebAuthn.checked`, liton-verify), for a session of
+## the passkey's person on a new device called `name`, lasting `session_ms`
+## from its last use, its token a cookie.
+login_finished! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+login_finished! = |context, request, headers| {
+	given : Try({ challenge : Str, id : Str, authenticator_data : Str, client_data : Str, signature : Str, name : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a sign-in is {\"challenge\", \"id\", \"authenticator_data\", \"client_data\", \"signature\", \"name\"}, its bytes base64url"))
+		(Ok(_), _) if !attempt_allowed!(context.db)? => Ok(text(429, "too many sign-in attempts; try again in a minute"))
+		(Ok({ rp_id, origin }), Ok(answered)) =>
+			match (WebAuthn.from_base64url(answered.authenticator_data), WebAuthn.from_base64url(answered.client_data), WebAuthn.from_base64url(answered.signature)) {
+				(Ok(authenticator_data), Ok(client_data), Ok(signature)) => {
+					transaction = Sqlite.begin!(context.db, Immediate)?
+					kept : List({ person_id : Str, alg : I64, public_key : Sqlite.Blob, sign_count : I64, name : Str, role : Str })
+					kept = transaction.query_many!({ query: "SELECT person_id, alg, public_key, sign_count, persons.name AS name, role FROM passkeys JOIN persons ON persons.id = passkeys.person_id WHERE passkeys.id = :id AND rp_id = :rp_id;", params: { id: answered.id, rp_id }, limits: Sqlite.default_query_limits })?
+					match (challenge_taken!(transaction, answered.challenge, "login")?, kept) {
+						(Err(NoChallenge), _) => Ok(text(401, "that sign-in expired or was used; try again"))
+						(_, [passkey]) if passkey.role != "" =>
+							match WebAuthn.checked({ type: "webauthn.get", challenge: answered.challenge, origin, rp_id }, client_data, authenticator_data) {
+								Err(why) => Ok(text(401, why))
+								Ok(data) if !WebAuthn.counted(passkey.sign_count.to_u32_wrap(), data.sign_count) => Ok(text(401, "this passkey's counter went back, as a copy's would: sign in with another"))
+								Ok(_) if !verified!(context.verify, passkey.alg, passkey.public_key.to_bytes(), WebAuthn.signed_message(authenticator_data, client_data), signature) => Ok(text(401, "the passkey's signature is wrong"))
+								Ok(data) => {
+									now = now_ms!()
+									transaction.execute!({ query: "UPDATE passkeys SET sign_count = :sign_count, backed_up = :backed_up, used_at = :now WHERE id = :id;", params: { id: answered.id, sign_count: data.sign_count.to_i64(), backed_up: if (data.backed_up) 1.I64 else 0, now } })?
+									{ device, token } = device_made!(transaction, answered.name ?? "", passkey.person_id)?
+									transaction.execute!({ query: "UPDATE devices SET passkey_id = :passkey_id, expires_at = :expires_at WHERE id = :id;", params: { id: device.id, passkey_id: answered.id, expires_at: now + session_ms } })?
+									audited!(transaction, { ..context, person: passkey.person_id, asking: Device(device.id) }, "device.signed_in", device.id, Json.to_str({ name: device.name, passkey: answered.id }))?
+									transaction.commit!()?
+									person = { id: passkey.person_id, name: passkey.name, role: passkey.role }
+									Ok(json(Json.to_str({ device, person })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+								}
+							}
+						_ => Ok(text(401, "this passkey isn't one of this box's people's: ask an operator for an invite"))
+					}
+				}
+				_ => Ok(text(400, "a sign-in's authenticator_data, client_data and signature are base64url"))
+			}
+	}
+}
+
+## Whether `signature` of `message` is the key's, of the COSE algorithm
+## `alg`, as liton-verify at `verifier` says.
+verified! : Str, I64, List(U8), List(U8), List(U8) => Bool
+verified! = |verifier, alg, key, message, signature|
+	match Cmd.new_str(verifier).args_str([alg.to_str(), WebAuthn.hex(key), WebAuthn.hex(message), WebAuthn.hex(signature)]).exec_exit_code!() {
+		Ok(0) => Bool.True
+		Ok(_) => Bool.False
+		Err(problem) => {
+			logged!("liton: can't run ${verifier} to check a passkey: ${Str.inspect(problem)}")
+			Bool.False
+		}
+	}
+
+## Answers /liton/v1/logout: signs the device asking out, forgetting it.
+logged_out! : Context, Str => Try(Response, _)
+logged_out! = |context, device_id| {
+	transaction = Sqlite.begin!(context.db, Immediate)?
+	transaction.execute!({ query: "DELETE FROM devices WHERE id = :id;", params: { id: device_id } })?
+	audited!(transaction, context, "device.signed_out", device_id, "{}")?
+	transaction.commit!()?
+	Ok(json("{}").add_header("Set-Cookie", Auth.cleared_cookie))
+}
+
+## Answers /liton/v1/passkeys: the passkeys of the person asking, the oldest
+## first, each with the site it is for, whether it is backed up, as a synced
+## one is, and whether this device signed in with it; and the box's site.
+passkeys! : Context => Try(Response, _)
+passkeys! = |context| {
+	current =
+		match context.asking {
+			Device(id) => id
+			Open => ""
+		}
+	listed : List({ id : Str, name : Str, rp_id : Str, backed_up : I64, created_at : I64, used_at : I64, current : I64 })
+	listed = Sqlite.query_many!({ db: context.db, query: "SELECT id, name, rp_id, backed_up, created_at, used_at, EXISTS (SELECT 1 FROM devices WHERE devices.id = :current AND passkey_id = passkeys.id) AS current FROM passkeys WHERE person_id = :person ORDER BY created_at, id;", params: { person: context.person, current }, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ passkeys: listed.map(|row| { id: row.id, name: row.name, rp_id: row.rp_id, backed_up: row.backed_up == 1, created_at: row.created_at, used_at: row.used_at, current: row.current == 1 }), rp_id: context.rp_id })))
+}
+
+## Answers /liton/v1/passkeys/delete: forgets a passkey of the person
+## asking, and signs out the devices it signed in.
+passkey_deleted! : Context, Server.Request => Try(Response, _)
+passkey_deleted! = |context, request| {
+	given : Try({ id : Str }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Err(_) => Ok(text(400, "a passkey to delete is {\"id\": \"its credential id\"}"))
+		Ok({ id }) => {
+			transaction = Sqlite.begin!(context.db, Immediate)?
+			deleted : List({ id : Str })
+			deleted = transaction.query_many!({ query: "DELETE FROM passkeys WHERE id = :id AND person_id = :person RETURNING id;", params: { id, person: context.person }, limits: Sqlite.default_query_limits })?
+			if deleted.is_empty() {
+				return Ok(text(404, "you have no passkey ${id}"))
+			}
+			signed_out : List({ id : Str })
+			signed_out = transaction.query_many!({ query: "DELETE FROM devices WHERE passkey_id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
+			audited!(transaction, context, "passkey.deleted", id, "{}")?
+			transaction.commit!()?
+			Ok(if (signed_out.any(|device| context.asking == Device(device.id))) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
 		}
 	}
 }
@@ -2269,7 +2526,12 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_transcripts (utterance_id TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', through INTEGER NOT NULL DEFAULT 0, agent_id TEXT NOT NULL DEFAULT '', asking_through INTEGER NOT NULL DEFAULT 0, asking_at TEXT NOT NULL DEFAULT '', asked_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL, person_id TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL, person_id TEXT NOT NULL, passkey_id TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	# The passkeys people sign in with, each by its credential id, the site
+	# it is for and its public key, and the challenges a passkey answers,
+	# each used once within 5 minutes.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, rp_id TEXT NOT NULL, alg INTEGER NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL, backed_up INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, used_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, purpose TEXT NOT NULL, person_id TEXT NOT NULL DEFAULT '', grant TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
 	# The invites not used yet, each kept by its secret's SHA-256.

@@ -87,7 +87,7 @@ PeopleDesk := [].{
 }
 
 expect {
-	listed = { people: [{ id: "ab", name: "Dana", role: "staff", agent: Bool.False, owner: Bool.False, devices: 1 }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x" }], roles: ["staff"] }
+	listed = { people: [{ id: "ab", name: "Dana", role: "staff", agent: Bool.False, owner: Bool.False, passkeys: 0, devices: 1 }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x" }], roles: ["staff"] }
 	desk = PeopleDesk.asking(PeopleDesk.asking({ ..PeopleDesk.initial, listed }, 1, Remove({ person: "ab" })), 2, Invite({ name: "Fay", role: "staff", rooms: ["dispatch"] }))
 	shown = PeopleDesk.shown(desk)
 	shown.people == []

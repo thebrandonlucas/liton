@@ -8,7 +8,7 @@
     (run-effect 2)
     (click (role button :name "Settings"))
     (click (role button :name "People"))
-    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"devices\":1}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"rooms\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[]}]}]}]}")
+    (stub-http "poll" :url "/liton/v1/poll" :status 200 :body "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"p1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"dd\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"passkeys\":0,\"devices\":1}],\"invites\":[],\"roles\":[\"staff\",\"admin\"]}}]},{\"capability\":\"rooms.v1\",\"topic\":\"rooms\",\"cursor\":\"r1\",\"events\":[{\"Rooms\":[{\"id\":\"dispatch\",\"provider\":\"rooms\",\"name\":\"dispatch\",\"kind\":\"Channel\",\"private\":false,\"archived\":false,\"joined\":true,\"unread\":\"Unknown\",\"links\":[]}]}]}]}")
     (run-effect 3)
     (expect-visible (text "Dana"))
     (click (role button :name "Make the invite link"))
