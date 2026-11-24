@@ -7,6 +7,10 @@ Sha256 := [].{
 	hex : List(U8) -> Str
 	hex = |bytes| Str.join_with(Sha256.digest(bytes).map(Sha256.word_hex), "")
 
+	## The digest of `bytes`, as 32 bytes.
+	digest_bytes : List(U8) -> List(U8)
+	digest_bytes = |message| Sha256.digest(message).fold([], |so_far, word| so_far.concat([16777216, 65536, 256, 1].map(|power| (word // power).to_u8_wrap())))
+
 	## The digest of `bytes`, as eight words.
 	digest : List(U8) -> List(U32)
 	digest = |bytes| {

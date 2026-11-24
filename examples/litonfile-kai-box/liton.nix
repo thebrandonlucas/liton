@@ -1,6 +1,8 @@
 # A Kai box's liton: the daemon, with the setup Litonfile.roc evaluates to,
 # behind Caddy at the box's name on the client's tailnet, which gives the
-# browser HTTPS. The box's Kaifile imports it beside the daemon's module:
+# browser HTTPS and is the site the box's passkeys are for (rpId, by
+# default the first of allowedHosts). Once deployed, `liton pair` on the
+# box prints the owner's link, which makes their passkey. The box's Kaifile imports it beside the daemon's module:
 #
 #   Input("liton", "github:thebrandonlucas/liton"),
 #   ...
@@ -13,8 +15,9 @@ in
   services.liton = {
     enable = true;
     allowedHosts = [ name ];
+    rpId = name;
     setupFile = ./liton.setup.json;
-    # Rooms are the relay's alone, without the mock's scripted ones.
+    # Rooms are the box's alone, without the mock's scripted ones.
     extraEnvironment.LITON_MOCK = "off";
   };
 

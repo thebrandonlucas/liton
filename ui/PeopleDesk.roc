@@ -17,8 +17,8 @@ PeopleDesk := [].{
 
 	## The listing as polls answered it, the requests on their way, the
 	## invite being written, the link that redeems the last one made, and the
-	## page's address, before its `#`, which links name; and the key asked to
-	## confirm its removal ("" for none).
+	## page's address, before its `#`, which links name; and the person
+	## asked to confirm their removal ("" for none).
 	State : { listed : People.Listing, asked : List(Asked), form : Form, link : Str, page : Str, removing : Str }
 
 	initial : State
@@ -35,10 +35,10 @@ PeopleDesk := [].{
 			desk.listed,
 			|so_far, { request, serial, .. }|
 				match request {
-					Invite({ name, role, rooms }) => { ..so_far, invites: so_far.invites.append({ id: "asking:${serial.to_str()}", name, role, rooms, expires: "" }) }
-					Remove({ pubkey }) => { ..so_far, people: so_far.people.drop_if(|person| person.pubkey == pubkey) }
+					Invite({ name, role, rooms, agent }) => { ..so_far, invites: so_far.invites.append({ id: "asking:${serial.to_str()}", name, role, rooms, expires: "", agent, person: "" }) }
+					Remove({ person }) => { ..so_far, people: so_far.people.drop_if(|listed| listed.id == person) }
 					Cancel({ id }) => { ..so_far, invites: so_far.invites.drop_if(|invite| invite.id == id) }
-					CreateRoom(_) => so_far
+					Relink(_) | CreateRoom(_) | AddMember(_) | RemoveMember(_) | Rename(_) => so_far
 				},
 		)
 
@@ -50,7 +50,7 @@ PeopleDesk := [].{
 		} else if form.role == "" {
 			Err("Pick the role the invite gives.")
 		} else {
-			Ok(Invite({ name: form.name.trim(), role: form.role, rooms: form.rooms }))
+			Ok(Invite({ name: form.name.trim(), role: form.role, rooms: form.rooms, agent: Bool.False }))
 		}
 
 	## `desk` with a request on its way as `serial`.
@@ -87,8 +87,8 @@ PeopleDesk := [].{
 }
 
 expect {
-	listed = { people: [{ pubkey: "ab", name: "Dana", role: "staff" }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x" }], roles: ["staff"] }
-	desk = PeopleDesk.asking(PeopleDesk.asking({ ..PeopleDesk.initial, listed }, 1, Remove({ pubkey: "ab" })), 2, Invite({ name: "Fay", role: "staff", rooms: ["dispatch"] }))
+	listed = { people: [{ id: "ab", name: "Dana", role: "staff", agent: Bool.False, owner: Bool.False, passkeys: 0, devices: 1 }], invites: [{ id: "i1", name: "Eli", role: "staff", rooms: [], expires: "x", agent: Bool.False, person: "" }], roles: ["staff"] }
+	desk = PeopleDesk.asking(PeopleDesk.asking({ ..PeopleDesk.initial, listed }, 1, Remove({ person: "ab" })), 2, Invite({ name: "Fay", role: "staff", rooms: ["dispatch"], agent: Bool.False }))
 	shown = PeopleDesk.shown(desk)
 	shown.people == []
 		and shown.invites.map(|invite| (invite.name, invite.expires)) == [("Eli", "x"), ("Fay", "")]
@@ -97,4 +97,4 @@ expect {
 		and PeopleDesk.settled(PeopleDesk.answered(desk, 1, Accepted(4)), 4).asked.len() == 1
 }
 
-expect PeopleDesk.request_of({ ..PeopleDesk.blank, name: " Dana ", role: "staff" }) == Ok(Invite({ name: "Dana", role: "staff", rooms: [] })) and PeopleDesk.request_of(PeopleDesk.blank).is_err() and PeopleDesk.picked(PeopleDesk.picked(PeopleDesk.blank, "a", Bool.True), "a", Bool.False).rooms == []
+expect PeopleDesk.request_of({ ..PeopleDesk.blank, name: " Dana ", role: "staff" }) == Ok(Invite({ name: "Dana", role: "staff", rooms: [], agent: Bool.False })) and PeopleDesk.request_of(PeopleDesk.blank).is_err() and PeopleDesk.picked(PeopleDesk.picked(PeopleDesk.blank, "a", Bool.True), "a", Bool.False).rooms == []

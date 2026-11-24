@@ -30,7 +30,7 @@ liton is a protocol and a set of parts more than an app. Its narrow waist is the
    ├─ context graph         workspace ↔ agent ↔ room ↔ ticket ↔ PR ↔ sandbox
    └─ providers             in the daemon (Roc packages) or out of it (any language,
                             over the provider protocol): Paseo, ACP agents, GitHub,
-                            Nostr rooms, other liton daemons ...
+                            other liton daemons ...
 ```
 
 How the parts grow without the core growing:
@@ -77,7 +77,7 @@ A capability is a versioned, typed interface made of queries, commands and event
 | `terminal` | pty in a workspace or sandbox |
 | `workspace.git` | repos, worktrees, branches, history, diffs |
 | `ci` | run graphs (jobs and steps), logs, rerun. GitHub Actions first |
-| `tickets` | issues and tickets merged across providers (GitHub Issues, then Linear, then native tickets stored as Nostr events), each with its source and a URL back to it: listed and filtered, read with comments, commented on, moved between statuses and assignees, and linked to the sessions working on them, by branch name or by hand. Credentials stay in the daemon |
+| `tickets` | issues and tickets merged across providers (GitHub Issues, then Linear, then native tickets kept by the daemon), each with its source and a URL back to it: listed and filtered, read with comments, commented on, moved between statuses and assignees, and linked to the sessions working on them, by branch name or by hand. Credentials stay in the daemon |
 | `rooms` | people and agents together in channels, forums, direct conversations and announcements, with threads and reactions, from any NIP-29 relay or other source of rooms. Agents speak only when @mentioned |
 | `review` | crit.md-style anchored line comments on diffs, files, agent output and docs. Comments are batched and submitted as one review, then the agent replies per thread and revises |
 | `environment` | the sandbox's static definition (Nix closure, mounts, network policy, granted credentials), live resources, denials/audit, and lifecycle (create, snapshot, destroy) |
@@ -101,7 +101,7 @@ A room can be attached to a context. Selecting the room then drives focus to tha
 
 ### Identity and social
 
-People and agents both have Nostr keypairs. Keys sign snapshots, room messages, native tickets and agent personas.
+People and agents are persons of a daemon: people sign in with passkeys, agents and other clients with tokens, and each holds a role. The daemon keeps rooms, their messages and an audit of who changed what in its own tables, and is the authority over who said what.
 
 Hosting: each user runs a personal daemon, and a personal daemon can also join a shared team daemon. Rooms sync between daemons.
 
@@ -143,8 +143,8 @@ A snapshot is a deterministic JSON file. It contains:
 | daemon language | Roc, on roc-lang/basic-webserver (HTTP server, SSE, HTTP client). It has no WebSocket and no pty |
 | first provider | Paseo, via its daemon API |
 | first CI | GitHub Actions |
-| identity | Nostr keypairs |
-| native tickets | Nostr events |
+| identity | persons of the daemon: passkeys for people, tokens for agents and the CLI |
+| native tickets | the daemon's tables |
 | agents using liton | yes, through the daemon's MCP server |
 | render targets | web first (roc-signals is browser-only). Native and TUI need other renderers |
 | license | MIT / Apache-2.0 |
@@ -178,6 +178,6 @@ The order after the MVP: the Paseo provider (`chat`), then `workspace.git`, then
 - basic-webserver: whether its no-background-work model can hold many long-lived SSE streams, and whether it can keep polling or pushing from upstream providers.
 - Paseo's daemon API: how stable it is, how auth works, and how it maps onto `chat`, `terminal` and `workspace.git`.
 - Capability schema format: Roc types as the source of truth, with JSON Schema generated for the wire?
-- Room sync between daemons: Nostr relays or direct daemon-to-daemon.
+- Room sync between daemons.
 - How the `environment` capability fits sandboxes where a remote daemon reads code and sandboxed agents make the changes.
 - Snapshot format versioning and migrations.

@@ -71,13 +71,32 @@ main! = |arguments| {
 				Err(_) => failed!(2, "the daemon's answer to pairing isn't one this liton reads")
 			}
 		}
-		Invite({ name, role, rooms }) => {
+		Invite({ name, role, rooms, agent }) => {
 			request : People.Request
-			request = Invite({ name, role, rooms })
+			request = Invite({ name, role, rooms, agent })
 			answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
 			match Cli.invite_link(daemon, answer) {
-				Ok(link) => Stdout.line!("${link}\n\nOpen it on ${name}'s device to join, once, within 7 days.")
+				Ok(link) if agent => Stdout.line!("${link}\n\nRedeem it for ${name}'s token, once, within 7 days: node examples/room-agent/agent.mjs join <link> <file>.")
+				Ok(link) => Stdout.line!("${link}\n\nOpen it on ${name}'s device to make their passkey, once, within 7 days.")
 				Err(why) => failed!(1, why)
+			}
+		}
+		Relink(which) => {
+			listing = asked!(POST, "${daemon}/liton/v1/poll", Json.to_str({ topics: [{ capability: "people.v1", topic: "people", after: "" }] }))?
+			match Cli.relinked(listing, which) {
+				Err(why) => failed!(1, why)
+				Ok(people) => {
+					for person in people {
+						request : People.Request
+						request = Relink({ person: person.id })
+						answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+						match Cli.invite_link(daemon, answer) {
+							Ok(link) => Stdout.line!("${person.name}\t${link}")?
+							Err(why) => return failed!(1, "${person.name}: ${why}")
+						}
+					}
+					Ok({})
+				}
 			}
 		}
 		CreateRoom(room) => {

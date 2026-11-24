@@ -13,8 +13,7 @@ Rooms := [].{
 
 	## `joined` is whether you are a member; `me` your member id there, when
 	## the provider knows it, which reactions name; `links` the repositories
-	## or projects it discusses, as clone URLs; `signing`, when true, that a
-	## request of it carries the event it makes, signed by this device's key.
+	## or projects it discusses, as clone URLs.
 	Room : {
 		id : Str,
 		provider : Str,
@@ -28,7 +27,6 @@ Rooms := [].{
 		updated : Try(Str, [Missing]),
 		links : List(Str),
 		me : Try(Str, [Missing]),
-		signing : Try(Bool, [Missing]),
 	}
 
 	## An agent's `owner` is told only when its provider verified it.
@@ -100,7 +98,7 @@ Rooms := [].{
 
 	## A room its provider tells nothing more of.
 	room : { id : Str, provider : Str, name : Str, kind : Kind } -> Room
-	room = |{ id, provider, name, kind }| { id, provider, name, kind, topic: Err(Missing), private: Bool.False, archived: Bool.False, joined: Bool.True, unread: Unknown, updated: Err(Missing), links: [], me: Err(Missing), signing: Err(Missing) }
+	room = |{ id, provider, name, kind }| { id, provider, name, kind, topic: Err(Missing), private: Bool.False, archived: Bool.False, joined: Bool.True, unread: Unknown, updated: Err(Missing), links: [], me: Err(Missing) }
 
 	## A message as it is posted, unedited and with no reactions.
 	message : { id : Str, room_id : Str, author : Str, text : Str, time : Str, place : Place, mentions : List(Str) } -> Message
@@ -220,7 +218,7 @@ expect {
 golden : { rooms : List(Rooms.Room), members : List(Rooms.Member), entries : List(Rooms.Entry), requests : List(Rooms.Request), responses : List(Rooms.Response) }
 golden = {
 	rooms: [
-		{ ..Rooms.room({ id: "general", provider: "mock", name: "general", kind: Channel }), topic: Ok("The team"), unread: Counted({ messages: 3, mentions: 1 }), updated: Ok("2026-01-01T09:00:00.000Z"), links: ["https://example.com/liton.git"], me: Ok("you"), signing: Ok(Bool.True) },
+		{ ..Rooms.room({ id: "general", provider: "mock", name: "general", kind: Channel }), topic: Ok("The team"), unread: Counted({ messages: 3, mentions: 1 }), updated: Ok("2026-01-01T09:00:00.000Z"), links: ["https://example.com/liton.git"], me: Ok("you") },
 		{ ..Rooms.room({ id: "ideas", provider: "mock", name: "ideas", kind: Forum }), private: Bool.True, joined: Bool.False },
 	],
 	members: [

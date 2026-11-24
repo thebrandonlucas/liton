@@ -299,6 +299,13 @@ fn addUiBuild(
     return www;
 }
 
+// liton-verify (verify/), which checks a passkey's signature for the daemon
+// with Zig's std.crypto, for target: static on Linux, since it links no libc.
+fn addVerifyBuild(b: *std.Build, target: std.Build.ResolvedTarget) std.Build.LazyPath {
+    const module = b.createModule(.{ .root_source_file = b.path("verify/liton-verify.zig"), .target = target, .optimize = .ReleaseSafe, .strip = true });
+    return b.addExecutable(.{ .name = "liton-verify", .root_module = module }).getEmittedBin();
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
@@ -335,13 +342,15 @@ pub fn build(b: *std.Build) void {
 
     // The capabilities and setup packages are imported by the UI and the
     // daemon, so a UI compiler of its own checks and tests them too.
-    const test_step = b.step("test", "Run checks and Roc tests");
+    const test_step = b.step("test", "Run checks, Roc tests and Zig tests");
     test_step.dependOn(check_step);
     for (sources.roc_roots) |root| {
         const shared = std.mem.startsWith(u8, root, "capabilities/") or std.mem.startsWith(u8, root, "setup/");
         if (!isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
         if (isUi(root) or (shared and !std.mem.eql(u8, roc_ui, roc))) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
+    const verify_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("verify/liton-verify.zig"), .target = b.graph.host }) });
+    test_step.dependOn(&b.addRunArtifact(verify_tests).step);
 
     // liton's development tool (devtool/), on the daemon's compiler, which
     // runs the tasks that would otherwise be shell scripts, as kai's does.
@@ -396,8 +405,15 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&install_docs.step);
     test_step.dependOn(&build_docs.step);
 
+    const verify_step = b.step("verify", "Build the passkey signature verifier into zig-out/bin/liton-verify");
+    const install_verify = b.addInstallBinFile(addVerifyBuild(b, b.graph.host), "liton-verify");
+    verify_step.dependOn(&install_verify.step);
+
+    // The daemon runs liton-verify from beside itself, so whatever installs
+    // the daemon installs it too.
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
     const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    install_daemon.step.dependOn(&install_verify.step);
     daemon_step.dependOn(&install_daemon.step);
     if (previews) {
         run_devtool.step.dependOn(&install_ui.step);
@@ -419,9 +435,9 @@ pub fn build(b: *std.Build) void {
     // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
     // and their SHA256SUMS, into zig-out/release: for each Linux system the
     // daemon's and the command line's platforms build for, their static
-    // binaries in bin/ and the UI in share/liton/www, without specialization
-    // unless -Dspecialize (addUiBuild says why), the same bytes from the
-    // same sources.
+    // binaries and liton-verify's in bin/ and the UI in share/liton/www,
+    // without specialization unless -Dspecialize (addUiBuild says why), the
+    // same bytes from the same sources.
     const release_step = b.step("release", "Build the release archives into zig-out/release");
     const version = @import("build.zig.zon").version;
     const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
@@ -430,6 +446,8 @@ pub fn build(b: *std.Build) void {
         const tree = b.addWriteFiles();
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "daemon/main.roc", "liton-daemon"), "bin/liton-daemon");
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
+        const verify_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = b.fmt("{s}-musl", .{release[0]}) }) catch unreachable);
+        _ = tree.addCopyFile(addVerifyBuild(b, verify_target), "bin/liton-verify");
         _ = tree.addCopyDirectory(www, "share/liton/www", .{});
         const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
         const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
@@ -481,6 +499,21 @@ pub fn build(b: *std.Build) void {
     run_rooms.step.dependOn(&install_daemon.step);
     run_rooms.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_rooms.step);
+    // Registers a passkey and signs in with it, in headless Chrome with a
+    // virtual authenticator.
+    const run_passkeys = b.addSystemCommand(&.{ "node", "e2e/passkeys.mjs" });
+    run_passkeys.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_passkeys.has_side_effects = true;
+    run_passkeys.step.dependOn(&install_daemon.step);
+    run_passkeys.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_passkeys.step);
+    // Invites people, who make passkeys there, and agents, who get tokens.
+    const run_invites = b.addSystemCommand(&.{ "node", "e2e/invites.mjs" });
+    run_invites.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_invites.has_side_effects = true;
+    run_invites.step.dependOn(&install_daemon.step);
+    run_invites.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_invites.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);

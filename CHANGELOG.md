@@ -4,6 +4,39 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
+### Added
+
+- An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
+- A setup's room declares whether it is `open`: anyone whose role uses rooms joins an open room themselves, where a closed one's admins add its members. A room you can't join says why, such as that it is closed and you weren't invited.
+- The daemon keeps an audit of who changed what: people, devices, invites, rooms and their members.
+- People sign in with passkeys. With `LITON_RP_ID` set to the box's name, such as `box.example.ts.net`, a signed-in person registers a passkey (`/liton/v1/passkeys/register/begin` and `finish`), and signs in with it on any browser that has it, synced passkeys and a phone's QR code included (`/liton/v1/login/begin` and `finish`), for a session that lasts 30 days from its last use. `/liton/v1/logout` signs a device out, `GET /liton/v1/passkeys` lists your passkeys and `/liton/v1/passkeys/delete` forgets one, signing out the devices it signed in. Without `LITON_RP_ID`, passkeys are refused with why; a request to another name is told the one to use. people.v1 counts each person's passkeys.
+- A pairing code makes a passkey: `/liton/v1/passkeys/register/begin` with `{ "code" }` registers one for the person the code is for and signs them in, spending the code. `liton pair`'s code is the owner's, so on a fresh box, or after the owner lost every passkey, its link makes the owner's passkey, naming them if they are still called Owner.
+- An invite of a person is redeemed by making a passkey: `POST /liton/v1/invite` with `{ "secret" }` answers what the browser asks to make one, and `/liton/v1/passkeys/register/finish` then makes the person, a member of the invite's rooms, and signs them in. An agent's invite, people.v1's `Invite` with `agent: true` or `liton invite --agent`, gives a token alone, redeemed with `{ "secret", "token": true }`.
+- people.v1's `Relink` and `liton people relink (--all | <person>)` make an invite for a person already there, to make a passkey again, as one who lost theirs, or everyone after the box's name changed; `--all` prints a link for each person but the owner, who runs `liton pair`.
+- The sign-in screen signs in with a passkey: this device's, a synced one, or a phone's by its QR code. A link's pairing code or invite asks at once for the passkey it grants, and the owner's name while they have none, then makes it with a click; a box with no `LITON_RP_ID` pairs by code as before.
+- Settings → Passkeys & devices (Devices before) lists your passkeys, each synced or for another name said so, to delete; makes a passkey on this device; adds a device of yours by a code and link; and signs out your devices, this browser too. A locked UI opens this page alone, from its Passkeys & devices button or the palette.
+- Each device signed in as you since this browser shows a notice for a day, "New sign-in: Phone. Not you?", to sign it out or say it was you: a poll's answer lists them as `sign_ins`.
+- people.v1's `RemoveMember` takes a person out of a room, as an operator or an admin of it, and `Rename` names a person, yourself, or anyone as an operator. Its topic `audit`, which operators alone follow, shows the latest 200 changes to people, passkeys, devices, invites, rooms and their members: who, from which device, when and what.
+- `services.liton.rpId` sets `LITON_RP_ID`, the box's name its passkeys are for, by default the first of `allowedHosts`. Choose it before inviting people: when it changes, set the new one, run `liton pair` on the box for the owner's passkey, then `liton people relink --all`.
+- The release archive and the Nix package ship `liton-verify` beside `liton-daemon`: a small program the daemon runs to check a passkey's signature (ES256 or Ed25519) when someone signs in.
+
+### Changed
+
+- **Breaking:** the box's rooms are kept in the daemon's own tables, offered as rooms.v1's provider `rooms` in place of `relay`, and its people are its own: each person holds a role, and every device belongs to one. The box's owner is a person the daemon makes at its first start, whose devices `liton pair` pairs; an invite makes a new person. Requests of rooms need no signed event, and attention is kept apart per person. Rooms and people of the relay are not carried over.
+- **Breaking:** every person, whatever their role, makes a pairing code for another device of their own with `/liton/v1/devices/code`, lists their own devices with `/liton/v1/devices`, each with when its session ends, and revokes them; no one sees or revokes another's devices.
+- **Breaking:** an invite of a person makes a passkey, rather than pairing the browser by its link alone, and people.v1's `Invite` takes `agent`; an agent's invite alone is redeemed for a token.
+- **Breaking:** people.v1 lists each person by their `id`, with whether they are the owner or an agent and how many devices they have, and `Remove` names a person: `{ "Remove": { "person": "…" } }`. A person removed keeps their name for their messages, and the owner can't be removed.
+- **Breaking:** a setup's rooms are closed unless declared `open`: `Setup.with_room` takes `open`, and a setup evaluated before reads its rooms as closed. The setup's owner key no longer names the owner; the daemon makes the owner an admin of each of the setup's rooms at start.
+- **Breaking:** the daemon refuses to start on a database from liton 0.1, saying so: 0.2 starts fresh, so move `liton.db` aside, then pair the owner again with `liton pair` and invite people and agents again.
+- The room agent example (`examples/room-agent/agent.mjs`) joins with its invite and posts with the token that gives it, kept in one file readable by its owner alone; it holds no key.
+
+### Removed
+
+- **Breaking:** Nostr. The daemon is no longer a relay: `/liton/v1/nostr/event`, `/liton/v1/nostr/req` and `/liton/v1/devices/key` are gone, a rooms.v1 call carries no `signed` event, rooms.v1's `signing` is gone, and the browser makes and keeps no key. Settings → Devices no longer shows a key per device.
+- **Breaking:** `Setup.with_owner` and a setup's `owner`: the daemon makes the owner itself, who signs in with `liton pair` on the box.
+
 ## [0.1.1] - 2026-11-23
 
 ### Added

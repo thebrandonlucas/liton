@@ -69,7 +69,7 @@ try {
   }
   await step("the manifest lists the mock, attention as a transformer, and topics", () => {
     assert.equal(manifest.protocol, 1);
-    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "relay", "hosts", "people"]);
+    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "rooms", "hosts", "people"]);
     assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
