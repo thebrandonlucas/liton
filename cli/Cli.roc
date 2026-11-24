@@ -8,7 +8,7 @@ Cli := [].{
 
 	## What the arguments ask for. A call given no request, or `-`, reads it
 	## from stdin.
-	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Invite({ name : Str, role : Str, rooms : List(Str) }), CreateRoom({ name : Str, about : Str, kind : Rooms.Kind, private : Bool }), ListRooms, Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
+	Command : [Help, Usage(Str), Manifest, Setup(Str), Pair, Login(Str), Invite({ name : Str, role : Str, rooms : List(Str), agent : Bool }), Relink([All, Person(Str)]), CreateRoom({ name : Str, about : Str, kind : Rooms.Kind, private : Bool }), ListRooms, Call({ capability : Str, request : [Given(Str), Stdin] }), Watch({ topics : List(Protocol.Wanted), interval : U64 })]
 
 	usage : Str
 	usage =
@@ -19,7 +19,8 @@ Cli := [].{
 		\\  liton setup [<Litonfile.roc or its directory>]
 		\\  liton pair
 		\\  liton login <pairing code>
-		\\  liton invite --role <role> [--rooms <room>,...] <name>
+		\\  liton invite --role <role> [--rooms <room>,...] [--agent] <name>
+		\\  liton people relink (--all | <person id or name>)
 		\\  liton room create [--about <text>] [--type forum|direct|announce] [--private] <name>
 		\\  liton room list
 		\\  liton help
@@ -43,8 +44,12 @@ Cli := [].{
 		\\if set, is used in place of the token kept.
 		\\
 		\\`invite` asks the daemon, as an operator or admin, for an invite of the
-		\\person or agent called <name> into <role> and its rooms (people.v1), and
-		\\prints the link that redeems it, good once for 7 days.
+		\\person called <name> into <role> and its rooms (people.v1), and prints
+		\\the link that redeems it, good once for 7 days: a person opens it to make
+		\\a passkey, and an --agent's gives a token alone. `people relink` prints,
+		\\for each person but the owner, or the one named, their name and the
+		\\link of an invite that makes them a passkey again, as after the box's
+		\\name changed.
 		\\
 		\\`room create` asks the daemon, as an operator or admin, to make a room of
 		\\the box called <name>, a channel unless --type says otherwise (people.v1),
@@ -58,7 +63,9 @@ Cli := [].{
 			["manifest"] => Manifest
 			["pair"] => Pair
 			["login", code] => Login(code)
-			["invite", .. as rest] => invited(rest, { name: "", role: "", rooms: [] })
+			["invite", .. as rest] => invited(rest, { name: "", role: "", rooms: [], agent: Bool.False })
+			["people", "relink", "--all"] => Relink(All)
+			["people", "relink", person] if !person.starts_with("-") => Relink(Person(person))
 			["room", "create", .. as rest] => room_created(rest, { name: "", about: "", kind: Channel, private: Bool.False })
 			["room", "list"] => ListRooms
 			["setup"] => Setup("Litonfile.roc")
@@ -81,6 +88,31 @@ Cli := [].{
 			Ok(Ok(Rejected(why))) => Err(why)
 			Ok(Err(error)) => Err(described(error))
 			_ => Err("the daemon's answer to an invite isn't one this liton reads")
+		}
+	}
+
+	## The people people.v1's topic `people`, as a poll's `answer` gives it,
+	## that `which` names to relink: every one but the owner, or the one of
+	## that id or name.
+	relinked : Str, [All, Person(Str)] -> Try(List({ id : Str, name : Str }), Str)
+	relinked = |answer, which| {
+		decoded : Try({ topics : List({ events : List([People(People.Listing)]) }) }, _)
+		decoded = Json.parse(answer)
+		latest = decoded.map_ok(|{ topics }| topics.join_map(|topic| topic.events).last())
+		people =
+			match latest {
+				Ok(Ok(People(listing))) => listing.people.drop_if(|person| person.owner).map(|person| { id: person.id, name: person.name })
+				_ => []
+			}
+		wanted =
+			match which {
+				All => people
+				Person(named) => people.keep_if(|person| person.id == named or person.name == named)
+			}
+		match (latest, which) {
+			(Ok(Ok(_)), Person(named)) if wanted.is_empty() => Err("there is no person ${named} but the owner, who runs liton pair")
+			(Ok(Ok(_)), _) => Ok(wanted)
+			_ => Err(Cli.failure(answer) ?? "the daemon's answer to listing people isn't one this liton reads")
 		}
 	}
 
@@ -183,7 +215,7 @@ watched = |rest, so_far|
 		_ => Usage("watch takes a capability and a topic in pairs")
 	}
 
-invited : List(Str), { name : Str, role : Str, rooms : List(Str) } -> Cli.Command
+invited : List(Str), { name : Str, role : Str, rooms : List(Str), agent : Bool } -> Cli.Command
 invited = |rest, so_far|
 	match rest {
 		[] if so_far.role == "" => Usage("invite needs --role")
@@ -191,12 +223,17 @@ invited = |rest, so_far|
 		[] => Invite(so_far)
 		["--role", role, .. as after] => invited(after, { ..so_far, role })
 		["--rooms", rooms, .. as after] => invited(after, { ..so_far, rooms: rooms.split_on(",").map(|room| room.trim()).drop_if(|room| room == "") })
+		["--agent", .. as after] => invited(after, { ..so_far, agent: Bool.True })
 		[option, ..] if option.starts_with("-") => Usage("unknown option ${option}")
 		[name, .. as after] if so_far.name == "" => invited(after, { ..so_far, name })
 		_ => Usage("invite takes one name")
 	}
 
-expect Cli.parse(["invite", "--role", "staff", "--rooms", "dispatch, general", "Dana"]) == Invite({ name: "Dana", role: "staff", rooms: ["dispatch", "general"] }) and Cli.parse(["invite", "Dana"]) == Usage("invite needs --role") and Cli.parse(["invite", "--role", "staff"]) == Usage("invite needs the name of whom it is for")
+expect Cli.parse(["invite", "--role", "staff", "--rooms", "dispatch, general", "Dana"]) == Invite({ name: "Dana", role: "staff", rooms: ["dispatch", "general"], agent: Bool.False }) and Cli.parse(["invite", "--agent", "--role", "agent", "bot"]) == Invite({ name: "bot", role: "agent", rooms: [], agent: Bool.True }) and Cli.parse(["people", "relink", "--all"]) == Relink(All) and Cli.parse(["people", "relink", "Dana"]) == Relink(Person("Dana")) and Cli.parse(["invite", "Dana"]) == Usage("invite needs --role") and Cli.parse(["invite", "--role", "staff"]) == Usage("invite needs the name of whom it is for")
+expect {
+	answer = "{\"topics\":[{\"capability\":\"people.v1\",\"topic\":\"people\",\"cursor\":\"1\",\"events\":[{\"People\":{\"people\":[{\"id\":\"o\",\"name\":\"Ada\",\"role\":\"operator\",\"agent\":false,\"owner\":true,\"passkeys\":1,\"devices\":1},{\"id\":\"d\",\"name\":\"Dana\",\"role\":\"staff\",\"agent\":false,\"owner\":false,\"passkeys\":1,\"devices\":1}],\"invites\":[],\"roles\":[]}}]}]}"
+	(Cli.relinked(answer, All), Cli.relinked(answer, Person("d")), Cli.relinked(answer, Person("Ada")).is_err()) == (Ok([{ id: "d", name: "Dana" }]), Ok([{ id: "d", name: "Dana" }]), Bool.True)
+}
 expect Cli.invite_link("http://box:8095", "{\"Ok\":{\"Invited\":{\"id\":\"i1\",\"secret\":\"s3\"}}}") == Ok("http://box:8095/ui/index.html#invite=s3") and Cli.invite_link("x", "{\"Ok\":{\"Rejected\":\"the setup declares no role chef\"}}") == Err("the setup declares no role chef")
 
 room_created : List(Str), { name : Str, about : Str, kind : Rooms.Kind, private : Bool } -> Cli.Command

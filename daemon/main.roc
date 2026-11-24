@@ -510,11 +510,11 @@ people! : Context => Try(People.Listing, _)
 people! = |{ db, roles, access, .. }| {
 	listed : List({ id : Str, name : Str, role : Str, agent : I64, owner : I64, passkeys : I64, devices : I64 })
 	listed = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, owner, (SELECT count(*) FROM passkeys WHERE passkeys.person_id = persons.id) AS passkeys, (SELECT count(*) FROM devices WHERE devices.person_id = persons.id) AS devices FROM persons WHERE role != '' ORDER BY owner DESC, name, id;", params: {}, limits: Sqlite.default_query_limits })?
-	invites : List({ id : Str, name : Str, role : Str, rooms : Str, expires_at : I64 })
-	invites = Sqlite.query_many!({ db, query: "SELECT id, name, role, rooms, expires_at FROM invites WHERE expires_at > :now ORDER BY expires_at;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	invites : List({ id : Str, name : Str, role : Str, rooms : Str, expires_at : I64, agent : I64, person_id : Str })
+	invites = Sqlite.query_many!({ db, query: "SELECT id, name, role, rooms, expires_at, agent, person_id FROM invites WHERE expires_at > :now ORDER BY expires_at;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
 	Ok({
 		people: listed.map(|person| { id: person.id, name: person.name, role: person.role, agent: person.agent == 1, owner: person.owner == 1, passkeys: person.passkeys.to_u32_wrap(), devices: person.devices.to_u32_wrap() }),
-		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at) }),
+		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at), agent: invite.agent == 1, person: invite.person_id }),
 		roles: (if (access == Operator) ["operator"] else []).concat(roles.map(|role| role.name)),
 	})
 }
@@ -532,7 +532,7 @@ people_call! = |context, asked| {
 	rooms : List({ id : Str })
 	rooms = Sqlite.query_many!({ db, query: "SELECT id FROM rooms WHERE archived = 0;", params: {}, limits: Sqlite.default_query_limits })?
 	match asked {
-		Invite({ name, role, rooms: named }) =>
+		Invite({ name, role, rooms: named, agent }) =>
 			if name.trim() == "" {
 				refused("an invite names whom it is for")
 			} else if role == "operator" and context.access != Operator {
@@ -546,13 +546,30 @@ people_call! = |context, asked| {
 						transaction = Sqlite.begin!(db, Immediate)?
 						random : { id : Str, secret : Str }
 						random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
-						transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at) VALUES (:id, :secret_hash, :name, :role, :rooms, :expires_at);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: name.trim(), role, rooms: Json.to_str(named), expires_at: now_ms!() + invite_ms } })?
-						audited!(transaction, context, "invite.made", random.id, Json.to_str({ name: name.trim(), role, rooms: named }))?
+						transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at, agent) VALUES (:id, :secret_hash, :name, :role, :rooms, :expires_at, :agent);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: name.trim(), role, rooms: Json.to_str(named), expires_at: now_ms!() + invite_ms, agent: if (agent) 1.I64 else 0 } })?
+						audited!(transaction, context, "invite.made", random.id, Json.to_str({ name: name.trim(), role, rooms: named, agent }))?
 						transaction.commit!()?
 						Ok(Ok(Invited(random)))
 					}
 				}
 			}
+		Relink({ person }) => {
+			found : List({ name : Str, role : Str, agent : I64 })
+			found = Sqlite.query_many!({ db, query: "SELECT name, role, agent FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			match found {
+				[{ role: "operator", .. }] if context.access != Operator => refused("only an operator relinks an operator")
+				[kept] => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					random : { id : Str, secret : Str }
+					random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+					transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at, agent, person_id) VALUES (:id, :secret_hash, :name, :role, '[]', :expires_at, :agent, :person);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: kept.name, role: kept.role, expires_at: now_ms!() + invite_ms, agent: kept.agent, person } })?
+					audited!(transaction, context, "invite.made", random.id, Json.to_str({ relink: person }))?
+					transaction.commit!()?
+					Ok(Ok(Invited(random)))
+				}
+				_ => refused("there is no person ${person}")
+			}
+		}
 		Remove({ person }) => {
 			found : List({ role : Str, owner : I64 })
 			found = Sqlite.query_many!({ db, query: "SELECT role, owner FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
@@ -646,11 +663,13 @@ room_created! = |context, { name, about, kind, private, open }| {
 	Ok(Ok(room_id))
 }
 
-## Answers /liton/v1/invite: an invite's secret, used once within its 7
-## days, for a token of a new device of a new person, named as the invite
-## and holding its role, a member of its rooms. As pairing does, a browser
-## gets the token as a cookie, and a client asking `token: true` in the
-## answer too, with the invite's name and role.
+## Answers /liton/v1/invite: an invite's secret, good once within its 7
+## days. An agent's, asked `token: true`, gives a token device of a new
+## agent person, named as the invite and holding its role, a member of its
+## rooms, or of the person it relinks; the token comes in the answer and as
+## a cookie. A person's answers what the browser asks to make a passkey,
+## which /liton/v1/passkeys/register/finish then makes for the new person,
+## or the person it relinks, spending the invite (`grant_spent!`).
 invited! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
 invited! = |context, request, headers| {
 	db = context.db
@@ -661,30 +680,91 @@ invited! = |context, request, headers| {
 	given = Json.parse(read_json!(request)?)
 	match given {
 		Ok({ secret, name, token: wants_token }) => {
-			transaction = Sqlite.begin!(db, Immediate)?
-			used : List({ id : Str, name : Str, role : Str, rooms : Str })
-			used = transaction.query_many!({ query: "DELETE FROM invites WHERE secret_hash = :secret_hash AND expires_at > :now RETURNING id, name, role, rooms;", params: { secret_hash: Sha256.hex(secret.to_utf8()), now: now_ms!() }, limits: Sqlite.default_query_limits })?
-			match used {
-				[invite] => {
+			found : List({ id : Str, name : Str, role : Str, agent : I64, person_id : Str })
+			found = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, person_id FROM invites WHERE secret_hash = :secret_hash AND expires_at > :now;", params: { secret_hash: Sha256.hex(secret.to_utf8()), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			match (found, wants_token == Ok(Bool.True)) {
+				([invite], Bool.True) if invite.agent == 1 => {
+					transaction = Sqlite.begin!(db, Immediate)?
 					made : { id : Str }
-					made = transaction.query!({ query: "INSERT INTO persons (id, name, role, created_at) VALUES (lower(hex(randomblob(8))), :name, :role, :now) RETURNING id;", params: { name: invite.name, role: invite.role, now: now_ms!() }, limits: Sqlite.default_query_limits })?
-					{ device, token } = device_made!(transaction, name ?? invite.name, made.id)?
-					joining = { ..context, person: made.id, asking: Device(device.id) }
-					audited!(transaction, joining, "invite.redeemed", invite.id, Json.to_str({ person: made.id, name: invite.name, role: invite.role }))?
-					rooms : List(Str)
-					rooms = Json.parse(invite.rooms) ?? []
-					for room in rooms {
-						member_added!(transaction, joining, room, made.id, Bool.False)?
+					made = transaction.query!({ query: "SELECT CASE WHEN :person = '' THEN lower(hex(randomblob(8))) ELSE :person END AS id;", params: { person: invite.person_id }, limits: Sqlite.default_query_limits })?
+					match grant_spent!(transaction, context, "invite:${invite.id}", made.id, "")? {
+						Err(why) => Ok(text(401, why))
+						Ok({}) => {
+							{ device, token } = device_made!(transaction, name ?? invite.name, made.id)?
+							audited!(transaction, { ..context, person: made.id, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
+							transaction.commit!()?
+							person = { id: made.id, name: invite.name, role: invite.role }
+							Ok(json(Json.to_str({ device, person, token })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+						}
 					}
-					transaction.commit!()?
-					person = { id: made.id, name: invite.name, role: invite.role }
-					body = if (wants_token == Ok(Bool.True)) Json.to_str({ device, person, token }) else Json.to_str({ device, person })
-					Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
 				}
+				([invite], Bool.False) if invite.agent == 0 =>
+					match passkey_site(context, request, headers) {
+						Err(refused) => Ok(refused)
+						Ok({ rp_id, .. }) => {
+							made : { id : Str }
+							made = Sqlite.query!({ db, query: "SELECT CASE WHEN :person = '' THEN lower(hex(randomblob(8))) ELSE :person END AS id;", params: { person: invite.person_id }, limits: Sqlite.default_query_limits })?
+							kept : List({ id : Str })
+							kept = Sqlite.query_many!({ db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person: made.id, rp_id }, limits: Sqlite.default_query_limits })?
+							challenge = challenge_made!(db, "register", made.id, "invite:${invite.id}")?
+							Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(made.id.to_utf8()), user_name: "${invite.name} (${rp_id})", display_name: invite.name, exclude: kept.map(|row| row.id), unnamed: Bool.False, invite: { name: invite.name, role: invite.role } })))
+						}
+					}
+				([invite], _) if invite.agent == 1 => Ok(text(400, "this invite is an agent's: redeem it with {\"secret\": \"…\", \"token\": true} for a token"))
+				([_], _) => Ok(text(400, "this invite is a person's: open its link in a browser to make a passkey"))
 				_ => Ok(text(401, "that invite is wrong, used or expired"))
 			}
 		}
 		_ => Ok(text(400, "an invite is redeemed with {\"secret\": \"…\"}"))
+	}
+}
+
+## Spends what grants a new passkey or token of `person_id`, or says why it
+## can't: a pairing code (`pair:<code>`), which names the owner
+## `person_name` while they are still called "Owner"; or an invite
+## (`invite:<id>`), which makes the person it is for, holding its role and
+## a member of its rooms, unless it relinks one already there.
+grant_spent! : Sqlite.Transaction, Context, Str, Str, Str => Try(Try({}, Str), _)
+grant_spent! = |transaction, context, grant, person_id, person_name| {
+	now = now_ms!()
+	as_person = { ..context, person: person_id }
+	if grant.starts_with("pair:") {
+		spent : List({ code : Str })
+		spent = transaction.query_many!({ query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: grant.drop_prefix("pair:"), now }, limits: Sqlite.default_query_limits })?
+		if spent.is_empty() {
+			return Ok(Err("that pairing code was used or expired meanwhile"))
+		}
+		named = Str.from_utf8_lossy(person_name.trim().to_utf8().take_first(80))
+		renamed : List({ id : Str })
+		renamed = if (named == "") [] else transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :id AND owner = 1 AND name = 'Owner' RETURNING id;", params: { id: person_id, name: named }, limits: Sqlite.default_query_limits })?
+		if !renamed.is_empty() {
+			audited!(transaction, as_person, "person.renamed", person_id, Json.to_str({ name: named }))?
+		}
+		return Ok(Ok({}))
+	}
+	used : List({ id : Str, name : Str, role : Str, rooms : Str, agent : I64, person_id : Str })
+	used = transaction.query_many!({ query: "DELETE FROM invites WHERE id = :id AND expires_at > :now RETURNING id, name, role, rooms, agent, person_id;", params: { id: grant.drop_prefix("invite:"), now }, limits: Sqlite.default_query_limits })?
+	match used {
+		[invite] if invite.person_id == "" => {
+			transaction.execute!({ query: "INSERT INTO persons (id, name, role, agent, created_at) VALUES (:id, :name, :role, :agent, :now);", params: { id: person_id, name: invite.name, role: invite.role, agent: invite.agent, now } })?
+			audited!(transaction, as_person, "invite.redeemed", invite.id, Json.to_str({ person: person_id, name: invite.name, role: invite.role }))?
+			rooms : List(Str)
+			rooms = Json.parse(invite.rooms) ?? []
+			for room in rooms {
+				member_added!(transaction, as_person, room, person_id, Bool.False)?
+			}
+			Ok(Ok({}))
+		}
+		[invite] => {
+			kept : List({ id : Str })
+			kept = transaction.query_many!({ query: "SELECT id FROM persons WHERE id = :id AND role != '';", params: { id: invite.person_id }, limits: Sqlite.default_query_limits })?
+			if kept.is_empty() {
+				return Ok(Err("the person this invite relinks was removed"))
+			}
+			audited!(transaction, as_person, "invite.redeemed", invite.id, Json.to_str({ person: person_id, relink: Bool.True }))
+				.map_ok(|_| Ok({}))
+		}
+		_ => Ok(Err("that invite was used or expired meanwhile"))
 	}
 }
 
@@ -894,16 +974,9 @@ register_finished! = |context, request, headers| {
 										transaction.commit!()?
 										return Ok(json(Json.to_str({ passkey: { id: made.id, name } })))
 									}
-									spent : List({ code : Str })
-									spent = transaction.query_many!({ query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: grant.drop_prefix("pair:"), now }, limits: Sqlite.default_query_limits })?
-									if spent.is_empty() {
-										return Ok(text(401, "that pairing code was used or expired meanwhile"))
-									}
-									person_name = Str.from_utf8_lossy((made.person_name ?? "").trim().to_utf8().take_first(80))
-									renamed : List({ id : Str })
-									renamed = if (person_name == "") [] else transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :id AND owner = 1 AND name = 'Owner' RETURNING id;", params: { id: person_id, name: person_name }, limits: Sqlite.default_query_limits })?
-									if !renamed.is_empty() {
-										audited!(transaction, as_person, "person.renamed", person_id, Json.to_str({ name: person_name }))?
+									match grant_spent!(transaction, context, grant, person_id, made.person_name ?? "")? {
+										Err(why) => return Ok(text(401, why))
+										Ok({}) => {}
 									}
 									{ device, token } = session_made!(transaction, context, person_id, made.id, if (name == "") "A device" else name)?
 									person : { id : Str, name : Str, role : Str }
@@ -2597,7 +2670,7 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, person_id TEXT NOT NULL DEFAULT '');", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
 	# The invites not used yet, each kept by its secret's SHA-256.
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL, agent INTEGER NOT NULL DEFAULT 0, person_id TEXT NOT NULL DEFAULT '');", params: {} })?
 	# The people of the box, humans and agents, its owner one of them: what
 	# they can do is their role's, `operator` or one the setup declares, and
 	# a person removed keeps a row with no role, which old messages name.

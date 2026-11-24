@@ -14,6 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { opened } from "./passkey-page.mjs";
+
 const { launch } = await import(pathToFileURL(process.argv[2]).href);
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -69,48 +71,6 @@ const step = async (name, test) => {
   await test();
 };
 
-// What the page does with a passkey, as the UI's will: each route's answer
-// as { status, body }, the browser's passkey asked for between begin and
-// finish, its bytes base64url.
-const helpers = `
-  const b64 = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-  const bytes = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
-  const post = async (route, body) => {
-    const r = await fetch("/liton/v1/" + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const text = await r.text();
-    return { status: r.status, body: r.ok ? JSON.parse(text) : text };
-  };
-  window.liton = {
-    post,
-    register: async (name, code, person_name) => {
-      const begun = await post("passkeys/register/begin", code ? { code } : {});
-      if (begun.status !== 200) return begun;
-      const o = begun.body;
-      const made = await navigator.credentials.create({ publicKey: {
-        challenge: bytes(o.challenge), rp: { id: o.rp_id, name: o.rp_id },
-        user: { id: bytes(o.user_id), name: o.user_name, displayName: o.display_name },
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -8 }],
-        authenticatorSelection: { residentKey: "required", userVerification: "required" }, attestation: "none",
-        excludeCredentials: o.exclude.map((id) => ({ type: "public-key", id: bytes(id) })) } });
-      return post("passkeys/register/finish", { challenge: o.challenge, id: b64(made.rawId), public_key: b64(made.response.getPublicKey()), alg: made.response.getPublicKeyAlgorithm(), authenticator_data: b64(made.response.getAuthenticatorData()), client_data: b64(made.response.clientDataJSON), name, person_name });
-    },
-    answer: async () => {
-      const begun = await post("login/begin", {});
-      const got = await navigator.credentials.get({ publicKey: { challenge: bytes(begun.body.challenge), rpId: begun.body.rp_id, userVerification: "required", allowCredentials: [] } });
-      return { challenge: begun.body.challenge, id: b64(got.rawId), authenticator_data: b64(got.response.authenticatorData), client_data: b64(got.response.clientDataJSON), signature: b64(got.response.signature), name: "Browser" };
-    },
-    // An answer with its signature counter one higher, which it didn't sign.
-    tampered: (answer) => {
-      const data = bytes(answer.authenticator_data);
-      data[36] = data[36] + 1;
-      return { ...answer, authenticator_data: b64(data) };
-    },
-    sign_in: async () => {
-      const answer = await window.liton.answer();
-      return { answer, finished: await post("login/finish", answer) };
-    },
-  };`;
-
 try {
   await step("without LITON_RP_ID, passkeys are refused, saying to set it", async () => {
     start({ LITON_RP_ID: "" });
@@ -128,17 +88,8 @@ try {
     assert.match(await elsewhere.text(), /passkeys are for localhost/);
   });
   browser = await launch({ executablePath: process.env.CHROME || "chromium" });
-  // A browser of its own, with an authenticator of its own.
-  const opened = async (context) => {
-    const page = await context.newPage();
-    await page.send("WebAuthn.enable", {});
-    await page.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true } });
-    await page.goto(`${daemon}/ui/index.html`);
-    await page.evaluate(helpers);
-    return page;
-  };
-  const page = await opened(browser);
-  const phone = await opened(await browser.createBrowserContext());
+  const page = await opened(browser, daemon);
+  const phone = await opened(await browser.createBrowserContext(), daemon);
   const poll = (on = page) => on.evaluate(`liton.post("poll", { topics: [] }).then((r) => r.status)`);
   await step("on a fresh box, liton pair's code makes the owner's first passkey, names them and signs them in; the code is spent", async () => {
     assert.equal(await poll(), 401);

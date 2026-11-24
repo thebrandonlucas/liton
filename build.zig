@@ -507,6 +507,13 @@ pub fn build(b: *std.Build) void {
     run_passkeys.step.dependOn(&install_daemon.step);
     run_passkeys.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_passkeys.step);
+    // Invites people, who make passkeys there, and agents, who get tokens.
+    const run_invites = b.addSystemCommand(&.{ "node", "e2e/invites.mjs" });
+    run_invites.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_invites.has_side_effects = true;
+    run_invites.step.dependOn(&install_daemon.step);
+    run_invites.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_invites.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);

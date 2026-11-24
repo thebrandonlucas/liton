@@ -125,7 +125,7 @@ try {
   let dana;
   let dana_id;
   await step("a staff member invited into a room redeems the invite for a token, posts there, and joins the open room to post in it", async () => {
-    const invited = await liton(["invite", "--role", "staff", "--rooms", "front-desk", "Dana"]);
+    const invited = await liton(["invite", "--agent", "--role", "staff", "--rooms", "front-desk", "Dana"]);
     assert.equal(invited.code, 0, invited.stderr);
     const secret = new URL(invited.stdout.split("\n")[0]).hash.slice("#invite=".length);
     const redeemed = await ask("invite", { secret, token: true });
@@ -167,7 +167,7 @@ try {
     assert.deepEqual(after.flatMap((e) => (e.RoomEntry?.event.Reacted ? [e.RoomEntry.event.Reacted.added] : [])), [true, false]);
   });
   await step("an agent joins by its invite's link and posts with its token (examples/room-agent)", async () => {
-    const invited = await liton(["invite", "--role", "staff", "--rooms", "front-desk", "Dispatch bot"]);
+    const invited = await liton(["invite", "--agent", "--role", "staff", "--rooms", "front-desk", "Dispatch bot"]);
     const file = path.join(scratch, "agent-token");
     const joined = await agent(["join", invited.stdout.split("\n")[0], file]);
     assert.equal(joined.code, 0, joined.stderr);
