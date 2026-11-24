@@ -38,7 +38,7 @@ PeopleDesk := [].{
 					Invite({ name, role, rooms, agent }) => { ..so_far, invites: so_far.invites.append({ id: "asking:${serial.to_str()}", name, role, rooms, expires: "", agent, person: "" }) }
 					Remove({ person }) => { ..so_far, people: so_far.people.drop_if(|listed| listed.id == person) }
 					Cancel({ id }) => { ..so_far, invites: so_far.invites.drop_if(|invite| invite.id == id) }
-					Relink(_) | CreateRoom(_) | AddMember(_) => so_far
+					Relink(_) | CreateRoom(_) | AddMember(_) | RemoveMember(_) | Rename(_) => so_far
 				},
 		)
 

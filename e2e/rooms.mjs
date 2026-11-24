@@ -178,6 +178,19 @@ try {
     assert.equal(refused.code, 1);
     assert.match(refused.stdout, /you aren't a member of this room/);
   });
+  await step("an operator renames a person and takes them out of a room, a staff member renames only themselves, and the audit shows who did what", async () => {
+    assert.deepEqual(await call(owner_token, "people.v1", { Rename: { person: dana_id, name: "Dana S." } }), { Ok: "Accepted" });
+    const [people] = await polled(owner_token, ["people.v1", "people"]);
+    const owner_id = people.at(-1).People.people.find((person) => person.owner).id;
+    assert.deepEqual(await call(dana, "people.v1", { Rename: { person: owner_id, name: "Eve" } }), { Err: { code: "Refused", message: "this device's role, staff, can't use people.v1" } });
+    assert.deepEqual(await call(owner_token, "people.v1", { RemoveMember: { room: "general", person: dana_id } }), { Ok: "Accepted" });
+    const [members] = await polled(owner_token, ["rooms.v1", "members/general"]);
+    assert.equal(members.at(-1).Members.some((member) => member.id === dana_id), false);
+    const [audit] = await polled(owner_token, ["people.v1", "audit"]);
+    const actions = audit.at(-1).Audit.map((entry) => entry.action);
+    for (const action of ["invite.made", "invite.redeemed", "room.made", "member.joined", "person.renamed", "member.removed"]) assert.ok(actions.includes(action), action);
+    assert.equal(audit.at(-1).Audit.at(-1).person, "Owner");
+  });
   await step("a staff member can't create rooms", async () => {
     const answer = await call(dana, "people.v1", { CreateRoom: { name: "Back room", about: "", kind: "Channel", private: false } });
     assert.ok(answer.Err, "the call is refused");

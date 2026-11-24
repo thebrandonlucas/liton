@@ -314,6 +314,11 @@ Model := [].{
 		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
 		pairing : Pairing,
 
+		## The devices signed in as this person since this browser was, as
+		## the last poll said, and those this browser was told were theirs.
+		sign_ins : List(Protocol.SignIn),
+		sign_ins_seen : List(Str),
+
 		## Whether the daemon says this device's role locks its UI: its layout,
 		## its deck and Settings stay as they are, shown without their controls.
 		locked : Bool,
@@ -590,6 +595,8 @@ Model := [].{
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
 				locked: Bool.False,
+				sign_ins: [],
+				sign_ins_seen: [],
 				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", passkeys: [], rp_id: "", deleting: [], delete: { serial: 0, id: "" }, ceremony: Model.ceremony_idle, logout: 0 },
 				focused_pane: "",
 				menu: "",

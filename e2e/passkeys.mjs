@@ -110,6 +110,9 @@ try {
     assert.equal(await poll(phone), 200);
     const people = await page.evaluate(`liton.post("poll", { topics: [{ capability: "people.v1", topic: "people", after: "" }] }).then((r) => r.body.topics[0].events.at(-1).People.people)`);
     assert.deepEqual(people.map((person) => [person.name, person.passkeys, person.devices]), [["Ada", 2, 2]]);
+    const polled = await page.evaluate(`liton.post("poll", { topics: [] }).then((r) => r.body.sign_ins)`);
+    assert.deepEqual(polled.map((sign_in) => sign_in.name), ["Phone"]);
+    assert.deepEqual(await phone.evaluate(`liton.post("poll", { topics: [] }).then((r) => r.body.sign_ins)`), []);
   });
   await step("a person lists and revokes their own devices", async () => {
     const { devices } = await page.evaluate(`fetch("/liton/v1/devices").then((r) => r.json())`);

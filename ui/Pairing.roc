@@ -353,6 +353,29 @@ Pairing := [].{
 		)
 	}
 
+	## A notice of each device signed in as this person since this browser
+	## was, within a day, until they say it was them, or sign it out.
+	sign_ins : State(ctx, Model.State) -> Elem(ctx)
+	sign_ins = |model|
+		Html.div(
+			"sign-in-notices",
+			[
+				Engine.each(
+					model.signal().map(|state| state.sign_ins.drop_if(|sign_in| state.sign_ins_seen.contains(sign_in.id))),
+					|sign_in| sign_in.id,
+					|row|
+						Html.div(
+							"sign-in-notice",
+							[
+								Html.p_s(row.field(|sign_in| "New sign-in: ${sign_in.name}. Not you?"), [Engine.attr("role", "status")]),
+								Html.button_s(row.field(|sign_in| "Sign out ${sign_in.name}"), [], model.lift_row().update_by(row.key(), |state, id| Pairing.revoke({ ..state, sign_ins_seen: state.sign_ins_seen.append(id) }, id))),
+								Html.button_s(row.field(|_| "It was me"), [Html.aria_label_s(row.field(|sign_in| "It was me on ${sign_in.name}"))], model.lift_row().update_by(row.key(), |state, id| { ..state, sign_ins_seen: state.sign_ins_seen.append(id) })),
+							],
+						),
+				),
+			],
+		)
+
 	## What the sign-in screen's button is for: the passkey a code or an
 	## invite grants, else signing in.
 	wanted : Model.Ceremony -> Model.Purpose

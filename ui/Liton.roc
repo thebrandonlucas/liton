@@ -170,6 +170,7 @@ Liton := [].{
 				Liton.palette(model),
 				Liton.shortcuts(model),
 				Pairing.screen(model),
+				Pairing.sign_ins(model),
 			].concat(Liton.effects(model)).concat(Pairing.effects(model)).concat(Liton.drag_effects(model, drag)).concat(Microphone.effects(model)).concat(Wallpaper.effects(model)),
 		)
 	}
@@ -420,7 +421,7 @@ Liton := [].{
 					decoded = Json.parse(res ?? "")
 					match (res, decoded) {
 						(Err(Status(401)), _) => Pairing.refused(Model.poll_failed(state))
-						(_, Ok(answer)) => Model.polled({ ..state, unreachable: Bool.False, refresh: { ..state.refresh, offered: answer.refresh == Ok(Bool.True) } }, poll, answer.topics)
+						(_, Ok(answer)) => Model.polled({ ..state, unreachable: Bool.False, refresh: { ..state.refresh, offered: answer.refresh == Ok(Bool.True) }, sign_ins: answer.sign_ins ?? [] }, poll, answer.topics)
 						(_, Err(_)) => Model.poll_failed(state)
 					}
 				},

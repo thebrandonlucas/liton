@@ -18,6 +18,12 @@ People := [].{
 	## the person it relinks, "" for a new one.
 	Invite : { id : Str, name : Str, role : Str, rooms : List(Str), expires : Str, agent : Bool, person : Str }
 
+	## What happened in the topic `audit`, which operators alone follow: its
+	## place, when, by whom and from which device, what (`person.removed`,
+	## `member.added`, `device.signed_in` and the like), to what, and its
+	## details as JSON.
+	Audited : { seq : U64, at : Str, person : Str, device : Str, action : Str, subject : Str, detail : Str }
+
 	## What the topic `people` holds, and the roles whoever asks may invite
 	## into.
 	Listing : { people : List(Person), invites : List(Invite), roles : List(Str) }
@@ -33,8 +39,10 @@ People := [].{
 	## box, for its invites to name, answering `RoomCreated` with its id, its
 	## name's letters and digits, lowercased, joined by hyphens. `AddMember`
 	## makes a person a member of a room, and its admin if `admin`, which an
-	## operator alone asks.
-	Request : [Invite({ name : Str, role : Str, rooms : List(Str), agent : Bool }), Relink({ person : Str }), Remove({ person : Str }), Cancel({ id : Str }), CreateRoom({ name : Str, about : Str, kind : Rooms.Kind, private : Bool }), AddMember({ room : Str, person : Str, admin : Bool })]
+	## operator alone asks; `RemoveMember` takes them out, as an operator or
+	## an admin of the room. `Rename` names a person: yourself, or anyone as
+	## an operator.
+	Request : [Invite({ name : Str, role : Str, rooms : List(Str), agent : Bool }), Relink({ person : Str }), Remove({ person : Str }), Cancel({ id : Str }), CreateRoom({ name : Str, about : Str, kind : Rooms.Kind, private : Bool }), AddMember({ room : Str, person : Str, admin : Bool }), RemoveMember({ room : Str, person : Str }), Rename({ person : Str, name : Str })]
 
 	Response : [Invited({ id : Str, secret : Str }), RoomCreated({ room_id : Str }), Accepted, Rejected(Str)]
 }

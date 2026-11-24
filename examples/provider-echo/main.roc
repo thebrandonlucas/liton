@@ -128,7 +128,7 @@ polled! = |db, request| {
 				$updates = $updates.append(update)
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates, refresh: Err(Missing) }
+			polled = { topics: $updates, refresh: Err(Missing), sign_ins: Err(Missing) }
 			Ok(json(Json.to_str(polled)))
 		}
 	}

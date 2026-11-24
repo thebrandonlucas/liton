@@ -605,6 +605,51 @@ people_call! = |context, asked| {
 				Ok(room_id) => Ok(Ok(RoomCreated({ room_id: room_id })))
 				Err(why) => refused(why)
 			}
+		RemoveMember({ room, person }) => {
+			admins : List({ admin : I64 })
+			admins = Sqlite.query_many!({ db, query: "SELECT admin FROM members WHERE room_id = :room AND person_id = :person AND admin = 1;", params: { room, person: context.person }, limits: Sqlite.default_query_limits })?
+			if context.access != Operator and admins.is_empty() {
+				refused("only an operator or an admin of the room removes its members")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				removed : List({ room_id : Str })
+				removed = transaction.query_many!({ query: "DELETE FROM members WHERE room_id = :room AND person_id = :person RETURNING room_id;", params: { room, person }, limits: Sqlite.default_query_limits })?
+				if removed.is_empty() {
+					return refused("${person} isn't a member of ${room}")
+				}
+				audited!(
+					transaction,
+					context,
+					"member.removed",
+					room,
+					Json.to_str(
+						{
+							person
+						},
+					),
+				)?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
+			}
+		}
+		Rename({ person, name }) => {
+			named = Str.from_utf8_lossy(name.trim().to_utf8().take_first(80))
+			if named == "" {
+				refused("a person's name has a letter or digit")
+			} else if person != context.person and context.access != Operator {
+				refused("only an operator renames someone else")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				renamed : List({ id : Str })
+				renamed = transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :person AND role != '' RETURNING id;", params: { person, name: named }, limits: Sqlite.default_query_limits })?
+				if renamed.is_empty() {
+					return refused("there is no person ${person}")
+				}
+				audited!(transaction, context, "person.renamed", person, Json.to_str({ name: named }))?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
+			}
+		}
 		AddMember({ room, person, admin }) => {
 			admins : List({ admin : I64 })
 			admins = Sqlite.query_many!({ db, query: "SELECT admin FROM members WHERE room_id = :room AND person_id = :person AND admin = 1;", params: { room, person: context.person }, limits: Sqlite.default_query_limits })?
@@ -1421,11 +1466,25 @@ polled_topics! = |context0, request| {
 				}
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
+			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing), sign_ins: sign_ins!(context)? }
 			Ok(json(Json.to_str(polled)))
 		}
 	}
 }
+
+## The devices signed in as the person asking since the device asking was,
+## within a day, so a sign-in that wasn't theirs is seen; none where no
+## device asks.
+sign_ins! : Context => Try(Try(List(Protocol.SignIn), [Missing]), _)
+sign_ins! = |{ db, person, asking, .. }|
+	match asking {
+		Open => Ok(Err(Missing))
+		Device(id) => {
+			rows : List({ id : Str, name : Str, created_at : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT id, name, created_at FROM devices WHERE person_id = :person AND id != :id AND created_at > :since AND created_at > (SELECT created_at FROM devices WHERE id = :id) ORDER BY created_at, id;", params: { person, id, since: now_ms!() - 86_400_000 }, limits: Sqlite.default_query_limits })?
+			Ok(Ok(rows.map(|row| { id: row.id, name: row.name, at: Chat.timestamp(row.created_at) })))
+		}
+	}
 
 ## Answers a /liton/v1/refresh: asks Paseo and the remotes, when due, about
 ## what polls watch, as a poll that isn't cached does before answering. A
@@ -1600,6 +1659,12 @@ update! = |context, wanted, subject| {
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
 		PeopleList => Ok(Protocol.snapshot(wanted, People(people!(context)?)))
+		PeopleAudit if context.access != Operator => Ok(Protocol.failed(wanted, { code: Refused, message: "only an operator follows the audit" }))
+		PeopleAudit => {
+			rows : List({ seq : I64, at : I64, name : Str, device_id : Str, action : Str, subject : Str, detail : Str })
+			rows = Sqlite.query_many!({ db: context.db, query: "SELECT * FROM (SELECT seq, at, coalesce(persons.name, audit.person_id) AS name, device_id, action, subject, detail FROM audit LEFT JOIN persons ON persons.id = audit.person_id ORDER BY seq DESC LIMIT 200) ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+			Ok(Protocol.snapshot(wanted, Audit(rows.map(|row| { seq: row.seq.to_u64_wrap(), at: Chat.timestamp(row.at), person: row.name, device: row.device_id, action: row.action, subject: row.subject, detail: row.detail }))))
+		}
 	}
 }
 
