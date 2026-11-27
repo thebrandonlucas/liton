@@ -7,6 +7,7 @@ All notable changes to liton are documented in this file. The format is based on
 ### Added
 
 - Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled. Edit a ticket's title, description and labels from the ticket itself.
+- Attach images and text files to a chat message: drop them on the composer, paste a screenshot, or pick them with Attach. Each shows in the composer at once, a thumbnail for an image, with × to take it off, and goes to the agent with the message. Up to 10 MB together; other kinds of file say why they weren't attached.
 
 ### Fixed
 
