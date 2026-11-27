@@ -475,6 +475,7 @@ Liton := [].{
 						"review.v1" => Model.reviewed(state, outbox.serial, res ?? "")
 						"rooms.v1" => Model.rooms_answered(state, outbox.serial, res ?? "")
 						"tickets.v1" => Model.tickets_answered(state, outbox.serial, res ?? "")
+						"start" => Model.start_answered(state, outbox.serial, res ?? "")
 						"schedules.v1" => Model.schedules_answered(state, outbox.serial, res ?? "")
 						"hosts.v1" => Model.hosts_answered(state, outbox.serial, res ?? "")
 						"people.v1" => Model.people_answered(state, outbox.serial, res ?? "")
@@ -2578,6 +2579,18 @@ Liton := [].{
 						[
 							Html.span_s(Engine.const("Repo"), [Engine.class("field-name"), Engine.attr("aria-hidden", "true")]),
 							Dropdown.select(Engine.const("Set the repo"), summary.map2(model.signal(), |listed, state| Model.repo_of(state, listed.source)), [], Liton.choices(model.signal().map(|state| [{ value: "", label: "None" }].concat(state.workspaces.projects.map(|project| { value: project.id, label: project.name })))), model.set_value_by(summary.map(|listed| listed.source), |state, source, repo| Model.ask_tickets(state, LinkRepo({ source, repo })))),
+						],
+					),
+					|| Engine.text(""),
+				),
+				Engine.when(
+					summary.map(|listed| listed.provider == "tickets"),
+					|| Html.div(
+						"ticket-field ticket-start",
+						[
+							Dropdown.select(Engine.const("Agent to start"), summary.map2(model.signal(), |listed, state| Model.start_offered(state, Model.repo_of(state, listed.source)).agent), [], Liton.choices(summary.map2(model.signal(), |listed, state| Model.repo_agents(state, Model.repo_of(state, listed.source)).map(|kind| { value: kind.agent, label: kind.agent }))), model.set_value(|state, agent| { ..state, start_choice: { agent, model: "" } })),
+							Dropdown.select(Engine.const("Model to start"), summary.map2(model.signal(), |listed, state| Model.start_offered(state, Model.repo_of(state, listed.source)).model), [], Liton.choices(summary.map2(model.signal(), |listed, state| [{ value: "", label: "Default model" }].concat(Model.start_models(state, Model.repo_of(state, listed.source))))), model.set_value_by(summary.map(|listed| listed.source), |state, source, picked| { ..state, start_choice: { ..Model.start_offered(state, Model.repo_of(state, source)), model: picked } })),
+							Html.button_s(summary.map2(model.signal(), |listed, state| if (state.ticket_start.ticket_id == listed.id) "Starting…" else "Start"), [Html.boolean("disabled", summary.map2(model.signal(), |listed, state| state.ticket_start.ticket_id == listed.id)), Engine.class("primary")], model.update_by(summary.map(|listed| listed.id), Model.start_ticket)),
 						],
 					),
 					|| Engine.text(""),
