@@ -287,13 +287,15 @@ fn addUiBuild(
     roc_ui: []const u8,
     roc_signals: *std.Build.Dependency,
     specialize: bool,
+    dev: bool,
 ) std.Build.LazyPath {
     const build_ui = std.Build.Step.Run.create(b, if (specialize) "build the specialized browser UI" else "build the browser UI");
     build_ui.addFileArg(devtool);
     build_ui.addArgs(&.{ "ui", roc_ui });
     const www = build_ui.addOutputDirectoryArg("www");
     for ([_][]const u8{ "runtime.mjs", "environment.mjs", "startup.mjs", "worker.mjs" }) |file| build_ui.addFileArg(roc_signals.path(file));
-    if (!specialize) build_ui.addArg("--specialize=no");
+    build_ui.addArg(if (dev) "--opt=dev" else "--opt=size");
+    if (!specialize or dev) build_ui.addArg("--specialize=no");
     addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
     for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
     return www;
@@ -317,6 +319,12 @@ pub fn build(b: *std.Build) void {
     // release alike, to measure what it buys (bench/): about an hour and
     // 20 GB of memory.
     const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, releases too") orelse false;
+    // The daemon, the command line and the UI on Roc's dev backend without
+    // specialization, for a preview: each in seconds against minutes, but
+    // slower and the UI three times the download. Never released. FIXME: the
+    // dev backend's specialized daemon crashes on review.v1's calls (e2e).
+    const dev = b.option(bool, "dev", "Build the daemon, the command line and the UI for a preview, in seconds, not for releases") orelse false;
+    const roc_flags: []const []const u8 = if (dev) &.{ "--opt=dev", "--specialize=no" } else &.{};
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -384,7 +392,7 @@ pub fn build(b: *std.Build) void {
     // Without specialization unless -Dspecialize: about 9 MB, built in about
     // three minutes, against 81 MB in about an hour.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const www = addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize);
+    const www = addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize, dev);
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
@@ -412,7 +420,7 @@ pub fn build(b: *std.Build) void {
     // The daemon runs liton-verify from beside itself, so whatever installs
     // the daemon installs it too.
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
-    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, roc_flags, "daemon/main.roc", "liton-daemon"), "liton-daemon");
     install_daemon.step.dependOn(&install_verify.step);
     daemon_step.dependOn(&install_daemon.step);
     if (previews) {
@@ -423,7 +431,7 @@ pub fn build(b: *std.Build) void {
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.
     const cli_step = b.step("cli", "Build the command line client into zig-out/bin/liton");
-    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "cli/main.roc", "liton"), "liton");
+    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, roc_flags, "cli/main.roc", "liton"), "liton");
     cli_step.dependOn(&install_cli.step);
 
     // The example provider outside the daemon, a server of /liton/v1 on the
@@ -439,6 +447,7 @@ pub fn build(b: *std.Build) void {
     // without specialization unless -Dspecialize (addUiBuild says why), the
     // same bytes from the same sources.
     const release_step = b.step("release", "Build the release archives into zig-out/release");
+    const release_www = if (dev) addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize, false) else www;
     const version = @import("build.zig.zon").version;
     const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
     for ([_][2][]const u8{ .{ "x86_64-linux", "x64musl" }, .{ "aarch64-linux", "arm64musl" } }) |release| {
@@ -448,7 +457,7 @@ pub fn build(b: *std.Build) void {
         _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
         const verify_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = b.fmt("{s}-musl", .{release[0]}) }) catch unreachable);
         _ = tree.addCopyFile(addVerifyBuild(b, verify_target), "bin/liton-verify");
-        _ = tree.addCopyDirectory(www, "share/liton/www", .{});
+        _ = tree.addCopyDirectory(release_www, "share/liton/www", .{});
         const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
         const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
         archive.addPrefixedDirectoryArg("--directory=", tree.getDirectory());
