@@ -50,24 +50,31 @@ Tickets := [].{
 	Filter : { sources : List(Str), kinds : List(Kind), assignee : [Anyone, Me, Nobody, Person(Str)], label : Str, text : Str }
 
 	## `GetTicket` answers the ticket with its comments. `Comment`,
-	## `SetStatus` (one of its source's `statuses`) and `SetAssignees` (of its
-	## source's `people`, none to unassign) change a ticket where its source
-	## keeps it. `Link` links a session to a ticket by hand, and `Unlink`
-	## unlinks it by hand, either winning over the ticket its branch names.
-	## Each answers `Accepted`.
+	## `SetStatus` (one of its source's `statuses`), `SetAssignees` (of its
+	## source's `people`, none to unassign) and `EditTicket` (its title, body
+	## and labels) change a ticket where its source keeps it. `Link` links a
+	## session to a ticket by hand, and `Unlink` unlinks it by hand, either
+	## winning over the ticket its branch names. Each answers `Accepted`.
+	## `CreateTicket` makes a ticket of a source, and `CreateProject` a source
+	## of the daemon's own whose tickets' keys start with `prefix`, as
+	## `LIT-12`, or with one made of its name for "": each answers `Created`
+	## with the new one's id and key.
 	Request : [
 		ListTickets(Filter),
 		GetTicket({ ticket_id : Str }),
 		Comment({ ticket_id : Str, body : Str }),
 		SetStatus({ ticket_id : Str, status_id : Str }),
 		SetAssignees({ ticket_id : Str, person_ids : List(Str) }),
+		EditTicket({ ticket_id : Str, title : Str, body : Str, labels : List(Str) }),
+		CreateTicket({ source : Str, title : Str, body : Str, labels : List(Str) }),
+		CreateProject({ name : Str, prefix : Str }),
 		Link({ session_id : Str, ticket_id : Str }),
 		Unlink({ session_id : Str }),
 	]
 
-	## What a request answers: a listing, one ticket, or that the provider
-	## took it.
-	Response : [Listed(Listing), Ticket(Ticket), Accepted]
+	## What a request answers: a listing, one ticket, what was created, or
+	## that the provider took it.
+	Response : [Listed(Listing), Ticket(Ticket), Created({ id : Str, key : Str }), Accepted]
 
 	## Open and started tickets, of every source and assignee.
 	open : Filter
@@ -99,12 +106,12 @@ Tickets := [].{
 	ticket_of : Request -> Str
 	ticket_of = |request|
 		match request {
-			GetTicket({ ticket_id }) | Comment({ ticket_id, .. }) | SetStatus({ ticket_id, .. }) | SetAssignees({ ticket_id, .. }) | Link({ ticket_id, .. }) => ticket_id
+			GetTicket({ ticket_id }) | Comment({ ticket_id, .. }) | SetStatus({ ticket_id, .. }) | SetAssignees({ ticket_id, .. }) | EditTicket({ ticket_id, .. }) | Link({ ticket_id, .. }) => ticket_id
 			_ => ""
 		}
 
-	## A ticket as a status or assignees request changes it, of the statuses
-	## and people its source has.
+	## A ticket as a status, assignees or edit request changes it, of the
+	## statuses and people its source has.
 	changed : Listing, Summary, Request -> Try(Summary, [NoSuchStatus(Str), NoSuchPerson(Str)])
 	changed = |listing, ticket, request| {
 		source = listing.sources.find_first(|known| known.id == ticket.source)
@@ -121,13 +128,15 @@ Tickets := [].{
 					Err(_) => Ok({ ..ticket, assignees: people.keep_if(|person| person_ids.contains(person.id)) })
 				}
 			}
+			EditTicket({ title, labels, .. }) => Ok({ ..ticket, title: title.trim(), labels: labels.map(Str.trim).drop_if(Str.is_empty) })
 			_ => Ok(ticket)
 		}
 	}
 
-	## A ticket as a request changes it: its status or assignees, or a
-	## comment by its source's `me` added as `comment_id` at `now`.
-	applied : Listing, Ticket, Request, { comment_id : Str, now : Str } -> Try(Ticket, [NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment])
+	## A ticket as a request changes it: its status, assignees, title, body
+	## or labels, or a comment by its source's `me` added as `comment_id` at
+	## `now`.
+	applied : Listing, Ticket, Request, { comment_id : Str, now : Str } -> Try(Ticket, [NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment, EmptyTitle])
 	applied = |listing, ticket, request, { comment_id, now }|
 		match request {
 			Comment({ body, .. }) if body.trim() == "" => Err(EmptyComment)
@@ -135,6 +144,8 @@ Tickets := [].{
 				me = listing.sources.find_first(|source| source.id == ticket.summary.source).map_ok(|source| source.me ?? Tickets.you) ?? Tickets.you
 				Ok({ ..ticket, comments: ticket.comments.append({ id: comment_id, author: me, body: body.trim(), created: now }), summary: { ..ticket.summary, updated: now } })
 			}
+			EditTicket({ title, .. }) if title.trim() == "" => Err(EmptyTitle)
+			EditTicket({ body, .. }) => Tickets.changed(listing, ticket.summary, request).map_ok(|summary| { ..ticket, summary, body: body.trim() })
 			_ => Tickets.changed(listing, ticket.summary, request).map_ok(|summary| { ..ticket, summary })
 		}
 
@@ -143,13 +154,14 @@ Tickets := [].{
 	you = { id: "", name: "You" }
 
 	## Why a request couldn't change a ticket.
-	refusal : [NotFound(Str), NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment] -> Str
+	refusal : [NotFound(Str), NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment, EmptyTitle] -> Str
 	refusal = |problem|
 		match problem {
 			NotFound(id) => "no ticket ${id}"
 			NoSuchStatus(id) => "no status ${id} for this ticket"
 			NoSuchPerson(id) => "no one ${id} can be assigned this ticket"
 			EmptyComment => "a comment needs some text"
+			EmptyTitle => "a ticket needs a title"
 		}
 
 	## The ticket a branch names: the one its source suggests the branch

@@ -69,7 +69,7 @@ try {
   }
   await step("the manifest lists the mock, attention as a transformer, and topics", () => {
     assert.equal(manifest.protocol, 1);
-    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "rooms", "hosts", "people"]);
+    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "rooms", "tickets", "hosts", "people"]);
     assert.deepEqual(manifest.transformers.map((t) => [t.id, t.offers.name, t.uses[0].name]), [["attention", "attention", "chat"]]);
     assert.deepEqual(manifest.topics.find((t) => t.capability.name === "chat").patterns, ["sessions", "timeline/<session_id>", "importable", "agents"]);
     assert.ok(manifest.topics.find((t) => t.capability.name === "workspace.git").patterns.includes("file/<session_id>/<scope>/<path>"));
@@ -265,6 +265,26 @@ try {
     assert.deepEqual(await call("tickets.v1", { Link: { session_id: "notes", ticket_id: "mock/liton#9" } }), { Ok: "Accepted" });
     assert.deepEqual(await links(), [{ session_id: "notes", ticket_id: "mock/liton#9", inferred: false }]);
     assert.equal((await call("tickets.v1", { Link: { session_id: "notes", ticket_id: "nope" } })).Err.code, "NotFound");
+  });
+  await step("tickets.v1 keeps the daemon's own projects and tickets, keyed by each project's prefix", async () => {
+    const project = (await call("tickets.v1", { CreateProject: { name: "liton app", prefix: "" } })).Ok.Created;
+    assert.equal(project.key, "LA");
+    assert.equal((await call("tickets.v1", { CreateProject: { name: "Other", prefix: "la" } })).Err.message, "the prefix LA is liton app's");
+    assert.equal((await call("tickets.v1", { CreateTicket: { source: project.id, title: " ", body: "", labels: [] } })).Err.message, "a ticket needs a title");
+    const first = (await call("tickets.v1", { CreateTicket: { source: project.id, title: "Drop images in the composer", body: "Paste too.", labels: ["ui", " "] } })).Ok.Created;
+    const second = (await call("tickets.v1", { CreateTicket: { source: project.id, title: "Group workspaces", body: "", labels: [] } })).Ok.Created;
+    assert.deepEqual([first.key, second.key], ["LA-1", "LA-2"]);
+    assert.deepEqual(await call("tickets.v1", { EditTicket: { ticket_id: first.id, title: "Drop and paste images", body: "In the composer.", labels: ["ui", "chat"] } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("tickets.v1", { SetStatus: { ticket_id: first.id, status_id: "in_review" } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("tickets.v1", { Comment: { ticket_id: first.id, body: "Done but for paste." } }), { Ok: "Accepted" });
+    assert.equal((await call("tickets.v1", { SetStatus: { ticket_id: first.id, status_id: "closed" } })).Err.code, "BadRequest");
+    const ours = { sources: [project.id], kinds: [], assignee: "Anyone", label: "", text: "" };
+    const listed = (await call("tickets.v1", { ListTickets: ours })).Ok.Listed;
+    const source = listed.sources.find((s) => s.id === project.id);
+    assert.deepEqual([source.name, source.statuses.map((status) => status.name)], ["liton app", ["Backlog", "Todo", "In progress", "In review", "Done", "Canceled"]]);
+    assert.deepEqual(listed.tickets.map((t) => [t.key, t.title, t.status.name, t.labels]), [["LA-1", "Drop and paste images", "In review", ["ui", "chat"]], ["LA-2", "Group workspaces", "Todo", []]]);
+    const opened = (await post("poll", { topics: [{ capability: "tickets.v1", topic: `ticket/${first.id}`, after: "" }] })).topics[0].events[0].Ticket;
+    assert.deepEqual([opened.body, opened.comments.map((c) => c.body)], ["In the composer.", ["Done but for paste."]]);
   });
   await step("chat.v1's ListHistory pages through the mock's sessions, archived ones too, and Unarchive lists one again", async () => {
     const history = async (request) => (await call("chat.v1", { ListHistory: request })).Ok.History;

@@ -75,9 +75,9 @@ MockTickets := [].{
 	listing : List(Tickets.Ticket) -> Tickets.Listing
 	listing = |tickets| { sources: MockTickets.sources, tickets: tickets.map(|shown| shown.summary) }
 
-	## A ticket as a Comment, SetStatus or SetAssignees changes it, a comment
+	## A ticket as a Comment, SetStatus, SetAssignees or EditTicket changes it, a comment
 	## numbered after the ticket's, at `now`.
-	changed : List(Tickets.Ticket), Tickets.Request, Str -> Try(Tickets.Ticket, [NotFound(Str), NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment])
+	changed : List(Tickets.Ticket), Tickets.Request, Str -> Try(Tickets.Ticket, [NotFound(Str), NoSuchStatus(Str), NoSuchPerson(Str), EmptyComment, EmptyTitle])
 	changed = |tickets, request, now| {
 		ticket_id = Tickets.ticket_of(request)
 		match tickets.find_first(|shown| shown.summary.id == ticket_id) {
