@@ -99,14 +99,15 @@ Chat := [].{
 	## its own: a client pins the workspace it works in (workspaces.v1).
 	## `Configure` switches a session's model, mode or thinking level, those
 	## it names, at once. A message sent while the agent works on a turn
-	## interrupts it, or with `while_running` `Steer` joins it.
+	## interrupts it, or with `while_running` `Steer` joins it; its
+	## `attachments` go with it.
 	## `ListHistory` lists sessions, archived ones too, the latest first: those
 	## whose title, agent or directory holds `search`, at most `limit` of them
 	## from `cursor` on (left out for the first); `Unarchive` lists one again.
 	Request : [
 		ListSessions,
 		WatchSession({ session_id : Str, after : U64 }),
-		SendMessage({ session_id : Str, text : Str, while_running : Try([Interrupt, Steer], [Missing]) }),
+		SendMessage({ session_id : Str, text : Str, while_running : Try([Interrupt, Steer], [Missing]), attachments : Try(List(Attachment), [Missing]) }),
 		AnswerPermission({ session_id : Str, request_id : Str, allowed : Bool, choice : Try(Str, [Missing]) }),
 		Cancel({ session_id : Str }),
 		Create(Create),
@@ -116,6 +117,10 @@ Chat := [].{
 		ListHistory({ search : Str, cursor : Try(Str, [Missing]), limit : U64 }),
 		Unarchive({ session_id : Str }),
 	]
+
+	## A file sent with a message: an image, its bytes in base64, or a text
+	## file's text, each with its file's name.
+	Attachment : [Image({ name : Str, mime_type : Str, data : Str }), Text({ name : Str, text : Str })]
 
 	## A session to start: where it works (a workspace, or a directory), the
 	## agent and, if not their defaults, the model, mode and thinking level,

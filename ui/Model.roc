@@ -2883,7 +2883,7 @@ Model := [].{
 		if (text.is_empty() or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing) }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing), attachments: Err(Missing) }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer

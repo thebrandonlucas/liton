@@ -135,13 +135,33 @@ Paseo := [].{
 
 	## Prompts an agent, interrupting it if it is running, as Paseo's own app
 	## does, or steering its turn as `while_running` asks (Paseo's
-	## `activeTurnBehavior`, from 0.5). Paseo answers once the agent took the
-	## prompt (see `sent`).
-	send_request : Str, Str, Try([Interrupt, Steer], [Missing]), Str -> Str
-	send_request = |agent_id, text, while_running, request_id| {
+	## `activeTurnBehavior`, from 0.5), with its attachments: images as its
+	## `images`, text files as `text` attachments titled by their names.
+	## Paseo answers once the agent took the prompt (see `sent`).
+	send_request : Str, Str, Try([Interrupt, Steer], [Missing]), List(Chat.Attachment), Str -> Str
+	send_request = |agent_id, text, while_running, attachments, request_id| {
 		behavior : Try(Str, [Missing])
 		behavior = while_running.map_ok(|asked| if (asked == Steer) "steer" else "interrupt")
-		Json.to_str({ type: "session", message: { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text, activeTurnBehavior: behavior } })
+		images = attachments.keep_oks(
+			|attachment|
+				match attachment {
+					Image({ mime_type, data, .. }) => Ok({ data, mimeType: mime_type })
+					Text(_) => Err(NotImage)
+				},
+		)
+		texts = attachments.keep_oks(
+			|attachment|
+				match attachment {
+					Text({ name, text: content }) => Ok({ type: "text", mimeType: "text/plain", title: name, text: content })
+					Image(_) => Err(NotText)
+				},
+		)
+		sent_images : Try(List({ data : Str, mimeType : Str }), [Missing])
+		sent_images = if (images.is_empty()) Err(Missing) else Ok(images)
+		sent_texts : Try(List({ type : Str, mimeType : Str, title : Str, text : Str }), [Missing])
+		sent_texts = if (texts.is_empty()) Err(Missing) else Ok(texts)
+		asked = { type: "send_agent_message_request", requestId: request_id, agentId: agent_id, text, activeTurnBehavior: behavior, images: sent_images, attachments: sent_texts }
+		Json.to_str({ type: "session", message: asked })
 	}
 
 	## Whether a `send_agent_message_response` says the agent took the prompt.
@@ -1053,8 +1073,12 @@ request = |message| "{\"message\":${message},\"type\":\"session\"}"
 
 expect Paseo.permission_answer("a1", "p1", Bool.False, Err(Missing)) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"deny\"},\"type\":\"agent_permission_response\"}")
 expect Paseo.permission_answer("a1", "p1", Bool.True, Ok("implement")) == request("{\"agentId\":\"a1\",\"requestId\":\"p1\",\"response\":{\"behavior\":\"allow\",\"selectedActionId\":\"implement\"},\"type\":\"agent_permission_response\"}")
-expect Paseo.send_request("a1", "Go on", Err(Missing), "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
-expect Paseo.send_request("a1", "Also the docs", Ok(Steer), "w1") == request("{\"activeTurnBehavior\":\"steer\",\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Also the docs\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Go on", Err(Missing), [], "w1") == request("{\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Go on\",\"type\":\"send_agent_message_request\"}")
+expect Paseo.send_request("a1", "Also the docs", Ok(Steer), [], "w1") == request("{\"activeTurnBehavior\":\"steer\",\"agentId\":\"a1\",\"requestId\":\"w1\",\"text\":\"Also the docs\",\"type\":\"send_agent_message_request\"}")
+expect {
+	sent = Paseo.send_request("a1", "See", Err(Missing), [Image({ name: "shot.png", mime_type: "image/png", data: "aGk=" }), Text({ name: "notes.md", text: "# Notes" })], "w1")
+	sent.contains("\"images\":[{\"data\":\"aGk=\",\"mimeType\":\"image/png\"}]") and sent.contains("\"attachments\":[{\"mimeType\":\"text/plain\",\"text\":\"# Notes\",\"title\":\"notes.md\",\"type\":\"text\"}]")
+}
 
 expect {
 	answer = |fields| session("{\"type\":\"send_agent_message_response\",\"payload\":{\"requestId\":\"w1\",\"agentId\":\"a1\",${fields}}}")
