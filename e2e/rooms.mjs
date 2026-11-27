@@ -95,6 +95,33 @@ try {
     assert.equal(refused.status, 3);
     assert.match(refused.stderr, /is from liton 0\.1; 0\.2 starts fresh: move liton\.db aside/);
   });
+  await step("a database from before passkeys starts: its devices are the owner's and still signed in, and liton pair's code pairs", async () => {
+    const before = path.join(scratch, "before.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    const { createHash } = await import("node:crypto");
+    const secret = "5".repeat(64);
+    const kept = new DatabaseSync(before);
+    kept.exec("CREATE TABLE devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL); CREATE TABLE pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL); CREATE TABLE invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    kept.prepare("INSERT INTO devices VALUES (?, ?, ?, 0, 0)").run("d0", "Browser", createHash("sha256").update(secret).digest("hex"));
+    kept.close();
+    const migrated = spawn(path.join(repo, "zig-out/bin/liton-daemon"), { cwd: repo, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, PASEO_PASSWORD: "", LITON_HOST: "127.0.0.1", LITON_PORT: String(port), LITON_DB: before, LITON_UI: path.join(scratch, "www"), LITON_MOCK: "off", LITON_AUTH: "required" } });
+    try {
+      await answering();
+      const listed = await fetch(`${daemon}/liton/v1/devices`, { headers: { Authorization: `Bearer d0.${secret}` } });
+      assert.equal(listed.status, 200, await listed.clone().text());
+      assert.deepEqual((await listed.json()).devices.map((device) => [device.name, device.current, device.expires_at]), [["Browser", true, 0]]);
+      const code = (await run(path.join(repo, "zig-out/bin/liton"), ["pair"], { LITON_DB: before })).stdout.split("\n")[0];
+      const paired = await ask("pair", { code, name: "Phone", token: true });
+      assert.ok(paired.token, JSON.stringify(paired));
+      const [people] = await polled(paired.token, ["people.v1", "people"]);
+      assert.deepEqual(people.at(-1).People.people.map((person) => [person.name, person.devices]), [["Owner", 2]]);
+    } finally {
+      await new Promise((resolve) => {
+        migrated.on("exit", resolve);
+        migrated.kill();
+      });
+    }
+  });
   start();
   await answering();
   let owner_token;

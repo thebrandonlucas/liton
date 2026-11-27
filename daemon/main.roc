@@ -224,12 +224,14 @@ verify_beside! = || {
 }
 
 ## The owner's id, the person called "Owner", an operator, made at the
-## first start.
+## first start. Devices paired before people came, each an operator's, are
+## theirs.
 owner_made! : Sqlite.Db => Try(Str, _)
 owner_made! = |db| {
 	Sqlite.execute!({ db, query: "INSERT INTO persons (id, name, role, agent, owner, created_at) SELECT lower(hex(randomblob(8))), 'Owner', 'operator', 0, 1, :now WHERE NOT EXISTS (SELECT 1 FROM persons WHERE owner = 1);", params: { now: now_ms!() } })?
 	found : { id : Str }
 	found = Sqlite.query!({ db, query: "SELECT id FROM persons WHERE owner = 1;", params: {}, limits: Sqlite.default_query_limits })?
+	Sqlite.execute!({ db, query: "UPDATE devices SET person_id = :owner WHERE person_id = '';", params: { owner: found.id } })?
 	Ok(found.id)
 }
 
@@ -2759,12 +2761,15 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
-	# no directory, workspace or listing until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''"), ("archived", "INTEGER NOT NULL DEFAULT 0"), ("model", "TEXT NOT NULL DEFAULT ''"), ("mode", "TEXT NOT NULL DEFAULT ''"), ("thinking", "TEXT NOT NULL DEFAULT ''")] {
+	# no directory, workspace or listing until listed again. Devices, pairing
+	# codes and invites kept before people came are the owner's
+	# (`owner_made!`), and their devices' sessions don't expire.
+	added = [("sessions", "provider", "TEXT NOT NULL DEFAULT 'mock'"), ("sessions", "directory", "TEXT NOT NULL DEFAULT ''"), ("sessions", "workspace_id", "TEXT NOT NULL DEFAULT ''"), ("sessions", "listed", "TEXT NOT NULL DEFAULT ''"), ("sessions", "archived", "INTEGER NOT NULL DEFAULT 0"), ("sessions", "model", "TEXT NOT NULL DEFAULT ''"), ("sessions", "mode", "TEXT NOT NULL DEFAULT ''"), ("sessions", "thinking", "TEXT NOT NULL DEFAULT ''"), ("devices", "person_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "passkey_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "expires_at", "INTEGER NOT NULL DEFAULT 0"), ("pairing_codes", "person_id", "TEXT NOT NULL DEFAULT ''"), ("invites", "agent", "INTEGER NOT NULL DEFAULT 0"), ("invites", "person_id", "TEXT NOT NULL DEFAULT ''")]
+	for (table, column, definition) in added {
 		existing : List({ name : Str })
-		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
+		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info(:table) WHERE name = :column;", params: { table, column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
-			Sqlite.execute!({ db, query: "ALTER TABLE sessions ADD COLUMN ${column} ${definition};", params: {} })?
+			Sqlite.execute!({ db, query: "ALTER TABLE ${table} ADD COLUMN ${column} ${definition};", params: {} })?
 		}
 	}
 	Ok({})
