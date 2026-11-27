@@ -174,6 +174,11 @@ Model := [].{
 		next_id : U64,
 		drafts : List({ pane : Str, text : Str }),
 
+		## The files attached to each chat pane's composer, each by an id
+		## counted on from `attachment_serial`, not sent yet.
+		attachments : List({ pane : Str, id : U64, attachment : Chat.Attachment }),
+		attachment_serial : U64,
+
 		## How many times a draft changed other than by typing, sent or
 		## How many times a draft changed other than by typing, sent, dictated or
 		## mentioned, and the draft's key (`drafts`' `pane`) of the latest, so
@@ -558,6 +563,8 @@ Model := [].{
 				url_hash: "",
 				next_id: 1,
 				drafts: [],
+				attachments: [],
+				attachment_serial: 0,
 				drafts_rewritten: { pane: "", count: 0 },
 				coarse_pointer: Bool.False,
 				operating_system: Other,
@@ -2781,7 +2788,9 @@ Model := [].{
 	confirmed = |state, sent| {
 		timeline = Model.entries(state, sent.session_id)
 		match sent.request {
-			SendMessage({ text, .. }) => timeline.any(|entry| entry.sequence > sent.after and entry.event == UserMessage({ text: text }))
+			# With attachments, a provider may show the message otherwise, as
+			# the mock does, naming them after it: any message after it is it.
+			SendMessage({ text, attachments, .. }) => timeline.any(|entry| entry.sequence > sent.after and (entry.event == UserMessage({ text: text }) or (attachments.is_ok() and Model.is_user_message(entry.event))))
 			AnswerPermission({ request_id, .. }) => !Chat.pending_permissions(timeline).contains(request_id) and !state.attention.any(|item| item.permissions.any(|asked| asked.request_id == request_id))
 			Cancel({ session_id }) => !Model.busy(Model.session(state, session_id).status)
 			_ => Bool.True
@@ -2901,17 +2910,96 @@ Model := [].{
 	set_draft : State, Str, Str -> State
 	set_draft = |state, pane_id, text| { ..state, drafts: state.drafts.drop_if(|found| found.pane == pane_id).append({ pane: pane_id, text }) }
 
-	## Sends a pane's draft to the session the pane shows, and clears its
-	## composer. While its agent works, the draft steers the turn it works
-	## on; Stop interrupts it.
+	## A chat pane's attachments, each by the id its × takes it off by.
+	attachments_of : State, Str -> List({ id : U64, attachment : Chat.Attachment })
+	attachments_of = |state, pane_id| state.attachments.keep_if(|kept| kept.pane == pane_id).map(|kept| { id: kept.id, attachment: kept.attachment })
+
+	## The most a message's attachments hold together, as base64 or text:
+	## about 10 MB of files.
+	attachments_limit : U64
+	attachments_limit = 14_000_000
+
+	## What an attachment holds, as the call carries it.
+	attachment_size : Chat.Attachment -> U64
+	attachment_size = |attachment|
+		match attachment {
+			Image({ data, .. }) => data.to_utf8().len()
+			Text({ text, .. }) => text.to_utf8().len()
+		}
+
+	## The name of an attachment's file.
+	attachment_name : Chat.Attachment -> Str
+	attachment_name = |attachment|
+		match attachment {
+			Image({ name, .. }) | Text({ name, .. }) => name
+		}
+
+	## An image attachment as a `data:` URL, to show it.
+	image_source : Chat.Attachment -> Try(Str, [NotImage])
+	image_source = |attachment|
+		match attachment {
+			Image({ mime_type, data, .. }) => Ok("data:${mime_type};base64,${data}")
+			Text(_) => Err(NotImage)
+		}
+
+	## Takes the files the page read for a composer (`Ports.attach`): each
+	## that fits under `attachments_limit` with those there joins them at
+	## once; those the page refused, or that don't fit, say why.
+	attached : State, Str -> State
+	attached = |state, text| {
+		given : Try({ pane : Str, attachments : List(Chat.Attachment), refused : List(Str) }, _)
+		given = Json.parse(text)
+		match given {
+			Err(_) => state
+			Ok({ pane: pane_id, attachments, refused: not_taken }) => {
+				held = Model.attachments_of(state, pane_id).fold(0, |total, kept| total + Model.attachment_size(kept.attachment))
+				added = attachments.fold(
+					{ kept: state.attachments, serial: state.attachment_serial, size: held, left_out: [] },
+					|so_far, attachment| {
+						size = so_far.size + Model.attachment_size(attachment)
+						if size > Model.attachments_limit {
+							{ ..so_far, left_out: so_far.left_out.append(Model.attachment_name(attachment)) }
+						} else {
+							{ ..so_far, kept: so_far.kept.append({ pane: pane_id, id: so_far.serial + 1, attachment }), serial: so_far.serial + 1, size }
+						}
+					},
+				)
+				why = Str.join_with(
+					[
+						if (not_taken.is_empty()) "" else "Only images and text files of up to 10 MB attach: ${Str.join_with(not_taken, ", ")}.",
+						if (added.left_out.is_empty()) "" else "A message's attachments hold 10 MB together: ${Str.join_with(added.left_out, ", ")} didn't fit.",
+					].drop_if(Str.is_empty),
+					" ",
+				)
+				{ ..state, attachments: added.kept, attachment_serial: added.serial, notice: if (why.is_empty()) state.notice else why }
+			}
+		}
+	}
+
+	## Takes an attachment off its composer.
+	detach : State, U64 -> State
+	detach = |state, id| { ..state, attachments: state.attachments.drop_if(|kept| kept.id == id) }
+
+	## Whether a timeline's event is a message the user sent.
+	is_user_message : Chat.Event -> Bool
+	is_user_message = |event|
+		match event {
+			UserMessage(_) => Bool.True
+			_ => Bool.False
+		}
+
+	## Sends a pane's draft and attachments to the session the pane shows,
+	## and clears its composer. While its agent works, the draft steers the
+	## turn it works on; Stop interrupts it.
 	submit : State, Str -> State
 	submit = |state, pane_id| {
 		text = Model.draft(state, pane_id).trim()
+		attaching = Model.attachments_of(state, pane_id).map(|kept| kept.attachment)
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		if (text.is_empty() or session_id.is_empty())
+		if ((text.is_empty() and attaching.is_empty()) or session_id.is_empty())
 			state
 		else
-			Model.send({ ..Model.set_draft(state, pane_id, ""), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing) }))
+			Model.send({ ..Model.set_draft(state, pane_id, ""), attachments: state.attachments.drop_if(|kept| kept.pane == pane_id), drafts_rewritten: { pane: pane_id, count: state.drafts_rewritten.count + 1 } }, SendMessage({ session_id, text, while_running: if (Model.busy(Model.session(state, session_id).status)) Ok(Steer) else Err(Missing), attachments: if (attaching.is_empty()) Err(Missing) else Ok(attaching) }))
 	}
 
 	## The latest permission request in the session a pane shows that no answer
@@ -4214,7 +4302,7 @@ Model := [].{
 	compact : State, Str -> State
 	compact = |state, pane_id| {
 		session_id = Model.session_of(state, Model.pane(state, pane_id))
-		if (session_id.is_empty()) state else { ..Model.send(state, SendMessage({ session_id, text: "/compact", while_running: Err(Missing) })), menu: "" }
+		if (session_id.is_empty()) state else { ..Model.send(state, SendMessage({ session_id, text: "/compact", while_running: Err(Missing), attachments: Err(Missing) })), menu: "" }
 	}
 
 	## Opens the form to start an agent of the same kind as the session a

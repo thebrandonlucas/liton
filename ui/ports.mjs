@@ -168,6 +168,58 @@ const swipe = (_, { emit }) => {
   return () => { clearTimeout(rest); window.removeEventListener("wheel", wheel); };
 };
 
+// Files attached to a chat's composer (ui/Ports.roc): dropped on it, pasted
+// into it, or picked with its Attach button, a file input whose
+// `data-attach` names the composer's pane. Images are read as base64, text
+// files (text/*, JSON and the like, or a name such files have) as text,
+// each of up to 10 MB; the rest are refused by name.
+const text_types = /^(text\/|application\/(json|xml|javascript|toml|yaml|x-sh))/;
+const text_names = /\.(md|txt|roc|zig|rs|js|mjs|ts|tsx|json|toml|ya?ml|nix|sh|py|go|c|h|css|html|csv|log|diff|patch|sql)$/i;
+const base64 = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.slice(reader.result.indexOf(",") + 1));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+const attach = (_, { emit }) => {
+  const pane_of = (target) => (target instanceof Element ? target.closest(".composer")?.querySelector("[data-attach]")?.getAttribute("data-attach") : null);
+  const read = async (pane, files) => {
+    const attachments = [], refused = [];
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) refused.push(file.name);
+      else if (file.type.startsWith("image/")) attachments.push({ Image: { name: file.name || "image", mime_type: file.type, data: await base64(file) } });
+      else if (text_types.test(file.type) || text_names.test(file.name)) attachments.push({ Text: { name: file.name, text: await file.text() } });
+      else refused.push(file.name);
+    }
+    if (attachments.length || refused.length) emit(JSON.stringify({ pane, attachments, refused }));
+  };
+  const over = (event) => {
+    if (pane_of(event.target) && event.dataTransfer?.types.includes("Files")) event.preventDefault();
+  };
+  const dropped = (event) => {
+    const pane = pane_of(event.target);
+    if (!pane || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    read(pane, [...event.dataTransfer.files]);
+  };
+  const pasted = (event) => {
+    const pane = pane_of(event.target), files = [...(event.clipboardData?.files ?? [])];
+    if (!pane || !files.length) return;
+    event.preventDefault();
+    read(pane, files);
+  };
+  const picked = (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !input.hasAttribute("data-attach")) return;
+    read(input.getAttribute("data-attach"), [...input.files]);
+    input.value = "";
+  };
+  const listeners = [["dragover", over], ["drop", dropped], ["paste", pasted], ["change", picked]];
+  for (const [name, listener] of listeners) document.addEventListener(name, listener, true);
+  return () => listeners.forEach(([name, listener]) => document.removeEventListener(name, listener, true));
+};
+
 // Voice (ui/Speech.roc) loads ui/voice.mjs and its worklet on first use only.
 const voice = () => import("./voice.mjs");
 
@@ -221,6 +273,7 @@ export default {
   },
   "liton/drag/pointer": { subscribe: drag },
   "liton/deck/swipe": { subscribe: swipe },
+  "liton/attach": { subscribe: attach },
   "liton/voice/capture": {
     subscribe(asked, port) {
       let stop, gone;

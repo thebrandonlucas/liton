@@ -2,8 +2,8 @@
 ## roc-signals does not model: copying text where the clipboard API is not
 ## offered (a page served over plain HTTP from another machine), voice
 ## (ui/Speech.roc), the pointer while a pane is dragged (ui/Drag.roc),
-## a trackpad's swipe across the page, and passkeys, which the browser
-## makes and uses (navigator.credentials).
+## a trackpad's swipe across the page, files attached to a chat's composer,
+## and passkeys, which the browser makes and uses (navigator.credentials).
 import pf.Engine
 import pf.Port
 import Drag
@@ -21,6 +21,12 @@ Ports := [].{
 	swipe : Port.Subscription({}, Str)
 	swipe = Port.subscription({ name: "liton/deck/swipe", delivery: Every(8) })
 
+	## Files dropped on, pasted into or picked for a chat's composer, as
+	## JSON: `{"pane", "attachments", "refused"}`, the attachments as
+	## `Chat.Attachment`s, and the names of files it can't take.
+	attach : Port.Subscription({}, Str)
+	attach = Port.subscription({ name: "liton/attach", delivery: Every(8) })
+
 	## A passkey made (`create`), or used to sign in, as the daemon's
 	## `options` ask, called `name` and for the person `person_name`
 	## names: what /liton/v1/login/finish or
@@ -30,5 +36,5 @@ Ports := [].{
 
 	## The ports the page's JavaScript answers.
 	registrations : List(Engine.PortRegistration)
-	registrations = Port.registrations({ copy: Ports.copy, capture: Speech.capture, drag: Drag.pointer, order: Speech.order, voices: Speech.voices, swipe: Ports.swipe, passkey: Ports.passkey })
+	registrations = Port.registrations({ copy: Ports.copy, capture: Speech.capture, drag: Drag.pointer, order: Speech.order, voices: Speech.voices, swipe: Ports.swipe, attach: Ports.attach, passkey: Ports.passkey })
 }

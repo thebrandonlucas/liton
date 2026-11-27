@@ -114,6 +114,19 @@ Mock := [].{
 		{ id: "implement_resume", label: "Implement with Auto", allows: Bool.True, style: Secondary },
 	]
 
+	## A message as the mock takes it: its text, and the names of its
+	## attachments after it, as `Look (attached: shot.png, notes.md)`.
+	attached : Str, List(Chat.Attachment) -> Str
+	attached = |text, attachments| {
+		names = attachments.map(
+			|attachment|
+				match attachment {
+					Image({ name, .. }) | Text({ name, .. }) => name
+				},
+		)
+		if (names.is_empty()) text else Str.join_with([text, "(attached: ${Str.join_with(names, ", ")})"].drop_if(Str.is_empty), " ")
+	}
+
 	## What follows a message. `next` is the timeline's next sequence number,
 	## which makes the ids of the calls and requests unique. A message that
 	## asks for a plan gets one to approve, in Markdown with its own choices.
@@ -730,3 +743,5 @@ expect {
 	weekly = |source| reports.find_first(|report| report.source == source).map_ok(|report| Usage.weekly(report).map_ok(|window| (window.used_pct, window.resets_at)))
 	reports.map(|report| report.source) == ["claude", "codex"] and weekly("codex") == Ok(Ok((Ok(37), Ok("1970-01-08T00:00:00.000Z")))) and weekly("claude") == Ok(Ok((Ok(31), Ok("1970-01-08T00:00:00.000Z"))))
 }
+
+expect Mock.attached("Look", [Image({ name: "shot.png", mime_type: "image/png", data: "" }), Text({ name: "notes.md", text: "" })]) == "Look (attached: shot.png, notes.md)" and Mock.attached("", [Text({ name: "a.txt", text: "" })]) == "(attached: a.txt)" and Mock.attached("Hi", []) == "Hi"

@@ -1080,6 +1080,18 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .model-chip:empty { display: none; }
 .composer-chips { display: flex; align-items: center; gap: 2px; margin-right: auto; min-width: 0; overflow: hidden; }
 .composer-chips .model-chip { margin-right: 0; }
+.composer-row { flex-wrap: wrap; }
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+.composer-attachments:empty { display: none; }
+.attachment { display: flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--edge); border-radius: 8px; color: var(--muted); font-size: 12px; }
+.attachment-thumb { height: 48px; max-width: 96px; border-radius: 6px; object-fit: cover; }
+.attachment-name { padding: 0 6px; max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment button { min-width: 0; min-height: 0; padding: 0 6px; background: transparent; color: var(--muted); }
+.attach { padding: 2px 10px; border-radius: 999px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.attach:hover { background-color: var(--field); color: var(--text); }
+.attach-input { display: none; }
+.sent-attachments { display: block; color: var(--muted); font-size: 12px; }
+.sent-attachments:empty { display: none; }
 .composer .chip { max-width: 16ch; min-height: 24px; background-color: transparent; color: var(--muted); font-size: 12px; }
 .composer .chip:hover { background-color: var(--field); color: var(--text); }
 .composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
