@@ -2570,10 +2570,11 @@ Model := [].{
 		# The people, and the rooms an invite may name, while Settings shows them.
 		people = if (state.capabilities.contains(Capability.people_v1) and state.show_settings and state.settings_page.section == "people") [PeopleList].concat(if (offered(Capability.rooms_v1)) [RoomList] else []) else []
 		# The accounts' usage while Settings' Usage & limits or the
-		# connection menu shows it, and the limits while those or a chat do.
+		# connection menu shows it, and the limits always, for the meter
+		# beside Settings.
 		accounts_shown = (state.show_settings and state.settings_page.section == "usage") or state.menu == "connection"
 		usage = if (state.capabilities.contains(Capability.usage_v1) and accounts_shown) [UsageReports] else []
-		limits = if (state.capabilities.contains(Capability.limits_v1) and (accounts_shown or laid_out.any(|shown| shown.widget == "chat"))) [LimitStatus] else []
+		limits = if (state.capabilities.contains(Capability.limits_v1)) [LimitStatus] else []
 		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(usage).concat(limits).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}

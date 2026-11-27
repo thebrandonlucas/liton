@@ -1756,7 +1756,7 @@ Liton := [].{
 				# state.
 				Html.div("git-actions", []),
 				Liton.drawer_toggle(model, Right, header.map(|shown| shown.counts)),
-				Engine.when(left_shown, || Engine.text(""), || Liton.settings_toggle(model, "icon settings-toggle")),
+				Engine.when(left_shown, || Engine.text(""), || Html.div("usage-and-settings", [Liton.usage_meter(model), Liton.settings_toggle(model, "icon settings-toggle")])),
 			],
 		)
 	}
@@ -1919,7 +1919,7 @@ Liton := [].{
 							|| Liton.icon_button(Engine.const("Close the thread"), "icon dismiss", model.update_by(id, |state, pane_id| Model.open_thread(state, { pane_id, root: "" }))),
 							|| Engine.text(""),
 						),
-						Engine.when(place.map(|at| at == LeftTab or at == MainTabWithSettings), || Liton.settings_toggle(model, "icon settings-toggle"), || Engine.text("")),
+						Engine.when(place.map(|at| at == LeftTab or at == MainTabWithSettings), || Html.div("usage-and-settings", [Liton.usage_meter(model), Liton.settings_toggle(model, "icon settings-toggle")]), || Engine.text("")),
 						Liton.pane_menu(model, id, title, shown),
 						Engine.when(place.map(|at| at == MainTab or at == MainTabWithSettings), || Liton.drawer_toggle(model, Right, shown.map(|{ pane, state }| Model.workspace_changes(state, pane))), || Engine.text("")),
 					],

@@ -1580,3 +1580,4 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .usage-meter { display: inline-flex; flex-direction: column; justify-content: center; gap: 3px; padding: 0 8px; }
 .usage-meter-window { display: grid; grid-template-columns: 2ch 44px; align-items: center; gap: 4px; font-size: 10px; line-height: 1; color: var(--muted); }
 .usage-meter .usage-bar { min-width: 0; height: 4px; }
+.usage-and-settings { display: contents; }
