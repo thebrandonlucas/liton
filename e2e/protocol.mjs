@@ -285,6 +285,10 @@ try {
     assert.deepEqual(listed.tickets.map((t) => [t.key, t.title, t.status.name, t.labels]), [["LA-1", "Drop and paste images", "In review", ["ui", "chat"]], ["LA-2", "Group workspaces", "Todo", []]]);
     const opened = (await post("poll", { topics: [{ capability: "tickets.v1", topic: `ticket/${first.id}`, after: "" }] })).topics[0].events[0].Ticket;
     assert.deepEqual([opened.body, opened.comments.map((c) => c.body)], ["In the composer.", ["Done but for paste."]]);
+    assert.deepEqual(await call("tickets.v1", { LinkRepo: { source: project.id, repo: "p-app" } }), { Ok: "Accepted" });
+    assert.equal((await call("tickets.v1", { LinkRepo: { source: "tickets/nope", repo: "p-app" } })).Err.message, "there is no project tickets/nope");
+    const relisted = (await call("tickets.v1", { ListTickets: ours })).Ok.Listed;
+    assert.equal(relisted.sources.find((s) => s.id === project.id).repo, "p-app");
   });
   await step("chat.v1's ListHistory pages through the mock's sessions, archived ones too, and Unarchive lists one again", async () => {
     const history = async (request) => (await call("chat.v1", { ListHistory: request })).Ok.History;

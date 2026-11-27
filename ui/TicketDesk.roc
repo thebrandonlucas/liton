@@ -173,16 +173,24 @@ TicketDesk := [].{
 		[All, Mine, Unassigned].concat(desk.listing.sources.map(|source| Source(source.id))).concat(desk.saved.map(|kept| Saved(kept.name))).map(counted)
 	}
 
-	## The sources and tickets with the changes on their way applied, and the
-	## projects and tickets being created, each as `asking:<serial>`.
+	## The sources and tickets with the changes on their way applied, repos
+	## linked too, and the projects and tickets being created, each as
+	## `asking:<serial>`.
 	listing_shown : State -> Tickets.Listing
 	listing_shown = |desk| {
 		changed = |ticket| desk.asked.map(|asked| asked.request).concat(desk.waiting).fold(ticket, |shown, request| if (Tickets.ticket_of(request) == shown.id) Tickets.changed(desk.listing, shown, request) ?? shown else shown)
 		asking = |serial| "asking:${serial.to_str()}"
-		sources = desk.listing.sources.concat(
+		linked = |source| desk.asked.fold(
+			source,
+			|shown, { request, .. }| match request {
+				LinkRepo({ source: linked_id, repo }) if linked_id == shown.id => { ..shown, repo: if (repo == "") Err(Missing) else Ok(repo) }
+				_ => shown
+			},
+		)
+		sources = desk.listing.sources.map(linked).concat(
 			desk.asked.keep_oks(
 				|{ serial, request, .. }| match request {
-					CreateProject({ name, .. }) => Ok({ id: asking(serial), provider: "tickets", name: name.trim(), url: "", me: Err(Missing), people: [], statuses: [] })
+					CreateProject({ name, .. }) => Ok({ id: asking(serial), provider: "tickets", name: name.trim(), url: "", me: Err(Missing), people: [], statuses: [], repo: Err(Missing) })
 					_ => Err(NotCreating)
 				},
 			),
@@ -378,7 +386,7 @@ desk : State
 desk = {
 	..TicketDesk.initial,
 	listing: {
-		sources: [{ id: "repo", provider: "mock", name: "repo", url: "", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }, { id: "bo", name: "Bo" }], statuses: [status("open", Open), status("closed", Done)] }],
+		sources: [{ id: "repo", provider: "mock", name: "repo", url: "", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }, { id: "bo", name: "Bo" }], statuses: [status("open", Open), status("closed", Done)], repo: Err(Missing) }],
 		tickets: [summary("t1", "Old", "2026-01-01T08:00:00.000Z"), summary("t2", "New", "2026-01-02T08:00:00.000Z")],
 	},
 }

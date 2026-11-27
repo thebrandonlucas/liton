@@ -712,7 +712,9 @@ a ticket of one, its key the prefix and the next number, as LIT-12, in
 Todo. Both answer `{"Created": {"id", "key"}}`. Every project's tickets
 move between Backlog and Todo (open), In progress and In review
 (started), Done and Canceled, and can be assigned to anyone the daemon
-knows (People), the person asking its `me`.
+knows (People), the person asking its `me`. `LinkRepo` names the
+workspaces.v1 project a project's tickets are worked in, `""` for none,
+which its source then gives as `repo`.
 
 ```json
 { "capability": "tickets.v1", "request": { "CreateProject": { "name": "liton", "prefix": "" } } }
