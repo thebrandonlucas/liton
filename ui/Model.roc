@@ -376,6 +376,11 @@ Model := [].{
 		## workspace, and what is typed in it.
 		form : Form,
 
+		## A ticket being started (`start_ticket`), and the agent and model last
+		## started, which Start offers first.
+		ticket_start : TicketStart,
+		start_choice : { agent : Str, model : Str },
+
 		## Agents started and workspaces created, shown starting until a listing
 		## has them; the last call whose answer may take a provider a while, to
 		## create one, or a review.v1 or tickets.v1 request, its capability as `key` and its
@@ -425,6 +430,11 @@ Model := [].{
 	## mode and thinking level are "" for its provider's defaults. `failed`
 	## says why the daemon didn't, "" until it refuses.
 	Form : { pane : Str, kind : [Closed, Agent, Workspace], place : Str, agent : Str, model : Str, mode : Str, thinking : Str, prompt : Str, worktree : Bool, branch : Str, failed : Str }
+
+	## A ticket being started: its id ("" for none), the call on its way for
+	## it, the repo, branch, agent, model and prompt to start, and the status
+	## it had.
+	TicketStart : { ticket_id : Str, serial : U64, repo : Str, branch : Str, agent : Str, model : Str, prompt : Str, was : Str }
 
 	## An agent started or a workspace created, from `form`, until a listing
 	## has it; `id` is "" until the daemon answers with it.
@@ -609,6 +619,8 @@ Model := [].{
 				opened_folds: [],
 				voice: Speech.initial,
 				form: Model.closed_form,
+				ticket_start: Model.no_start,
+				start_choice: { agent: "", model: "" },
 				creating: [],
 				call_outbox: { serial: 0, key: "", text: "" },
 				agents: [],
@@ -4239,20 +4251,127 @@ Model := [].{
 
 	## Takes the daemon's answer to a tickets.v1 request: accepted, it holds
 	## until the poll it asks for shows it; refused, it is undone, with why.
-	## Then the next request waiting goes.
+	## Then the next request waiting goes, or the next step of a ticket's
+	## start (`start_ticket`) it was the first of.
 	tickets_answered : State, U64, Str -> State
 	tickets_answered = |state, serial, text| {
 		answered : Try(Protocol.Answer(Tickets.Response), _)
 		answered = Json.parse(text)
 		undone = |reason| { ..state, tickets: TicketDesk.created(TicketDesk.answered(state.tickets, serial, Refused), serial, ""), notice: reason }
-		Model.send_waiting(
+		taken =
 			match answered {
 				Ok(Ok(Created({ id, .. }))) => Model.poll({ ..state, tickets: TicketDesk.answered(TicketDesk.created(state.tickets, serial, id), serial, Accepted(state.poll.serial + 1)) })
 				Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
 				Ok(Err({ message, .. })) => undone(message)
 				Err(_) => undone("The daemon did not answer.")
-			},
-		)
+			}
+		starts_here = !state.ticket_start.ticket_id.is_empty() and state.ticket_start.serial == serial
+		match answered {
+			Ok(Ok(_)) if starts_here => Model.start_worktree(taken)
+			_ if starts_here => Model.send_waiting({ ..taken, ticket_start: Model.no_start })
+			_ => Model.send_waiting(taken)
+		}
+	}
+
+	## No ticket being started.
+	no_start : TicketStart
+	no_start = { ticket_id: "", serial: 0, repo: "", branch: "", agent: "", model: "", prompt: "", was: "" }
+
+	## The branch a ticket is started on: its key and the first words of its
+	## title, lowercased, as `lit-1-attach-images-and`.
+	branch_for : Tickets.Summary -> Str
+	branch_for = |ticket| {
+		words = |text| Str.from_utf8_lossy(text.with_ascii_lowercased().to_utf8().map(|byte| if ((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9')) byte else ' ')).split_on(" ").drop_if(Str.is_empty)
+		Str.join_with(words(ticket.key).concat(words(ticket.title).take_first(4)), "-")
+	}
+
+	## What an agent started on a ticket is asked: the ticket, its comments,
+	## and to say when it is done or blocked.
+	start_prompt : Tickets.Ticket -> Str
+	start_prompt = |ticket| {
+		comments = ticket.comments.map(|comment| "- ${comment.author.name}: ${comment.body}")
+		said = if (comments.is_empty()) [] else ["Comments:\n${Str.join_with(comments, "\n")}"]
+		Str.join_with(["Work on ${ticket.summary.key}: ${ticket.summary.title}", ticket.body].concat(said).append("Say when it's done or you're blocked.").drop_if(|part| part.trim().is_empty()), "\n\n")
+	}
+
+	## The kinds of agent that work in the workspaces.v1 project `repo`.
+	repo_agents : State, Str -> List(Chat.Agent)
+	repo_agents = |state, repo| {
+		provider = state.workspaces.projects.find_first(|project| project.id == repo).map_ok(|project| project.provider) ?? ""
+		state.agents.keep_if(|kind| kind.provider == provider)
+	}
+
+	## The agent and model Start offers in `repo`: the last started, if that
+	## kind works there, else the first kind that does, its model its own
+	## default ("").
+	start_offered : State, Str -> { agent : Str, model : Str }
+	start_offered = |state, repo| {
+		kinds = Model.repo_agents(state, repo)
+		if (kinds.any(|kind| kind.agent == state.start_choice.agent)) state.start_choice else { agent: kinds.first().map_ok(|kind| kind.agent) ?? "", model: "" }
+	}
+
+	## The models of the agent Start offers in `repo`, each a value and its
+	## label.
+	start_models : State, Str -> List({ value : Str, label : Str })
+	start_models = |state, repo| {
+		agent = Model.start_offered(state, repo).agent
+		Model.repo_agents(state, repo).find_first(|kind| kind.agent == agent).map_ok(|kind| (kind.models ?? []).map(|offered| { value: offered.id, label: offered.label })) ?? []
+	}
+
+	## Starts an agent on a ticket of the daemon's own, in its project's repo:
+	## moves it to In progress, shown at once, then makes a worktree there on
+	## a branch named for it (`branch_for`), which links the session to it,
+	## then starts the agent Start offers in it, asked to do it
+	## (`start_prompt`). Each waits for the answer to the one before; one
+	## refused is undone with why.
+	start_ticket : State, Str -> State
+	start_ticket = |state, ticket_id|
+		match TicketDesk.ticket_shown(state.tickets, ticket_id) {
+			Err(_) => state
+			Ok(_) if !state.ticket_start.ticket_id.is_empty() => state
+			Ok(ticket) => {
+				repo = Model.repo_of(state, ticket.summary.source)
+				choice = Model.start_offered(state, repo)
+				if repo.is_empty() {
+					{ ..state, notice: "Pick the repo its project is worked in, under Repo, first." }
+				} else if choice.agent.is_empty() {
+					{ ..state, notice: "No kind of agent works in that repo." }
+				} else {
+					asked = Model.ask_tickets(state, SetStatus({ ticket_id, status_id: "in_progress" }))
+					{ ..asked, start_choice: choice, ticket_start: { ticket_id, serial: asked.call_outbox.serial, repo, branch: Model.branch_for(ticket.summary), agent: choice.agent, model: choice.model, prompt: Model.start_prompt(ticket), was: ticket.summary.status.id } }
+				}
+			}
+		}
+
+	## A ticket's start once its status moved: the worktree to make.
+	start_worktree : State -> State
+	start_worktree = |state| {
+		serial = state.call_outbox.serial + 1
+		call : { capability : Str, request : Workspaces.Request }
+		call = { capability: "workspaces.v1", request: Create({ project_id: state.ticket_start.repo, kind: Worktree, branch: Ok(state.ticket_start.branch) }) }
+		{ ..state, call_outbox: { serial, key: "start", text: Json.to_str(call) }, ticket_start: { ..state.ticket_start, serial } }
+	}
+
+	## Takes the answer to a ticket's worktree (`start_worktree`): made, the
+	## agent starts in it, focused, as a Workspaces pane's form starts one;
+	## refused, the ticket's status goes back, with why.
+	start_answered : State, U64, Str -> State
+	start_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Workspaces.Response), _)
+		answered = Json.parse(text)
+		start = state.ticket_start
+		stopped = { ..state, ticket_start: Model.no_start }
+		failed = |reason| { ..Model.ask_tickets(stopped, SetStatus({ ticket_id: start.ticket_id, status_id: start.was })), notice: reason }
+		if serial != start.serial {
+			state
+		} else {
+			match answered {
+				Ok(Ok(Created({ workspace_id }))) => Model.submit_form({ ..stopped, form: { ..Model.closed_form, kind: Agent, place: workspace_id, agent: start.agent, model: start.model, prompt: start.prompt } })
+				Ok(Ok(Rejected(reason))) => failed(reason)
+				Ok(Err({ message, .. })) => failed(message)
+				_ => failed("The daemon did not answer.")
+			}
+		}
 	}
 
 	## Opens a Board pane's row for a new ticket, in the first of the
@@ -4974,7 +5093,7 @@ Model := [].{
 			call : { capability : Str, request : Chat.Request }
 			call = { capability: "chat.v1", request: Create({ place: Workspace(form.place), agent: form.agent, model: optional(form.model), mode: optional(form.mode), thinking: optional(form.thinking), prompt }) }
 			title = if (prompt.is_empty()) "New ${form.agent} agent" else prompt.split_on("\n").first() ?? prompt
-			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, notice: "" }
+			started = { ..state, form: Model.closed_form, creating: state.creating.append({ serial, form, title, id: "" }), call_outbox: { serial, key: call.capability, text: Json.to_str(call) }, start_choice: { agent: form.agent, model: form.model }, notice: "" }
 			if (form.agent.is_empty()) { ..state, form: { ..form, failed: "Pick a kind of agent." } } else Model.open(started, Session(Model.starting_key(serial)))
 		} else {
 			call : { capability : Str, request : Workspaces.Request }
