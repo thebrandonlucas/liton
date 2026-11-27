@@ -2497,7 +2497,7 @@ Liton := [].{
 			[Engine.class("ticket"), Engine.attr("data-part", "ticket")],
 			[
 				Liton.ticket_bar(model, summary),
-				Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
+				Liton.ticket_heading(model, id, opened_ticket),
 				Html.div(
 					"ticket-meta",
 					[
@@ -2512,14 +2512,46 @@ Liton := [].{
 		)
 	}
 
-	## A ticket's key and a link to it where its source keeps it.
+	## A ticket's title, with Edit for one of the daemon's own, which
+	## edits its title, body and labels in place, saved at once.
+	ticket_heading : State(PaneCtx, Model.State), Signal(PaneCtx, Str), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	ticket_heading = |model, id, ticket_id| {
+		summary = ticket_id.map2(model.signal(), |shown_id, state| (TicketDesk.ticket_shown(state.tickets, shown_id) ?? TicketDesk.missing).summary)
+		asked = id.map2(ticket_id, |pane_id, shown_id| { pane_id, ticket_id: shown_id })
+		drafted = |name| id.map2(model.signal(), |pane_id, state| Model.draft(state, "${pane_id}/${name}"))
+		set_draft = |name| model.set_value_by(id.map(|pane_id| "${pane_id}/${name}"), Model.set_draft)
+		Engine.when(
+			asked.map2(model.signal(), |editor, state| editor.ticket_id != "" and TicketDesk.editing_in(state.tickets, editor.pane_id) == editor.ticket_id),
+			||
+				Html.div_attrs(
+					[Engine.class("ticket-editor"), Engine.attr("data-part", "editor")],
+					[
+						Html.text_input(Engine.const("Ticket title"), "text", drafted("edit-title"), [], set_draft("edit-title")),
+						Html.textarea(Engine.const("Ticket body"), drafted("edit-body"), [Engine.attr("rows", "6"), Engine.attr("placeholder", "Describe it, in Markdown")], set_draft("edit-body")),
+						Html.text_input(Engine.const("Labels"), "text", drafted("edit-labels"), [Engine.attr("placeholder", "bug, ui")], set_draft("edit-labels")),
+						Html.div("ticket-editor-actions", [Html.button("Save", [Engine.class("primary")], model.update_by(asked, Model.save_ticket)), Html.button("Cancel", [], model.update_by(asked, Model.cancel_edit))]),
+					],
+				),
+			||
+				Html.div(
+					"ticket-title",
+					[
+						Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
+						Engine.when(summary.map(|listed| listed.provider == "tickets"), || Html.button("Edit", [Html.aria_label("Edit the ticket")], model.update_by(asked, Model.edit_ticket)), || Engine.text("")),
+					],
+				),
+		)
+	}
+
+	## A ticket's key and a link to it where its source keeps it, if it
+	## has one.
 	ticket_bar : State(PaneCtx, Model.State), Signal(PaneCtx, Tickets.Summary) -> Elem(PaneCtx)
 	ticket_bar = |model, summary|
 		Html.div(
 			"ticket-bar",
 			[
 				Html.span_s(summary.map(|listed| listed.key), [Engine.class("ticket-key")]),
-				Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]),
+				Engine.when(summary.map(|listed| listed.url != ""), || Engine.element("a", [Engine.attr_s("href", summary.map(|listed| listed.url)), Engine.attr("target", "_blank"), Engine.attr("rel", "noopener noreferrer"), Engine.class("ticket-link")], [Engine.text_s(summary.map2(model.signal(), |listed, state| "Open in ${TicketDesk.source_name(state.tickets, listed.source)}"))]), || Engine.text("")),
 			],
 		)
 
@@ -2684,7 +2716,7 @@ Liton := [].{
 						Html.button("↓", [Html.aria_label("Next ticket"), Engine.class("step")], model.update(|state| Model.step_ticket(state, Next))),
 					],
 				),
-				Engine.element("h3", [Engine.class("ticket-heading")], [Engine.text_s(summary.map(|listed| if (listed.id.is_empty()) "No such ticket" else listed.title))]),
+				Liton.ticket_heading(model, id, ticket_id),
 			].concat(Liton.ticket_discussion(model, id, ticket_id)),
 		)
 	}
