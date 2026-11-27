@@ -121,6 +121,7 @@ import transformers.NeedsYou
 import transformers.Transformer
 import Auth
 import RoomStore
+import TicketStore
 import Sha256
 import WebAuthn
 
@@ -1292,7 +1293,7 @@ offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
 	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
-	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(rooms_provider).append(hosts_provider).append(people_provider)
+	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(rooms_provider).append(tickets_provider).append(hosts_provider).append(people_provider)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -1639,9 +1640,12 @@ update! = |context, wanted, subject| {
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
 		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox => rooms_update!(context, wanted, subject)
-		TicketList => Ok(Protocol.snapshot(wanted, Tickets(MockTickets.listing(tickets!(context)?))))
+		TicketList => {
+			all = tickets!(context)?
+			Ok(Protocol.snapshot(wanted, Tickets({ sources: all.sources, tickets: all.tickets.map(|shown| shown.summary) })))
+		}
 		TicketDetail(ticket_id) =>
-			match tickets!(context)?.find_first(|shown| shown.summary.id == ticket_id) {
+			match tickets!(context)?.tickets.find_first(|shown| shown.summary.id == ticket_id) {
 				Ok(shown) => Ok(Protocol.snapshot(wanted, Ticket(shown)))
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
@@ -2074,16 +2078,53 @@ agents! = |context| {
 	Ok((if (context.mock.agents) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
 }
 
-## tickets.v1's tickets: the mock's, as calls changed them.
-tickets! : Context => Try(List(Tickets.Ticket), _)
-tickets! = |context|
-	if context.mock.tickets {
-		rows : List({ value : Str })
-		rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
-		Ok(MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))))
-	} else {
-		Ok([])
-	}
+## tickets.v1's tickets with their sources: the mock's, as calls changed
+## them, and the daemon's own.
+tickets! : Context => Try({ sources : List(Tickets.Source), tickets : List(Tickets.Ticket) }, _)
+tickets! = |context| {
+	mocked =
+		if context.mock.tickets {
+			rows : List({ value : Str })
+			rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
+			{ sources: MockTickets.sources, tickets: MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))) }
+		} else {
+			{ sources: [], tickets: [] }
+		}
+	kept = kept_tickets!(context)?
+	Ok({ sources: mocked.sources.concat(kept.sources), tickets: mocked.tickets.concat(kept.tickets) })
+}
+
+## The daemon's own projects (`TicketStore`).
+ticket_projects! : Sqlite.Db => Try(List(TicketStore.Project), _)
+ticket_projects! = |db| Sqlite.query_many!({ db, query: "SELECT id, name, prefix FROM ticket_projects ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })
+
+## The daemon's own tickets with their comments, and its projects as
+## sources, whose tickets anyone the daemon knows may be assigned, `me` the
+## person asking.
+kept_tickets! : Context => Try({ sources : List(Tickets.Source), tickets : List(Tickets.Ticket) }, _)
+kept_tickets! = |context| {
+	db = context.db
+	projects = ticket_projects!(db)?
+	people : List(Tickets.Person)
+	people = Sqlite.query_many!({ db, query: "SELECT id, name FROM persons ORDER BY name, id;", params: {}, limits: Sqlite.default_query_limits })?
+	me = people.find_first(|person| person.id == context.person).map_err(|_| Missing)
+	rows : List({ seq : I64, project_id : Str, number : I64, title : Str, body : Str, status : Str, labels : Str, assignees : Str, updated_at : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT seq, project_id, number, title, body, status, labels, assignees, updated_at FROM tickets ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+	comments : List({ seq : I64, ticket_seq : I64, author : Str, body : Str, created_at : I64 })
+	comments = Sqlite.query_many!({ db, query: "SELECT seq, ticket_seq, author, body, created_at FROM ticket_comments ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+	person = |id| people.find_first(|known| known.id == id) ?? (if (id == "") Tickets.you else { id, name: id })
+	tickets = rows.keep_oks(
+		|row| {
+			labels : List(Str)
+			labels = Json.parse(row.labels) ?? []
+			assignees : List(Str)
+			assignees = Json.parse(row.assignees) ?? []
+			commented = comments.keep_if(|comment| comment.ticket_seq == row.seq).map(|comment| { id: "${TicketStore.id_of(row.seq)}/${comment.seq.to_str()}", author: person(comment.author), body: comment.body, created: Chat.timestamp(comment.created_at) })
+			projects.find_first(|project| project.id == row.project_id).map_ok(|project| TicketStore.ticket({ seq: row.seq, project, number: row.number, title: row.title, body: row.body, status: row.status, labels, assignees, updated: Chat.timestamp(row.updated_at) }, people, commented))
+		},
+	)
+	Ok({ sources: projects.map(|project| TicketStore.as_source(project, people, me)), tickets })
+}
 
 ## Each session's ticket: linked by hand, or named by its branch.
 ticket_links! : Context => Try(List(Tickets.Link), _)
@@ -2091,21 +2132,26 @@ ticket_links! = |context| {
 	by_hand : List(Tickets.Linked)
 	by_hand = Sqlite.query_many!({ db: context.db, query: "SELECT session_id, ticket_id FROM ticket_links;", params: {}, limits: Sqlite.default_query_limits })?
 	sessions = sessions!(context)?.map(|session| { id: session.id, branch: session.branch })
-	Ok(Tickets.links(sessions, by_hand, tickets!(context)?.map(|shown| shown.summary)))
+	Ok(Tickets.links(sessions, by_hand, tickets!(context)?.tickets.map(|shown| shown.summary)))
 }
 
-## Answers a tickets.v1 request. The mock's tickets keep their changes;
-## links set by hand are the daemon's, whoever has the session or ticket.
+## Answers a tickets.v1 request. The mock's tickets keep their changes, and
+## the daemon's own are made and changed in its tables; links set by hand
+## are the daemon's, whoever has the session or ticket.
 tickets_call! : Context, Try(Str, [Missing]), Tickets.Request => Try(Protocol.Answer(Tickets.Response), _)
 tickets_call! = |context, provider, asked| {
 	db = context.db
-	tickets = if (Protocol.serves(provider, Mock.provider.id)) tickets!(context)? else []
-	listing = MockTickets.listing(tickets)
+	all = tickets!(context)?
+	tickets = all.tickets.keep_if(|shown| Protocol.serves(provider, shown.summary.provider))
+	listing = { sources: all.sources.keep_if(|source| Protocol.serves(provider, source.provider)), tickets: tickets.map(|shown| shown.summary) }
+	now = now_ms!()
 	no_ticket = |ticket_id| Err({ code: NotFound, message: Tickets.refusal(NotFound(ticket_id)) })
+	refused = |message| Ok(Err({ code: BadRequest, message }))
 	linked! = |session_id, ticket_id| {
 		Sqlite.execute!({ db, query: "INSERT INTO ticket_links (session_id, ticket_id) VALUES (:session_id, :ticket_id) ON CONFLICT (session_id) DO UPDATE SET ticket_id = excluded.ticket_id;", params: { session_id, ticket_id } })?
 		Ok(Ok(Accepted))
 	}
+	trimmed = |labels| labels.map(Str.trim).drop_if(Str.is_empty)
 	match asked {
 		ListTickets(filter) => Ok(Ok(Listed(Tickets.filtered(listing, filter))))
 		GetTicket({ ticket_id }) =>
@@ -2115,14 +2161,59 @@ tickets_call! = |context, provider, asked| {
 			}
 		Link({ session_id, ticket_id }) => if (tickets.any(|shown| shown.summary.id == ticket_id)) linked!(session_id, ticket_id) else Ok(no_ticket(ticket_id))
 		Unlink({ session_id }) => linked!(session_id, "")
-		_ =>
-			match MockTickets.changed(tickets, asked, Chat.timestamp(now_ms!())) {
-				Ok(changed) => {
-					Sqlite.execute!({ db, query: "INSERT INTO mock_tickets (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: changed.summary.id, value: Json.to_str(changed) } })?
-					Ok(Ok(Accepted))
+		CreateProject(project) => {
+			projects = ticket_projects!(db)?
+			match TicketStore.refusal(projects, asked) {
+				Err(why) => refused(why)
+				Ok(_) => {
+					random : { id : Str }
+					random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id;", params: {}, limits: Sqlite.default_query_limits })?
+					made = { id: random.id, name: project.name.trim(), prefix: TicketStore.prefix_asked(project) }
+					Sqlite.execute!({ db, query: "INSERT INTO ticket_projects (id, name, prefix, created_by, created_at) VALUES (:id, :name, :prefix, :created_by, :now);", params: { id: made.id, name: made.name, prefix: made.prefix, created_by: context.person, now } })?
+					Ok(Ok(Created({ id: TicketStore.source_id(made), key: made.prefix })))
 				}
-				Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
-				Err(problem) => Ok(Err({ code: BadRequest, message: Tickets.refusal(problem) }))
+			}
+		}
+		CreateTicket({ source, title, body, labels }) => {
+			projects = ticket_projects!(db)?
+			match (TicketStore.refusal(projects, asked), projects.find_first(|project| TicketStore.project_of(source) == Ok(project.id))) {
+				(Err(why), _) => refused(why)
+				(Ok(_), Err(_)) => refused("there is no project ${source}")
+				(Ok(_), Ok(project)) => {
+					made : { seq : I64, number : I64 }
+					made = Sqlite.query!({ db, query: "INSERT INTO tickets (project_id, number, title, body, status, labels, assignees, created_by, created_at, updated_at) VALUES (:project_id, (SELECT coalesce(max(number), 0) + 1 FROM tickets WHERE project_id = :project_id), :title, :body, :status, :labels, '[]', :created_by, :now, :now) RETURNING seq, number;", params: { project_id: project.id, title: title.trim(), body: body.trim(), status: TicketStore.new_status, labels: Json.to_str(trimmed(labels)), created_by: context.person, now }, limits: Sqlite.default_query_limits })?
+					Ok(Ok(Created({ id: TicketStore.id_of(made.seq), key: TicketStore.key(project, made.number) })))
+				}
+			}
+		}
+		_ =>
+			match (TicketStore.seq_of(Tickets.ticket_of(asked)), tickets.find_first(|shown| shown.summary.id == Tickets.ticket_of(asked))) {
+				(Ok(_), Err(_)) => Ok(no_ticket(Tickets.ticket_of(asked)))
+				(Ok(seq), Ok(shown)) =>
+					match Tickets.applied(listing, shown, asked, { comment_id: "", now: "" }) {
+						Err(problem) => refused(Tickets.refusal(problem))
+						Ok(changed) => {
+							when_commented = match asked {
+								Comment({ body, .. }) => [body.trim()]
+								_ => []
+							}
+							for body in when_commented {
+								Sqlite.execute!({ db, query: "INSERT INTO ticket_comments (ticket_seq, author, body, created_at) VALUES (:seq, :author, :body, :now);", params: { seq, author: context.person, body, now } })?
+							}
+							summary = changed.summary
+							Sqlite.execute!({ db, query: "UPDATE tickets SET title = :title, body = :body, status = :status, labels = :labels, assignees = :assignees, updated_at = :now WHERE seq = :seq;", params: { seq, title: summary.title, body: changed.body, status: summary.status.id, labels: Json.to_str(summary.labels), assignees: Json.to_str(summary.assignees.map(|person| person.id)), now } })?
+							Ok(Ok(Accepted))
+						}
+					}
+				(Err(_), _) =>
+					match MockTickets.changed(tickets, asked, Chat.timestamp(now)) {
+						Ok(changed) => {
+							Sqlite.execute!({ db, query: "INSERT INTO mock_tickets (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: changed.summary.id, value: Json.to_str(changed) } })?
+							Ok(Ok(Accepted))
+						}
+						Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
+						Err(problem) => refused(Tickets.refusal(problem))
+					}
 			}
 	}
 }
@@ -2720,6 +2811,9 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_schedules (id TEXT PRIMARY KEY, position INTEGER NOT NULL, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, prefix TEXT NOT NULL UNIQUE, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, labels TEXT NOT NULL, assignees TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (project_id, number));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_comments (seq INTEGER PRIMARY KEY AUTOINCREMENT, ticket_seq INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
@@ -4245,6 +4339,10 @@ mock_rooms! = |db| {
 ## The rooms the daemon keeps in its tables (`RoomStore`).
 rooms_provider : Manifest.Provider
 rooms_provider = { id: RoomStore.provider, name: "Rooms", capabilities: [Capability.rooms_v1] }
+
+## The tickets the daemon keeps itself, which it always offers.
+tickets_provider : Manifest.Provider
+tickets_provider = { id: TicketStore.provider, name: "Tickets", capabilities: [Capability.tickets_v1] }
 
 ## A room's row.
 RoomRow : { id : Str, name : Str, about : Str, kind : Str, private : I64, open : I64, archived : I64 }

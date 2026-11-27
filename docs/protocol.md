@@ -691,9 +691,9 @@ pass its filter: of the `sources` named (all for none), of the `kinds` named
 topic too). `GetTicket` answers `{"Ticket": ticket}`. `Comment`, `SetStatus`
 (one of its source's statuses) and `SetAssignees` (of its source's people,
 none to unassign) change a ticket where its source keeps it and answer
-`Accepted`; the next poll of its topics shows it. A status or person its
-source hasn't is `BadRequest`, a ticket no provider has `NotFound`. Creating
-tickets comes later.
+`Accepted`; the next poll of its topics shows it. `EditTicket` sets its title, body and labels
+the same way. A status or person its source hasn't, or an empty title, is
+`BadRequest`, a ticket no provider has `NotFound`.
 
 `links` links each session to the ticket it works for: one linked by hand,
 `Link`, or else the one its branch names (`"inferred": true`), the ticket
@@ -702,6 +702,25 @@ its source suggests the branch for, or else the first whose key is in it:
 (`Tickets.inferred`). `Unlink` unlinks a session by hand, so no branch links
 it either; `Link` links it again. The daemon keeps the links set by hand,
 whichever provider has the session or the ticket.
+
+The daemon keeps tickets of its own too, provider `tickets`, in its
+database. Each of its sources is a project, made by `CreateProject` with
+a name and the prefix its tickets' keys start with, in capitals, or `""`
+for one made of the name: the first three letters of one word, else the
+words' initials, so `liton` is LIT and `Kai box` KB. `CreateTicket` makes
+a ticket of one, its key the prefix and the next number, as LIT-12, in
+Todo. Both answer `{"Created": {"id", "key"}}`. Every project's tickets
+move between Backlog and Todo (open), In progress and In review
+(started), Done and Canceled, and can be assigned to anyone the daemon
+knows (People), the person asking its `me`.
+
+```json
+{ "capability": "tickets.v1", "request": { "CreateProject": { "name": "liton", "prefix": "" } } }
+{ "Ok": { "Created": { "id": "tickets/9f2c41d07a3e8b15", "key": "LIT" } } }
+{ "capability": "tickets.v1", "request": { "CreateTicket": { "source": "tickets/9f2c41d07a3e8b15", "title": "Drop images in the composer", "body": "", "labels": ["ui"] } } }
+{ "Ok": { "Created": { "id": "tickets/1", "key": "LIT-1" } } }
+{ "capability": "tickets.v1", "request": { "EditTicket": { "ticket_id": "tickets/1", "title": "Drop and paste images", "body": "In the composer.", "labels": ["ui"] } } }
+```
 
 The mock provider offers it with scripted tickets of two sources, one
 shaped as GitHub's issues and one as a Linear team's, and keeps the changes

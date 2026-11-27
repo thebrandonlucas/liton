@@ -83,7 +83,7 @@ const step = async (name, run) => {
 try {
   const manifest = await until("manifest", () => fetch(`${base}/manifest`).then((r) => r.json()));
   await step("the manifest adds the remotes' providers under their names, and leaves out one that is down", () => {
-    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "echo/echo", "peer/mock", "rooms", "hosts", "people"]);
+    assert.deepEqual(manifest.providers.map((p) => p.id), ["mock", "review", "echo/echo", "peer/mock", "rooms", "tickets", "hosts", "people"]);
     assert.deepEqual(manifest.providers[2].capabilities, [{ name: "chat", version: 1 }]);
   });
   await step("the manifest offers the setup's presets", () => assert.deepEqual(manifest.setup, { default_preset: "Review", presets: [{ ...review, snapshot: { ...review.snapshot, hidden: [], frame: "Tiles" } }], themes: [], default_theme: "", deck: [] }));
