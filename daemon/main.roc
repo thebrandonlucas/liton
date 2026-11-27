@@ -198,6 +198,9 @@ init! = || {
 			.with_listen({ host, port })
 			.with_file_roots(if (docs_built) [ui, docs] else [ui])
 			.with_native_routes({ files: [Server.static_mount({ at: "/ui", files: ui })].concat(if (docs_built) [Server.static_mount({ at: "/docs", files: docs })] else []), liveness: [], readiness: [] })
+			# Above /liton/v1/call's own limit, so a call over it is answered
+			# why, and not cut off by the platform's 1 MB.
+			.with_request_body_limit(2 * call_limit_bytes)
 	transformers = checked!(transformers_named(setup.transformers.concat(env_or!("LITON_TRANSFORMERS", "").split_on(","))))?
 	allowed_hosts = [host, "localhost", "127.0.0.1", "[::1]"].concat(env_or!("LITON_ALLOWED_HOSTS", "").split_on(",").map(|name| name.trim()).drop_if(|name| name == ""))
 	summary_model = if (env_or!("LITON_SUMMARY", "on") == "off") Err(Off) else Ok(env_or!("LITON_SUMMARY_MODEL", ""))
@@ -1310,10 +1313,18 @@ transformer_of : Context, Manifest.Offered, Str -> Try(Transformer.Part, [NotTra
 transformer_of = |context, manifest, capability|
 	context.transformers.find_first(|part| Capability.to_str(part.offers.capability) == capability and manifest.transformers.any(|offered_part| offered_part.id == part.id)).map_err(|_| NotTransformed)
 
+## The most a /liton/v1/call may hold: 16 MB, for a message's attachments.
+call_limit_bytes : U64
+call_limit_bytes = 16 * 1024 * 1024
+
 ## Answers a /liton/v1/call by its capability (see docs/protocol.md).
 call! : Context, Server.Request => Try(Response, _)
 call! = |context, request| {
-	body = read_json!(request)?
+	body =
+		match request.body().with_limit(call_limit_bytes).read_all!() {
+			Err(RequestBodyErr(TooLarge(_))) => return Ok(text(413, "a call holds at most 16 MB: send smaller attachments"))
+			read => Str.from_utf8(read?)?
+		}
 	addressed : Try(Protocol.Addressed, _)
 	addressed = Json.parse(body)
 	manifest = offered!(context)?
@@ -1746,16 +1757,17 @@ chat_call! = |context, provider, asked| {
 				NoSession => Ok(no_session(session_id))
 				_ => Ok(Ok(Entries(timelines!(context, [{ session_id, after }])?.first().map_ok(|timeline| timeline.entries) ?? [])))
 			}
-		SendMessage({ session_id, text: message, while_running }) =>
+		SendMessage({ session_id, text: message, while_running, attachments }) =>
 			match routed_provider!(context, provider, session_id)? {
 				MockSession => {
 					timeline = visible!(db, session_id, 0)?
-					schedule!(db, session_id, |next| if (while_running == Ok(Steer) and Mock.status(timeline) == Running) Mock.on_steer(message, next) else Mock.on_message(message, next))?
+					attached = Mock.attached(message, attachments ?? [])
+					schedule!(db, session_id, |next| if (while_running == Ok(Steer) and Mock.status(timeline) == Running) Mock.on_steer(attached, next) else Mock.on_message(attached, next))?
 					Ok(Ok(Accepted))
 				}
 				PaseoSession(daemon) => {
 					request_id = "liton-send-${now_ms!().to_str()}"
-					outcome = written!(daemon, Paseo.send_request(session_id, message, while_running, request_id), request_id, Paseo.sent)
+					outcome = written!(daemon, Paseo.send_request(session_id, message, while_running, attachments ?? [], request_id), request_id, Paseo.sent)
 					forget_check!(db, "cycle")?
 					Ok(paseo_answer(outcome))
 				}
@@ -2474,7 +2486,7 @@ review_call! = |context, asked| {
 	match (asked, Review.applied(stored.review, asked)) {
 		(_, Err(problem)) => Ok(Err(refused(problem)))
 		(Send({ session_id, .. }), Ok(_)) =>
-			match chat_call!(context, Err(Missing), SendMessage({ session_id, text: Review.message(stored.review), while_running: Err(Missing) }))? {
+			match chat_call!(context, Err(Missing), SendMessage({ session_id, text: Review.message(stored.review), while_running: Err(Missing), attachments: Err(Missing) }))? {
 				Err(error) => Ok(Err(error))
 				Ok(Rejected(reason)) => Ok(Err({ code: Refused, message: reason }))
 				Ok(_) => Ok(answered(review_changed!(context.db, key, |review| Review.applied(review, asked))?, |review| Sent({ round: review.round })))

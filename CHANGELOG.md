@@ -13,6 +13,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Name the repo a project of liton's own is worked in, from any of its tickets' Repo.
 - Start on a ticket of liton's own sets an agent working on it: the ticket moves to In progress, a worktree of its project's repo is made on a branch named for it, as lit-1-attach-images-and, which links the two, and the agent picked beside Start, the last one started at first, is asked to do the ticket and say when it's done or blocked.
 - A meter beside Settings shows, for the 5-hour window and the week, how much the account nearest its limit has used, a bar that fills up to your limit and turns amber near it and red past it, and opens Usage & limits. A 5-hour limit joins the weekly one there: set either below 100% to keep the rest in reserve, as past it liton refuses new messages and agents on the account.
+- Attach images and text files to a chat message: drop them on the composer, paste a screenshot, or pick them with Attach. Each shows in the composer at once, a thumbnail for an image, with × to take it off, and goes to the agent with the message. Up to 10 MB together; other kinds of file say why they weren't attached.
 
 ### Fixed
 

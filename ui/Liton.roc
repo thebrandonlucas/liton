@@ -547,6 +547,18 @@ Liton := [].{
 					},
 			),
 		),
+		# Files dropped on, pasted into or picked for a chat's composer.
+		Engine.watch(
+			Engine.const({}),
+			|_| [Ports.attach.ask({})],
+			model.on_result(
+				|state, _, res|
+					match res {
+						Ok(text) => Model.attached(state, text)
+						_ => state
+					},
+			),
+		),
 		# Another window's change to the deck, such as a surface added there,
 		# shows here too.
 		Engine.watch(
@@ -3314,6 +3326,7 @@ Liton := [].{
 								[Engine.class_s(row.field(|sent| Liton.sent_class(sent))), Engine.attr("data-part", "bubble")],
 								[
 									Html.pre_s(row.field(|sent| Liton.sent_text(sent.request)), []),
+									Html.span_s(row.field(|sent| Liton.sent_attachments(sent.request)), [Engine.class("sent-attachments"), Engine.test_id("sent-attachments")]),
 									Conversation.sent_state({ status: row.field(|sent| Liton.sent_status(sent)), failed: row.field(|sent| !sent.failed.is_empty()), test_id: "sent-status" }, [{ label: "Retry", handler: model0.lift_row().update_by(row.key(), Model.retry) }]),
 								],
 							),
@@ -3349,6 +3362,7 @@ Liton := [].{
 							id,
 							{ form: "Send a message", name: "Message", placeholder: shown.map(|{ pane, state }| if (Model.busy(Model.session(state, Model.session_of(state, pane)).status)) "Steer: add to the turn it is working on" else "Message the agent"), send: Microphone.send, completions: |_, _| [], shift_tab: Runs(Model.cycle_mode) },
 							[
+								Liton.attachments(model0, id),
 								Html.div(
 									"composer-chips",
 									[
@@ -3357,6 +3371,7 @@ Liton := [].{
 										Liton.setting_chip(model0, id, Thinking, "Thinking", Html.span_s(Engine.const(""), [Engine.class("model-chip")])),
 									],
 								),
+								Liton.attach_button(id),
 								Liton.context_meter(model0, id),
 								Microphone.controls(model0, id),
 								# One round button: Send, or Stop while the agent works and
@@ -5236,6 +5251,57 @@ Liton := [].{
 			AnswerPermission({ allowed, .. }) => if (allowed) "Allowing…" else "Denying…"
 			_ => ""
 		}
+
+	## What a message on its way attaches, as "📎 shot.png, notes.md", "" for
+	## nothing.
+	sent_attachments : Chat.Request -> Str
+	sent_attachments = |request|
+		match request {
+			SendMessage({ attachments: Ok(attached), .. }) if !attached.is_empty() => "📎 ${Str.join_with(attached.map(Model.attachment_name), ", ")}"
+			_ => ""
+		}
+
+	## A chat composer's attachments, each an image's thumbnail or a text
+	## file's name, with × to take it off.
+	attachments : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	attachments = |model, id|
+		Html.div(
+			"composer-attachments",
+			[
+				Engine.each(
+					id.map2(model.signal(), |pane_id, state| Model.attachments_of(state, pane_id)),
+					|kept| kept.id.to_str(),
+					|row| {
+						name = row.field(|kept| Model.attachment_name(kept.attachment))
+						Html.div(
+							"attachment",
+							[
+								Engine.when(
+									row.field(|kept| Model.image_source(kept.attachment).is_ok()),
+									|| Engine.element("img", [Engine.attr_s("src", row.field(|kept| Model.image_source(kept.attachment) ?? "")), Engine.attr_s("alt", name), Engine.class("attachment-thumb")], []),
+									|| Html.span_s(name, [Engine.class("attachment-name")]),
+								),
+								Html.button_s(Engine.const("×"), [Html.aria_label_s(name.map(|shown| "Remove ${shown}"))], model.lift_row().update_by(row.field(|kept| kept.id), Model.detach)),
+							],
+						)
+					},
+				),
+			],
+		)
+
+	## A chat composer's Attach button: a file picker, which the page reads
+	## (`Ports.attach`) as it does files dropped on or pasted into the
+	## composer.
+	attach_button : Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	attach_button = |id|
+		Engine.element(
+			"label",
+			[Engine.class("attach"), Engine.attr("title", "Attach images or text files")],
+			[
+				Engine.element("input", [Engine.attr("type", "file"), Engine.attr("multiple", ""), Engine.attr_s("data-attach", id), Engine.class("attach-input")], []),
+				Html.span_s(Engine.const("Attach"), [Engine.class("attach-label")]),
+			],
+		)
 
 	## A message's state; an answer's is in its text.
 	sent_status : Model.Sent -> Str

@@ -221,6 +221,11 @@ it works on a turn, the message interrupts it, or with `"while_running":
 "Steer"` joins the turn, as Paseo's `activeTurnBehavior` `steer`; Paseo
 sends `"Interrupt"` as `interrupt`, and the mock takes a steer as a word that
 it goes on.
+Its `attachments`, if any, go with it: `{"Image": {"name", "mime_type",
+"data"}}`, the bytes in base64, or `{"Text": {"name", "text"}}`, a text
+file's text. Paseo gets images as its `images` and text files as `text`
+attachments titled by their names; the mock names them after the message's
+text. A call holds at most 16 MB, answered `413` beyond.
 
 `{"Cancel": {"session_id"}}` stops a session's running turn, as an agent's
 own stop button does, and is `Accepted` once the provider stopped it (from

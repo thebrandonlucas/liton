@@ -390,6 +390,18 @@ try {
     for (const scope of [{ Session: "fix-auth" }, "Week", "FiveHour"]) assert.deepEqual(await call("limits.v1", { ClearLimit: { scope } }), { Ok: "Accepted" });
     assert.deepEqual((await polled("limits.v1", "status")).Limits.limits, []);
   });
+  await step("a message's attachments go with it: the mock names them after its text, a 2 MB one is taken, and a call over 16 MB is refused", async () => {
+    const started = (await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "claude", prompt: "" } })).Ok.Started.session_id;
+    const attachments = [{ Image: { name: "shot.png", mime_type: "image/png", data: "iVBORw0KGgo=" } }, { Text: { name: "notes.md", text: "# Notes" } }];
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: started, text: "Look", attachments } }), { Ok: "Accepted" });
+    const said = async () => (await call("chat.v1", { WatchSession: { session_id: started, after: 0 } })).Ok.Entries.map((e) => e.event.UserMessage?.text).filter(Boolean);
+    for (const start = Date.now(); !(await said()).includes("Look (attached: shot.png, notes.md)"); await new Promise((r) => setTimeout(r, 200))) {
+      if (Date.now() - start > 5000) throw new Error(`no message naming its attachments: ${JSON.stringify(await said())}`);
+    }
+    assert.deepEqual(await call("chat.v1", { SendMessage: { session_id: started, text: "Two megabytes", attachments: [{ Text: { name: "two.txt", text: "x".repeat(2 * 1024 * 1024) } }] } }), { Ok: "Accepted" });
+    const big = await fetch(`${base}/call`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ capability: "chat.v1", request: { SendMessage: { session_id: started, text: "big", attachments: [{ Text: { name: "big.txt", text: "x".repeat(17 * 1024 * 1024) } }] } } }) });
+    assert.equal(big.status, 413);
+  });
   await step("sessions, workspaces and projects are renamed, pinned and archived, and the listings show it", async () => {
     const workspaces = async () => (await call("workspaces.v1", "ListWorkspaces")).Ok.Listed;
     const sessions = async () => (await call("chat.v1", "ListSessions")).Ok.Sessions;
