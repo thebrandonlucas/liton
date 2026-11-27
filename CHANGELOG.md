@@ -7,6 +7,7 @@ All notable changes to liton are documented in this file. The format is based on
 ### Added
 
 - Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled. Edit a ticket's title, description and labels from the ticket itself.
+- Name the repo a project of liton's own is worked in, from any of its tickets' Repo.
 
 ### Fixed
 

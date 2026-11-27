@@ -100,7 +100,7 @@ Fixtures := [].{
 
 	ticket_responses : List(Tickets.Response)
 	ticket_responses = [
-		Listed({ sources: [{ id: "thebrandonlucas/liton", provider: "github", name: "thebrandonlucas/liton", url: "https://github.com/thebrandonlucas/liton", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }], statuses: [{ id: "open", name: "Open", kind: Open }, { id: "closed", name: "Closed", kind: Done }] }], tickets: [Fixtures.ticket.summary] }),
+		Listed({ sources: [{ id: "thebrandonlucas/liton", provider: "github", name: "thebrandonlucas/liton", url: "https://github.com/thebrandonlucas/liton", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }], statuses: [{ id: "open", name: "Open", kind: Open }, { id: "closed", name: "Closed", kind: Done }], repo: Err(Missing) }], tickets: [Fixtures.ticket.summary] }),
 		Ticket(Fixtures.ticket),
 		Accepted,
 	]

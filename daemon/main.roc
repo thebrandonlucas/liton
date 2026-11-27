@@ -2098,7 +2098,7 @@ tickets! = |context| {
 
 ## The daemon's own projects (`TicketStore`).
 ticket_projects! : Sqlite.Db => Try(List(TicketStore.Project), _)
-ticket_projects! = |db| Sqlite.query_many!({ db, query: "SELECT id, name, prefix FROM ticket_projects ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })
+ticket_projects! = |db| Sqlite.query_many!({ db, query: "SELECT id, name, prefix, repo FROM ticket_projects ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })
 
 ## The daemon's own tickets with their comments, and its projects as
 ## sources, whose tickets anyone the daemon knows may be assigned, `me` the
@@ -2170,12 +2170,20 @@ tickets_call! = |context, provider, asked| {
 				Ok(_) => {
 					random : { id : Str }
 					random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id;", params: {}, limits: Sqlite.default_query_limits })?
-					made = { id: random.id, name: project.name.trim(), prefix: TicketStore.prefix_asked(project) }
+					made = { id: random.id, name: project.name.trim(), prefix: TicketStore.prefix_asked(project), repo: "" }
 					Sqlite.execute!({ db, query: "INSERT INTO ticket_projects (id, name, prefix, created_by, created_at) VALUES (:id, :name, :prefix, :created_by, :now);", params: { id: made.id, name: made.name, prefix: made.prefix, created_by: context.person, now } })?
 					Ok(Ok(Created({ id: TicketStore.source_id(made), key: made.prefix })))
 				}
 			}
 		}
+		LinkRepo({ source, repo }) =>
+			match TicketStore.refusal(ticket_projects!(db)?, asked) {
+				Err(why) => refused(why)
+				Ok(_) => {
+					Sqlite.execute!({ db, query: "UPDATE ticket_projects SET repo = :repo WHERE id = :id;", params: { id: TicketStore.project_of(source) ?? "", repo: repo.trim() } })?
+					Ok(Ok(Accepted))
+				}
+			}
 		CreateTicket({ source, title, body, labels }) => {
 			projects = ticket_projects!(db)?
 			match (TicketStore.refusal(projects, asked), projects.find_first(|project| TicketStore.project_of(source) == Ok(project.id))) {
@@ -2857,8 +2865,9 @@ create_tables! = |db| {
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
 	# no directory, workspace or listing until listed again. Devices, pairing
 	# codes and invites kept before people came are the owner's
-	# (`owner_made!`), and their devices' sessions don't expire.
-	added = [("sessions", "provider", "TEXT NOT NULL DEFAULT 'mock'"), ("sessions", "directory", "TEXT NOT NULL DEFAULT ''"), ("sessions", "workspace_id", "TEXT NOT NULL DEFAULT ''"), ("sessions", "listed", "TEXT NOT NULL DEFAULT ''"), ("sessions", "archived", "INTEGER NOT NULL DEFAULT 0"), ("sessions", "model", "TEXT NOT NULL DEFAULT ''"), ("sessions", "mode", "TEXT NOT NULL DEFAULT ''"), ("sessions", "thinking", "TEXT NOT NULL DEFAULT ''"), ("devices", "person_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "passkey_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "expires_at", "INTEGER NOT NULL DEFAULT 0"), ("pairing_codes", "person_id", "TEXT NOT NULL DEFAULT ''"), ("invites", "agent", "INTEGER NOT NULL DEFAULT 0"), ("invites", "person_id", "TEXT NOT NULL DEFAULT ''")]
+	# (`owner_made!`), and their devices' sessions don't expire. Ticket
+	# projects made before repos came name none.
+	added = [("sessions", "provider", "TEXT NOT NULL DEFAULT 'mock'"), ("sessions", "directory", "TEXT NOT NULL DEFAULT ''"), ("sessions", "workspace_id", "TEXT NOT NULL DEFAULT ''"), ("sessions", "listed", "TEXT NOT NULL DEFAULT ''"), ("sessions", "archived", "INTEGER NOT NULL DEFAULT 0"), ("sessions", "model", "TEXT NOT NULL DEFAULT ''"), ("sessions", "mode", "TEXT NOT NULL DEFAULT ''"), ("sessions", "thinking", "TEXT NOT NULL DEFAULT ''"), ("devices", "person_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "passkey_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "expires_at", "INTEGER NOT NULL DEFAULT 0"), ("pairing_codes", "person_id", "TEXT NOT NULL DEFAULT ''"), ("invites", "agent", "INTEGER NOT NULL DEFAULT 0"), ("invites", "person_id", "TEXT NOT NULL DEFAULT ''"), ("ticket_projects", "repo", "TEXT NOT NULL DEFAULT ''")]
 	for (table, column, definition) in added {
 		existing : List({ name : Str })
 		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info(:table) WHERE name = :column;", params: { table, column }, limits: Sqlite.default_query_limits })?

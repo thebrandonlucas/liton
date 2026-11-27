@@ -2571,6 +2571,17 @@ Liton := [].{
 						Html.span_s(summary.map2(model.signal(), |listed, state| if (TicketDesk.pending(state.tickets, listed.id)) "Saving…" else ""), [Engine.class("ticket-saving"), Engine.test_id("ticket-saving")]),
 					],
 				),
+				Engine.when(
+					summary.map(|listed| listed.provider == "tickets"),
+					|| Html.div(
+						"ticket-field",
+						[
+							Html.span_s(Engine.const("Repo"), [Engine.class("field-name"), Engine.attr("aria-hidden", "true")]),
+							Dropdown.select(Engine.const("Set the repo"), summary.map2(model.signal(), |listed, state| Model.repo_of(state, listed.source)), [], Liton.choices(model.signal().map(|state| [{ value: "", label: "None" }].concat(state.workspaces.projects.map(|project| { value: project.id, label: project.name })))), model.set_value_by(summary.map(|listed| listed.source), |state, source, repo| Model.ask_tickets(state, LinkRepo({ source, repo })))),
+						],
+					),
+					|| Engine.text(""),
+				),
 				Engine.element(
 					"fieldset",
 					[Engine.class("ticket-field ticket-people")],

@@ -17,8 +17,9 @@ Tickets := [].{
 
 	## A repository's issues or a team's tickets: whom it knows the user as
 	## (`me`), the people its tickets can be assigned to, and the statuses
-	## they move between.
-	Source : { id : Str, provider : Str, name : Str, url : Str, me : Try(Person, [Missing]), people : List(Person), statuses : List(Status) }
+	## they move between; and `repo`, the workspaces.v1 project its tickets
+	## are worked in, when it names one.
+	Source : { id : Str, provider : Str, name : Str, url : Str, me : Try(Person, [Missing]), people : List(Person), statuses : List(Status), repo : Try(Str, [Missing]) }
 
 	## A ticket as listed. `key` is how its source names it, such as `#3` or
 	## `LIN-12`; `waiting_on` the ids of the people it waits on, such as for
@@ -58,7 +59,9 @@ Tickets := [].{
 	## `CreateTicket` makes a ticket of a source, and `CreateProject` a source
 	## of the daemon's own whose tickets' keys start with `prefix`, as
 	## `LIT-12`, or with one made of its name for "": each answers `Created`
-	## with the new one's id and key.
+	## with the new one's id and key. `LinkRepo` names the workspaces.v1
+	## project a source's tickets are worked in, "" for none, answering
+	## `Accepted`.
 	Request : [
 		ListTickets(Filter),
 		GetTicket({ ticket_id : Str }),
@@ -68,6 +71,7 @@ Tickets := [].{
 		EditTicket({ ticket_id : Str, title : Str, body : Str, labels : List(Str) }),
 		CreateTicket({ source : Str, title : Str, body : Str, labels : List(Str) }),
 		CreateProject({ name : Str, prefix : Str }),
+		LinkRepo({ source : Str, repo : Str }),
 		Link({ session_id : Str, ticket_id : Str }),
 		Unlink({ session_id : Str }),
 	]
@@ -222,7 +226,7 @@ summary = |id, key| { id, provider: "mock", source: "repo", key, title: "Fix the
 
 listing : Tickets.Listing
 listing = {
-	sources: [{ id: "repo", provider: "mock", name: "liton", url: "", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }, { id: "bo", name: "Bo" }], statuses: [open_status, { id: "closed", name: "Closed", kind: Done }] }],
+	sources: [{ id: "repo", provider: "mock", name: "liton", url: "", me: Ok({ id: "ada", name: "Ada" }), people: [{ id: "ada", name: "Ada" }, { id: "bo", name: "Bo" }], statuses: [open_status, { id: "closed", name: "Closed", kind: Done }], repo: Err(Missing) }],
 	tickets: [{ ..summary("t3", "#3"), assignees: [{ id: "ada", name: "Ada" }] }, { ..summary("t4", "LIN-4"), title: "Write docs", labels: [], status: { id: "closed", name: "Closed", kind: Done } }],
 }
 

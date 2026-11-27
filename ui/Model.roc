@@ -2527,7 +2527,7 @@ Model := [].{
 		desks = laid_out.keep_if(|shown| ["tickets", "ticket", "ticket-scopes", "board", "ticket-properties"].contains(shown.widget) and Model.pane_visible(state, shown.id))
 		tickets = if (offered(Capability.tickets_v1) and !desks.is_empty()) [TicketList, TicketLinks].concat(desks.keep_if(|shown| shown.widget == "ticket" or (shown.widget == "board" and TicketDesk.board(state.tickets, shown.id).opened)).map(|shown| Model.ticket_of(state, shown.id)).drop_if(Str.is_empty).map(|ticket_id| TicketDetail(ticket_id))) else []
 		threads = if (offered(Capability.review_v1)) showing("files").concat(showing("changes")).concat(showing("review")).concat(showing("review-files")).concat(showing("review-threads")).map(|shown| Threads(Model.context_of(state, shown))) else []
-		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| shown.widget == "workspaces" or shown.widget == "inbox")) [WorkspaceList, Agents] else []
+		listing = if (offered(Capability.workspaces_v1) and laid_out.any(|shown| ["workspaces", "inbox", "tickets", "ticket", "board"].contains(shown.widget))) [WorkspaceList, Agents] else []
 		# The kinds of agent, with their models and modes, for chat panes'
 		# composers, followed last.
 		agent_choices = if (offered(Capability.chat_v1) and laid_out.any(|shown| shown.widget == "chat")) [Agents] else []
@@ -3941,6 +3941,11 @@ Model := [].{
 			[] => state
 			[first, .. as rest] => { ..Model.ask_tickets(state, first), tickets: { ..Model.ask_tickets(state, first).tickets, waiting: state.tickets.waiting.concat(rest) } }
 		}
+
+	## The workspaces.v1 project a ticket source's tickets are worked in, as
+	## shown, "" for none.
+	repo_of : State, Str -> Str
+	repo_of = |state, source_id| TicketDesk.listing_shown(state.tickets).sources.find_first(|source| source.id == source_id).map_ok(|source| source.repo ?? "") ?? ""
 
 	## Sends the first request waiting.
 	send_waiting : State -> State
