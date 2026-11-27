@@ -7,6 +7,7 @@ import cap.Context
 import cap.Files
 import cap.Hosts
 import cap.Limits
+import cap.People
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -23,6 +24,7 @@ import Highlight
 import History
 import HostDesk
 import LimitDesk
+import PeopleDesk
 import ReviewDesk
 import ScheduleDesk
 import Speech
@@ -76,6 +78,28 @@ Model := [].{
 	## times in milliseconds, `current` the one asking.
 	Device : { id : Str, name : Str, created_at : I64, seen_at : I64, current : Bool }
 
+	## No passkey being made or used.
+	ceremony_idle : Ceremony
+	ceremony_idle = { serial: 0, purpose: SignIn, options: "", unnamed: Bool.False, person_name: "", invited: "", busy: Bool.False, failed: "", begin: { serial: 0, ceremony: 0, route: "", body: "" }, ask: { serial: 0, ceremony: 0, create: Bool.False, options: "", name: "", person_name: "" }, finish: { serial: 0, ceremony: 0, route: "", body: "" } }
+
+	## A passkey of the person signed in, as /liton/v1/passkeys lists it: the
+	## site it is for, whether it is backed up, as a synced one is, its times
+	## in milliseconds, and whether this browser signed in with it.
+	Passkey : { id : Str, name : Str, rp_id : Str, backed_up : Bool, created_at : I64, used_at : I64, current : Bool }
+
+	## What a passkey is wanted for: signing in, one more for the person
+	## signed in, or one a pairing code or an invite's secret grants.
+	Purpose : [SignIn, Register, Pair(Str), Invite(Str)]
+
+	## A passkey being made or used (ui/Pairing.roc), numbered by `serial`:
+	## what for; the daemon's challenge and what the browser is asked, once
+	## it answered; whether the owner it is for still has no name, and the
+	## name typed; whom an invite is for; whether it waits on the daemon or
+	## the browser, and why it failed; and the requests, the challenge
+	## asked for (`begin`), the browser asked (`ask`), and its answer sent
+	## (`finish`), each of the ceremony numbered `ceremony`.
+	Ceremony : { serial : U64, purpose : Purpose, options : Str, unnamed : Bool, person_name : Str, invited : Str, busy : Bool, failed : Str, begin : { serial : U64, ceremony : U64, route : Str, body : Str }, ask : { serial : U64, ceremony : U64, create : Bool, options : Str, name : Str, person_name : Str }, finish : { serial : U64, ceremony : U64, route : Str, body : Str } }
+
 	## Pairing this browser with the daemon and the devices paired
 	## (ui/Pairing.roc): whether the daemon answered that it isn't paired;
 	## the code typed or the URL's `#pair=` gave, and whether that one is to
@@ -84,8 +108,11 @@ Model := [].{
 	## asking for the manifest again; the devices last listed, and the
 	## listings asked for; the revocations on their way, as `revoke` sent
 	## them; and a code made for another device, while `asking` or once
-	## given, with the link that pairs a browser with it.
-	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str } }
+	## given, with the link that pairs a browser with it; the URL's `#invite=`
+	## secret, redeemed once the daemon refuses; the passkeys last listed and
+	## the site they are for, those being deleted, as `delete` sent them; the
+	## passkey being made or used; and the sign-outs of this browser asked.
+	Pairing : { unpaired : Bool, code : Str, from_url : Bool, sent : { serial : U64, code : Str, name : Str }, sending : Bool, failed : Str, paired : U64, devices : List(Device), listings : U64, revoking : List(Str), revoke : { serial : U64, id : Str }, offer : { serial : U64, asking : Bool, code : Str, link : Str }, invite : Str, passkeys : List(Passkey), rp_id : Str, deleting : List(Str), delete : { serial : U64, id : Str }, ceremony : Ceremony, logout : U64 }
 
 	## The UI's model: what the daemon offers and answered, the layout, and
 	## what each part shows and is doing, as its fields say.
@@ -290,6 +317,15 @@ Model := [].{
 		wallpaper : { url : Str, dim : [ThemeDim, Dim(U8)] },
 		pairing : Pairing,
 
+		## The devices signed in as this person since this browser was, as
+		## the last poll said, and those this browser was told were theirs.
+		sign_ins : List(Protocol.SignIn),
+		sign_ins_seen : List(Str),
+
+		## Whether the daemon says this device's role locks its UI: its layout,
+		## its deck and Settings stay as they are, shown without their controls.
+		locked : Bool,
+
 		## The pane last clicked or focused in, which the bright edge marks.
 		focused_pane : Str,
 
@@ -372,6 +408,10 @@ Model := [].{
 		## limits.v1 and usage.v1 requests on their way (sent as
 		## `call_outbox`).
 		limits : LimitDesk.State,
+
+		## What Settings' People shows (ui/PeopleDesk.roc), and the people.v1
+		## requests on their way (sent as `call_outbox`).
+		people : PeopleDesk.State,
 	}
 
 	## The platform the page runs on, which decides how keys are written.
@@ -562,7 +602,10 @@ Model := [].{
 				theme_chosen: restored.map_ok(|loaded| !loaded.theme.is_empty()) ?? Bool.False,
 				glass: Bool.True,
 				wallpaper: { url: "", dim: ThemeDim },
-				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" } },
+				locked: Bool.False,
+				sign_ins: [],
+				sign_ins_seen: [],
+				pairing: { unpaired: Bool.False, code: "", from_url: Bool.False, sent: { serial: 0, code: "", name: "" }, sending: Bool.False, failed: "", paired: 0, devices: [], listings: 0, revoking: [], revoke: { serial: 0, id: "" }, offer: { serial: 0, asking: Bool.False, code: "", link: "" }, invite: "", passkeys: [], rp_id: "", deleting: [], delete: { serial: 0, id: "" }, ceremony: Model.ceremony_idle, logout: 0 },
 				focused_pane: "",
 				menu: "",
 				renaming: Model.not_renaming,
@@ -582,6 +625,7 @@ Model := [].{
 				schedules: ScheduleDesk.initial,
 				hosts: HostDesk.initial,
 				limits: LimitDesk.initial,
+				people: PeopleDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
 		)
@@ -623,7 +667,7 @@ Model := [].{
 	show_surface = |state, index| {
 		kept = Model.deck(state)
 		match kept.get(index) {
-			Ok(surface) if index != state.deck_shown => {
+			Ok(surface) if index != state.deck_shown and !state.locked => {
 				laid = Model.layout({ ..state, deck: kept, deck_shown: index }, Model.layout_of(surface.snapshot))
 				panel = Model.slot_of(laid, laid.active_tile)
 				hash = Model.hash_of(laid, if (panel == Main) "" else Model.slot_hash(panel))
@@ -907,7 +951,11 @@ Model := [].{
 
 	## Opens Settings, a phone's at its list of sections, or closes it.
 	toggle_settings : State -> State
-	toggle_settings = |state| Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+	toggle_settings = |state| if (state.locked and !state.show_settings) state else Model.with_snapshot_text({ ..state, show_settings: !state.show_settings, settings_page: { ..state.settings_page, pushed: Bool.False } })
+
+	## Opens Settings at Passkeys & devices, a locked UI's too.
+	open_passkeys : State -> State
+	open_passkeys = |state| { ..state, show_settings: Bool.True, settings_page: { section: "devices", pushed: Bool.True } }
 
 	## Shows a section of Settings, over its list on a phone.
 	## Opens Settings at what the daemon connects.
@@ -2507,12 +2555,14 @@ Model := [].{
 		schedules = if (offered(Capability.schedules_v1) and laid_out.any(|shown| shown.widget == "schedules" and Model.pane_visible(state, shown.id))) [ScheduleList].concat(if (state.schedules.opened.is_empty() or state.schedules.opened.starts_with("creating:")) [] else [ScheduleRuns(state.schedules.opened)]) else []
 		# The hosts, for Settings' Hosts and the host badges.
 		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
+		# The people, and the rooms an invite may name, while Settings shows them.
+		people = if (state.capabilities.contains(Capability.people_v1) and state.show_settings and state.settings_page.section == "people") [PeopleList].concat(if (offered(Capability.rooms_v1)) [RoomList] else []) else []
 		# The accounts' usage while Settings' Usage & limits or the
 		# connection menu shows it, and the limits while those or a chat do.
 		accounts_shown = (state.show_settings and state.settings_page.section == "usage") or state.menu == "connection"
 		usage = if (state.capabilities.contains(Capability.usage_v1) and accounts_shown) [UsageReports] else []
 		limits = if (state.capabilities.contains(Capability.limits_v1) and (accounts_shown or laid_out.any(|shown| shown.widget == "chat"))) [LimitStatus] else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(usage).concat(limits).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(usage).concat(limits).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2596,7 +2646,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), limits: LimitDesk.settled(applied.limits, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), people: PeopleDesk.settled(applied.people, sent.serial), limits: LimitDesk.settled(applied.limits, sent.serial) }
 		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		# A timeline the daemon has yet to fetch is asked for at once.
 		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
@@ -2676,6 +2726,7 @@ Model := [].{
 			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
 			(_, Reports(reports)) => { ..state, limits: { ..state.limits, reports } }
 			(_, Limits(status)) => { ..state, limits: { ..state.limits, status } }
+			(_, People(listed)) => { ..state, people: { ..state.people, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
 				{
@@ -4078,6 +4129,40 @@ Model := [].{
 		}
 	}
 
+	## Sends a people.v1 request, shown at once until the daemon answers.
+	ask_people : State, People.Request -> State
+	ask_people = |state, request| {
+		serial = state.call_outbox.serial + 1
+		{ ..state, call_outbox: { serial, key: "people.v1", text: Json.to_str({ capability: "people.v1", request }) }, people: PeopleDesk.asking(state.people, serial, request), notice: "" }
+	}
+
+	## Sends the invite Settings' People writes, or says why it can't.
+	invite : State -> State
+	invite = |state| {
+		desk = state.people
+		match PeopleDesk.request_of(desk.form) {
+			Err(why) => { ..state, people: { ..desk, form: { ..desk.form, failed: why } } }
+			Ok(request) => Model.ask_people({ ..state, people: { ..desk, form: PeopleDesk.blank, link: "" } }, request)
+		}
+	}
+
+	## Takes the daemon's answer to a people.v1 request: an invite made
+	## shows the link that redeems it; refused, a request is undone, with why.
+	people_answered : State, U64, Str -> State
+	people_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(People.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, people: PeopleDesk.answered(state.people, serial, Refused(reason)), notice: reason }
+		accepted = |desk| Model.poll({ ..state, people: PeopleDesk.answered(desk, serial, Accepted(state.poll.serial + 1)) })
+		match answered {
+			Ok(Ok(Invited({ secret, .. }))) => accepted({ ..state.people, link: "${state.people.page}#invite=${secret}" })
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(_)) => accepted(state.people)
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
 	## Asks the providers for their accounts' usage again, shown as
 	## refreshing until the daemon answers.
 	refresh_usage : State -> State
@@ -4260,15 +4345,88 @@ Model := [].{
 	tickets_answered = |state, serial, text| {
 		answered : Try(Protocol.Answer(Tickets.Response), _)
 		answered = Json.parse(text)
-		undone = |reason| { ..state, tickets: TicketDesk.answered(state.tickets, serial, Refused), notice: reason }
+		undone = |reason| { ..state, tickets: TicketDesk.created(TicketDesk.answered(state.tickets, serial, Refused), serial, ""), notice: reason }
 		Model.send_waiting(
 			match answered {
+				Ok(Ok(Created({ id, .. }))) => Model.poll({ ..state, tickets: TicketDesk.answered(TicketDesk.created(state.tickets, serial, id), serial, Accepted(state.poll.serial + 1)) })
 				Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
 				Ok(Err({ message, .. })) => undone(message)
 				Err(_) => undone("The daemon did not answer.")
 			},
 		)
 	}
+
+	## Opens a Board pane's row for a new ticket, in the first of the
+	## daemon's projects, or naming a new one if it has none.
+	compose_ticket : State, Str -> State
+	compose_ticket = |state, pane_id| { ..state, tickets: TicketDesk.compose(state.tickets, pane_id, TicketDesk.projects(state.tickets).first().map_ok(|project| project.id) ?? "") }
+
+	## Puts a Board pane's new ticket in the project `source`, "" to name a
+	## new one.
+	choose_project : State, Str, Str -> State
+	choose_project = |state, pane_id, source| { ..state, tickets: TicketDesk.compose(state.tickets, pane_id, source) }
+
+	## Closes a Board pane's row for a new ticket.
+	cancel_ticket : State, Str -> State
+	cancel_ticket = |state, pane_id| { ..state, tickets: TicketDesk.uncompose(state.tickets, pane_id) }
+
+	## Creates the project a Board pane's row names, which the row writes in
+	## at once, as it is being created.
+	create_project : State, Str -> State
+	create_project = |state, pane_id| {
+		key = "${pane_id}/new-project"
+		name = Model.draft(state, key).trim()
+		serial = state.call_outbox.serial + 1
+		if name.is_empty() {
+			{ ..state, notice: "Name the project." }
+		} else {
+			asked = Model.ask_tickets(Model.set_draft(state, key, ""), CreateProject({ name, prefix: "" }))
+			{ ..asked, tickets: TicketDesk.compose(asked.tickets, pane_id, "asking:${serial.to_str()}") }
+		}
+	}
+
+	## Creates the ticket a Board pane's row writes, shown at once, and
+	## closes the row.
+	create_ticket : State, Str -> State
+	create_ticket = |state, pane_id| {
+		key = "${pane_id}/new-ticket"
+		title = Model.draft(state, key).trim()
+		match TicketDesk.composing_in(state.tickets, pane_id) {
+			_ if title.is_empty() => { ..state, notice: "Give the ticket a title." }
+			Ok(source) if source != "" and !source.starts_with("asking:") => {
+				asked = Model.ask_tickets(Model.set_draft(state, key, ""), CreateTicket({ source, title, body: "", labels: [] }))
+				{ ..asked, tickets: TicketDesk.uncompose(asked.tickets, pane_id) }
+			}
+			_ => { ..state, notice: "Pick the project it goes in." }
+		}
+	}
+
+	## Opens pane `pane_id`'s editor of the ticket `ticket_id`, with its title,
+	## body and labels.
+	edit_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	edit_ticket = |state, { pane_id, ticket_id }| {
+		shown = TicketDesk.ticket_shown(state.tickets, ticket_id) ?? TicketDesk.missing
+		drafted = Model.set_draft(Model.set_draft(Model.set_draft(state, "${pane_id}/edit-title", shown.summary.title), "${pane_id}/edit-body", shown.body), "${pane_id}/edit-labels", Str.join_with(shown.summary.labels, ", "))
+		{ ..drafted, tickets: TicketDesk.edit(drafted.tickets, pane_id, ticket_id) }
+	}
+
+	## Saves pane `pane_id`'s edit of the ticket `ticket_id`, shown at once, its
+	## labels comma-separated, and closes the editor.
+	save_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	save_ticket = |state, { pane_id, ticket_id }| {
+		title = Model.draft(state, "${pane_id}/edit-title").trim()
+		labels = Model.draft(state, "${pane_id}/edit-labels").split_on(",").map(Str.trim).drop_if(Str.is_empty)
+		if title.is_empty() {
+			{ ..state, notice: "Give the ticket a title." }
+		} else {
+			asked = Model.ask_tickets(state, EditTicket({ ticket_id, title, body: Model.draft(state, "${pane_id}/edit-body").trim(), labels }))
+			{ ..asked, tickets: TicketDesk.edit(asked.tickets, pane_id, "") }
+		}
+	}
+
+	## Closes pane `pane_id`'s editor of a ticket.
+	cancel_edit : State, { pane_id : Str, ticket_id : Str } -> State
+	cancel_edit = |state, { pane_id, .. }| { ..state, tickets: TicketDesk.edit(state.tickets, pane_id, "") }
 
 	## Links the session the focus shows to a ticket by hand: the one
 	## focused, or the focused workspace's that needs you most.
@@ -5381,8 +5539,18 @@ Model := [].{
 	ask_rooms : State, Rooms.Request -> State
 	ask_rooms = |state, request| {
 		serial = state.call_outbox.serial + 1
-		{ ..state, call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) }, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "" }
+		{ ..state, room_asks: state.room_asks.append({ serial, request, accepted: 0, message_id: "", failed: "" }), notice: "", call_outbox: { serial, key: "rooms.v1", text: Json.to_str({ capability: "rooms.v1", request }) } }
 	}
+
+	## The room a rooms.v1 request is of, "" for none.
+	asked_room : Rooms.Request -> Str
+	asked_room = |request|
+		match request {
+			ListRooms => ""
+			Send({ room_id, .. }) => room_id
+			React({ room_id, .. }) | Unreact({ room_id, .. }) => room_id
+			Join({ room_id }) | Leave({ room_id }) => room_id
+		}
 
 	## Without the messages sent that a log has posted.
 	posted_sent : State -> State

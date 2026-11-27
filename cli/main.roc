@@ -30,6 +30,7 @@ import pf.Stdin
 import pf.Stdout
 import http.Method
 import http.Request
+import cap.People
 import cap.Protocol
 import setup.Setup
 import Cli
@@ -68,6 +69,55 @@ main! = |arguments| {
 					Stdout.line!("Paired with ${daemon}.")
 				}
 				Err(_) => failed!(2, "the daemon's answer to pairing isn't one this liton reads")
+			}
+		}
+		Invite({ name, role, rooms, agent }) => {
+			request : People.Request
+			request = Invite({ name, role, rooms, agent })
+			answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+			match Cli.invite_link(daemon, answer) {
+				Ok(link) if agent => Stdout.line!("${link}\n\nRedeem it for ${name}'s token, once, within 7 days: node examples/room-agent/agent.mjs join <link> <file>.")
+				Ok(link) => Stdout.line!("${link}\n\nOpen it on ${name}'s device to make their passkey, once, within 7 days.")
+				Err(why) => failed!(1, why)
+			}
+		}
+		Relink(which) => {
+			listing = asked!(POST, "${daemon}/liton/v1/poll", Json.to_str({ topics: [{ capability: "people.v1", topic: "people", after: "" }] }))?
+			match Cli.relinked(listing, which) {
+				Err(why) => failed!(1, why)
+				Ok(people) => {
+					for person in people {
+						request : People.Request
+						request = Relink({ person: person.id })
+						answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+						match Cli.invite_link(daemon, answer) {
+							Ok(link) => Stdout.line!("${person.name}\t${link}")?
+							Err(why) => return failed!(1, "${person.name}: ${why}")
+						}
+					}
+					Ok({})
+				}
+			}
+		}
+		CreateRoom(room) => {
+			request : People.Request
+			request = CreateRoom(room)
+			answer = asked!(POST, "${daemon}/liton/v1/call", Json.to_str({ capability: "people.v1", request }))?
+			match Cli.created_room(answer) {
+				Ok(room_id) => Stdout.line!("${room_id}\n\nInvite into it with liton invite --role <role> --rooms ${room_id} <name>.")
+				Err(why) => failed!(1, why)
+			}
+		}
+		ListRooms => {
+			answer = asked!(POST, "${daemon}/liton/v1/call", Cli.call_body("rooms.v1", "\"ListRooms\""))?
+			match Cli.room_lines(answer) {
+				Ok(lines) => {
+					for line in lines {
+						Stdout.line!(line)?
+					}
+					Ok({})
+				}
+				Err(why) => failed!(1, why)
 			}
 		}
 		Setup(litonfile) => {

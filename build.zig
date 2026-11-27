@@ -271,6 +271,43 @@ fn addDevtoolCommand(
     return run;
 }
 
+// The browser UI, its page and the runtime files of roc_signals's release
+// bundle, into a directory. Built for size: the wasm's download is most of a
+// cold load (bench/). Without specialization unless asked, releases too:
+// specialized, input answers in about half the time (a keystroke under a
+// long timeline in 29 ms against 62 ms), but release 0.1.0's UI downloaded
+// 20 MB against 3.1 MB, held 1300 MB of the renderer's memory after loading
+// against 121 MB, and on a phone over a slow network hadn't drawn after
+// 240 s where the unspecialized one drew in about 18 s. It also takes about
+// an hour and 20 GB of memory to build.
+fn addUiBuild(
+    b: *std.Build,
+    sources: SourceTree,
+    devtool: std.Build.LazyPath,
+    roc_ui: []const u8,
+    roc_signals: *std.Build.Dependency,
+    specialize: bool,
+    dev: bool,
+) std.Build.LazyPath {
+    const build_ui = std.Build.Step.Run.create(b, if (specialize) "build the specialized browser UI" else "build the browser UI");
+    build_ui.addFileArg(devtool);
+    build_ui.addArgs(&.{ "ui", roc_ui });
+    const www = build_ui.addOutputDirectoryArg("www");
+    for ([_][]const u8{ "runtime.mjs", "environment.mjs", "startup.mjs", "worker.mjs" }) |file| build_ui.addFileArg(roc_signals.path(file));
+    build_ui.addArg(if (dev) "--opt=dev" else "--opt=size");
+    if (!specialize or dev) build_ui.addArg("--specialize=no");
+    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
+    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    return www;
+}
+
+// liton-verify (verify/), which checks a passkey's signature for the daemon
+// with Zig's std.crypto, for target: static on Linux, since it links no libc.
+fn addVerifyBuild(b: *std.Build, target: std.Build.ResolvedTarget) std.Build.LazyPath {
+    const module = b.createModule(.{ .root_source_file = b.path("verify/liton-verify.zig"), .target = target, .optimize = .ReleaseSafe, .strip = true });
+    return b.addExecutable(.{ .name = "liton-verify", .root_module = module }).getEmittedBin();
+}
+
 pub fn build(b: *std.Build) void {
     const sources = discoverSources(b);
 
@@ -278,10 +315,16 @@ pub fn build(b: *std.Build) void {
     // -Droc-ui tries the UI on another.
     const roc = b.option([]const u8, "roc", "The daemon's Roc compiler") orelse "roc";
     const roc_ui = b.option([]const u8, "roc-ui", "The UI's Roc compiler") orelse roc;
-    // For iterating: the UI built without specialization, in under a minute
-    // rather than about six, and slower to run. Never for the preview or a
-    // final e2e run, which drive what ships.
-    const fast = b.option(bool, "fast", "Build the browser UI without specialization, for iterating") orelse false;
+    // The UI with lambda-set specialization, for zig build ui, run and
+    // release alike, to measure what it buys (bench/): about an hour and
+    // 20 GB of memory.
+    const specialize = b.option(bool, "specialize", "Build the browser UI with specialization, releases too") orelse false;
+    // The daemon, the command line and the UI on Roc's dev backend without
+    // specialization, for a preview: each in seconds against minutes, but
+    // slower and the UI three times the download. Never released. FIXME: the
+    // dev backend's specialized daemon crashes on review.v1's calls (e2e).
+    const dev = b.option(bool, "dev", "Build the daemon, the command line and the UI for a preview, in seconds, not for releases") orelse false;
+    const roc_flags: []const []const u8 = if (dev) &.{ "--opt=dev", "--specialize=no" } else &.{};
 
     var roc_files = std.ArrayList([]const u8).empty;
     var ui_roc_files = std.ArrayList([]const u8).empty;
@@ -307,13 +350,15 @@ pub fn build(b: *std.Build) void {
 
     // The capabilities and setup packages are imported by the UI and the
     // daemon, so a UI compiler of its own checks and tests them too.
-    const test_step = b.step("test", "Run checks and Roc tests");
+    const test_step = b.step("test", "Run checks, Roc tests and Zig tests");
     test_step.dependOn(check_step);
     for (sources.roc_roots) |root| {
         const shared = std.mem.startsWith(u8, root, "capabilities/") or std.mem.startsWith(u8, root, "setup/");
         if (!isUi(root)) addRocRoot(b, check_step, test_step, roc, root);
         if (isUi(root) or (shared and !std.mem.eql(u8, roc_ui, roc))) addRocRoot(b, check_step, test_step, roc_ui, root);
     }
+    const verify_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("verify/liton-verify.zig"), .target = b.graph.host }) });
+    test_step.dependOn(&b.addRunArtifact(verify_tests).step);
 
     // liton's development tool (devtool/), on the daemon's compiler, which
     // runs the tasks that would otherwise be shell scripts, as kai's does.
@@ -344,22 +389,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_specs.step);
 
     // The browser UI, its page and the roc-signals runtime, into zig-out/www.
-    // Built for size: the wasm's download is most of a cold load (bench/).
-    // Specialized still: --specialize=no makes it a quarter of the size, but
-    // a long chat (200 messages with code blocks) takes seconds to open or
-    // leave, against a third of a second. -Dfast trades that for build time.
+    // Without specialization unless -Dspecialize: about 9 MB, built in about
+    // three minutes, against 81 MB in about an hour.
     const ui_step = b.step("ui", "Build the browser UI into zig-out/www");
-    const build_ui = std.Build.Step.Run.create(b, "build the browser UI");
-    build_ui.addFileArg(devtool);
-    build_ui.addArgs(&.{ "ui", roc_ui });
-    const www = build_ui.addOutputDirectoryArg("www");
-    build_ui.addFileArg(roc_signals.path("runtime.mjs"));
-    build_ui.addFileArg(roc_signals.path("environment.mjs"));
-    build_ui.addFileArg(roc_signals.path("startup.mjs"));
-    build_ui.addFileArg(roc_signals.path("worker.mjs"));
-    if (fast) build_ui.addArg("--specialize=no");
-    addRocAppInputs(b, build_ui, sources, roc_ui, "ui/main.roc");
-    for (sources.ui_page_files) |path| build_ui.addFileInput(b.path(path));
+    const www = addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize, dev);
     const install_ui = b.addInstallDirectory(.{ .source_dir = www, .install_dir = .prefix, .install_subdir = "www" });
     ui_step.dependOn(&install_ui.step);
 
@@ -380,8 +413,15 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&install_docs.step);
     test_step.dependOn(&build_docs.step);
 
+    const verify_step = b.step("verify", "Build the passkey signature verifier into zig-out/bin/liton-verify");
+    const install_verify = b.addInstallBinFile(addVerifyBuild(b, b.graph.host), "liton-verify");
+    verify_step.dependOn(&install_verify.step);
+
+    // The daemon runs liton-verify from beside itself, so whatever installs
+    // the daemon installs it too.
     const daemon_step = b.step("daemon", "Build the daemon into zig-out/bin/liton-daemon");
-    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    const install_daemon = b.addInstallBinFile(addRocBuild(b, sources, roc, roc_flags, "daemon/main.roc", "liton-daemon"), "liton-daemon");
+    install_daemon.step.dependOn(&install_verify.step);
     daemon_step.dependOn(&install_daemon.step);
     if (previews) {
         run_devtool.step.dependOn(&install_ui.step);
@@ -391,7 +431,7 @@ pub fn build(b: *std.Build) void {
     // The command line client, whose platform, basic-cli, runs on the
     // daemon's compiler.
     const cli_step = b.step("cli", "Build the command line client into zig-out/bin/liton");
-    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "cli/main.roc", "liton"), "liton");
+    const install_cli = b.addInstallBinFile(addRocBuild(b, sources, roc, roc_flags, "cli/main.roc", "liton"), "liton");
     cli_step.dependOn(&install_cli.step);
 
     // The example provider outside the daemon, a server of /liton/v1 on the
@@ -399,6 +439,38 @@ pub fn build(b: *std.Build) void {
     const example_step = b.step("example-provider", "Build the example provider into zig-out/bin/provider-echo");
     const install_example = b.addInstallBinFile(addRocBuild(b, sources, roc, &.{}, "examples/provider-echo/main.roc", "provider-echo"), "provider-echo");
     example_step.dependOn(&install_example.step);
+
+    // The release archives flake.nix fetches, liton-VERSION-SYSTEM.tar.gz
+    // and their SHA256SUMS, into zig-out/release: for each Linux system the
+    // daemon's and the command line's platforms build for, their static
+    // binaries and liton-verify's in bin/ and the UI in share/liton/www,
+    // without specialization unless -Dspecialize (addUiBuild says why), the
+    // same bytes from the same sources.
+    const release_step = b.step("release", "Build the release archives into zig-out/release");
+    const release_www = if (dev) addUiBuild(b, sources, devtool, roc_ui, roc_signals, specialize, false) else www;
+    const version = @import("build.zig.zon").version;
+    const sums = b.addSystemCommand(&.{ "sha256sum", "--" });
+    for ([_][2][]const u8{ .{ "x86_64-linux", "x64musl" }, .{ "aarch64-linux", "arm64musl" } }) |release| {
+        const target = b.fmt("--target={s}", .{release[1]});
+        const tree = b.addWriteFiles();
+        _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "daemon/main.roc", "liton-daemon"), "bin/liton-daemon");
+        _ = tree.addCopyFile(addRocBuild(b, sources, roc, &.{target}, "cli/main.roc", "liton"), "bin/liton");
+        const verify_target = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = b.fmt("{s}-musl", .{release[0]}) }) catch unreachable);
+        _ = tree.addCopyFile(addVerifyBuild(b, verify_target), "bin/liton-verify");
+        _ = tree.addCopyDirectory(release_www, "share/liton/www", .{});
+        const name = b.fmt("liton-{s}-{s}.tar.gz", .{ version, release[0] });
+        const archive = b.addSystemCommand(&.{ "tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--use-compress-program=gzip -n" });
+        archive.addPrefixedDirectoryArg("--directory=", tree.getDirectory());
+        const packed_archive = archive.addPrefixedOutputFileArg("--file=", name);
+        archive.addArgs(&.{ "--create", "bin", "share" });
+        const install = b.addInstallFileWithDir(packed_archive, .{ .custom = "release" }, name);
+        release_step.dependOn(&install.step);
+        sums.addArg(name);
+        sums.step.dependOn(&install.step);
+    }
+    // In zig-out/release, so the sums name the archives alone.
+    sums.setCwd(.{ .cwd_relative = b.getInstallPath(.{ .custom = "release" }, "") });
+    release_step.dependOn(&b.addInstallFileWithDir(sums.captureStdOut(.{}), .{ .custom = "release" }, "SHA256SUMS").step);
 
     // Serves the UI, its API docs and the API at http://127.0.0.1:8095
     // (LITON_HOST and LITON_PORT to change it).
@@ -431,6 +503,26 @@ pub fn build(b: *std.Build) void {
     run_auth.step.dependOn(&install_daemon.step);
     run_auth.step.dependOn(&install_cli.step);
     e2e_step.dependOn(&run_auth.step);
+    const run_rooms = b.addSystemCommand(&.{ "node", "e2e/rooms.mjs" });
+    run_rooms.has_side_effects = true;
+    run_rooms.step.dependOn(&install_daemon.step);
+    run_rooms.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_rooms.step);
+    // Registers a passkey and signs in with it, in headless Chrome with a
+    // virtual authenticator.
+    const run_passkeys = b.addSystemCommand(&.{ "node", "e2e/passkeys.mjs" });
+    run_passkeys.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_passkeys.has_side_effects = true;
+    run_passkeys.step.dependOn(&install_daemon.step);
+    run_passkeys.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_passkeys.step);
+    // Invites people, who make passkeys there, and agents, who get tokens.
+    const run_invites = b.addSystemCommand(&.{ "node", "e2e/invites.mjs" });
+    run_invites.addFileArg(b.dependency("roc_signals_source", .{}).path("tests/browser/cdp.mjs"));
+    run_invites.has_side_effects = true;
+    run_invites.step.dependOn(&install_daemon.step);
+    run_invites.step.dependOn(&install_cli.step);
+    e2e_step.dependOn(&run_invites.step);
     const run_federation = b.addSystemCommand(&.{ "node", "e2e/federation.mjs" });
     run_federation.has_side_effects = true;
     run_federation.step.dependOn(&install_daemon.step);

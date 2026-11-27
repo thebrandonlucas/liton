@@ -23,6 +23,12 @@
 ## LITON_HOST is loopback and no proxy forwarded the request; `required`
 ## always; `off` never.
 ##
+## LITON_RP_ID is the box's name, such as box.example.ts.net, the site its
+## passkeys are for: people sign in with them at https://<LITON_RP_ID>, or
+## at http://localhost:<port> where it is `localhost`. Unset, passkeys are
+## refused. LITON_VERIFY names liton-verify, which checks their signatures
+## (by default, beside the daemon).
+##
 ## LITON_SETUP names the setup a Litonfile evaluates to (`liton setup`), by
 ## default liton.setup.json if there is one, or else liton's own
 ## (setup/Default.roc). It declares the remotes, the transformers and the
@@ -86,6 +92,7 @@ import cap.Capability
 import cap.Chat
 import cap.Context as Focus
 import cap.Hosts
+import cap.People
 import cap.Manifest
 import cap.Protocol
 import cap.Review
@@ -117,15 +124,21 @@ import transformers.LimitsTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 import Auth
+import RoomStore
+import TicketStore
 import Sha256
+import WebAuthn
 
 ## What each request is answered from: the database, the hosts it answers,
 ## when it must come from a paired device,
 ## the providers and transformers configured, the model Paseo's summaries
 ## are written with ("" for the agent's smallest), the setup it offers, and
 ## whether answering may ask Paseo and the remotes when due (`Ask`), or
-## only reads what the daemon keeps (`Cached`, a cached poll's).
-Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached] }
+## only reads what the daemon keeps (`Cached`, a cached poll's); the device asking,
+## the owner's id, the person asking (the owner where no device
+## need be), and what their role lets them do (`Access`), of the setup's
+## roles.
+Context : { db : Sqlite.Db, allowed_hosts : List(Str), auth : Auth.Mode, mock : Mock.Parts, paseo : Try(PaseoDaemon, [Disabled]), summary_model : Try(Str, [Off]), speech : Try(LocalSpeech.Engine, [Disabled]), remotes : List(Remote.Endpoint), remote_interval_ms : I64, transformers : List(Transformer.Part), setup : Setup.Offered, upstream : [Ask, Cached], asking : [Device(Str), Open], owner : Str, person : Str, rp_id : Str, verify : Str, roles : List(Setup.Role), access : Access }
 
 ## Where the Paseo daemon is, and its password.
 PaseoDaemon : { host : Str, port : U16, password : Str }
@@ -149,7 +162,15 @@ init! = || {
 		Exit(2)
 	}
 	db = Sqlite.open!(Sqlite.default_config(Path.utf8(db_path))) ? |_| Exit(2)
+	# liton 0.1's people were its relay's keys, which 0.2 doesn't carry over.
+	from_0_1 : List({ name : Str })
+	from_0_1 = Sqlite.query_many!({ db, query: "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('nostr_events', 'key_roles') AND NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'persons');", params: {}, limits: Sqlite.default_query_limits }) ? |_| Exit(3)
+	if !from_0_1.is_empty() {
+		logged!("liton: ${db_path} is from liton 0.1; 0.2 starts fresh: move liton.db aside")
+		return Err(Exit(3))
+	}
 	create_tables!(db) ? |_| Exit(3)
+	owner = owner_made!(db) ? |_| Exit(3)
 	kept_private!(db_path) ? |_| Exit(2)
 	# A password Paseo refused may have been fixed since.
 	Sqlite.execute!({ db, query: "DELETE FROM paseo_listings WHERE what = 'refusal';", params: {} }) ? |_| Exit(3)
@@ -190,12 +211,48 @@ init! = || {
 		}
 	seeded_remotes = remotes.map(|endpoint| { name: endpoint.name, kind: "Liton", target: endpoint.url, secret: remote_token(tokens, endpoint.name) ?? "", origin: if (from_environment.contains(endpoint.name)) "Environment" else "Setup" })
 	hosts_seeded!(db, seeded_paseo.concat(seeded_remotes)) ? |_| Exit(3)
-	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask }) ? |_| Exit(3)
+	context = hosted!({ db, allowed_hosts, auth, mock, paseo, summary_model, speech, remotes, remote_interval_ms, transformers, setup: Setup.offered(setup), upstream: Ask, asking: Open, owner, person: owner, rp_id: env_or!("LITON_RP_ID", "").trim(), verify: env_or!("LITON_VERIFY", verify_beside!()), roles: setup.roles, access: Operator }) ? |_| Exit(3)
 	# Each remote starts unasked, and its manifest is asked for at once.
 	Sqlite.execute!({ db, query: "DELETE FROM remotes;", params: {} }) ? |_| Exit(3)
 	Sqlite.execute!({ db, query: "INSERT INTO remotes (name) SELECT name FROM hosts WHERE kind = 'Liton';", params: {} }) ? |_| Exit(3)
 	remotes_cycle!(context) ? |_| Exit(3)
+	setup_rooms_kept!(context, setup.rooms) ? |_| Exit(3)
 	Ok({ config, context })
+}
+
+## liton-verify beside the daemon's program, as a release ships it.
+verify_beside! : () => Str
+verify_beside! = || {
+	daemon_path = Env.exe_path!().map_ok(Path.display) ?? ""
+	directory = daemon_path.split_last("/").map_ok(|{ before, .. }| before) ?? "."
+	"${directory}/liton-verify"
+}
+
+## The owner's id, the person called "Owner", an operator, made at the
+## first start. Devices paired before people came, each an operator's, are
+## theirs.
+owner_made! : Sqlite.Db => Try(Str, _)
+owner_made! = |db| {
+	Sqlite.execute!({ db, query: "INSERT INTO persons (id, name, role, agent, owner, created_at) SELECT lower(hex(randomblob(8))), 'Owner', 'operator', 0, 1, :now WHERE NOT EXISTS (SELECT 1 FROM persons WHERE owner = 1);", params: { now: now_ms!() } })?
+	found : { id : Str }
+	found = Sqlite.query!({ db, query: "SELECT id FROM persons WHERE owner = 1;", params: {}, limits: Sqlite.default_query_limits })?
+	Sqlite.execute!({ db, query: "UPDATE devices SET person_id = :owner WHERE person_id = '';", params: { owner: found.id } })?
+	Ok(found.id)
+}
+
+## Keeps the setup's rooms: makes those the box hasn't, as on a box rebuilt
+## from its setup, keeps each open or closed as declared, and makes the
+## owner an admin of each.
+setup_rooms_kept! : Context, List(Setup.Room) => Try({}, _)
+setup_rooms_kept! = |context, declared| {
+	for room in declared {
+		_ = room_created!(context, room)?
+		Sqlite.execute!({ db: context.db, query: "UPDATE rooms SET open = :open WHERE id = :id;", params: { id: RoomStore.id_of_name(room.name), open: if (room.open) 1.I64 else 0 } })?
+		transaction = Sqlite.begin!(context.db, Immediate)?
+		member_added!(transaction, context, RoomStore.id_of_name(room.name), context.owner, Bool.True)?
+		transaction.commit!()?
+	}
+	Ok({})
 }
 
 ## The setup at `named`, or at liton.setup.json if `named` is "" and there
@@ -253,9 +310,15 @@ checked! = |given|
 		}
 	}
 
-## Nothing to do at shutdown.
+## Nothing to do at shutdown. Stopped by SIGTERM, as systemd stops a
+## service, the daemon exits 0 rather than the platform's 143, which would
+## leave a service stopped or restarted as failed.
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64)])
-shutdown! = |_reason, _context| Ok({})
+shutdown! = |reason, _context|
+	match reason {
+		Terminate => Err(Exit(0))
+		_ => Ok({})
+	}
 
 ## Answers a request: the UI's redirect, the protocol's manifest, calls
 ## and polls, voice's audio, and pairing and the devices paired, refusing
@@ -289,32 +352,52 @@ respond! = |request, context| {
 ## with 401.
 routed! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
 routed! = |started, request, headers| {
-	context = hosted!(started)?
+	served = hosted!(started)?
 	path =
 		match request.target() {
 			Resource({ raw_path, .. }) => raw_path
 			_ => ""
 		}
-	seen = if (path.starts_with("/liton/v1/") and path != "/liton/v1/pair") signed_in!(context, headers)? else Ok(Open)
+	seen = if (path.starts_with("/liton/v1/") and !["/liton/v1/pair", "/liton/v1/invite", "/liton/v1/login/begin", "/liton/v1/login/finish"].contains(path)) signed_in!(served, headers)? else Ok(Open)
+	asking = seen ?? Open
+	signing_in : List({ person_id : Str })
+	signing_in = match asking {
+		Device(id) => Sqlite.query_many!({ db: served.db, query: "SELECT person_id FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+		Open => []
+	}
+	person = signing_in.first().map_ok(|row| row.person_id) ?? served.owner
+	held : List({ role : Str })
+	held = Sqlite.query_many!({ db: served.db, query: "SELECT role FROM persons WHERE id = :person;", params: { person }, limits: Sqlite.default_query_limits })?
+	context = { ..served, asking, person, access: access_of(served.roles, held.first().map_ok(|row| row.role) ?? "") }
 	match (seen, request.method(), path) {
+		(_, POST, "/liton/v1/passkeys/register/begin") => register_begun!(context, request, headers, seen.is_ok())
+		(_, POST, "/liton/v1/passkeys/register/finish") => register_finished!(context, request, headers)
 		(Err(Unpaired), _, _) =>
-			Ok(text(401, "this device isn't paired with the daemon: run `liton pair` on the daemon's machine, or open Settings → Devices on a paired one, for a pairing code").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
+			Ok(text(401, "this device isn't signed in: sign in with a passkey, or pair it with a code from `liton pair` on the daemon's machine or Settings → Passkeys & devices on a device signed in").add_header("WWW-Authenticate", "Bearer realm=\"liton\""))
+		(_, _, _) if !route_allowed(context.access, path) => Ok(text(403, "this device's role can't use ${path}"))
 		(_, GET, "/") => Ok(Response.from_status(302).with_headers([{ name: "Location", value: "/ui/index.html" }]))
 		(_, GET, "/liton/v1/manifest") => manifest!(context)
 		(_, POST, "/liton/v1/call") => call!(context, request)
 		(_, POST, "/liton/v1/poll") => polled_topics!(context, request)
 		(_, POST, "/liton/v1/refresh") => refreshed!(context)
 		(_, POST, "/liton/v1/pair") => paired!(context, request, headers)
+		(_, POST, "/liton/v1/invite") => invited!(context, request, headers)
 		(Ok(device), GET, "/liton/v1/devices") => devices!(context, device)
 		(_, POST, "/liton/v1/devices/code") => pairing_code!(context, request, headers)
 		(Ok(device), POST, "/liton/v1/devices/revoke") => revoked!(context, request, device)
+		(_, GET, "/liton/v1/passkeys") => passkeys!(context)
+		(_, POST, "/liton/v1/passkeys/delete") => passkey_deleted!(context, request)
+		(_, POST, "/liton/v1/login/begin") => login_begun!(context, request, headers)
+		(_, POST, "/liton/v1/login/finish") => login_finished!(context, request, headers)
+		(Ok(Device(id)), POST, "/liton/v1/logout") => logged_out!(context, id)
 		(_, POST, _) if path.starts_with(audio_route) => audio_chunk!(context, request, path.drop_prefix(audio_route))
 		_ => Ok(text(404, "Not found"))
 	}
 }
 
 ## The device a request comes from, by the token it shows (`Auth.credential`):
-## `Device(id)` when the token is one paired, else `Open` when this request
+## `Device(id)` when the token is one paired and its session hasn't ended
+## (`session_ms`, kept to the day), else `Open` when this request
 ## needn't be paired (`Auth.required`), or else `Unpaired`. A device's last
 ## use is kept to the minute.
 signed_in! : Context, List({ name : Str, value : Str }) => Try(Try([Device(Str), Open], [Unpaired]), _)
@@ -322,12 +405,13 @@ signed_in! = |context, headers| {
 	unknown = if (Auth.required(context.auth, headers)) Err(Unpaired) else Ok(Open)
 	match Auth.credential(headers) {
 		Ok({ id, secret }) => {
+			now = now_ms!()
 			kept : List({ token_hash : Str })
-			kept = Sqlite.query_many!({ db: context.db, query: "SELECT token_hash FROM devices WHERE id = :id;", params: { id }, limits: Sqlite.default_query_limits })?
+			kept = Sqlite.query_many!({ db: context.db, query: "SELECT token_hash FROM devices WHERE id = :id AND (expires_at = 0 OR expires_at > :now);", params: { id, now }, limits: Sqlite.default_query_limits })?
 			match kept {
 				[{ token_hash }] if Auth.same(Sha256.hex(secret.to_utf8()), token_hash) => {
-					now = now_ms!()
 					Sqlite.execute!({ db: context.db, query: "UPDATE devices SET seen_at = :now WHERE id = :id AND seen_at < :since;", params: { id, now, since: now - 60_000 } })?
+					Sqlite.execute!({ db: context.db, query: "UPDATE devices SET expires_at = :expires_at WHERE id = :id AND expires_at != 0 AND expires_at < :since;", params: { id, expires_at: now + session_ms, since: now + session_ms - 86_400_000 } })?
 					Ok(Ok(Device(id)))
 				}
 				_ => Ok(unknown)
@@ -347,63 +431,418 @@ pairings_per_minute : I64
 pairings_per_minute = 10
 
 ## Answers /liton/v1/pair: a pairing code, used once, for a token of a new
-## device. A browser gets it as an HttpOnly cookie, out of its scripts'
+## device of the person it is for, the owner's from `liton pair`. A browser gets it as an HttpOnly cookie, out of its scripts'
 ## reach; a client asking `token: true`, as the CLI or another daemon, in
 ## the answer too.
 paired! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-paired! = |{ db, .. }, request, headers| {
-	now = now_ms!()
-	Sqlite.execute!({ db, query: "DELETE FROM pairing_attempts WHERE at < :since;", params: { since: now - 60_000 } })?
-	attempts : { count : I64 }
-	attempts = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM pairing_attempts;", params: {}, limits: Sqlite.default_query_limits })?
-	if attempts.count >= pairings_per_minute {
+paired! = |context, request, headers| {
+	db = context.db
+	if !attempt_allowed!(db)? {
 		return Ok(text(429, "too many pairing attempts; try again in a minute"))
 	}
-	Sqlite.execute!({ db, query: "INSERT INTO pairing_attempts (at) VALUES (:now);", params: { now } })?
 	given : Try({ code : Str, name : Try(Str, [Missing]), token : Try(Bool, [Missing]) }, _)
 	given = Json.parse(read_json!(request)?)
 	match given {
 		Err(_) => Ok(text(400, "a pairing is {\"code\": \"ABCD-EFGH\", \"name\": \"this device's name\"}"))
 		Ok({ code, name, token: wants_token }) => {
-			used : List({ code : Str })
-			used = Sqlite.query_many!({ db, query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: Auth.typed_code(code), now }, limits: Sqlite.default_query_limits })?
-			if used.is_empty() {
+			used : List({ person_id : Str })
+			used = Sqlite.query_many!({ db, query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING person_id;", params: { code: Auth.typed_code(code), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			person = used.first().map_ok(|row| if (row.person_id == "") context.owner else row.person_id) ?? ""
+			if person == "" {
 				return Ok(text(401, "that pairing code is wrong, used or expired"))
 			}
-			# SQLite's randomblob is its ChaCha20 generator, seeded from the system's.
-			random : { id : Str, secret : Str }
-			random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(32))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
-			device = { id: random.id, name: Str.from_utf8_lossy((name ?? "").trim().to_utf8().take_first(80)) }
-			named = if (device.name == "") { ..device, name: "A device" } else device
-			Sqlite.execute!({ db, query: "INSERT INTO devices (id, name, token_hash, created_at, seen_at) VALUES (:id, :name, :token_hash, :now, :now);", params: { id: named.id, name: named.name, token_hash: Sha256.hex(random.secret.to_utf8()), now } })?
-			token = "${random.id}.${random.secret}"
-			body = if (wants_token == Ok(Bool.True)) Json.to_str({ device: named, token }) else Json.to_str({ device: named })
+			transaction = Sqlite.begin!(db, Immediate)?
+			{ device, token } = device_made!(transaction, name ?? "", person)?
+			audited!(transaction, { ..context, person, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
+			transaction.commit!()?
+			body = if (wants_token == Ok(Bool.True)) Json.to_str({ device, token }) else Json.to_str({ device: device })
 			Ok(json(body).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
 		}
 	}
 }
 
-## Answers /liton/v1/devices: the devices paired, the oldest first, the one
-## asking marked `current`. A token is never shown.
-devices! : Context, [Device(Str), Open] => Try(Response, _)
-devices! = |{ db, .. }, asking| {
-	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64 })
-	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at FROM devices ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })?
-	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at }| { id, name, created_at, seen_at, current: asking == Device(id) }) })))
+## Whether the daemon tries another pairing or invite this minute
+## (`pairings_per_minute`), counting this one if so.
+attempt_allowed! : Sqlite.Db => Try(Bool, _)
+attempt_allowed! = |db| {
+	now = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM pairing_attempts WHERE at < :since;", params: { since: now - 60_000 } })?
+	attempts : { count : I64 }
+	attempts = Sqlite.query!({ db, query: "SELECT count(*) AS count FROM pairing_attempts;", params: {}, limits: Sqlite.default_query_limits })?
+	if attempts.count >= pairings_per_minute {
+		return Ok(Bool.False)
+	}
+	Sqlite.execute!({ db, query: "INSERT INTO pairing_attempts (at) VALUES (:now);", params: { now } })?
+	Ok(Bool.True)
 }
 
-## Answers /liton/v1/devices/code: a new pairing code, for
-## `pairing_code_ms`, when it expires, and the link to the UI that pairs a
-## browser with it, at the address the request came to.
+## A new device of the person `person_id`, called `name`, and its token.
+device_made! : Sqlite.Transaction, Str, Str => Try({ device : { id : Str, name : Str }, token : Str }, _)
+device_made! = |transaction, name, person_id| {
+	now = now_ms!()
+	# SQLite's randomblob is its ChaCha20 generator, seeded from the system's.
+	random : { id : Str, secret : Str }
+	random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(32))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+	trimmed = Str.from_utf8_lossy(name.trim().to_utf8().take_first(80))
+	device = { id: random.id, name: if (trimmed == "") "A device" else trimmed }
+	transaction.execute!({ query: "INSERT INTO devices (id, name, token_hash, created_at, seen_at, person_id) VALUES (:id, :name, :token_hash, :now, :now, :person_id);", params: { id: device.id, name: device.name, token_hash: Sha256.hex(random.secret.to_utf8()), now, person_id } })?
+	Ok({ device, token: "${random.id}.${random.secret}" })
+}
+
+## Notes in the audit that the person and device asking in `context` did
+## `action` to `subject`, as the JSON `detail` tells.
+audited! : Sqlite.Transaction, Context, Str, Str, Str => Try({}, _)
+audited! = |transaction, context, action, subject, detail| {
+	device_id =
+		match context.asking {
+			Device(id) => id
+			Open => ""
+		}
+	transaction.execute!({ query: "INSERT INTO audit (at, person_id, device_id, action, subject, detail) VALUES (:at, :person_id, :device_id, :action, :subject, :detail);", params: { at: now_ms!(), person_id: context.person, device_id, action, subject, detail } })
+}
+
+## The people of the box and how they get in, which the daemon offers
+## itself.
+people_provider : Manifest.Provider
+people_provider = { id: "people", name: "People", capabilities: [Capability.people_v1] }
+
+## How long an invite lasts: 7 days.
+invite_ms : I64
+invite_ms = 604_800_000
+
+## The topic `people`: the owner first, then the people holding a role, by
+## name, the invites not used yet, and the roles the person asking may
+## invite into: an operator any, an admin any but `operator`.
+people! : Context => Try(People.Listing, _)
+people! = |{ db, roles, access, .. }| {
+	listed : List({ id : Str, name : Str, role : Str, agent : I64, owner : I64, passkeys : I64, devices : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, owner, (SELECT count(*) FROM passkeys WHERE passkeys.person_id = persons.id) AS passkeys, (SELECT count(*) FROM devices WHERE devices.person_id = persons.id) AS devices FROM persons WHERE role != '' ORDER BY owner DESC, name, id;", params: {}, limits: Sqlite.default_query_limits })?
+	invites : List({ id : Str, name : Str, role : Str, rooms : Str, expires_at : I64, agent : I64, person_id : Str })
+	invites = Sqlite.query_many!({ db, query: "SELECT id, name, role, rooms, expires_at, agent, person_id FROM invites WHERE expires_at > :now ORDER BY expires_at;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	Ok({
+		people: listed.map(|person| { id: person.id, name: person.name, role: person.role, agent: person.agent == 1, owner: person.owner == 1, passkeys: person.passkeys.to_u32_wrap(), devices: person.devices.to_u32_wrap() }),
+		invites: invites.map(|invite| { id: invite.id, name: invite.name, role: invite.role, rooms: Json.parse(invite.rooms) ?? [], expires: Chat.timestamp(invite.expires_at), agent: invite.agent == 1, person: invite.person_id }),
+		roles: (if (access == Operator) ["operator"] else []).concat(roles.map(|role| role.name)),
+	})
+}
+
+## Answers a people.v1 request. An invite is into a role the setup declares,
+## or `operator` by an operator alone, and into rooms the box has. Removing
+## a person takes their devices and rooms away and leaves their name to
+## their messages; the owner stays, and only an operator removes an
+## operator. A room's members are added by an operator or an admin of it,
+## its admins by an operator alone.
+people_call! : Context, People.Request => Try(Protocol.Answer(People.Response), _)
+people_call! = |context, asked| {
+	db = context.db
+	refused = |why| Ok(Ok(Rejected(why)))
+	rooms : List({ id : Str })
+	rooms = Sqlite.query_many!({ db, query: "SELECT id FROM rooms WHERE archived = 0;", params: {}, limits: Sqlite.default_query_limits })?
+	match asked {
+		Invite({ name, role, rooms: named, agent }) =>
+			if name.trim() == "" {
+				refused("an invite names whom it is for")
+			} else if role == "operator" and context.access != Operator {
+				refused("only an operator invites an operator")
+			} else if role != "operator" and !context.roles.any(|declared| declared.name == role) {
+				refused("the setup declares no role ${role}")
+			} else {
+				match named.find_first(|room_id| !rooms.any(|room| room.id == room_id)) {
+					Ok(missing) => refused("there is no room ${missing}")
+					Err(_) => {
+						transaction = Sqlite.begin!(db, Immediate)?
+						random : { id : Str, secret : Str }
+						random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+						transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at, agent) VALUES (:id, :secret_hash, :name, :role, :rooms, :expires_at, :agent);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: name.trim(), role, rooms: Json.to_str(named), expires_at: now_ms!() + invite_ms, agent: if (agent) 1.I64 else 0 } })?
+						audited!(transaction, context, "invite.made", random.id, Json.to_str({ name: name.trim(), role, rooms: named, agent }))?
+						transaction.commit!()?
+						Ok(Ok(Invited(random)))
+					}
+				}
+			}
+		Relink({ person }) => {
+			found : List({ name : Str, role : Str, agent : I64 })
+			found = Sqlite.query_many!({ db, query: "SELECT name, role, agent FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			match found {
+				[{ role: "operator", .. }] if context.access != Operator => refused("only an operator relinks an operator")
+				[kept] => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					random : { id : Str, secret : Str }
+					random = transaction.query!({ query: "SELECT lower(hex(randomblob(8))) AS id, lower(hex(randomblob(16))) AS secret;", params: {}, limits: Sqlite.default_query_limits })?
+					transaction.execute!({ query: "INSERT INTO invites (id, secret_hash, name, role, rooms, expires_at, agent, person_id) VALUES (:id, :secret_hash, :name, :role, '[]', :expires_at, :agent, :person);", params: { id: random.id, secret_hash: Sha256.hex(random.secret.to_utf8()), name: kept.name, role: kept.role, expires_at: now_ms!() + invite_ms, agent: kept.agent, person } })?
+					audited!(transaction, context, "invite.made", random.id, Json.to_str({ relink: person }))?
+					transaction.commit!()?
+					Ok(Ok(Invited(random)))
+				}
+				_ => refused("there is no person ${person}")
+			}
+		}
+		Remove({ person }) => {
+			found : List({ role : Str, owner : I64 })
+			found = Sqlite.query_many!({ db, query: "SELECT role, owner FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			match found {
+				[{ owner: 1, .. }] => refused("the owner can't be removed")
+				[{ role: "operator", .. }] if context.access != Operator => refused("only an operator removes an operator")
+				[_] => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					transaction.execute!({ query: "DELETE FROM devices WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "DELETE FROM passkeys WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "DELETE FROM members WHERE person_id = :person;", params: { person } })?
+					transaction.execute!({ query: "UPDATE persons SET role = '' WHERE id = :person;", params: { person } })?
+					audited!(transaction, context, "person.removed", person, "{}")?
+					transaction.commit!()?
+					Ok(Ok(Accepted))
+				}
+				_ => refused("there is no person ${person}")
+			}
+		}
+		Cancel({ id }) => {
+			transaction = Sqlite.begin!(db, Immediate)?
+			cancelled : List({ id : Str })
+			cancelled = transaction.query_many!({ query: "DELETE FROM invites WHERE id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
+			if cancelled.is_empty() {
+				return refused("there is no invite ${id}")
+			}
+			audited!(transaction, context, "invite.cancelled", id, "{}")?
+			transaction.commit!()?
+			Ok(Ok(Accepted))
+		}
+		CreateRoom(room) =>
+			match room_created!(context, { name: room.name, about: room.about, kind: room.kind, private: room.private, open: Bool.False })? {
+				Ok(room_id) => Ok(Ok(RoomCreated({ room_id: room_id })))
+				Err(why) => refused(why)
+			}
+		RemoveMember({ room, person }) => {
+			admins : List({ admin : I64 })
+			admins = Sqlite.query_many!({ db, query: "SELECT admin FROM members WHERE room_id = :room AND person_id = :person AND admin = 1;", params: { room, person: context.person }, limits: Sqlite.default_query_limits })?
+			if context.access != Operator and admins.is_empty() {
+				refused("only an operator or an admin of the room removes its members")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				removed : List({ room_id : Str })
+				removed = transaction.query_many!({ query: "DELETE FROM members WHERE room_id = :room AND person_id = :person RETURNING room_id;", params: { room, person }, limits: Sqlite.default_query_limits })?
+				if removed.is_empty() {
+					return refused("${person} isn't a member of ${room}")
+				}
+				audited!(
+					transaction,
+					context,
+					"member.removed",
+					room,
+					Json.to_str(
+						{
+							person
+						},
+					),
+				)?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
+			}
+		}
+		Rename({ person, name }) => {
+			named = Str.from_utf8_lossy(name.trim().to_utf8().take_first(80))
+			if named == "" {
+				refused("a person's name has a letter or digit")
+			} else if person != context.person and context.access != Operator {
+				refused("only an operator renames someone else")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				renamed : List({ id : Str })
+				renamed = transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :person AND role != '' RETURNING id;", params: { person, name: named }, limits: Sqlite.default_query_limits })?
+				if renamed.is_empty() {
+					return refused("there is no person ${person}")
+				}
+				audited!(transaction, context, "person.renamed", person, Json.to_str({ name: named }))?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
+			}
+		}
+		AddMember({ room, person, admin }) => {
+			admins : List({ admin : I64 })
+			admins = Sqlite.query_many!({ db, query: "SELECT admin FROM members WHERE room_id = :room AND person_id = :person AND admin = 1;", params: { room, person: context.person }, limits: Sqlite.default_query_limits })?
+			known : List({ id : Str })
+			known = Sqlite.query_many!({ db, query: "SELECT id FROM persons WHERE id = :person AND role != '';", params: { person }, limits: Sqlite.default_query_limits })?
+			if !rooms.any(|kept| kept.id == room) {
+				refused("there is no room ${room}")
+			} else if known.is_empty() {
+				refused("there is no person ${person}")
+			} else if admin and context.access != Operator {
+				refused("only an operator makes a room's admins")
+			} else if context.access != Operator and admins.is_empty() {
+				refused("only an operator or an admin of the room adds its members")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				member_added!(transaction, context, room, person, admin)?
+				transaction.commit!()?
+				Ok(Ok(Accepted))
+			}
+		}
+	}
+}
+
+## Makes `person` a member of the room `room_id`, its admin if `admin`, or
+## no longer if not, noted in the audit if that changes anything.
+member_added! : Sqlite.Transaction, Context, Str, Str, Bool => Try({}, _)
+member_added! = |transaction, context, room_id, person, admin| {
+	changed : List({ room_id : Str })
+	changed = transaction.query_many!({ query: "INSERT INTO members (room_id, person_id, admin, added_by, added_at) VALUES (:room_id, :person, :admin, :added_by, :now) ON CONFLICT (room_id, person_id) DO UPDATE SET admin = excluded.admin WHERE members.admin != excluded.admin RETURNING room_id;", params: { room_id, person, admin: if (admin) 1.I64 else 0, added_by: context.person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	if changed.is_empty() {
+		return Ok({})
+	}
+	audited!(transaction, context, "member.added", room_id, Json.to_str({ person, admin }))
+}
+
+## Makes the room `room`, its id its name's (`RoomStore.id_of_name`), and
+## the owner and the person asking its admins, or says why not: a room of
+## that id was made already, even if archived since. Joined freely if `open`.
+room_created! : Context, { name : Str, about : Str, kind : Rooms.Kind, private : Bool, open : Bool } => Try(Try(Str, Str), _)
+room_created! = |context, { name, about, kind, private, open }| {
+	room_id = RoomStore.id_of_name(name)
+	if room_id == "" {
+		return Ok(Err("a room's name needs a letter or digit"))
+	}
+	transaction = Sqlite.begin!(context.db, Immediate)?
+	made : List({ id : Str })
+	made = transaction.query_many!({ query: "INSERT INTO rooms (id, name, about, kind, private, open, created_by, created_at) VALUES (:id, :name, :about, :kind, :private, :open, :created_by, :now) ON CONFLICT (id) DO NOTHING RETURNING id;", params: { id: room_id, name: name.trim(), about: about.trim(), kind: RoomStore.kind_text(kind), private: if (private) 1.I64 else 0, open: if (open) 1.I64 else 0, created_by: context.person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	if made.is_empty() {
+		return Ok(Err("there is a room ${room_id} already"))
+	}
+	audited!(transaction, context, "room.made", room_id, Json.to_str({ name: name.trim(), kind: RoomStore.kind_text(kind), private, open }))?
+	for admin in if (context.person == context.owner) [context.owner] else [context.owner, context.person] {
+		member_added!(transaction, context, room_id, admin, Bool.True)?
+	}
+	transaction.commit!()?
+	Ok(Ok(room_id))
+}
+
+## Answers /liton/v1/invite: an invite's secret, good once within its 7
+## days. An agent's, asked `token: true`, gives a token device of a new
+## agent person, named as the invite and holding its role, a member of its
+## rooms, or of the person it relinks; the token comes in the answer and as
+## a cookie. A person's answers what the browser asks to make a passkey,
+## which /liton/v1/passkeys/register/finish then makes for the new person,
+## or the person it relinks, spending the invite (`grant_spent!`).
+invited! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+invited! = |context, request, headers| {
+	db = context.db
+	if !attempt_allowed!(db)? {
+		return Ok(text(429, "too many pairing attempts; try again in a minute"))
+	}
+	given : Try({ secret : Str, name : Try(Str, [Missing]), token : Try(Bool, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Ok({ secret, name, token: wants_token }) => {
+			found : List({ id : Str, name : Str, role : Str, agent : I64, person_id : Str })
+			found = Sqlite.query_many!({ db, query: "SELECT id, name, role, agent, person_id FROM invites WHERE secret_hash = :secret_hash AND expires_at > :now;", params: { secret_hash: Sha256.hex(secret.to_utf8()), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			match (found, wants_token == Ok(Bool.True)) {
+				([invite], Bool.True) if invite.agent == 1 => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					made : { id : Str }
+					made = transaction.query!({ query: "SELECT CASE WHEN :person = '' THEN lower(hex(randomblob(8))) ELSE :person END AS id;", params: { person: invite.person_id }, limits: Sqlite.default_query_limits })?
+					match grant_spent!(transaction, context, "invite:${invite.id}", made.id, "")? {
+						Err(why) => Ok(text(401, why))
+						Ok({}) => {
+							{ device, token } = device_made!(transaction, name ?? invite.name, made.id)?
+							audited!(transaction, { ..context, person: made.id, asking: Device(device.id) }, "device.paired", device.id, Json.to_str({ name: device.name }))?
+							transaction.commit!()?
+							person = { id: made.id, name: invite.name, role: invite.role }
+							Ok(json(Json.to_str({ device, person, token })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+						}
+					}
+				}
+				([invite], Bool.False) if invite.agent == 0 =>
+					match passkey_site(context, request, headers) {
+						Err(refused) => Ok(refused)
+						Ok({ rp_id, .. }) => {
+							made : { id : Str }
+							made = Sqlite.query!({ db, query: "SELECT CASE WHEN :person = '' THEN lower(hex(randomblob(8))) ELSE :person END AS id;", params: { person: invite.person_id }, limits: Sqlite.default_query_limits })?
+							kept : List({ id : Str })
+							kept = Sqlite.query_many!({ db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person: made.id, rp_id }, limits: Sqlite.default_query_limits })?
+							challenge = challenge_made!(db, "register", made.id, "invite:${invite.id}")?
+							Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(made.id.to_utf8()), user_name: "${invite.name} (${rp_id})", display_name: invite.name, exclude: kept.map(|row| row.id), unnamed: Bool.False, invite: { name: invite.name, role: invite.role } })))
+						}
+					}
+				([invite], _) if invite.agent == 1 => Ok(text(400, "this invite is an agent's: redeem it with {\"secret\": \"…\", \"token\": true} for a token"))
+				([_], _) => Ok(text(400, "this invite is a person's: open its link in a browser to make a passkey"))
+				_ => Ok(text(401, "that invite is wrong, used or expired"))
+			}
+		}
+		_ => Ok(text(400, "an invite is redeemed with {\"secret\": \"…\"}"))
+	}
+}
+
+## Spends what grants a new passkey or token of `person_id`, or says why it
+## can't: a pairing code (`pair:<code>`), which names the owner
+## `person_name` while they are still called "Owner"; or an invite
+## (`invite:<id>`), which makes the person it is for, holding its role and
+## a member of its rooms, unless it relinks one already there.
+grant_spent! : Sqlite.Transaction, Context, Str, Str, Str => Try(Try({}, Str), _)
+grant_spent! = |transaction, context, grant, person_id, person_name| {
+	now = now_ms!()
+	as_person = { ..context, person: person_id }
+	if grant.starts_with("pair:") {
+		spent : List({ code : Str })
+		spent = transaction.query_many!({ query: "DELETE FROM pairing_codes WHERE code = :code AND expires_at > :now RETURNING code;", params: { code: grant.drop_prefix("pair:"), now }, limits: Sqlite.default_query_limits })?
+		if spent.is_empty() {
+			return Ok(Err("that pairing code was used or expired meanwhile"))
+		}
+		named = Str.from_utf8_lossy(person_name.trim().to_utf8().take_first(80))
+		renamed : List({ id : Str })
+		renamed = if (named == "") [] else transaction.query_many!({ query: "UPDATE persons SET name = :name WHERE id = :id AND owner = 1 AND name = 'Owner' RETURNING id;", params: { id: person_id, name: named }, limits: Sqlite.default_query_limits })?
+		if !renamed.is_empty() {
+			audited!(transaction, as_person, "person.renamed", person_id, Json.to_str({ name: named }))?
+		}
+		return Ok(Ok({}))
+	}
+	used : List({ id : Str, name : Str, role : Str, rooms : Str, agent : I64, person_id : Str })
+	used = transaction.query_many!({ query: "DELETE FROM invites WHERE id = :id AND expires_at > :now RETURNING id, name, role, rooms, agent, person_id;", params: { id: grant.drop_prefix("invite:"), now }, limits: Sqlite.default_query_limits })?
+	match used {
+		[invite] if invite.person_id == "" => {
+			transaction.execute!({ query: "INSERT INTO persons (id, name, role, agent, created_at) VALUES (:id, :name, :role, :agent, :now);", params: { id: person_id, name: invite.name, role: invite.role, agent: invite.agent, now } })?
+			audited!(transaction, as_person, "invite.redeemed", invite.id, Json.to_str({ person: person_id, name: invite.name, role: invite.role }))?
+			rooms : List(Str)
+			rooms = Json.parse(invite.rooms) ?? []
+			for room in rooms {
+				member_added!(transaction, as_person, room, person_id, Bool.False)?
+			}
+			Ok(Ok({}))
+		}
+		[invite] => {
+			kept : List({ id : Str })
+			kept = transaction.query_many!({ query: "SELECT id FROM persons WHERE id = :id AND role != '';", params: { id: invite.person_id }, limits: Sqlite.default_query_limits })?
+			if kept.is_empty() {
+				return Ok(Err("the person this invite relinks was removed"))
+			}
+			audited!(transaction, as_person, "invite.redeemed", invite.id, Json.to_str({ person: person_id, relink: Bool.True }))
+				.map_ok(|_| Ok({}))
+		}
+		_ => Ok(Err("that invite was used or expired meanwhile"))
+	}
+}
+
+## Answers /liton/v1/devices: the devices of the person asking, the oldest
+## first, the one asking marked `current`, each with when its session ends
+## (0 for a token device, which doesn't). A token is never shown.
+devices! : Context, [Device(Str), Open] => Try(Response, _)
+devices! = |{ db, person, .. }, asking| {
+	listed : List({ id : Str, name : Str, created_at : I64, seen_at : I64, expires_at : I64 })
+	listed = Sqlite.query_many!({ db, query: "SELECT id, name, created_at, seen_at, expires_at FROM devices WHERE person_id = :person ORDER BY created_at, id;", params: { person }, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ devices: listed.map(|{ id, name, created_at, seen_at, expires_at }| { id, name, created_at, seen_at, expires_at, current: asking == Device(id) }) })))
+}
+
+## Answers /liton/v1/devices/code: a new pairing code for another device of
+## the person asking, for `pairing_code_ms`, when it expires, and the link
+## to the UI that pairs a browser with it, at the address the request came
+## to.
 pairing_code! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
-pairing_code! = |{ db, .. }, request, headers| {
+pairing_code! = |{ db, person, .. }, request, headers| {
 	now = now_ms!()
 	Sqlite.execute!({ db, query: "DELETE FROM pairing_codes WHERE expires_at <= :now;", params: { now } })?
 	random : { bytes : Sqlite.Blob }
 	random = Sqlite.query!({ db, query: "SELECT randomblob(8) AS bytes;", params: {}, limits: Sqlite.default_query_limits })?
 	code = Auth.code(random.bytes.to_bytes())
 	expires_at = now + pairing_code_ms
-	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at) VALUES (:code, :expires_at);", params: { code, expires_at } })?
+	Sqlite.execute!({ db, query: "INSERT INTO pairing_codes (code, expires_at, person_id) VALUES (:code, :expires_at, :person);", params: { code, expires_at, person } })?
 	served =
 		match request.authority() {
 			Present(named) =>
@@ -417,17 +856,305 @@ pairing_code! = |{ db, .. }, request, headers| {
 	Ok(json(Json.to_str({ code, expires_at, link })))
 }
 
-## Answers /liton/v1/devices/revoke: forgets the device `id` names, so its
-## token is refused from then on. The device revoking itself is signed out.
+## Answers /liton/v1/devices/revoke: forgets the device `id` names, one of
+## the person asking, so its token is refused from then on. The device
+## revoking itself is signed out.
 revoked! : Context, Server.Request, [Device(Str), Open] => Try(Response, _)
-revoked! = |{ db, .. }, request, asking| {
+revoked! = |context, request, asking| {
+	db = context.db
 	given : Try({ id : Str }, _)
 	given = Json.parse(read_json!(request)?)
 	match given {
 		Err(_) => Ok(text(400, "a revocation is {\"id\": \"the device's id\"}"))
 		Ok({ id }) => {
-			Sqlite.execute!({ db, query: "DELETE FROM devices WHERE id = :id;", params: { id } })?
+			transaction = Sqlite.begin!(db, Immediate)?
+			revoked : List({ id : Str })
+			revoked = transaction.query_many!({ query: "DELETE FROM devices WHERE id = :id AND person_id = :person RETURNING id;", params: { id, person: context.person }, limits: Sqlite.default_query_limits })?
+			if !revoked.is_empty() {
+				audited!(transaction, context, "device.revoked", id, "{}")?
+			}
+			transaction.commit!()?
 			Ok(if (asking == Device(id)) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
+		}
+	}
+}
+
+## How long a session a passkey opens lasts unused: 30 days from its last
+## use.
+session_ms : I64
+session_ms = 2_592_000_000
+
+## How long a passkey's challenge lasts: 5 minutes.
+challenge_ms : I64
+challenge_ms = 300_000
+
+## The site passkeys are for, LITON_RP_ID, and the origin a browser on it
+## shows, when the request came to it; else why passkeys can't be used.
+passkey_site : Context, Server.Request, List({ name : Str, value : Str }) -> Try({ rp_id : Str, origin : Str }, Response)
+passkey_site = |{ rp_id, .. }, request, headers| {
+	(host, port) =
+		match request.authority() {
+			Present(named) =>
+				match named.port() {
+					Present(number) => (named.host(), ":${number.to_str()}")
+					Absent => (named.host(), "")
+				}
+			Absent => ("", "")
+		}
+	if rp_id == "" {
+		Err(text(503, "passkeys need the box's name: set LITON_RP_ID, such as box.example.ts.net"))
+	} else if !host.caseless_ascii_equals(rp_id) {
+		Err(text(403, "passkeys are for ${rp_id}: open https://${rp_id}/ui/index.html to use them"))
+	} else if rp_id == "localhost" and !Auth.secure(headers) {
+		Ok({ rp_id, origin: "http://localhost${port}" })
+	} else {
+		Ok({ rp_id, origin: "https://${rp_id}${port}" })
+	}
+}
+
+## A new challenge, to `purpose` (`register` or `login`), for the person
+## `person_id` ("" for whoever answers it), given by `grant`, an invite or a
+## pairing code ("" for none), as base64url.
+challenge_made! : Sqlite.Db, Str, Str, Str => Try(Str, _)
+challenge_made! = |db, purpose, person_id, grant| {
+	now = now_ms!()
+	Sqlite.execute!({ db, query: "DELETE FROM challenges WHERE expires_at <= :now;", params: { now } })?
+	random : { id : Str, bytes : Sqlite.Blob }
+	random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id, randomblob(32) AS bytes;", params: {}, limits: Sqlite.default_query_limits })?
+	challenge = WebAuthn.base64url(random.bytes.to_bytes())
+	Sqlite.execute!({ db, query: "INSERT INTO challenges (id, challenge, purpose, person_id, grant, expires_at) VALUES (:id, :challenge, :purpose, :person_id, :grant, :expires_at);", params: { id: random.id, challenge, purpose, person_id, grant, expires_at: now + challenge_ms } })?
+	Ok(challenge)
+}
+
+## The challenge `challenge` to `purpose`, used up, if it is one not
+## expired: whom it is for, and what grants it.
+challenge_taken! : Sqlite.Transaction, Str, Str => Try(Try({ person_id : Str, grant : Str }, [NoChallenge]), _)
+challenge_taken! = |transaction, challenge, purpose| {
+	taken : List({ person_id : Str, grant : Str })
+	taken = transaction.query_many!({ query: "DELETE FROM challenges WHERE challenge = :challenge AND purpose = :purpose AND expires_at > :now RETURNING person_id, grant;", params: { challenge, purpose, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+	Ok(taken.first().map_err(|_| NoChallenge))
+}
+
+## Answers /liton/v1/passkeys/register/begin: a challenge to make a
+## passkey for this box with, for the person signed in, or the one a
+## pairing `code` is for, which the passkey made spends; and what the
+## browser asks for it: the site, the person, and the passkeys they have,
+## not to make twice, and whether they are the owner still called "Owner",
+## to be named.
+register_begun! : Context, Server.Request, List({ name : Str, value : Str }), Bool => Try(Response, _)
+register_begun! = |context, request, headers, signed| {
+	given : Try({ code : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	db = context.db
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a passkey is asked for with {}, or {\"code\": \"ABCD-EFGH\"} for a pairing code's person"))
+		(Ok({ rp_id, .. }), Ok({ code })) => {
+			granted : Try({ person : Str, grant : Str }, Str)
+			granted =
+				match code {
+					Ok(typed) => {
+						if !attempt_allowed!(db)? {
+							return Ok(text(429, "too many pairing attempts; try again in a minute"))
+						}
+						codes : List({ person_id : Str })
+						codes = Sqlite.query_many!({ db, query: "SELECT person_id FROM pairing_codes WHERE code = :code AND expires_at > :now;", params: { code: Auth.typed_code(typed), now: now_ms!() }, limits: Sqlite.default_query_limits })?
+						codes.first().map_ok(|row| { person: if (row.person_id == "") context.owner else row.person_id, grant: "pair:${Auth.typed_code(typed)}" }).map_err(|_| "that pairing code is wrong, used or expired")
+					}
+					Err(Missing) if signed => Ok({ person: context.person, grant: "" })
+					Err(Missing) => Err("sign in first, or make a passkey with a pairing code")
+				}
+			match granted {
+				Err(why) => Ok(text(401, why))
+				Ok({ person, grant }) => {
+					named : { name : Str, owner : I64 }
+					named = Sqlite.query!({ db, query: "SELECT name, owner FROM persons WHERE id = :id;", params: { id: person }, limits: Sqlite.default_query_limits })?
+					kept : List({ id : Str })
+					kept = Sqlite.query_many!({ db, query: "SELECT id FROM passkeys WHERE person_id = :person AND rp_id = :rp_id;", params: { person, rp_id }, limits: Sqlite.default_query_limits })?
+					challenge = challenge_made!(db, "register", person, grant)?
+					Ok(json(Json.to_str({ challenge, rp_id, user_id: WebAuthn.base64url(person.to_utf8()), user_name: "${named.name} (${rp_id})", display_name: named.name, exclude: kept.map(|row| row.id), unnamed: named.owner == 1 and named.name == "Owner" })))
+				}
+			}
+		}
+	}
+}
+
+## A new session of the person `person_id` on a device called `name`,
+## signed in by the passkey `passkey_id`, lasting `session_ms` from its last
+## use, noted in the audit, and its token.
+session_made! : Sqlite.Transaction, Context, Str, Str, Str => Try({ device : { id : Str, name : Str }, token : Str }, _)
+session_made! = |transaction, context, person_id, passkey_id, name| {
+	{ device, token } = device_made!(transaction, name, person_id)?
+	transaction.execute!({ query: "UPDATE devices SET passkey_id = :passkey_id, expires_at = :expires_at WHERE id = :id;", params: { id: device.id, passkey_id, expires_at: now_ms!() + session_ms } })?
+	audited!(transaction, { ..context, person: person_id, asking: Device(device.id) }, "device.signed_in", device.id, Json.to_str({ name: device.name, passkey: passkey_id }))?
+	Ok({ device, token })
+}
+
+## Answers /liton/v1/passkeys/register/finish: the new passkey of the person
+## the challenge is for, once the browser's answer is checked
+## (`WebAuthn.checked`): its credential id, its public key as SPKI, its
+## algorithm, ES256 or Ed25519, the authenticator data and client data, each
+## base64url, and a name for it.
+register_finished! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+register_finished! = |context, request, headers| {
+	given : Try({ challenge : Str, id : Str, public_key : Str, alg : I64, authenticator_data : Str, client_data : Str, name : Try(Str, [Missing]), person_name : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a passkey is {\"challenge\", \"id\", \"public_key\", \"alg\", \"authenticator_data\", \"client_data\", \"name\"}, its bytes base64url"))
+		(Ok({ rp_id, origin }), Ok(made)) =>
+			match (WebAuthn.from_base64url(made.public_key), WebAuthn.from_base64url(made.authenticator_data), WebAuthn.from_base64url(made.client_data)) {
+				(Ok(spki), Ok(authenticator_data), Ok(client_data)) => {
+					transaction = Sqlite.begin!(context.db, Immediate)?
+					match challenge_taken!(transaction, made.challenge, "register")? {
+						Err(NoChallenge) => Ok(text(401, "that passkey request expired or was used; try again"))
+						Ok({ person_id, grant }) =>
+							match (WebAuthn.checked({ type: "webauthn.create", challenge: made.challenge, origin, rp_id }, client_data, authenticator_data), WebAuthn.public_key(made.alg, spki)) {
+								(Err(why), _) => Ok(text(400, why))
+								(_, Err(Unsupported)) => Ok(text(400, "liton takes passkeys of ES256 or Ed25519 alone"))
+								(Ok(data), Ok(key)) => {
+									now = now_ms!()
+									name = Str.from_utf8_lossy((made.name ?? "").trim().to_utf8().take_first(80))
+									stored : List({ id : Str })
+									stored = transaction.query_many!({ query: "INSERT INTO passkeys (id, person_id, rp_id, alg, public_key, sign_count, backed_up, name, created_at, used_at) VALUES (:id, :person_id, :rp_id, :alg, :public_key, :sign_count, :backed_up, :name, :now, 0) ON CONFLICT (id) DO NOTHING RETURNING id;", params: { id: made.id, person_id, rp_id, alg: made.alg, public_key: Sqlite.Blob.from_bytes(key), sign_count: data.sign_count.to_i64(), backed_up: if (data.backed_up) 1.I64 else 0, name: if (name == "") "A passkey" else name, now }, limits: Sqlite.default_query_limits })?
+									if stored.is_empty() {
+										return Ok(text(409, "that passkey is registered already"))
+									}
+									as_person = { ..context, person: person_id }
+									audited!(transaction, as_person, "passkey.added", made.id, Json.to_str({ name, rp_id, backed_up: data.backed_up }))?
+									if grant == "" {
+										transaction.commit!()?
+										return Ok(json(Json.to_str({ passkey: { id: made.id, name } })))
+									}
+									match grant_spent!(transaction, context, grant, person_id, made.person_name ?? "")? {
+										Err(why) => return Ok(text(401, why))
+										Ok({}) => {}
+									}
+									{ device, token } = session_made!(transaction, context, person_id, made.id, if (name == "") "A device" else name)?
+									person : { id : Str, name : Str, role : Str }
+									person = transaction.query!({ query: "SELECT id, name, role FROM persons WHERE id = :id;", params: { id: person_id }, limits: Sqlite.default_query_limits })?
+									transaction.commit!()?
+									Ok(json(Json.to_str({ passkey: { id: made.id, name }, device, person })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+								}
+							}
+					}
+				}
+				_ => Ok(text(400, "a passkey's public_key, authenticator_data and client_data are base64url"))
+			}
+	}
+}
+
+## Answers /liton/v1/login/begin: a challenge any passkey of this box
+## answers, the person being whom it is for.
+login_begun! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+login_begun! = |context, request, headers|
+	match passkey_site(context, request, headers) {
+		Err(refused) => Ok(refused)
+		Ok(_) if !attempt_allowed!(context.db)? => Ok(text(429, "too many sign-in attempts; try again in a minute"))
+		Ok({ rp_id, .. }) => Ok(json(Json.to_str({ challenge: challenge_made!(context.db, "login", "", "")?, rp_id })))
+	}
+
+## Answers /liton/v1/login/finish: a passkey's answer to a challenge, its
+## credential id, authenticator data, client data and signature, each
+## base64url, checked (`WebAuthn.checked`, liton-verify), for a session of
+## the passkey's person on a new device called `name`, lasting `session_ms`
+## from its last use, its token a cookie.
+login_finished! : Context, Server.Request, List({ name : Str, value : Str }) => Try(Response, _)
+login_finished! = |context, request, headers| {
+	given : Try({ challenge : Str, id : Str, authenticator_data : Str, client_data : Str, signature : Str, name : Try(Str, [Missing]) }, _)
+	given = Json.parse(read_json!(request)?)
+	match (passkey_site(context, request, headers), given) {
+		(Err(refused), _) => Ok(refused)
+		(_, Err(_)) => Ok(text(400, "a sign-in is {\"challenge\", \"id\", \"authenticator_data\", \"client_data\", \"signature\", \"name\"}, its bytes base64url"))
+		(Ok(_), _) if !attempt_allowed!(context.db)? => Ok(text(429, "too many sign-in attempts; try again in a minute"))
+		(Ok({ rp_id, origin }), Ok(answered)) =>
+			match (WebAuthn.from_base64url(answered.authenticator_data), WebAuthn.from_base64url(answered.client_data), WebAuthn.from_base64url(answered.signature)) {
+				(Ok(authenticator_data), Ok(client_data), Ok(signature)) => {
+					transaction = Sqlite.begin!(context.db, Immediate)?
+					kept : List({ person_id : Str, alg : I64, public_key : Sqlite.Blob, sign_count : I64, name : Str, role : Str })
+					kept = transaction.query_many!({ query: "SELECT person_id, alg, public_key, sign_count, persons.name AS name, role FROM passkeys JOIN persons ON persons.id = passkeys.person_id WHERE passkeys.id = :id AND rp_id = :rp_id;", params: { id: answered.id, rp_id }, limits: Sqlite.default_query_limits })?
+					match (challenge_taken!(transaction, answered.challenge, "login")?, kept) {
+						(Err(NoChallenge), _) => Ok(text(401, "that sign-in expired or was used; try again"))
+						(_, [passkey]) if passkey.role != "" =>
+							match WebAuthn.checked({ type: "webauthn.get", challenge: answered.challenge, origin, rp_id }, client_data, authenticator_data) {
+								Err(why) => Ok(text(401, why))
+								Ok(data) if !WebAuthn.counted(passkey.sign_count.to_u32_wrap(), data.sign_count) => Ok(text(401, "this passkey's counter went back, as a copy's would: sign in with another"))
+								Ok(_) if !verified!(context.verify, passkey.alg, passkey.public_key.to_bytes(), WebAuthn.signed_message(authenticator_data, client_data), signature) => Ok(text(401, "the passkey's signature is wrong"))
+								Ok(data) => {
+									now = now_ms!()
+									transaction.execute!({ query: "UPDATE passkeys SET sign_count = :sign_count, backed_up = :backed_up, used_at = :now WHERE id = :id;", params: { id: answered.id, sign_count: data.sign_count.to_i64(), backed_up: if (data.backed_up) 1.I64 else 0, now } })?
+									{ device, token } = session_made!(transaction, context, passkey.person_id, answered.id, answered.name ?? "")?
+									transaction.commit!()?
+									person = { id: passkey.person_id, name: passkey.name, role: passkey.role }
+									Ok(json(Json.to_str({ device, person })).add_header("Set-Cookie", Auth.cookie(token, Auth.secure(headers))))
+								}
+							}
+						_ => Ok(text(401, "this passkey isn't one of this box's people's: ask an operator for an invite"))
+					}
+				}
+				_ => Ok(text(400, "a sign-in's authenticator_data, client_data and signature are base64url"))
+			}
+	}
+}
+
+## Whether `signature` of `message` is the key's, of the COSE algorithm
+## `alg`, as liton-verify at `verifier` says.
+verified! : Str, I64, List(U8), List(U8), List(U8) => Bool
+verified! = |verifier, alg, key, message, signature|
+	match Cmd.new_str(verifier).args_str([alg.to_str(), WebAuthn.hex(key), WebAuthn.hex(message), WebAuthn.hex(signature)]).exec_exit_code!() {
+		Ok(0) => Bool.True
+		Ok(_) => Bool.False
+		Err(problem) => {
+			logged!("liton: can't run ${verifier} to check a passkey: ${Str.inspect(problem)}")
+			Bool.False
+		}
+	}
+
+## Answers /liton/v1/logout: signs the device asking out, forgetting it.
+logged_out! : Context, Str => Try(Response, _)
+logged_out! = |context, device_id| {
+	transaction = Sqlite.begin!(context.db, Immediate)?
+	transaction.execute!({ query: "DELETE FROM devices WHERE id = :id;", params: { id: device_id } })?
+	audited!(transaction, context, "device.signed_out", device_id, "{}")?
+	transaction.commit!()?
+	Ok(json("{}").add_header("Set-Cookie", Auth.cleared_cookie))
+}
+
+## Answers /liton/v1/passkeys: the passkeys of the person asking, the oldest
+## first, each with the site it is for, whether it is backed up, as a synced
+## one is, and whether this device signed in with it; and the box's site.
+passkeys! : Context => Try(Response, _)
+passkeys! = |context| {
+	current =
+		match context.asking {
+			Device(id) => id
+			Open => ""
+		}
+	listed : List({ id : Str, name : Str, rp_id : Str, backed_up : I64, created_at : I64, used_at : I64, current : I64 })
+	listed = Sqlite.query_many!({ db: context.db, query: "SELECT id, name, rp_id, backed_up, created_at, used_at, EXISTS (SELECT 1 FROM devices WHERE devices.id = :current AND passkey_id = passkeys.id) AS current FROM passkeys WHERE person_id = :person ORDER BY created_at, id;", params: { person: context.person, current }, limits: Sqlite.default_query_limits })?
+	Ok(json(Json.to_str({ passkeys: listed.map(|row| { id: row.id, name: row.name, rp_id: row.rp_id, backed_up: row.backed_up == 1, created_at: row.created_at, used_at: row.used_at, current: row.current == 1 }), rp_id: context.rp_id })))
+}
+
+## Answers /liton/v1/passkeys/delete: forgets a passkey of the person
+## asking, and signs out the devices it signed in.
+passkey_deleted! : Context, Server.Request => Try(Response, _)
+passkey_deleted! = |context, request| {
+	given : Try({ id : Str }, _)
+	given = Json.parse(read_json!(request)?)
+	match given {
+		Err(_) => Ok(text(400, "a passkey to delete is {\"id\": \"its credential id\"}"))
+		Ok({ id }) => {
+			transaction = Sqlite.begin!(context.db, Immediate)?
+			deleted : List({ id : Str })
+			deleted = transaction.query_many!({ query: "DELETE FROM passkeys WHERE id = :id AND person_id = :person RETURNING id;", params: { id, person: context.person }, limits: Sqlite.default_query_limits })?
+			if deleted.is_empty() {
+				return Ok(text(404, "you have no passkey ${id}"))
+			}
+			signed_out : List({ id : Str })
+			signed_out = transaction.query_many!({ query: "DELETE FROM devices WHERE passkey_id = :id RETURNING id;", params: { id }, limits: Sqlite.default_query_limits })?
+			audited!(transaction, context, "passkey.deleted", id, "{}")?
+			transaction.commit!()?
+			Ok(if (signed_out.any(|device| context.asking == Device(device.id))) json("{}").add_header("Set-Cookie", Auth.cleared_cookie) else json("{}"))
 		}
 	}
 }
@@ -482,12 +1209,82 @@ read_json! = |request| {
 }
 
 ## Answers /liton/v1/manifest, once the remotes due are asked, with the
-## presets the setup offers clients.
+## presets the setup offers clients, as the device asking sees them, and
+## its `access`: its role, and whether its UI is locked.
 manifest! : Context => Try(Response, _)
 manifest! = |context| {
 	remotes_cycle!(context)?
-	{ protocol, daemon, providers, transformers, topics } = offered!(context)?
-	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: context.setup })))
+	{ protocol, daemon, providers, transformers, topics } = offered_to(context.access, offered!(context)?)
+	access = match context.access {
+		Operator => { role: "operator", locked: Bool.False }
+		Holding(role) => { role: role.name, locked: role.locked }
+	}
+	Ok(json(Json.to_str({ protocol, daemon, providers, transformers, topics, setup: setup_to(context.access, context.setup), access })))
+}
+
+## What a device's role lets it do: everything, the owner's and any key's
+## that holds no role, or what the role it holds declares.
+Access : [Operator, Holding(Setup.Role)]
+
+## The access of a person holding the role `held` among `roles`: one the
+## setup no longer declares, or none, as a person removed holds, lets them
+## do nothing.
+access_of : List(Setup.Role), Str -> Access
+access_of = |roles, held|
+	if held == "operator" {
+		Operator
+	} else {
+		Holding(roles.find_first(|role| role.name == held) ?? { name: held, capabilities: [], presets: [], locked: Bool.True })
+	}
+
+## Whether `access` lets a device call and poll `capability`.
+allows : Access, Str -> Bool
+allows = |access, capability|
+	match access {
+		Operator => Bool.True
+		Holding(role) => role.capabilities.contains(capability)
+	}
+
+## Whether `access` lets a device use the route `path`: voice's audio is
+## voice.v1's.
+route_allowed : Access, Str -> Bool
+route_allowed = |access, path|
+	if path.starts_with(audio_route) {
+		allows(access, "voice.v1")
+	} else {
+		Bool.True
+	}
+
+## The manifest as `access` sees it: the providers, transformers and topics
+## of the capabilities it allows.
+offered_to : Access, Manifest.Offered -> Manifest.Offered
+offered_to = |access, offered| {
+	allowed = |id| allows(access, Capability.to_str(id))
+	providers = offered.providers.map(|provider| { ..provider, capabilities: provider.capabilities.keep_if(allowed) }).drop_if(|provider| provider.capabilities.is_empty())
+	{ ..offered, providers, transformers: offered.transformers.keep_if(|part| allowed(part.offers)), topics: offered.topics.keep_if(|topics| allowed(topics.capability)) }
+}
+
+## The setup as `access` is offered it: the presets of its role, the
+## default one of them or else the first, and the deck of them.
+setup_to : Access, Setup.Offered -> Setup.Offered
+setup_to = |access, setup|
+	match access {
+		Operator => setup
+		Holding(role) => {
+			presets = setup.presets.keep_if(|preset| role.presets.contains(preset.name))
+			default_preset = if (presets.any(|preset| preset.name == setup.default_preset)) setup.default_preset else presets.first().map_ok(|preset| preset.name) ?? ""
+			{ ..setup, presets, default_preset, deck: setup.deck.keep_if(|name| role.presets.contains(name)) }
+		}
+	}
+
+## Why a device whose role is `access` may not call or poll `capability`.
+refusal : Access, Str -> Protocol.Error
+refusal = |access, capability| {
+	named = match access {
+		Operator => "operator"
+		Holding(role) => role.name
+	}
+	{ code: Refused, message: "this device's role, ${named}, can't use ${capability}" }
 }
 
 ## What the daemon offers, with the providers of the remotes that are up.
@@ -502,7 +1299,7 @@ offered = |{ mock, paseo, speech, transformers, .. }, remote_providers| {
 	local = [Mock.offering(mock)].drop_if(|provider| provider.capabilities.is_empty()).concat(if (paseo.is_ok()) [Paseo.provider] else []).concat(if (speech.is_ok()) [LocalSpeech.provider] else [])
 	# The daemon hosts review.v1 itself, for every context, while some provider offers the chat it sends reviews to.
 	chats = Manifest.capabilities({ protocol: Manifest.protocol, providers: local.concat(remote_providers) }).contains(Capability.chat_v1)
-	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(hosts_provider)
+	providers = local.concat(if (chats) [review_provider] else []).concat(remote_providers).append(rooms_provider).append(tickets_provider).append(hosts_provider).append(people_provider)
 	provided = Manifest.capabilities({ protocol: Manifest.protocol, providers })
 	offered_parts = Transformer.offered(transformers, provided)
 	{ protocol: Manifest.protocol, daemon: { id: "liton", name: "liton" }, providers, transformers: offered_parts.map(Transformer.declared), topics: Protocol.topics.keep_if(|topics| provided.contains(topics.capability)).concat(offered_parts.map(|part| part.offers)) }
@@ -526,6 +1323,11 @@ call! = |context, request| {
 			Err(_) => Err({ code: BadRequest, message: "expected a call, such as {\"capability\":\"chat.v1\",\"request\":\"ListSessions\"}" })
 		}
 	match routed {
+		Ok((capability, _)) if !allows(context.access, capability) => {
+			refused : Protocol.Answer({})
+			refused = Err(refusal(context.access, capability))
+			return Ok(json(Json.to_str(refused)))
+		}
 		Ok((capability, _)) =>
 			match guarded!(context, manifest, capability, body)? {
 				Err(why) => return Ok(json(Json.to_str(call_failed({ code: Refused, message: why }))))
@@ -601,6 +1403,16 @@ call! = |context, request| {
 				}
 				Json.to_str(answer)
 			}
+			Ok(("people.v1", _)) => {
+				decoded : Try(Protocol.Call(People.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(People.Response)
+				answer = match decoded {
+					Ok({ request: asked, .. }) => people_call!(context, asked)?
+					Err(_) => Err(unanswered("people.v1"))
+				}
+				Json.to_str(answer)
+			}
 			Ok(("hosts.v1", _)) => {
 				decoded : Try(Protocol.Call(Hosts.Request), _)
 				decoded = Json.parse(body)
@@ -658,29 +1470,47 @@ polled_topics! = |context0, request| {
 		Ok({ topics, cached }) => {
 			context = if (cached == Ok(Bool.True)) { ..context0, upstream: Cached } else context0
 			manifest = offered!(context)?
-			for { capability, topic, .. } in topics {
+			for { capability, topic, .. } in topics.keep_if(|wanted| allows(context.access, wanted.capability)) {
 				watched!(context, manifest, { capability, topic })?
 			}
 			paseo_cycle!(context)?
 			remotes_cycle!(context)?
 			var $updates = []
 			for wanted in topics {
-				update = topic_update!(context, manifest, wanted)?
-				$updates = $updates.append(
-					match if (context.upstream == Cached) refreshing!(context, manifest, wanted)? else Fresh {
-						Refreshing => { ..update, refreshing: Ok(Bool.True) }
-						# Not what the topic holds, which a client would show.
-						Unanswered => { ..update, events: [], cursor: wanted.after, refreshing: Ok(Bool.True) }
-						Fresh => update
-					},
-				)
+				if !allows(context.access, wanted.capability) {
+					$updates = $updates.append(Protocol.failed(wanted, refusal(context.access, wanted.capability)))
+				} else {
+					update = topic_update!(context, manifest, wanted)?
+					$updates = $updates.append(
+						match if (context.upstream == Cached) refreshing!(context, manifest, wanted)? else Fresh {
+							Refreshing => { ..update, refreshing: Ok(Bool.True) }
+							# Not what the topic holds, which a client would show.
+							Unanswered => { ..update, events: [], cursor: wanted.after, refreshing: Ok(Bool.True) }
+							Fresh => update
+						},
+					)
+				}
 			}
 			polled : Protocol.Polled
-			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing) }
+			polled = { topics: $updates, refresh: if (context.upstream == Cached) Ok(context.paseo.is_ok() or !context.remotes.is_empty()) else Err(Missing), sign_ins: sign_ins!(context)? }
 			Ok(json(Json.to_str(polled)))
 		}
 	}
 }
+
+## The devices signed in as the person asking since the device asking was,
+## within a day, so a sign-in that wasn't theirs is seen; none where no
+## device asks.
+sign_ins! : Context => Try(Try(List(Protocol.SignIn), [Missing]), _)
+sign_ins! = |{ db, person, asking, .. }|
+	match asking {
+		Open => Ok(Err(Missing))
+		Device(id) => {
+			rows : List({ id : Str, name : Str, created_at : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT id, name, created_at FROM devices WHERE person_id = :person AND id != :id AND created_at > :since AND created_at > (SELECT created_at FROM devices WHERE id = :id) ORDER BY created_at, id;", params: { person, id, since: now_ms!() - 86_400_000 }, limits: Sqlite.default_query_limits })?
+			Ok(Ok(rows.map(|row| { id: row.id, name: row.name, at: Chat.timestamp(row.created_at) })))
+		}
+	}
 
 ## Answers a /liton/v1/refresh: asks Paseo and the remotes, when due, about
 ## what polls watch, as a poll that isn't cached does before answering. A
@@ -768,7 +1598,7 @@ interested! = |context, subject| {
 			wanted!(db, "workspace_list", "")
 		}
 		UsageReports => if (context.paseo.is_ok()) wanted!(db, "usage", "") else Ok({})
-		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | TicketList | TicketDetail(_) => Ok({})
+		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox | TicketList | TicketDetail(_) => Ok({})
 		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
 		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
 		_ => if (context.paseo.is_ok()) wanted!(db, "agent_list", "") else Ok({})
@@ -835,10 +1665,13 @@ update! = |context, wanted, subject| {
 		Contents({ context: focus, path }) => Ok(Protocol.snapshot(wanted, explored!(context, Contents, focus, path)?))
 		VoiceStatus => Ok(Protocol.snapshot(wanted, Status({ stt: speech_status!(context)? })))
 		Threads(_) => Ok(Protocol.snapshot(wanted, Threads(reviewed!(context, wanted.topic.drop_prefix("threads/"))?)))
-		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) => rooms_update!(context, wanted, subject)
-		TicketList => Ok(Protocol.snapshot(wanted, Tickets(MockTickets.listing(tickets!(context)?))))
+		RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox => rooms_update!(context, wanted, subject)
+		TicketList => {
+			all = tickets!(context)?
+			Ok(Protocol.snapshot(wanted, Tickets({ sources: all.sources, tickets: all.tickets.map(|shown| shown.summary) })))
+		}
 		TicketDetail(ticket_id) =>
-			match tickets!(context)?.find_first(|shown| shown.summary.id == ticket_id) {
+			match tickets!(context)?.tickets.find_first(|shown| shown.summary.id == ticket_id) {
 				Ok(shown) => Ok(Protocol.snapshot(wanted, Ticket(shown)))
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no ticket ${ticket_id}" }))
 			}
@@ -856,6 +1689,13 @@ update! = |context, wanted, subject| {
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
 		UsageReports => Ok(Protocol.snapshot(wanted, Reports(usage_reports!(context)?)))
+		PeopleList => Ok(Protocol.snapshot(wanted, People(people!(context)?)))
+		PeopleAudit if context.access != Operator => Ok(Protocol.failed(wanted, { code: Refused, message: "only an operator follows the audit" }))
+		PeopleAudit => {
+			rows : List({ seq : I64, at : I64, name : Str, device_id : Str, action : Str, subject : Str, detail : Str })
+			rows = Sqlite.query_many!({ db: context.db, query: "SELECT * FROM (SELECT seq, at, coalesce(persons.name, audit.person_id) AS name, device_id, action, subject, detail FROM audit LEFT JOIN persons ON persons.id = audit.person_id ORDER BY seq DESC LIMIT 200) ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+			Ok(Protocol.snapshot(wanted, Audit(rows.map(|row| { seq: row.seq.to_u64_wrap(), at: Chat.timestamp(row.at), person: row.name, device: row.device_id, action: row.action, subject: row.subject, detail: row.detail }))))
+		}
 	}
 }
 
@@ -1265,16 +2105,53 @@ agents! = |context| {
 	Ok((if (context.mock.agents) Mock.agents else []).concat(if (context.paseo.is_ok()) from_paseo ?? [] else []).concat(from_remotes))
 }
 
-## tickets.v1's tickets: the mock's, as calls changed them.
-tickets! : Context => Try(List(Tickets.Ticket), _)
-tickets! = |context|
-	if context.mock.tickets {
-		rows : List({ value : Str })
-		rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
-		Ok(MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))))
-	} else {
-		Ok([])
-	}
+## tickets.v1's tickets with their sources: the mock's, as calls changed
+## them, and the daemon's own.
+tickets! : Context => Try({ sources : List(Tickets.Source), tickets : List(Tickets.Ticket) }, _)
+tickets! = |context| {
+	mocked =
+		if context.mock.tickets {
+			rows : List({ value : Str })
+			rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM mock_tickets;", params: {}, limits: Sqlite.default_query_limits })?
+			{ sources: MockTickets.sources, tickets: MockTickets.with_changes(rows.keep_oks(|row| Json.parse(row.value))) }
+		} else {
+			{ sources: [], tickets: [] }
+		}
+	kept = kept_tickets!(context)?
+	Ok({ sources: mocked.sources.concat(kept.sources), tickets: mocked.tickets.concat(kept.tickets) })
+}
+
+## The daemon's own projects (`TicketStore`).
+ticket_projects! : Sqlite.Db => Try(List(TicketStore.Project), _)
+ticket_projects! = |db| Sqlite.query_many!({ db, query: "SELECT id, name, prefix FROM ticket_projects ORDER BY created_at, id;", params: {}, limits: Sqlite.default_query_limits })
+
+## The daemon's own tickets with their comments, and its projects as
+## sources, whose tickets anyone the daemon knows may be assigned, `me` the
+## person asking.
+kept_tickets! : Context => Try({ sources : List(Tickets.Source), tickets : List(Tickets.Ticket) }, _)
+kept_tickets! = |context| {
+	db = context.db
+	projects = ticket_projects!(db)?
+	people : List(Tickets.Person)
+	people = Sqlite.query_many!({ db, query: "SELECT id, name FROM persons ORDER BY name, id;", params: {}, limits: Sqlite.default_query_limits })?
+	me = people.find_first(|person| person.id == context.person).map_err(|_| Missing)
+	rows : List({ seq : I64, project_id : Str, number : I64, title : Str, body : Str, status : Str, labels : Str, assignees : Str, updated_at : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT seq, project_id, number, title, body, status, labels, assignees, updated_at FROM tickets ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+	comments : List({ seq : I64, ticket_seq : I64, author : Str, body : Str, created_at : I64 })
+	comments = Sqlite.query_many!({ db, query: "SELECT seq, ticket_seq, author, body, created_at FROM ticket_comments ORDER BY seq;", params: {}, limits: Sqlite.default_query_limits })?
+	person = |id| people.find_first(|known| known.id == id) ?? (if (id == "") Tickets.you else { id, name: id })
+	tickets = rows.keep_oks(
+		|row| {
+			labels : List(Str)
+			labels = Json.parse(row.labels) ?? []
+			assignees : List(Str)
+			assignees = Json.parse(row.assignees) ?? []
+			commented = comments.keep_if(|comment| comment.ticket_seq == row.seq).map(|comment| { id: "${TicketStore.id_of(row.seq)}/${comment.seq.to_str()}", author: person(comment.author), body: comment.body, created: Chat.timestamp(comment.created_at) })
+			projects.find_first(|project| project.id == row.project_id).map_ok(|project| TicketStore.ticket({ seq: row.seq, project, number: row.number, title: row.title, body: row.body, status: row.status, labels, assignees, updated: Chat.timestamp(row.updated_at) }, people, commented))
+		},
+	)
+	Ok({ sources: projects.map(|project| TicketStore.as_source(project, people, me)), tickets })
+}
 
 ## Each session's ticket: linked by hand, or named by its branch.
 ticket_links! : Context => Try(List(Tickets.Link), _)
@@ -1282,21 +2159,26 @@ ticket_links! = |context| {
 	by_hand : List(Tickets.Linked)
 	by_hand = Sqlite.query_many!({ db: context.db, query: "SELECT session_id, ticket_id FROM ticket_links;", params: {}, limits: Sqlite.default_query_limits })?
 	sessions = sessions!(context)?.map(|session| { id: session.id, branch: session.branch })
-	Ok(Tickets.links(sessions, by_hand, tickets!(context)?.map(|shown| shown.summary)))
+	Ok(Tickets.links(sessions, by_hand, tickets!(context)?.tickets.map(|shown| shown.summary)))
 }
 
-## Answers a tickets.v1 request. The mock's tickets keep their changes;
-## links set by hand are the daemon's, whoever has the session or ticket.
+## Answers a tickets.v1 request. The mock's tickets keep their changes, and
+## the daemon's own are made and changed in its tables; links set by hand
+## are the daemon's, whoever has the session or ticket.
 tickets_call! : Context, Try(Str, [Missing]), Tickets.Request => Try(Protocol.Answer(Tickets.Response), _)
 tickets_call! = |context, provider, asked| {
 	db = context.db
-	tickets = if (Protocol.serves(provider, Mock.provider.id)) tickets!(context)? else []
-	listing = MockTickets.listing(tickets)
+	all = tickets!(context)?
+	tickets = all.tickets.keep_if(|shown| Protocol.serves(provider, shown.summary.provider))
+	listing = { sources: all.sources.keep_if(|source| Protocol.serves(provider, source.provider)), tickets: tickets.map(|shown| shown.summary) }
+	now = now_ms!()
 	no_ticket = |ticket_id| Err({ code: NotFound, message: Tickets.refusal(NotFound(ticket_id)) })
+	refused = |message| Ok(Err({ code: BadRequest, message }))
 	linked! = |session_id, ticket_id| {
 		Sqlite.execute!({ db, query: "INSERT INTO ticket_links (session_id, ticket_id) VALUES (:session_id, :ticket_id) ON CONFLICT (session_id) DO UPDATE SET ticket_id = excluded.ticket_id;", params: { session_id, ticket_id } })?
 		Ok(Ok(Accepted))
 	}
+	trimmed = |labels| labels.map(Str.trim).drop_if(Str.is_empty)
 	match asked {
 		ListTickets(filter) => Ok(Ok(Listed(Tickets.filtered(listing, filter))))
 		GetTicket({ ticket_id }) =>
@@ -1306,14 +2188,59 @@ tickets_call! = |context, provider, asked| {
 			}
 		Link({ session_id, ticket_id }) => if (tickets.any(|shown| shown.summary.id == ticket_id)) linked!(session_id, ticket_id) else Ok(no_ticket(ticket_id))
 		Unlink({ session_id }) => linked!(session_id, "")
-		_ =>
-			match MockTickets.changed(tickets, asked, Chat.timestamp(now_ms!())) {
-				Ok(changed) => {
-					Sqlite.execute!({ db, query: "INSERT INTO mock_tickets (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: changed.summary.id, value: Json.to_str(changed) } })?
-					Ok(Ok(Accepted))
+		CreateProject(project) => {
+			projects = ticket_projects!(db)?
+			match TicketStore.refusal(projects, asked) {
+				Err(why) => refused(why)
+				Ok(_) => {
+					random : { id : Str }
+					random = Sqlite.query!({ db, query: "SELECT lower(hex(randomblob(8))) AS id;", params: {}, limits: Sqlite.default_query_limits })?
+					made = { id: random.id, name: project.name.trim(), prefix: TicketStore.prefix_asked(project) }
+					Sqlite.execute!({ db, query: "INSERT INTO ticket_projects (id, name, prefix, created_by, created_at) VALUES (:id, :name, :prefix, :created_by, :now);", params: { id: made.id, name: made.name, prefix: made.prefix, created_by: context.person, now } })?
+					Ok(Ok(Created({ id: TicketStore.source_id(made), key: made.prefix })))
 				}
-				Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
-				Err(problem) => Ok(Err({ code: BadRequest, message: Tickets.refusal(problem) }))
+			}
+		}
+		CreateTicket({ source, title, body, labels }) => {
+			projects = ticket_projects!(db)?
+			match (TicketStore.refusal(projects, asked), projects.find_first(|project| TicketStore.project_of(source) == Ok(project.id))) {
+				(Err(why), _) => refused(why)
+				(Ok(_), Err(_)) => refused("there is no project ${source}")
+				(Ok(_), Ok(project)) => {
+					made : { seq : I64, number : I64 }
+					made = Sqlite.query!({ db, query: "INSERT INTO tickets (project_id, number, title, body, status, labels, assignees, created_by, created_at, updated_at) VALUES (:project_id, (SELECT coalesce(max(number), 0) + 1 FROM tickets WHERE project_id = :project_id), :title, :body, :status, :labels, '[]', :created_by, :now, :now) RETURNING seq, number;", params: { project_id: project.id, title: title.trim(), body: body.trim(), status: TicketStore.new_status, labels: Json.to_str(trimmed(labels)), created_by: context.person, now }, limits: Sqlite.default_query_limits })?
+					Ok(Ok(Created({ id: TicketStore.id_of(made.seq), key: TicketStore.key(project, made.number) })))
+				}
+			}
+		}
+		_ =>
+			match (TicketStore.seq_of(Tickets.ticket_of(asked)), tickets.find_first(|shown| shown.summary.id == Tickets.ticket_of(asked))) {
+				(Ok(_), Err(_)) => Ok(no_ticket(Tickets.ticket_of(asked)))
+				(Ok(seq), Ok(shown)) =>
+					match Tickets.applied(listing, shown, asked, { comment_id: "", now: "" }) {
+						Err(problem) => refused(Tickets.refusal(problem))
+						Ok(changed) => {
+							when_commented = match asked {
+								Comment({ body, .. }) => [body.trim()]
+								_ => []
+							}
+							for body in when_commented {
+								Sqlite.execute!({ db, query: "INSERT INTO ticket_comments (ticket_seq, author, body, created_at) VALUES (:seq, :author, :body, :now);", params: { seq, author: context.person, body, now } })?
+							}
+							summary = changed.summary
+							Sqlite.execute!({ db, query: "UPDATE tickets SET title = :title, body = :body, status = :status, labels = :labels, assignees = :assignees, updated_at = :now WHERE seq = :seq;", params: { seq, title: summary.title, body: changed.body, status: summary.status.id, labels: Json.to_str(summary.labels), assignees: Json.to_str(summary.assignees.map(|person| person.id)), now } })?
+							Ok(Ok(Accepted))
+						}
+					}
+				(Err(_), _) =>
+					match MockTickets.changed(tickets, asked, Chat.timestamp(now)) {
+						Ok(changed) => {
+							Sqlite.execute!({ db, query: "INSERT INTO mock_tickets (id, value) VALUES (:id, :value) ON CONFLICT (id) DO UPDATE SET value = excluded.value;", params: { id: changed.summary.id, value: Json.to_str(changed) } })?
+							Ok(Ok(Accepted))
+						}
+						Err(NotFound(ticket_id)) => Ok(no_ticket(ticket_id))
+						Err(problem) => refused(Tickets.refusal(problem))
+					}
 			}
 	}
 }
@@ -1768,9 +2695,9 @@ inputs! = |context, manifest, part| {
 derived! : Context, Manifest.Offered, Transformer.Part => Try({ state : Str, topics : List(Transformer.Derived) }, _)
 derived! = |context, manifest, part| {
 	inputs = inputs!(context, manifest, part)?
-	stored = transformer_state!(context.db, part.id)?
+	stored = transformer_state!(context.db, state_key(context, part))?
 	derived = (part.derive)(inputs, stored, now_ms!())
-	_ = state_swapped!(context.db, part.id, stored, derived.state)?
+	_ = state_swapped!(context.db, state_key(context, part), stored, derived.state)?
 	Ok(derived)
 }
 
@@ -1780,9 +2707,9 @@ transformer_call! : Context, Manifest.Offered, Transformer.Part, Str => Try(Str,
 transformer_call! = |context, manifest, part, body| {
 	inputs = inputs!(context, manifest, part)?
 	answered! = || {
-		stored = transformer_state!(context.db, part.id)?
+		stored = transformer_state!(context.db, state_key(context, part))?
 		called = (part.call)(inputs, stored, body, now_ms!())
-		if (state_swapped!(context.db, part.id, stored, called.state)?) Ok(called.answer) else answered!()
+		if (state_swapped!(context.db, state_key(context, part), stored, called.state)?) Ok(called.answer) else answered!()
 	}
 	answered!()
 }
@@ -1793,13 +2720,18 @@ guarded! : Context, Manifest.Offered, Str, Str => Try(Try({}, Str), _)
 guarded! = |context, manifest, capability, body| {
 	guarding = context.transformers.keep_if(|part| part.guards.contains(capability) and manifest.transformers.any(|offered_part| offered_part.id == part.id))
 	for part in guarding {
-		match (part.guard)(inputs!(context, manifest, part)?, transformer_state!(context.db, part.id)?, body) {
+		match (part.guard)(inputs!(context, manifest, part)?, transformer_state!(context.db, state_key(context, part))?, body) {
 			Err(why) => return Ok(Err(why))
 			Ok({}) => {}
 		}
 	}
 	Ok(Ok({}))
 }
+
+## What a transformer's state is stored under: its id and the person's
+## asking, so each person's settles, snoozes and marks seen are their own.
+state_key : Context, Transformer.Part -> Str
+state_key = |{ person, .. }, part| "${part.id}/${person}"
 
 ## A transformer's state as last stored, "" before.
 transformer_state! : Sqlite.Db, Str => Try(Str, _)
@@ -1974,25 +2906,57 @@ create_tables! = |db| {
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_tickets (id TEXT PRIMARY KEY, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mock_schedules (id TEXT PRIMARY KEY, position INTEGER NOT NULL, value TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_links (session_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, prefix TEXT NOT NULL UNIQUE, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, labels TEXT NOT NULL, assignees TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (project_id, number));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS ticket_comments (seq INTEGER PRIMARY KEY AUTOINCREMENT, ticket_seq INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS file_cache (directory TEXT NOT NULL, what TEXT NOT NULL, fetched_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (directory, what));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remotes (name TEXT PRIMARY KEY, manifest TEXT NOT NULL DEFAULT '', manifest_at INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS remote_topics (remote TEXT NOT NULL, capability TEXT NOT NULL, topic TEXT NOT NULL, wanted_at INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '', event TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', PRIMARY KEY (remote, capability, topic));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_chunks (utterance_id TEXT NOT NULL, seq INTEGER NOT NULL, pcm BLOB NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (utterance_id, seq));", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_transcripts (utterance_id TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', through INTEGER NOT NULL DEFAULT 0, agent_id TEXT NOT NULL DEFAULT '', asking_through INTEGER NOT NULL DEFAULT 0, asking_at TEXT NOT NULL DEFAULT '', asked_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL);", params: {} })?
-	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL, person_id TEXT NOT NULL, passkey_id TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	# The passkeys people sign in with, each by its credential id, the site
+	# it is for and its public key, and the challenges a passkey answers,
+	# each used once within 5 minutes.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, rp_id TEXT NOT NULL, alg INTEGER NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL, backed_up INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, used_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE, purpose TEXT NOT NULL, person_id TEXT NOT NULL DEFAULT '', grant TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, person_id TEXT NOT NULL DEFAULT '');", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS pairing_attempts (at INTEGER NOT NULL);", params: {} })?
+	# The invites not used yet, each kept by its secret's SHA-256.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, role TEXT NOT NULL, rooms TEXT NOT NULL, expires_at INTEGER NOT NULL, agent INTEGER NOT NULL DEFAULT 0, person_id TEXT NOT NULL DEFAULT '');", params: {} })?
+	# The people of the box, humans and agents, its owner one of them: what
+	# they can do is their role's, `operator` or one the setup declares, and
+	# a person removed keeps a row with no role, which old messages name.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, agent INTEGER NOT NULL DEFAULT 0, owner INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE UNIQUE INDEX IF NOT EXISTS persons_one_owner ON persons (owner) WHERE owner = 1;", params: {} })?
+	# The rooms, their members, and what is said in them: a room's id is its
+	# name's, a reply has its thread's root and its parent, and each change
+	# a room's messages topic shows is an entry, with the thread it is in.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, about TEXT NOT NULL, kind TEXT NOT NULL, private INTEGER NOT NULL, open INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS members (room_id TEXT NOT NULL, person_id TEXT NOT NULL, admin INTEGER NOT NULL DEFAULT 0, added_by TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (room_id, person_id));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, root TEXT NOT NULL DEFAULT '', parent TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, edited_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS messages_by_root ON messages (room_id, root);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS mentions (message_id TEXT NOT NULL, person_id TEXT NOT NULL, PRIMARY KEY (message_id, person_id));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS reactions (message_id TEXT NOT NULL, person_id TEXT NOT NULL, emoji TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (message_id, person_id, emoji));", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS room_entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, thread TEXT NOT NULL, event TEXT NOT NULL);", params: {} })?
+	Sqlite.execute!({ db, query: "CREATE INDEX IF NOT EXISTS room_entries_by_thread ON room_entries (room_id, thread, seq);", params: {} })?
+	# Who changed the people, their devices, the invites, the rooms and their
+	# members, and how, the latest last.
+	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, person_id TEXT NOT NULL, device_id TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL, detail TEXT NOT NULL);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS hosts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, origin TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', online_at INTEGER NOT NULL DEFAULT 0);", params: {} })?
 	Sqlite.execute!({ db, query: "CREATE TABLE IF NOT EXISTS voice_status (engine TEXT PRIMARY KEY, status TEXT NOT NULL, checked_at INTEGER NOT NULL);", params: {} })?
 	# Sessions stored before Paseo came are all the mock provider's, and
 	# Paseo's stored before git, workspaces or the WebSocket listing came have
-	# no directory, workspace or listing until listed again.
-	for (column, definition) in [("provider", "TEXT NOT NULL DEFAULT 'mock'"), ("directory", "TEXT NOT NULL DEFAULT ''"), ("workspace_id", "TEXT NOT NULL DEFAULT ''"), ("listed", "TEXT NOT NULL DEFAULT ''"), ("archived", "INTEGER NOT NULL DEFAULT 0"), ("model", "TEXT NOT NULL DEFAULT ''"), ("mode", "TEXT NOT NULL DEFAULT ''"), ("thinking", "TEXT NOT NULL DEFAULT ''")] {
+	# no directory, workspace or listing until listed again. Devices, pairing
+	# codes and invites kept before people came are the owner's
+	# (`owner_made!`), and their devices' sessions don't expire.
+	added = [("sessions", "provider", "TEXT NOT NULL DEFAULT 'mock'"), ("sessions", "directory", "TEXT NOT NULL DEFAULT ''"), ("sessions", "workspace_id", "TEXT NOT NULL DEFAULT ''"), ("sessions", "listed", "TEXT NOT NULL DEFAULT ''"), ("sessions", "archived", "INTEGER NOT NULL DEFAULT 0"), ("sessions", "model", "TEXT NOT NULL DEFAULT ''"), ("sessions", "mode", "TEXT NOT NULL DEFAULT ''"), ("sessions", "thinking", "TEXT NOT NULL DEFAULT ''"), ("devices", "person_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "passkey_id", "TEXT NOT NULL DEFAULT ''"), ("devices", "expires_at", "INTEGER NOT NULL DEFAULT 0"), ("pairing_codes", "person_id", "TEXT NOT NULL DEFAULT ''"), ("invites", "agent", "INTEGER NOT NULL DEFAULT 0"), ("invites", "person_id", "TEXT NOT NULL DEFAULT ''")]
+	for (table, column, definition) in added {
 		existing : List({ name : Str })
-		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info('sessions') WHERE name = :column;", params: { column }, limits: Sqlite.default_query_limits })?
+		existing = Sqlite.query_many!({ db, query: "SELECT name FROM pragma_table_info(:table) WHERE name = :column;", params: { table, column }, limits: Sqlite.default_query_limits })?
 		if existing.is_empty() {
-			Sqlite.execute!({ db, query: "ALTER TABLE sessions ADD COLUMN ${column} ${definition};", params: {} })?
+			Sqlite.execute!({ db, query: "ALTER TABLE ${table} ADD COLUMN ${column} ${definition};", params: {} })?
 		}
 	}
 	Ok({})
@@ -3476,12 +4440,212 @@ mock_rooms! = |db| {
 	Ok($rooms)
 }
 
-## Answers a rooms.v1 request, of the mock's rooms, the only provider of
-## rooms so far.
+## The rooms the daemon keeps in its tables (`RoomStore`).
+rooms_provider : Manifest.Provider
+rooms_provider = { id: RoomStore.provider, name: "Rooms", capabilities: [Capability.rooms_v1] }
+
+## The tickets the daemon keeps itself, which it always offers.
+tickets_provider : Manifest.Provider
+tickets_provider = { id: TicketStore.provider, name: "Tickets", capabilities: [Capability.tickets_v1] }
+
+## A room's row.
+RoomRow : { id : Str, name : Str, about : Str, kind : Str, private : I64, open : I64, archived : I64 }
+
+## A message's row.
+MessageRow : { id : Str, room_id : Str, author : Str, text : Str, root : Str, parent : Str, created_at : I64 }
+
+## The room a row keeps.
+kept_of : RoomRow -> RoomStore.Kept
+kept_of = |row| { id: row.id, name: row.name, about: row.about, kind: row.kind, private: row.private == 1, open: row.open == 1, archived: row.archived == 1 }
+
+## The room of the id `room_id`, if the daemon keeps one.
+kept_room! : Sqlite.Db, Str => Try(Try(RoomStore.Kept, [NoRoom]), _)
+kept_room! = |db, room_id| {
+	found : List(RoomRow)
+	found = Sqlite.query_many!({ db, query: "SELECT id, name, about, kind, private, open, archived FROM rooms WHERE id = :room_id;", params: { room_id }, limits: Sqlite.default_query_limits })?
+	Ok(found.first().map_ok(kept_of).map_err(|_| NoRoom))
+}
+
+## The rooms the person asking sees, as they see them: those not archived
+## that are public or that they are a member of, or every one to an
+## operator.
+kept_rooms! : Context => Try(List(Rooms.Room), _)
+kept_rooms! = |{ db, person, access, .. }| {
+	rows : List({ id : Str, name : Str, about : Str, kind : Str, private : I64, open : I64, archived : I64, joined : I64, updated : I64 })
+	rows = Sqlite.query_many!({ db, query: "SELECT id, name, about, kind, private, open, archived, EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND person_id = :person) AS joined, coalesce((SELECT max(created_at) FROM messages WHERE messages.room_id = rooms.id), 0) AS updated FROM rooms WHERE archived = 0 AND (private = 0 OR :operator = 1 OR EXISTS (SELECT 1 FROM members WHERE members.room_id = rooms.id AND person_id = :person)) ORDER BY created_at, id;", params: { person, operator: if (access == Operator) 1.I64 else 0 }, limits: Sqlite.default_query_limits })?
+	Ok(rows.map(|row| RoomStore.room(kept_of({ id: row.id, name: row.name, about: row.about, kind: row.kind, private: row.private, open: row.open, archived: row.archived }), { joined: row.joined == 1, updated: if (row.updated == 0) Err(Missing) else Ok(Chat.timestamp(row.updated)), me: person })))
+}
+
+## What the person asking is of the room `room_id`: an operator of the box,
+## a member, an admin.
+asker! : Context, Str => Try(RoomStore.Asker, _)
+asker! = |context, room_id| {
+	membership : List({ admin : I64 })
+	membership = Sqlite.query_many!({ db: context.db, query: "SELECT admin FROM members WHERE room_id = :room_id AND person_id = :person;", params: { room_id, person: context.person }, limits: Sqlite.default_query_limits })?
+	Ok({ operator: context.access == Operator, member: !membership.is_empty(), admin: membership.any(|row| row.admin == 1) })
+}
+
+## Adds to a room's messages topic the entry of `event`, in the thread
+## `RoomStore.thread_of` says, of a message in the thread of `root`.
+room_entry_added! : Sqlite.Transaction, Str, Rooms.Event, Str => Try({}, _)
+room_entry_added! = |transaction, room_id, event, root|
+	transaction.execute!({ query: "INSERT INTO room_entries (room_id, thread, event) VALUES (:room_id, :thread, :event);", params: { room_id, thread: RoomStore.thread_of(event, root), event: Json.to_str(event) } })
+
+## Answers a rooms.v1 request of the room `room`, one the daemon keeps, by
+## the person asking, unless `RoomStore.refusal` refuses it. Each change and
+## its entry are written together.
+kept_call! : Context, RoomStore.Kept, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
+kept_call! = |context, room, asked| {
+	db = context.db
+	person = context.person
+	refused = |why| Ok(Ok(Rejected(why)))
+	match RoomStore.refusal(Ok(room), room.id, asker!(context, room.id)?, asked) {
+		Err(why) => return refused(why)
+		Ok({}) => {}
+	}
+	match asked {
+		Send({ text: said, place, mentions, .. }) => {
+			{ root, parent } =
+				match place {
+					TopLevel => { root: "", parent: "" }
+					Reply(reply) => reply
+				}
+			roots : List({ id : Str })
+			roots = Sqlite.query_many!({ db, query: "SELECT id FROM messages WHERE room_id = :room_id AND ((id = :root AND root = '') OR (id = :parent AND (id = :root OR root = :root)));", params: { room_id: room.id, root, parent }, limits: Sqlite.default_query_limits })?
+			known : List({ id : Str })
+			known = Sqlite.query_many!({ db, query: "SELECT id FROM persons WHERE id IN (SELECT value FROM json_each(:mentions));", params: { mentions: Json.to_str(mentions) }, limits: Sqlite.default_query_limits })?
+			mentioned = mentions.fold([], |so_far, id| if (so_far.contains(id) or !known.any(|row| row.id == id)) so_far else so_far.append(id))
+			if said.trim() == "" {
+				refused("a message says something")
+			} else if root != "" and roots.len() != (if (root == parent) 1 else 2) {
+				refused("there is no thread ${root} to reply to ${parent} in")
+			} else {
+				transaction = Sqlite.begin!(db, Immediate)?
+				now = now_ms!()
+				made : { id : Str }
+				made = transaction.query!({ query: "INSERT INTO messages (id, room_id, author, text, root, parent, created_at) VALUES (lower(hex(randomblob(8))), :room_id, :author, :text, :root, :parent, :now) RETURNING id;", params: { room_id: room.id, author: person, text: said, root, parent, now }, limits: Sqlite.default_query_limits })?
+				for mention in mentioned {
+					transaction.execute!({ query: "INSERT INTO mentions (message_id, person_id) VALUES (:message_id, :person_id);", params: { message_id: made.id, person_id: mention } })?
+				}
+				room_entry_added!(transaction, room.id, Posted(RoomStore.message({ id: made.id, room_id: room.id, author: person, text: said, root, parent, created_at: now }, mentioned)), root)?
+				if root != "" {
+					replies : List(MessageRow)
+					replies = transaction.query_many!({ query: "SELECT id, room_id, author, text, root, parent, created_at FROM messages WHERE room_id = :room_id AND root = :root ORDER BY created_at, rowid;", params: { room_id: room.id, root }, limits: Sqlite.default_query_limits })?
+					room_entry_added!(transaction, room.id, Threaded(Rooms.thread(replies.map(|row| RoomStore.message(row, [])), root)), "")?
+				}
+				transaction.commit!()?
+				Ok(Ok(Sent({ message_id: made.id })))
+			}
+		}
+		React({ message_id, emoji, .. }) | Unreact({ message_id, emoji, .. }) => {
+			added =
+				match asked {
+					React(_) => Bool.True
+					_ => Bool.False
+				}
+			target : List({ root : Str })
+			target = Sqlite.query_many!({ db, query: "SELECT root FROM messages WHERE room_id = :room_id AND id = :message_id AND deleted_at = 0;", params: { room_id: room.id, message_id }, limits: Sqlite.default_query_limits })?
+			match target {
+				[{ root }] if emoji != "" => {
+					transaction = Sqlite.begin!(db, Immediate)?
+					changed : List({ emoji : Str })
+					changed =
+						if added {
+							transaction.query_many!({ query: "INSERT INTO reactions (message_id, person_id, emoji, created_at) VALUES (:message_id, :person, :emoji, :now) ON CONFLICT DO NOTHING RETURNING emoji;", params: { message_id, person, emoji, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+						} else {
+							transaction.query_many!({ query: "DELETE FROM reactions WHERE message_id = :message_id AND person_id = :person AND emoji = :emoji RETURNING emoji;", params: { message_id, person, emoji }, limits: Sqlite.default_query_limits })?
+						}
+					if !changed.is_empty() {
+						room_entry_added!(transaction, room.id, Reacted({ id: message_id, emoji, by: person, added }), root)?
+					}
+					transaction.commit!()?
+					Ok(Ok(Accepted))
+				}
+				_ => refused("there is no message ${message_id} to react to")
+			}
+		}
+		Join(_) | Leave(_) => {
+			transaction = Sqlite.begin!(db, Immediate)?
+			changed : List({ room_id : Str })
+			changed =
+				match asked {
+					Join(_) => transaction.query_many!({ query: "INSERT INTO members (room_id, person_id, admin, added_by, added_at) VALUES (:room_id, :person, 0, :person, :now) ON CONFLICT DO NOTHING RETURNING room_id;", params: { room_id: room.id, person, now: now_ms!() }, limits: Sqlite.default_query_limits })?
+					_ => transaction.query_many!({ query: "DELETE FROM members WHERE room_id = :room_id AND person_id = :person RETURNING room_id;", params: { room_id: room.id, person }, limits: Sqlite.default_query_limits })?
+				}
+			if !changed.is_empty() {
+				audited!(transaction, context, if (asked == Join({ room_id: room.id })) "member.joined" else "member.left", room.id, "{}")?
+			}
+			transaction.commit!()?
+			Ok(Ok(Accepted))
+		}
+		ListRooms => Ok(Ok(Rooms(kept_rooms!(context)?)))
+	}
+}
+
+## A topic of the room `room`, one the daemon keeps, unless the person
+## asking can't see it: its members, or the entries of its top level ("")
+## or of a thread after the cursor.
+kept_update! : Context, Protocol.Wanted, RoomStore.Kept, Protocol.Subject => Try(Protocol.Update, _)
+kept_update! = |context, wanted, room, subject| {
+	db = context.db
+	match RoomStore.refusal(Ok(room), room.id, asker!(context, room.id)?, ListRooms) {
+		Err(why) => return Ok(Protocol.failed(wanted, { code: NotFound, message: why }))
+		Ok({}) => {}
+	}
+	match subject {
+		RoomMembers(_) => {
+			rows : List({ id : Str, name : Str, agent : I64, owner : I64, admin : I64 })
+			rows = Sqlite.query_many!({ db, query: "SELECT persons.id, persons.name, persons.agent, persons.owner, members.admin FROM members JOIN persons ON persons.id = members.person_id WHERE members.room_id = :room_id ORDER BY members.added_at, persons.name;", params: { room_id: room.id }, limits: Sqlite.default_query_limits })?
+			Ok(Protocol.snapshot(wanted, Members(rows.map(|row| RoomStore.member({ id: row.id, name: row.name, agent: row.agent == 1, owner: row.owner == 1, admin: row.admin == 1 })))))
+		}
+		_ =>
+			match Protocol.sequence(wanted) {
+				Err(error) => Ok(Protocol.failed(wanted, error))
+				Ok(after) => {
+					thread =
+						match subject {
+							RoomThread({ root, .. }) => root
+							_ => ""
+						}
+					rows : List({ seq : I64, event : Str })
+					rows = Sqlite.query_many!({ db, query: "SELECT seq, event FROM room_entries WHERE room_id = :room_id AND thread = :thread AND seq > :after ORDER BY seq;", params: { room_id: room.id, thread, after: after.to_i64_wrap() }, limits: Sqlite.default_query_limits })?
+					Ok(Protocol.room_appended(wanted, room_entries_of(rows)))
+				}
+			}
+	}
+}
+
+## The entries of rows of `room_entries`.
+room_entries_of : List({ seq : I64, event : Str }) -> List(Rooms.Entry)
+room_entries_of = |rows|
+	rows.keep_oks(
+		|row| {
+			event : Try(Rooms.Event, _)
+			event = Json.parse(row.event)
+			event.map_ok(|shown| { sequence: row.seq.to_u64_wrap(), event: shown })
+		},
+	)
+
+## The room a rooms.v1 request is of, "" for none.
+asked_room : Rooms.Request -> Str
+asked_room = |asked|
+	match asked {
+		ListRooms => ""
+		Send({ room_id, .. }) => room_id
+		React({ room_id, .. }) | Unreact({ room_id, .. }) => room_id
+		Join({ room_id }) | Leave({ room_id }) => room_id
+	}
+
+## Answers a rooms.v1 request, of a room the daemon keeps (`kept_call!`)
+## or of the mock's.
 rooms_call! : Context, Rooms.Request => Try(Protocol.Answer(Rooms.Response), _)
 rooms_call! = |context, asked| {
 	db = context.db
 	rooms = if (context.mock.rooms) mock_rooms!(db)? else []
+	match kept_room!(db, asked_room(asked))? {
+		Ok(room) => return kept_call!(context, room, asked)
+		Err(NoRoom) => {}
+	}
 	room_of = |room_id| rooms.find_first(|room| room.id == room_id).map_err(|_| { code: NotFound, message: "no room ${room_id}" })
 	# A room's next events follow its last, even one still to come.
 	following! = |room_id| {
@@ -3493,7 +4657,7 @@ rooms_call! = |context, asked| {
 	joined! = |room_id, joined| Sqlite.execute!({ db, query: "INSERT INTO room_joins (room_id, joined) VALUES (:room_id, :joined) ON CONFLICT (room_id) DO UPDATE SET joined = excluded.joined;", params: { room_id, joined: if (joined) 1.I64 else 0 } })
 	refused = |why| Ok(Ok(Rejected(why)))
 	match asked {
-		ListRooms => Ok(Ok(Rooms(rooms)))
+		ListRooms => Ok(Ok(Rooms(kept_rooms!(context)?.concat(rooms))))
 		Send(sending) =>
 			match room_of(sending.room_id) {
 				Err(error) => Ok(Err(error))
@@ -3534,17 +4698,38 @@ rooms_call! = |context, asked| {
 }
 
 ## A rooms.v1 topic: the rooms, a room's members, or the entries of a
-## room's top level or of a thread after the cursor.
+## room's top level or of a thread after the cursor, of the rooms the daemon
+## keeps (`kept_update!`) and the mock's; or the inbox, the messages posted
+## after the cursor that mention the person asking, by someone else, in the
+## rooms they are a member of.
 rooms_update! : Context, Protocol.Wanted, Protocol.Subject => Try(Protocol.Update, _)
 rooms_update! = |context, wanted, subject| {
 	rooms = if (context.mock.rooms) mock_rooms!(context.db)? else []
+	asked = match subject {
+		RoomMembers(room_id) | RoomMessages(room_id) => room_id
+		RoomThread({ room_id, .. }) => room_id
+		_ => ""
+	}
+	match kept_room!(context.db, asked)? {
+		Ok(room) => return kept_update!(context, wanted, room, subject)
+		Err(NoRoom) => {}
+	}
 	missing = |room_id| Protocol.failed(wanted, { code: NotFound, message: "no room ${room_id}" })
 	known = |room_id| rooms.any(|room| room.id == room_id)
 	match subject {
 		RoomMembers(room_id) => Ok(if (known(room_id)) Protocol.snapshot(wanted, Members(MockRooms.members_of(room_id))) else missing(room_id))
 		RoomMessages(room_id) => if (known(room_id)) room_entries!(context.db, wanted, room_id, "") else Ok(missing(room_id))
 		RoomThread({ room_id, root }) => if (known(room_id)) room_entries!(context.db, wanted, room_id, root) else Ok(missing(room_id))
-		_ => Ok(Protocol.snapshot(wanted, Rooms(rooms)))
+		RoomInbox =>
+			match Protocol.sequence(wanted) {
+				Err(error) => Ok(Protocol.failed(wanted, error))
+				Ok(after) => {
+					rows : List({ seq : I64, event : Str })
+					rows = Sqlite.query_many!({ db: context.db, query: "SELECT seq, event FROM room_entries JOIN mentions ON mentions.message_id = json_extract(event, '$.Posted.id') AND mentions.person_id = :person WHERE seq > :after AND json_extract(event, '$.Posted.author') != :person AND room_id IN (SELECT room_id FROM members WHERE person_id = :person) ORDER BY seq;", params: { person: context.person, after: after.to_i64_wrap() }, limits: Sqlite.default_query_limits })?
+					Ok(Protocol.room_appended(wanted, room_entries_of(rows)))
+				}
+			}
+		_ => Ok(Protocol.snapshot(wanted, Rooms(kept_rooms!(context)?.concat(rooms))))
 	}
 }
 
@@ -3575,4 +4760,25 @@ expect {
 		and asked("127.0.0.1", Present(8095), Bool.True, []).is_err()
 		and asked("127.0.0.1", Present(8095), Bool.False, []).is_ok()
 		and cross_site_refusal(allowed_hosts, { authority: Absent, posted: Bool.False, headers: [] }).is_err()
+}
+
+expect {
+	staff = { name: "staff", capabilities: ["rooms.v1", "attention.v1"], presets: ["Rooms"], locked: Bool.True }
+	held = access_of([staff], "staff")
+	(held == Holding(staff), access_of([staff], "") == Holding({ ..staff, name: "", capabilities: [], presets: [] }), access_of([staff], "operator"), access_of([], "staff") == Holding({ ..staff, capabilities: [], presets: [] }))
+		== (Bool.True, Bool.True, Operator, Bool.True)
+		and [allows(held, "rooms.v1"), allows(held, "chat.v1"), allows(Operator, "chat.v1")] == [Bool.True, Bool.False, Bool.True]
+		and ["/liton/v1/devices", "/liton/v1/devices/code", "/liton/v1/manifest", audio_route].map(|path| route_allowed(held, path)) == [Bool.True, Bool.True, Bool.True, Bool.False]
+}
+
+expect {
+	staff = Holding({ name: "staff", capabilities: ["rooms.v1", "attention.v1"], presets: ["Rooms"], locked: Bool.True })
+	full = { protocol: 1, daemon: { id: "liton", name: "liton" }, providers: [{ id: "mock", name: "Mock", capabilities: [Capability.chat_v1, Capability.rooms_v1] }, { id: "hosts", name: "Hosts", capabilities: [Capability.hosts_v1] }], transformers: [AttentionTransformer.part, NeedsYou.part].map(Transformer.declared), topics: Protocol.topics }
+	seen = offered_to(staff, full)
+	shown = setup_to(staff, Setup.offered(Default.setup))
+	seen.providers == [{ id: "mock", name: "Mock", capabilities: [Capability.rooms_v1] }]
+		and seen.transformers.map(|part| part.id) == ["attention"]
+		and seen.topics.map(|topics| Capability.to_str(topics.capability)) == ["rooms.v1"]
+		and offered_to(Operator, full) == full
+		and shown.presets.map(|preset| preset.name) == ["Rooms"] and shown.default_preset == "Rooms" and shown.deck == ["Rooms"]
 }

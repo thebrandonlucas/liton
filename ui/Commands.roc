@@ -21,6 +21,7 @@ Commands := [].{
 			{ id: "drawer.right", title: "Show or hide the right drawer", group: "View", applies: workbench, run: |shown| Model.toggle_drawer(shown, Right) },
 			{ id: "palette", title: "Open or close the palette", group: "View", applies: always, run: |shown| if (shown.palette.open) Commands.close(shown) else Commands.open_palette(shown) },
 			{ id: "settings", title: "Open or close Settings", group: "View", applies: always, run: Model.toggle_settings },
+			{ id: "passkeys", title: "Passkeys & devices", group: "Account", applies: always, run: Model.open_passkeys },
 			{ id: "shortcuts", title: "Show or hide the keys", group: "View", applies: always, run: |shown| { ..shown, show_shortcuts: !shown.show_shortcuts } },
 			{ id: "close", title: "Close", group: "View", applies: Commands.closes, run: Commands.close },
 			{ id: "thread.close", title: "Close the thread", group: "Rooms", applies: Commands.thread_open, run: |shown| Model.open_thread(shown, { pane_id: "", root: "" }) },
@@ -202,11 +203,19 @@ Commands := [].{
 		order.get(next.to_u64_wrap()).map_ok(|workspace_id| Model.open(state, Workspace(workspace_id))) ?? state
 	}
 
+	## Whether `command` can run now: a locked UI's layout, deck, tabs and
+	## Settings stay as they are, so their commands don't.
+	can_run : Model.State, Command -> Bool
+	can_run = |state, command| {
+		locks = ["Layout", "Surfaces", "Deck", "Tabs"].contains(command.group) or command.id == "settings"
+		!(state.locked and locks) and (command.applies)(state)
+	}
+
 	## Runs the first of the commands named that applies, if any does.
 	run_first : Model.State, List(Str) -> Model.State
 	run_first = |state, ids| {
 		commands = Commands.all(state)
-		match ids.join_map(|id| commands.keep_if(|command| command.id == id)).find_first(|command| (command.applies)(state)) {
+		match ids.join_map(|id| commands.keep_if(|command| command.id == id)).find_first(|command| Commands.can_run(state, command)) {
 			Ok(command) => (command.run)(state)
 			Err(NotFound) => state
 		}

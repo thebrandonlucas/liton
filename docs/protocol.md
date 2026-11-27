@@ -39,38 +39,94 @@ naming a host other than `LITON_HOST`, `localhost` or one of
 
 ### Authentication
 
-Every route under `/liton/v1` but `pair` answers only a paired device,
-and `401` to any other. The UI (`/ui`) and the docs (`/docs`) hold no
-secrets and are served to anyone.
+Every route under `/liton/v1` but `pair`, `invite` and `login` answers only
+a device signed in, and `401` to any other. The UI (`/ui`) and the docs
+(`/docs`) hold no secrets and are served to anyone.
 
-- **Pairing.** A device pairs once, with a pairing code: 8 symbols such as
-  `K7QM-4XWP`, used once, for 10 minutes. `liton pair`, run on the daemon's
-  machine, makes one (The CLI), and so does a paired device's
-  `POST /liton/v1/devices/code`, which answers `{"code", "expires_at",
-  "link"}`, the link opening the UI at the address asked with the code.
-  `POST /liton/v1/pair` with `{"code", "name"}` then answers
-  `{"device": {"id", "name"}}` and sets the device's token as a cookie,
-  `liton_token`, `HttpOnly` and `SameSite=Strict`, and `Secure` when a proxy
+- **People.** A person is a row of the daemon's database, a human or an
+  agent, holding a role (people.v1): `operator`, or one the setup declares.
+  The owner is a person the daemon makes at its first start, called "Owner",
+  an operator always. Every device belongs to a person, and what it may do
+  is their role's.
+- **Passkeys.** People sign in with passkeys (WebAuthn), at the box's name
+  alone: `LITON_RP_ID`, such as `box.example.ts.net`, the browser's origin
+  `https://<LITON_RP_ID>`, or `http://localhost:<port>` where it is
+  `localhost`. Without it, passkey routes answer `503`; to another name,
+  `403` with the one to use. Each `begin` answers a challenge, 32 random
+  bytes as base64url, used once within 5 minutes, and what the browser asks
+  for; each `finish` takes the browser's answer, its bytes base64url. There
+  is no CBOR: registering, the browser sends `getPublicKey()` (SPKI) and
+  `getPublicKeyAlgorithm()`, ES256 or Ed25519, with attestation `none`.
+  The daemon checks the client data's type, challenge and origin, the
+  authenticator data's site and its user present and verified, and that the
+  signature counter grew (or stays 0, as a synced passkey's does), and the
+  signature with `liton-verify`.
+
+  ```json
+  POST /liton/v1/passkeys/register/begin   {} or { "code": "K7QM-4XWP" }
+  { "challenge": "…", "rp_id": "box.example.ts.net", "user_id": "…", "user_name": "Ada (box.example.ts.net)", "display_name": "Ada", "exclude": ["…"], "unnamed": false }
+  POST /liton/v1/passkeys/register/finish  { "challenge", "id", "public_key", "alg", "authenticator_data", "client_data", "name", "person_name" }
+  POST /liton/v1/login/begin               {}
+  { "challenge": "…", "rp_id": "box.example.ts.net" }
+  POST /liton/v1/login/finish              { "challenge", "id", "authenticator_data", "client_data", "signature", "name" }
+  { "device": { "id", "name" }, "person": { "id", "name", "role" } }
+  ```
+
+  A passkey is registered for the person signed in, or for the person a
+  pairing code is for, which it spends, signing them in (`unnamed`, the owner
+  still called "Owner", whom `person_name` names). Signing in asks for any of
+  the box's passkeys, a synced one or a phone's by its QR code. `GET
+  /liton/v1/passkeys` lists your passkeys, `{"passkeys": [{"id", "name",
+  "rp_id", "backed_up", "created_at", "used_at", "current"}], "rp_id"}`, and
+  `POST /liton/v1/passkeys/delete` with `{"id"}` forgets one, signing out the
+  devices it signed in. A passkey of an `rp_id` not the box's is one made
+  before its name changed.
+- **Sessions.** Signing in makes a device, a session, its token a cookie,
+  `liton_token`, `HttpOnly`, `SameSite=Strict`, and `Secure` when a proxy
   says the request came over HTTPS (`X-Forwarded-Proto` or `Forwarded`). A
-  page's scripts never see it. A client that isn't a browser asks
-  `"token": true` and is given the token in the answer too, to send as
-  `Authorization: Bearer <token>`. The daemon tries at most 10 pairings a
-  minute, right or wrong, and answers `429` beyond.
+  page's scripts never see it. A session lasts 30 days from its last use,
+  renewed to the day; a token device doesn't expire. `POST
+  /liton/v1/logout` signs the device asking out. Each poll's answer lists
+  the devices signed in as the person asking since the device asking was,
+  within a day, as `sign_ins`, for them to see.
+- **Pairing.** A pairing code, 8 symbols such as `K7QM-4XWP`, is for a person,
+  used once, for 10 minutes. `liton pair`, run on the daemon's machine,
+  makes one for the owner (The CLI): on a fresh box, or for an owner who
+  lost every passkey, its link makes their passkey. A device signed in makes
+  one for another device of its person with `POST /liton/v1/devices/code`,
+  which answers `{"code", "expires_at", "link"}`. A client that isn't a
+  browser, as the CLI or another daemon, sends the code to `POST
+  /liton/v1/pair` with `{"code", "name", "token": true}`, for a token device
+  of the code's person, given in the answer, to send as `Authorization:
+  Bearer <token>`; a browser of a box with no `LITON_RP_ID` gets it as the
+  cookie.
+- **Invites.** people.v1's `Invite` makes a link, `#invite=<secret>`, used
+  once within 7 days. A person's is redeemed by making a passkey: `POST
+  /liton/v1/invite` with `{"secret"}` answers what the browser asks, as
+  `register/begin` does, with `invite: {"name", "role"}`, and
+  `register/finish` makes the person, a member of the invite's rooms, and
+  signs them in. An agent's, `agent: true`, is redeemed with `{"secret",
+  "token": true}` for a token device alone. `Relink` makes an invite for a
+  person already there, to make a passkey again.
 - **Tokens.** A token is `<device id>.<secret>`, its secret 256 random bits
   as hex. The daemon keeps only its SHA-256, compares it in constant time,
-  and never shows or logs a token.
-- **Devices.** `GET /liton/v1/devices` lists the devices paired,
-  `{"devices": [{"id", "name", "created_at", "seen_at", "current"}]}`, with
-  times in milliseconds and the one asking `current`. `POST
-  /liton/v1/devices/revoke` with `{"id"}` forgets one, whose token is refused
-  from then on; revoking the device asking also clears its cookie.
-- **When.** `LITON_AUTH` decides. `on`, the default, requires a paired
-  device unless the daemon listens on loopback alone (`LITON_HOST` is
+  and never shows or logs a token. It keeps no secret of a passkey, only its
+  public key. The daemon tries at most 10 pairings, invites and sign-ins a
+  minute, right or wrong, and answers `429` beyond.
+- **Devices.** `GET /liton/v1/devices` lists the devices of the person
+  asking, `{"devices": [{"id", "name", "created_at", "seen_at",
+  "expires_at", "current"}]}`, with times in milliseconds, `expires_at` 0
+  for a token device, and the one asking `current`. `POST
+  /liton/v1/devices/revoke` with `{"id"}` signs one out, whose token is
+  refused from then on; revoking the device asking also clears its cookie.
+- **When.** `LITON_AUTH` decides. `on`, the default, requires a device
+  signed in unless the daemon listens on loopback alone (`LITON_HOST` is
   `127.0.0.1`, `::1` or `localhost`) and the request carries none of a
   proxy's `Forwarded`, `X-Forwarded-*` or `X-Real-IP` headers, so
-  `zig build run` works as it is. `required` always requires one, and is
-  what a daemon behind a proxy on the same machine needs, should the proxy
-  forward without those headers. `off` never does, for development only.
+  `zig build run` works as it is; a request without one is then the
+  owner's. `required` always requires one, and is what a daemon behind a
+  proxy on the same machine needs, should the proxy forward without those
+  headers. `off` never does, for development only.
 - **Federation.** A daemon is a client of its remotes like any other: pair it
   as the CLI does and give it the token with `LITON_PROVIDER_TOKENS`,
   comma-separated as `name=token`, which it sends as `Authorization: Bearer`.
@@ -98,13 +154,16 @@ capability as patterns:
     "default_theme": "Pastoral",
     "presets": [{ "name": "Developer", "snapshot": { "version": 6, "shell": "Workbench", "columns": […], "collapsed": [], "hidden": [], "theme": "" } }, …],
     "themes": [{ "name": "Pastoral", "scheme": "Dark", "accent": "#e8c872", … }, …]
-  }
+  },
+  "access": { "role": "operator", "locked": false }
 }
 ```
 
 A capability is offered when a provider supplies it or a transformer derives
 it. A client binds to capabilities, never to providers; it uses the manifest to
-show what is missing and who could supply it.
+show what is missing and who could supply it. `access` is the role of the
+device asking, `operator` unless its key holds another, and whether the role
+locks its UI, whose layout and Settings then stay as they are.
 
 `setup` holds what the daemon's setup (design.md, Setups) offers its
 clients: its presets, each a layout as a client saves it, a snapshot, with a
@@ -332,6 +391,7 @@ events when nothing changed:
 | `rooms.v1` | `members/<room_id>` | snapshot | `{"Members": [Member]}` |
 | `rooms.v1` | `messages/<room_id>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the room's top level and its threads' summaries |
 | `rooms.v1` | `thread/<room_id>/<root>` | append-only | `{"RoomEntry": {"sequence", "event"}}`: a thread's replies |
+| `rooms.v1` | `inbox` | append-only | `{"RoomEntry": {"sequence", "event"}}`: the messages, by others, that mention the person asking, in the rooms they are a member of, each `Posted` |
 | `tickets.v1` | `list` | snapshot | `{"Tickets": {"sources", "tickets"}}` |
 | `tickets.v1` | `ticket/<ticket_id>` | snapshot | `{"Ticket": {"summary", "body", "comments"}}` |
 | `tickets.v1` | `links` | snapshot | `{"Links": [{"session_id", "ticket_id", "inferred"}]}` |
@@ -570,6 +630,24 @@ as for a room you haven't joined; `ListRooms` answers `{"Rooms": [Room]}`.
 The mock provider keeps three rooms, one a forum, where its agents type and
 then answer when a message mentions them.
 
+The daemon keeps rooms of its own, the provider `rooms`, in its database:
+a room's id is its name's letters and digits, lowercased and joined by
+hyphens, a member is a person of the box (people.v1), an `Agent` when the
+person is one, and `me` is the person asking. A private room is listed to
+its members and to operators. A member posts and reacts, and in an
+announcements room only its admins post; a room is joined freely when it is
+open, else by its admins and operators, who add its members with people.v1's
+`AddMember`. A request the daemon refuses answers `Rejected` with why,
+such as "you aren't a member of this room: ask one of its admins to add you".
+The box's people are people.v1's: its topic `people` lists them, each
+`{"id", "name", "role", "agent", "owner", "passkeys", "devices"}`, with the
+invites not used and the roles whoever asks may invite into, and its
+requests invite (`Invite`, `Relink`), remove (`Remove`), rename (`Rename`),
+cancel an invite (`Cancel`), make a room (`CreateRoom`) and add or take a
+person out of one (`AddMember`, `RemoveMember`). Its topic `audit`, which
+operators alone follow, is the latest 200 changes to people, passkeys,
+devices, invites, rooms and their members, who made each and when.
+
 ### Tickets
 
 `tickets.v1` is the issues and tickets of the trackers providers reach,
@@ -617,9 +695,9 @@ pass its filter: of the `sources` named (all for none), of the `kinds` named
 topic too). `GetTicket` answers `{"Ticket": ticket}`. `Comment`, `SetStatus`
 (one of its source's statuses) and `SetAssignees` (of its source's people,
 none to unassign) change a ticket where its source keeps it and answer
-`Accepted`; the next poll of its topics shows it. A status or person its
-source hasn't is `BadRequest`, a ticket no provider has `NotFound`. Creating
-tickets comes later.
+`Accepted`; the next poll of its topics shows it. `EditTicket` sets its title, body and labels
+the same way. A status or person its source hasn't, or an empty title, is
+`BadRequest`, a ticket no provider has `NotFound`.
 
 `links` links each session to the ticket it works for: one linked by hand,
 `Link`, or else the one its branch names (`"inferred": true`), the ticket
@@ -628,6 +706,25 @@ its source suggests the branch for, or else the first whose key is in it:
 (`Tickets.inferred`). `Unlink` unlinks a session by hand, so no branch links
 it either; `Link` links it again. The daemon keeps the links set by hand,
 whichever provider has the session or the ticket.
+
+The daemon keeps tickets of its own too, provider `tickets`, in its
+database. Each of its sources is a project, made by `CreateProject` with
+a name and the prefix its tickets' keys start with, in capitals, or `""`
+for one made of the name: the first three letters of one word, else the
+words' initials, so `liton` is LIT and `Kai box` KB. `CreateTicket` makes
+a ticket of one, its key the prefix and the next number, as LIT-12, in
+Todo. Both answer `{"Created": {"id", "key"}}`. Every project's tickets
+move between Backlog and Todo (open), In progress and In review
+(started), Done and Canceled, and can be assigned to anyone the daemon
+knows (People), the person asking its `me`.
+
+```json
+{ "capability": "tickets.v1", "request": { "CreateProject": { "name": "liton", "prefix": "" } } }
+{ "Ok": { "Created": { "id": "tickets/9f2c41d07a3e8b15", "key": "LIT" } } }
+{ "capability": "tickets.v1", "request": { "CreateTicket": { "source": "tickets/9f2c41d07a3e8b15", "title": "Drop images in the composer", "body": "", "labels": ["ui"] } } }
+{ "Ok": { "Created": { "id": "tickets/1", "key": "LIT-1" } } }
+{ "capability": "tickets.v1", "request": { "EditTicket": { "ticket_id": "tickets/1", "title": "Drop and paste images", "body": "In the composer.", "labels": ["ui"] } } }
+```
 
 The mock provider offers it with scripted tickets of two sources, one
 shaped as GitHub's issues and one as a Linear team's, and keeps the changes
@@ -1051,13 +1148,17 @@ followed. Either exits 2 on a usage error or when the daemon can't be
 reached.
 
 `liton pair`, run on the daemon's machine, prints a pairing code for a new
-device (Authentication) and a link to pair a browser with it. It writes the
+device of the owner (Authentication) and a link that makes the owner's
+passkey in a browser. It writes the
 code in the daemon's database, at `LITON_DB` (default `liton.db`), as only
 someone who can write it already holds the daemon's every secret. `liton
 login <code>` pairs the CLI itself and keeps its token in
 `$XDG_CONFIG_HOME/liton/tokens` (by default under `~/.config`), readable by
 its owner alone, for the daemon at `LITON_URL`; `LITON_TOKEN` takes its
-place when set.
+place when set. `liton invite --role <role> [--rooms …] [--agent] <name>`
+prints an invite's link, and `liton people relink (--all | <person>)` one
+per person but the owner, to make a passkey again, as after the box's name
+changed.
 
 `liton setup [path]` speaks no protocol: it runs a Litonfile (by default
 `./Litonfile.roc`, or the one in a directory given) with `roc`, and writes the

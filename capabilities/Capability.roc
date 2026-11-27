@@ -49,6 +49,10 @@ Capability := [].{
 	hosts_v1 : Id
 	hosts_v1 = { name: "hosts", version: 1 }
 
+	## The people whose keys hold a role, and the invites that bring more.
+	people_v1 : Id
+	people_v1 = { name: "people", version: 1 }
+
 	## What the accounts agents run under have used of their plans.
 	usage_v1 : Id
 	usage_v1 = { name: "usage", version: 1 }

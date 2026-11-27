@@ -299,5 +299,5 @@ Default := [].{
 	## liton's own setup: no remotes, the attention and limits transformers, and its
 	## presets and themes, starting with Developer in Pastoral.
 	setup : Setup.Declared
-	setup = { remotes: [], transformers: ["attention", "limits"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms, Default.review, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral, Default.sky, Default.graphite], default_theme: "Pastoral", deck: [Default.developer.name, Default.rooms.name, Default.review.name, Default.board.name] }
+	setup = { ..Setup.empty, remotes: [], transformers: ["attention", "limits"], presets: [Default.developer, Default.inbox, Default.tiling, Default.chat, Default.rooms, Default.review, Default.board], default_preset: "Developer", themes: [Default.pastoral, Default.hypr, Default.plain, Default.neutral, Default.sky, Default.graphite], default_theme: "Pastoral", deck: [Default.developer.name, Default.rooms.name, Default.review.name, Default.board.name] }
 }

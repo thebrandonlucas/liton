@@ -9,6 +9,67 @@ All notable changes to liton are documented in this file. The format is based on
 - A chat's context meter turns amber near its session's context limit and red past it, and its popover sets the session's own limit with a slider and compacts it (`/compact`, for Claude and Codex). Near or past a limit, a bar above the composer says so, and past one offers Compact and Start fresh, a new agent of its kind in its workspace, or, past the weekly limit, to raise it; a message the daemon refuses says why in place.
 - Settings → Usage & limits, beside Hosts, shows each account's plan windows, such as its 5-hour and weekly limits, with how much of each is used and when it resets, and Refresh; and sets the weekly limit of each account and the default limit of each session's context, each a slider. The connection menu shows each account's 5-hour and weekly use as bars, and goes there.
 - Limits, each a percent, on how much of its context window a session fills and how much of its weekly quota an account uses (`limits.v1`, with the accounts' usage in `usage.v1`): past one, the daemon refuses new messages to the session, but `/compact`, and new agents on the account, while a turn already running finishes. The Inbox says when a session nears or passed its limit.
+- Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled. Edit a ticket's title, description and labels from the ticket itself.
+
+### Fixed
+
+- A box whose database predates 0.2.0's people, without the Nostr relay's tables, starts again: its devices, pairing codes and invites gain the columns 0.2.0 added, and its devices stay signed in as the owner's, with no expiry, where every request failed with "no such column: person_id" and the browser said it couldn't reach the daemon.
+
+## [0.2.0] - 2026-11-24
+
+### Added
+
+- An operator or a room's admin adds a person to a room with people.v1's `AddMember`, and an operator makes them its admin.
+- A setup's room declares whether it is `open`: anyone whose role uses rooms joins an open room themselves, where a closed one's admins add its members. A room you can't join says why, such as that it is closed and you weren't invited.
+- The daemon keeps an audit of who changed what: people, devices, invites, rooms and their members.
+- People sign in with passkeys. With `LITON_RP_ID` set to the box's name, such as `box.example.ts.net`, a signed-in person registers a passkey (`/liton/v1/passkeys/register/begin` and `finish`), and signs in with it on any browser that has it, synced passkeys and a phone's QR code included (`/liton/v1/login/begin` and `finish`), for a session that lasts 30 days from its last use. `/liton/v1/logout` signs a device out, `GET /liton/v1/passkeys` lists your passkeys and `/liton/v1/passkeys/delete` forgets one, signing out the devices it signed in. Without `LITON_RP_ID`, passkeys are refused with why; a request to another name is told the one to use. people.v1 counts each person's passkeys.
+- A pairing code makes a passkey: `/liton/v1/passkeys/register/begin` with `{ "code" }` registers one for the person the code is for and signs them in, spending the code. `liton pair`'s code is the owner's, so on a fresh box, or after the owner lost every passkey, its link makes the owner's passkey, naming them if they are still called Owner.
+- An invite of a person is redeemed by making a passkey: `POST /liton/v1/invite` with `{ "secret" }` answers what the browser asks to make one, and `/liton/v1/passkeys/register/finish` then makes the person, a member of the invite's rooms, and signs them in. An agent's invite, people.v1's `Invite` with `agent: true` or `liton invite --agent`, gives a token alone, redeemed with `{ "secret", "token": true }`.
+- people.v1's `Relink` and `liton people relink (--all | <person>)` make an invite for a person already there, to make a passkey again, as one who lost theirs, or everyone after the box's name changed; `--all` prints a link for each person but the owner, who runs `liton pair`.
+- The sign-in screen signs in with a passkey: this device's, a synced one, or a phone's by its QR code. A link's pairing code or invite asks at once for the passkey it grants, and the owner's name while they have none, then makes it with a click; a box with no `LITON_RP_ID` pairs by code as before.
+- Settings → Passkeys & devices (Devices before) lists your passkeys, each synced or for another name said so, to delete; makes a passkey on this device; adds a device of yours by a code and link; and signs out your devices, this browser too. A locked UI opens this page alone, from its Passkeys & devices button or the palette.
+- Each device signed in as you since this browser shows a notice for a day, "New sign-in: Phone. Not you?", to sign it out or say it was you: a poll's answer lists them as `sign_ins`.
+- people.v1's `RemoveMember` takes a person out of a room, as an operator or an admin of it, and `Rename` names a person, yourself, or anyone as an operator. Its topic `audit`, which operators alone follow, shows the latest 200 changes to people, passkeys, devices, invites, rooms and their members: who, from which device, when and what.
+- `services.liton.rpId` sets `LITON_RP_ID`, the box's name its passkeys are for, by default the first of `allowedHosts`. Choose it before inviting people: when it changes, set the new one, run `liton pair` on the box for the owner's passkey, then `liton people relink --all`.
+- The release archive and the Nix package ship `liton-verify` beside `liton-daemon`: a small program the daemon runs to check a passkey's signature (ES256 or Ed25519) when someone signs in.
+
+### Changed
+
+- **Breaking:** the box's rooms are kept in the daemon's own tables, offered as rooms.v1's provider `rooms` in place of `relay`, and its people are its own: each person holds a role, and every device belongs to one. The box's owner is a person the daemon makes at its first start, whose devices `liton pair` pairs; an invite makes a new person. Requests of rooms need no signed event, and attention is kept apart per person. Rooms and people of the relay are not carried over.
+- **Breaking:** every person, whatever their role, makes a pairing code for another device of their own with `/liton/v1/devices/code`, lists their own devices with `/liton/v1/devices`, each with when its session ends, and revokes them; no one sees or revokes another's devices.
+- **Breaking:** an invite of a person makes a passkey, rather than pairing the browser by its link alone, and people.v1's `Invite` takes `agent`; an agent's invite alone is redeemed for a token.
+- **Breaking:** people.v1 lists each person by their `id`, with whether they are the owner or an agent and how many devices they have, and `Remove` names a person: `{ "Remove": { "person": "…" } }`. A person removed keeps their name for their messages, and the owner can't be removed.
+- **Breaking:** a setup's rooms are closed unless declared `open`: `Setup.with_room` takes `open`, and a setup evaluated before reads its rooms as closed. The setup's owner key no longer names the owner; the daemon makes the owner an admin of each of the setup's rooms at start.
+- **Breaking:** the daemon refuses to start on a database from liton 0.1, saying so: 0.2 starts fresh, so move `liton.db` aside, then pair the owner again with `liton pair` and invite people and agents again.
+- The room agent example (`examples/room-agent/agent.mjs`) joins with its invite and posts with the token that gives it, kept in one file readable by its owner alone; it holds no key.
+
+### Removed
+
+- **Breaking:** Nostr. The daemon is no longer a relay: `/liton/v1/nostr/event`, `/liton/v1/nostr/req` and `/liton/v1/devices/key` are gone, a rooms.v1 call carries no `signed` event, rooms.v1's `signing` is gone, and the browser makes and keeps no key. Settings → Devices no longer shows a key per device.
+- **Breaking:** `Setup.with_owner` and a setup's `owner`: the daemon makes the owner itself, who signs in with `liton pair` on the box.
+
+## [0.1.1] - 2026-11-23
+
+### Added
+
+- An operator or admin creates a room of the box's relay with people.v1's `CreateRoom`: its name, what it is about, a channel, forum, direct conversation or announcements, and whether it is private. The daemon creates it on their behalf, as it adds an invite's members, so an operator needs no key of their own; the setup's owner and the key asking, if any, are its admins. Its id is its name's letters and digits, lowercased and joined by hyphens, as `Front desk` is `front-desk`.
+- `liton room create [--about <text>] [--type forum|direct|announce] [--private] <name>` creates a room of the box's relay and prints its id, for `liton invite --rooms` to name, and `liton room list` prints the relay's rooms, one per line.
+- A setup declares the rooms its relay starts with, `Setup.with_room` or its `rooms`: the daemon creates each at start unless the relay has a room of its id, so a box rebuilt from its Litonfile has its rooms again, ready for `liton invite --rooms`.
+- Settings → Devices shows each device's Nostr key, bound once its browser sees a room, so the operator copies their browser's key into a setup's `Setup.with_owner` to make it the owner's.
+
+### Changed
+
+- An operator sees every room of the box's relay, private ones they aren't a member of too, as they may invite anyone into them.
+- The release's UI is built without specialization, as `zig build ui` and `run` now build it, unless `zig build release -Dspecialize`. 0.1.0's specialized UI was a 20 MB download against 3.1 MB unspecialized, held 1300 MB of the browser's memory after loading against 121 MB, and on a phone over a slow network hadn't drawn after 240 s, where the unspecialized one draws in about 18 s. A keystroke under a long timeline takes about twice as long, 62 ms against 29 ms, until a fix in liton's source wins it back. A release now builds in minutes rather than about an hour.
+
+### Fixed
+
+- The daemon exits 0 when stopped by SIGTERM, rather than 143, so stopping or restarting services.liton no longer leaves it failed; the module counts 143 as a stop too.
+
+## [0.1.0] - 2026-11-23
+
+### Added
+
 - The Developer, Inbox, Rooms, Review and Board surfaces show their panes joined: one frame under one band of headers, the panes apart by thin lines you drag to resize them, a drawer's tabs a compact control in its header that never wraps, and the Review view's branch, files viewed and Finish review in its header. Headers, tabs, buttons and labels are in the theme's text font, keeping monospace for code, paths, ids and line counts. Settings → Surface (Joined) and each surface in Settings → Deck switch a surface between joined and separate tiles, as Tiling shows them; a snapshot keeps it.
 - While sessions and workspaces come from more than one place, each row from a host, in Workspaces, Sessions and the Inbox, has a badge naming its host in the host's own colour, and Workspaces' Group by option lists them under each host.
 - Settings → Hosts, beside Devices, lists the daemons this one connects to, each with a status dot, its version and when it was last online. Its ⋮ menu edits a host, disables or enables it, and removes one you added after asking; Add host connects another liton daemon by its URL and token. Each change shows at once, and comes back with why if the daemon refuses it. A password or token typed is never shown again.
@@ -128,7 +189,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Swipe between the deck's surfaces: across a trackpad with two fingers (not over something that scrolls sideways), or across the deck's strip on a phone, which still swipes between a surface's panels above it. A three-finger swipe belongs to the system and switches its desktops instead.
 - Settings' Deck lists the deck's surfaces in order: move one up or down, remove one, or add a surface the daemon offers what it needs for.
 - Each surface in Settings' Deck lists its parts under the provider offering what they need, with each part's role and needs, greyed with what is missing where no provider offers it. Uncheck a part to hide it from that surface, or check one to show it again or add it where it fits, without leaving the surface you are on.
-- Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -Dfast -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
+- Settings' Deck shows a thumbnail of each surface and part, greyed where the daemon doesn't offer what it needs. `zig build devtool -- previews` renders them again, each against the mock daemon in headless Chrome (`CHROME`), into `ui/previews/`.
 - Docs in Settings → About opens liton's API docs at /docs/index.html, built from its packages' and apps' comments by `zig build docs` (which `zig build run` runs). `LITON_DOCS` (default `zig-out/docs`) is where the daemon serves them from.
 - chat.v1 sessions tell the mode their agent works in, its thinking level, the modes it can switch to and what its last turn used (`mode`, `thinking`, `modes`, `usage`), and the `agents` topic each kind's models with their thinking levels, and its modes. `Configure` switches a session's model, mode or thinking level, and `Create` starts an agent in a mode and at a thinking level.
 - The mock's agents offer two models each, with low, medium and high thinking, and modes such as Plan; their sessions switch them with `Configure` and tell what their last turn used, more with each message.
@@ -146,6 +207,20 @@ All notable changes to liton are documented in this file. The format is based on
 - `schedules.v1` runs prompts on a cadence, every so long or by a cron expression in a time zone, in a session it keeps prompting (a heartbeat) or in a new session each time: `liton call schedules.v1 '"ListSchedules"'`, and `Create`, `Update`, `Pause`, `Resume`, `RunOnce` and `Delete`, with the `schedules` and `runs/<schedule_id>` topics. The mock runs its own, starting with a nightly one.
 - Schedules, a row over the Developer preset's Workspaces and ⌘K's Open the schedules, opens in the main area and lists the schedules of the daemon's providers, Paseo's and the mock's, each with its status, its cadence in words, whom it prompts and when it runs next. Open one to pause or resume it, run it now, edit or delete it, each shown at once, and to see its runs, each opening the session it prompted. New schedule (also in ⌘K) makes one: a name, the prompt, a cadence from presets such as Every 30 minutes or Weekdays at 09:00, or a cron expression in a time zone, and a new agent each run, picked as New agent picks one, or, from a session's ⋮ menu (Heartbeat…) or ⌘K's Heartbeat for the chat's session, that session itself.
 - A poll of `/liton/v1/poll` with `"cached": true` is answered at once from what the daemon keeps, while `POST /liton/v1/refresh` asks Paseo and the remote daemons what polls watch; topics the daemon hasn't fetched yet come back `"refreshing": true` (docs/protocol.md). Polls without it work as before.
+- `zig build release` builds the release archives into zig-out/release, `liton-VERSION-x86_64-linux.tar.gz` and `liton-VERSION-aarch64-linux.tar.gz` with their SHA256SUMS: each the static `liton-daemon` and `liton` in bin/ and the UI in share/liton/www, for running liton without building it.
+- A Nix flake: `nix run github:thebrandonlucas/liton` runs the command line, and `packages.liton` is the release, fetched by the sha256 RELEASE_SHA256SUMS records for the version build.zig.zon gives.
+- `nixosModules.liton` runs the daemon as a NixOS service, `services.liton`: set `enable`, and `host`, `port`, `allowedHosts`, `auth` (`required` by default), `setupFile` (a `liton setup`'s liton.setup.json), `environmentFile` for secrets, `stt` and `extraEnvironment` for any other `LITON_*` setting. It runs as a user of its own, keeps its database in /var/lib/liton, serves the release's UI and puts `liton` on PATH.
+- examples/litonfile-kai-box/ sets up liton for a box of staff who only talk in rooms: a Litonfile offering the Rooms preset alone, in the Sky theme, and a NixOS module running the daemon with its setup behind Caddy at the box's tailnet name.
+- The relay's rooms work from the UI: listing one, the browser makes its Nostr key, kept in IndexedDB on this device alone, and binds it to this device; a message, reaction, join or leave there is shown at once and sent as an event signed with that key. Signing needs a secure context, HTTPS or localhost.
+- A setup declares roles and an owner: `Setup.with_role(setup, { name: "staff", capabilities: ["rooms.v1"], presets: ["Rooms"], locked: Bool.True })` and `Setup.with_owner(setup, pubkey)`. A device whose key holds a role sees in the manifest only its capabilities' providers, topics and transformers and only its presets, its calls and polls of any other capability are `Refused`, and only an operator lists, pairs and revokes devices. The owner's key, and any key holding no role, is an operator, so devices paired as before keep doing everything.
+- `people.v1`, offered by the daemon to operators and to the roles allowed it, its admins: the `people` topic lists the keys holding a role, named by their profiles, and the invites not used yet; `Invite({ name, role, rooms })` answers a secret that `/ui/index.html#invite=<secret>` redeems once within 7 days, `Remove({ pubkey })` takes a key's role, rooms and devices away, and `Cancel({ id })` an invite. Only an operator invites or removes an operator. `POST /liton/v1/invite` redeems an invite with the browser's key, pairing it as a new device whose key holds the invite's role, in its rooms.
+- `liton invite --role <role> [--rooms <room>,...] <name>` asks the daemon, as an operator or admin, for an invite and prints the link that redeems it, good once for 7 days.
+- Opening an invite's link, `…/ui/index.html#invite=<secret>`, in a browser not paired joins it: the browser makes its key, redeems the invite with it, shown as pairing, and signs its profile with the invite's name. A wrong, used or expired invite says so on the pair screen.
+- Settings → People, for operators and admins: invite someone by name into a role and the rooms that sign, shown as inviting at once, then the link that joins their device; cancel an invite not used; and remove a person, after asking, which revokes their devices. `people.v1`'s listing names the roles whoever asks may invite into.
+- A device whose role is locked shows its surface as it is: no Settings, no deck strip or swipe, no pane menus and no dragging panes, and the keys and palette leave the layout, the deck, tabs and Settings alone. The manifest says so, as `access: { role, locked }`. It hides controls only: the daemon still refuses whatever the role isn't allowed.
+- Each person's inbox is their own: settling, snoozing or seeing an item on a device whose key holds a role sets it aside for that key alone. Devices paired without a key share one, as before.
+- `rooms.v1`'s `inbox` topic follows the relay's messages that mention the device's key, in every room it sees, so `liton watch rooms.v1 inbox` hears an agent's mentions.
+- examples/room-agent/agent.mjs gives an agent its own key in the rooms: `node agent.mjs join <invite link> <directory>` makes the key, redeems an invite made with `liton invite --role agent --rooms …`, names the agent a bot as the invite does, and writes its key and device token, readable by you alone, to keep as agenix secrets; `node agent.mjs send <room> <text> [<root>]` posts as the agent, signed with its key. A leaked key is revoked by removing the agent in Settings → People and joining a new invite.
 
 ### Changed
 
@@ -237,6 +312,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Revoke in Settings → Devices now revokes the device: it sent the bare id, which the daemon refused, rather than `{"id": …}`.
 - liton no longer looks frozen while its daemon is slow or unreachable: a note at the bottom says it is waiting for the daemon, or can't reach it and is trying again, until it answers. A session or scope picked while a poll is held up is polled for at once, in place of that poll.
 - A long diff in the Review view, or a long file in Files, opens at once and scrolls smoothly: lines are drawn as they come near the screen, not all at once.
 - Typing a comment in the Review view, and picking a line to comment on, no longer stall on a long diff: each key took most of a second on 2,000 lines, and now takes a frame or two.

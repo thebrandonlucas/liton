@@ -35,11 +35,14 @@ TicketDesk := [].{
 	## one goes at a time; they show at once too.
 	## `dragged` is the ticket whose card is held on a Board, whether it has
 	## moved since, and the group under the pointer, by its key, "" for none.
-	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), saved : List(SavedView), dragged : { ticket : Str, moved : Bool, over : Str } }
+	## `composing` are the Board panes writing a new ticket, each with the
+	## project it goes in ("" while naming a new one), and `editing` the
+	## panes editing a ticket, each with the ticket.
+	State : { listing : Tickets.Listing, opened : List(Tickets.Ticket), links : List(Tickets.Link), asked : List(Asked), waiting : List(Tickets.Request), views : List(View), scope : Scope, boards : List(Board), saved : List(SavedView), dragged : { ticket : Str, moved : Bool, over : Str }, composing : List({ pane : Str, source : Str }), editing : List({ pane : Str, ticket : Str }) }
 
 	## No tickets, links, views or boards yet, scoped to All.
 	initial : State
-	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], saved: [], dragged: { ticket: "", moved: Bool.False, over: "" } }
+	initial = { listing: { sources: [], tickets: [] }, opened: [], links: [], asked: [], waiting: [], views: [], scope: All, boards: [], saved: [], dragged: { ticket: "", moved: Bool.False, over: "" }, composing: [], editing: [] }
 
 	## A pane's view: its open and started tickets, until it changes them.
 	view : State, Str -> View
@@ -170,13 +173,53 @@ TicketDesk := [].{
 		[All, Mine, Unassigned].concat(desk.listing.sources.map(|source| Source(source.id))).concat(desk.saved.map(|kept| Saved(kept.name))).map(counted)
 	}
 
-	## The sources and tickets with the status and assignee changes on their
-	## way applied.
+	## The sources and tickets with the changes on their way applied, and the
+	## projects and tickets being created, each as `asking:<serial>`.
 	listing_shown : State -> Tickets.Listing
 	listing_shown = |desk| {
 		changed = |ticket| desk.asked.map(|asked| asked.request).concat(desk.waiting).fold(ticket, |shown, request| if (Tickets.ticket_of(request) == shown.id) Tickets.changed(desk.listing, shown, request) ?? shown else shown)
-		{ ..desk.listing, tickets: desk.listing.tickets.map(changed) }
+		asking = |serial| "asking:${serial.to_str()}"
+		sources = desk.listing.sources.concat(
+			desk.asked.keep_oks(
+				|{ serial, request, .. }| match request {
+					CreateProject({ name, .. }) => Ok({ id: asking(serial), provider: "tickets", name: name.trim(), url: "", me: Err(Missing), people: [], statuses: [] })
+					_ => Err(NotCreating)
+				},
+			),
+		)
+		making = desk.asked.keep_oks(
+			|{ serial, request, .. }| match request {
+				CreateTicket({ source, title, labels: labelled, .. }) => {
+					status = sources.find_first(|known| known.id == source).map_ok(|known| known.statuses).ok_or([]).find_first(|known| known.kind == Open) ?? { id: "todo", name: "Todo", kind: Open }
+					Ok({ id: asking(serial), provider: "tickets", source, key: "", title: title.trim(), url: "", status, assignees: [], labels: labelled, waiting_on: [], branch: Err(Missing), updated: "" })
+				}
+				_ => Err(NotCreating)
+			},
+		)
+		{ sources, tickets: desk.listing.tickets.map(changed).concat(making) }
 	}
+
+	## The daemon's own projects, those being created too, which new
+	## tickets go in.
+	projects : State -> List(Tickets.Source)
+	projects = |desk| TicketDesk.listing_shown(desk).sources.keep_if(|source| source.provider == "tickets")
+
+	## The project a Board pane writes a new ticket in, if it writes one.
+	composing_in : State, Str -> Try(Str, [Closed])
+	composing_in = |desk, pane| desk.composing.find_first(|row| row.pane == pane).map_ok(|row| row.source).map_err(|_| Closed)
+
+	## `desk` with pane `pane` writing a new ticket in `source`.
+	compose : State, Str, Str -> State
+	compose = |desk, pane, source| { ..desk, composing: desk.composing.drop_if(|row| row.pane == pane).append({ pane, source }) }
+
+	## `desk` with pane `pane` no longer writing a new ticket.
+	uncompose : State, Str -> State
+	uncompose = |desk, pane| { ..desk, composing: desk.composing.drop_if(|row| row.pane == pane) }
+
+	## `desk` once the project asked for as `serial` is `id`: the rows
+	## writing in it write in `id`.
+	created : State, U64, Str -> State
+	created = |desk, serial, id| { ..desk, composing: desk.composing.map(|row| if (row.source == "asking:${serial.to_str()}") { ..row, source: id } else row) }
 
 	## The tickets of a pane's list: those its filter passes, the latest
 	## changed first.
@@ -187,15 +230,15 @@ TicketDesk := [].{
 	}
 
 	## A ticket as listed, with its body and comments once its topic
-	## answers, and the comments on their way after its own, each numbered
-	## `pending-<serial>`.
+	## answers, the edits on their way applied, and the comments on their way
+	## after its own, each numbered `pending-<serial>`.
 	ticket_shown : State, Str -> Try(Tickets.Ticket, [NotFound])
 	ticket_shown = |desk, ticket_id| {
 		listing = TicketDesk.listing_shown(desk)
 		opened = desk.opened.find_first(|shown| shown.summary.id == ticket_id)
 		summary = listing.tickets.find_first(|shown| shown.id == ticket_id).on_err(|_| opened.map_ok(|shown| shown.summary))?
 		known = { summary, body: opened.map_ok(|shown| shown.body) ?? "", comments: opened.map_ok(|shown| shown.comments) ?? [] }
-		Ok(desk.asked.fold(known, |shown, asked| if (TicketDesk.comments(asked.request) and Tickets.ticket_of(asked.request) == ticket_id) Tickets.applied(listing, shown, asked.request, { comment_id: "pending-${asked.serial.to_str()}", now: "" }) ?? shown else shown))
+		Ok(desk.asked.fold(known, |shown, asked| if ((TicketDesk.comments(asked.request) or TicketDesk.edits(asked.request)) and Tickets.ticket_of(asked.request) == ticket_id) Tickets.applied(listing, shown, asked.request, { comment_id: "pending-${asked.serial.to_str()}", now: "" }) ?? shown else shown))
 	}
 
 	## Whether a ticket's topic has answered with its body and comments.
@@ -209,6 +252,22 @@ TicketDesk := [].{
 	## The name of a ticket's source.
 	source_name : State, Str -> Str
 	source_name = |desk, source_id| desk.listing.sources.find_first(|source| source.id == source_id).map_ok(|source| source.name) ?? source_id
+
+	## Whether `request` edits a ticket.
+	edits : Tickets.Request -> Bool
+	edits = |request|
+		match request {
+			EditTicket(_) => Bool.True
+			_ => Bool.False
+		}
+
+	## The ticket pane `pane` edits, "" for none.
+	editing_in : State, Str -> Str
+	editing_in = |desk, pane| desk.editing.find_first(|row| row.pane == pane).map_ok(|row| row.ticket) ?? ""
+
+	## `desk` with pane `pane` editing `ticket`, "" for none.
+	edit : State, Str, Str -> State
+	edit = |desk, pane, ticket| { ..desk, editing: desk.editing.drop_if(|row| row.pane == pane).concat(if (ticket == "") [] else [{ pane, ticket }]) }
 
 	## Whether `request` comments on a ticket.
 	comments : Tickets.Request -> Bool

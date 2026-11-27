@@ -1,6 +1,6 @@
 (test "Liton — Settings' Host names the daemon and lists its providers with their capabilities, its remotes and its transformers"
   (steps
-    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"home\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"team/paseo\",\"name\":\"Paseo\"},{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"team/nostr\",\"name\":\"Rooms\"}],\"transformers\":[{\"id\":\"attention\",\"name\":\"Attention\",\"offers\":{\"name\":\"attention\",\"version\":1},\"uses\":[{\"name\":\"chat\",\"version\":1}]}],\"topics\":[]}")
+    (stub-http "manifest" :url "/liton/v1/manifest" :status 200 :body "{\"protocol\":1,\"daemon\":{\"id\":\"liton\",\"name\":\"home\"},\"providers\":[{\"capabilities\":[{\"name\":\"chat\",\"version\":1},{\"name\":\"workspaces\",\"version\":1}],\"id\":\"mock\",\"name\":\"Mock\"},{\"capabilities\":[{\"name\":\"chat\",\"version\":1}],\"id\":\"team/paseo\",\"name\":\"Paseo\"},{\"capabilities\":[{\"name\":\"rooms\",\"version\":1}],\"id\":\"team/rooms\",\"name\":\"Rooms\"}],\"transformers\":[{\"id\":\"attention\",\"name\":\"Attention\",\"offers\":{\"name\":\"attention\",\"version\":1},\"uses\":[{\"name\":\"chat\",\"version\":1}]}],\"topics\":[]}")
     (run-effect 1)
     (click (role button :name "Settings"))
     (click (role button :name "home"))
