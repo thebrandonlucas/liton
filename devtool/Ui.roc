@@ -8,7 +8,8 @@ import Exec
 Ui := [].{
 
 	## The browser UI, its page and roc-signals's runtime files, into
-	## `output`. `flags` go to roc-ui's build, such as --specialize=no.
+	## `output`. `flags` go to roc-ui's build, such as --opt=size and
+	## --specialize=no.
 	build! : Str, Str, List(Str), List(Str) => Try({}, _)
 	build! = |roc_ui, output, runtime_files, flags| {
 		Path.create_all!(Path.utf8(output))?
@@ -18,7 +19,7 @@ Ui := [].{
 		# more than wasm's default 8 MB stack: it traps with "memory access
 		# out of bounds". So the stack is 32 MB. Drop --wasm-stack-size once
 		# a Roc nightly fixes those and the page mounts on the default.
-		Exec.call!(".", roc_ui, ["build", "--opt=size", "--wasm-stack-size=33554432"].concat(flags).concat(["--target=wasm32", "ui/main.roc", "--output=${output}/app.wasm"]))?
+		Exec.call!(".", roc_ui, ["build", "--wasm-stack-size=33554432"].concat(flags).concat(["--target=wasm32", "ui/main.roc", "--output=${output}/app.wasm"]))?
 		for file in ["index.html", "style.css", "ports.mjs", "voice.mjs", "voice-worklet.js"].map(|name| "ui/${name}").concat(runtime_files) {
 			name = Path.display(Path.filename(Path.utf8(file)) ?? Path.utf8(file))
 			Path.copy!(Path.utf8(file), Path.utf8("${output}/${name}"))?
