@@ -186,7 +186,7 @@ expect {
 # Near or past its limit, an item says so, and a settle of it ends.
 expect {
 	done = Attention.item(session(Finished), [])
-	status = |state| { limits: [], sessions: [{ session_id: "s1", used_pct: 85, limit_pct: Ok(80), state }], weeks: [] }
+	status = |state| { limits: [], sessions: [{ session_id: "s1", used_pct: 85, limit_pct: Ok(80), state }], weeks: [], five_hours: [] }
 	over = Attention.warned(done, status(Over))
 	over.warning == Ok("Over its context limit: 85% of 80%. Compact it or start fresh") and over.signature != done.signature and Attention.warned(done, status(Ok)) == done and Attention.warned(done, status(Near)).warning == Ok("Near its context limit: 85% of 80%")
 }

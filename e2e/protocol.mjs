@@ -384,7 +384,10 @@ try {
     assert.deepEqual(await call("limits.v1", { SetLimit: { scope: "Week", percent: 30 } }), { Ok: "Accepted" });
     assert.ok((await polled("limits.v1", "status")).Limits.weeks.every((w) => w.state === "Over" && w.limit_pct === 30));
     assert.equal((await call("chat.v1", { Create: { place: { Workspace: "main" }, agent: "codex", prompt: "" } })).Err.code, "Refused");
-    for (const scope of [{ Session: "fix-auth" }, "Week"]) assert.deepEqual(await call("limits.v1", { ClearLimit: { scope } }), { Ok: "Accepted" });
+    assert.deepEqual(await call("limits.v1", { SetLimit: { scope: "FiveHour", percent: 1 } }), { Ok: "Accepted" });
+    const fiveHours = (await polled("limits.v1", "status")).Limits.five_hours;
+    assert.ok(fiveHours.length > 0 && fiveHours.every((w) => w.state === "Over" && w.limit_pct === 1));
+    for (const scope of [{ Session: "fix-auth" }, "Week", "FiveHour"]) assert.deepEqual(await call("limits.v1", { ClearLimit: { scope } }), { Ok: "Accepted" });
     assert.deepEqual((await polled("limits.v1", "status")).Limits.limits, []);
   });
   await step("a message's attachments go with it: the mock names them after its text, a 2 MB one is taken, and a call over 16 MB is refused", async () => {

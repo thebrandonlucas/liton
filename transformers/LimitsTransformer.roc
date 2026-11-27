@@ -34,8 +34,8 @@ LimitsTransformer := [].{
 	}
 
 	## How near each session that tells what its last turn used is to its
-	## context limit, and each account that tells its weekly window to the
-	## weekly limit.
+	## context limit, and each account that tells its weekly and 5-hour
+	## windows to their limits.
 	status : List(Limits.Limit), List(Chat.Session), List(Usage.Report) -> Limits.Status
 	status = |limits, listed, accounts| {
 		session_rows = listed.keep_oks(
@@ -49,30 +49,33 @@ LimitsTransformer := [].{
 					_ => Err(Untold)
 				},
 		)
-		week_limit = Limits.limit_of(limits, Week)
-		week_rows = accounts.keep_oks(
-			|report|
-				match Usage.weekly(report) {
-					Ok(window) => {
-						used_pct = window.used_pct.map_ok(|percent| percent.round_to_u64_try() ?? 0) ?? 0
-						Ok({ provider: report.provider, source: report.source, account: report.account, used_pct, limit_pct: week_limit, state: Limits.state_of(used_pct, week_limit), resets_at: window.resets_at })
-					}
-					Err(_) => Err(NoWeek)
-				},
-		)
-		{ limits, sessions: session_rows, weeks: week_rows }
+		window_rows = |window_id, scope| {
+			limit_pct = Limits.limit_of(limits, scope)
+			accounts.keep_oks(
+				|report|
+					Usage.window(report, window_id).map_ok(
+						|window| {
+							used_pct = window.used_pct.map_ok(|percent| percent.round_to_u64_try() ?? 0) ?? 0
+							{ provider: report.provider, source: report.source, account: report.account, used_pct, limit_pct, state: Limits.state_of(used_pct, limit_pct), resets_at: window.resets_at }
+						},
+					),
+			)
+		}
+		{ limits, sessions: session_rows, weeks: window_rows(Usage.weekly_id, Week), five_hours: window_rows(Usage.five_hour_id, FiveHour) }
 	}
 
 	## Why a chat.v1 request is refused, if it is: a message to a session
 	## over its context limit, other than `/compact`, which makes room; a
-	## message to a session whose account is over its weekly limit; or a
-	## new agent of a kind whose account is. A limit not set refuses
+	## message to a session whose account is over its weekly or 5-hour
+	## limit; or a new agent of a kind whose account is. A limit not set refuses
 	## nothing.
 	refusal : Limits.Status, List(Chat.Session), Protocol.Call(Chat.Request) -> Try({}, Str)
 	refusal = |shown, listed, { provider, request, .. }| {
-		over_week = |provider_id, agent|
-			shown.weeks.find_first(|week| week.state == Over and week.source == agent and Protocol.serves(provider_id, week.provider))
-		week_refusal = |week| Err("the ${week.source} account is over its weekly limit (${week.used_pct.to_str()}% of ${(week.limit_pct ?? 0).to_str()}%): raise the limit or wait until it resets")
+		over_week = |provider_id, agent| {
+			over = |rows, name| rows.find_first(|week| week.state == Over and week.source == agent and Protocol.serves(provider_id, week.provider)).map_ok(|week| (week, name))
+			over(shown.weeks, "weekly").on_err(|_| over(shown.five_hours, "5-hour"))
+		}
+		week_refusal = |(week, name)| Err("the ${week.source} account is over its ${name} limit (${week.used_pct.to_str()}% of ${(week.limit_pct ?? 0).to_str()}%): raise the limit or wait until it resets")
 		match request {
 			SendMessage({ session_id, text, .. }) => {
 				session = listed.find_first(|candidate| candidate.id == session_id)

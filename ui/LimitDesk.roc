@@ -21,7 +21,7 @@ LimitDesk := [].{
 	Row : { key : Str, account : Bool, title : Str, detail : Str, percent : U64, state : Limits.State }
 
 	initial : State
-	initial = { reports: [], status: { limits: [], sessions: [], weeks: [] }, asked: [], refreshing: 0 }
+	initial = { reports: [], status: { limits: [], sessions: [], weeks: [], five_hours: [] }, asked: [], refreshing: 0 }
 
 	## The limits set, with those on their way applied.
 	limits : State -> List(Limits.Limit)
@@ -51,9 +51,17 @@ LimitDesk := [].{
 
 	## The accounts' weeks as shown, under the weekly limit.
 	weeks : State -> List(Limits.WeekStatus)
-	weeks = |desk| {
-		limit_pct = Limits.limit_of(LimitDesk.limits(desk), Week)
-		desk.status.weeks.map(|row| { ..row, limit_pct, state: Limits.state_of(row.used_pct, limit_pct) })
+	weeks = |desk| LimitDesk.under(desk, desk.status.weeks, Week)
+
+	## The accounts' 5-hour windows as shown, under the 5-hour limit.
+	five_hours : State -> List(Limits.WeekStatus)
+	five_hours = |desk| LimitDesk.under(desk, desk.status.five_hours, FiveHour)
+
+	## `windows` under the limit of `scope` as shown.
+	under : State, List(Limits.WeekStatus), Limits.Scope -> List(Limits.WeekStatus)
+	under = |desk, windows, scope| {
+		limit_pct = Limits.limit_of(LimitDesk.limits(desk), scope)
+		windows.map(|row| { ..row, limit_pct, state: Limits.state_of(row.used_pct, limit_pct) })
 	}
 
 	## The week of a session's account: its provider's whose source is its
@@ -111,8 +119,8 @@ LimitDesk := [].{
 	settled : State, U64 -> State
 	settled = |desk, serial| { ..desk, asked: desk.asked.drop_if(|asked| asked.accepted > 0 and asked.accepted <= serial) }
 
-	## The accounts and their windows as rows, each window's state that of
-	## its account's week under the weekly limit when it is the week; with
+	## The accounts and their windows as rows, the week's and the 5-hour
+	## window's state under their limits; with
 	## `summary`, only each account's 5-hour and weekly windows.
 	rows : State, Bool -> List(Row)
 	rows = |desk, summary|
@@ -124,18 +132,34 @@ LimitDesk := [].{
 					Available => ""
 					Unavailable(why) => why
 				}
-				week = LimitDesk.weeks(desk).find_first(|row| row.provider == report.provider and row.source == report.source and row.account == report.account)
-				windows = if (summary) report.windows.keep_if(|window| window.id == "five_hour" or window.id == Usage.weekly_id) else report.windows
+				mine = |row| row.provider == report.provider and row.source == report.source and row.account == report.account
+				week = LimitDesk.weeks(desk).find_first(mine)
+				five_hour = LimitDesk.five_hours(desk).find_first(mine)
+				windows = if (summary) report.windows.keep_if(|window| window.id == Usage.five_hour_id or window.id == Usage.weekly_id) else report.windows
 				heading = if (summary) [] else [{ key, account: Bool.True, title: named, detail: status, percent: 0, state: Ok }]
 				heading.concat(
 					windows.map(
 						|window| {
 							used_pct = window.used_pct.map_ok(|used| used.round_to_u64_try() ?? 0) ?? 0
-							state = if (window.id == Usage.weekly_id) week.map_ok(|row| row.state) ?? Ok else Ok
+							state = if (window.id == Usage.weekly_id) week.map_ok(|row| row.state) ?? Ok else if (window.id == Usage.five_hour_id) five_hour.map_ok(|row| row.state) ?? Ok else Ok
 							{ key: "${key}/${window.id}", account: Bool.False, title: if (summary) "${report.source} ${window.short}" else window.label, detail: window.resets_at ?? "", percent: U64.min(used_pct, 100), state }
 						},
 					),
 				)
+			},
+		)
+
+	## The meter beside Settings: for the 5-hour window and the week, the
+	## account nearest its limit, how full it is of the limit (of the whole
+	## window with none set), so full means the reserve is reached, and how
+	## near; none before an account tells its usage.
+	meter : State -> List({ short : Str, used_pct : U64, limit_pct : Try(U64, [Missing]), fill : U64, state : Limits.State })
+	meter = |desk|
+		[("5h", LimitDesk.five_hours(desk)), ("wk", LimitDesk.weeks(desk))].keep_oks(
+			|(short, windows)| {
+				filled = windows.map(|row| { short, used_pct: row.used_pct, limit_pct: row.limit_pct, fill: U64.min(100, (row.used_pct * 100) // U64.max(1, row.limit_pct ?? 100)), state: row.state })
+				fullest = filled.map(|row| row.fill).fold(0, U64.max)
+				filled.find_first(|row| row.fill == fullest)
 			},
 		)
 }
@@ -144,7 +168,7 @@ desk : LimitDesk.State
 desk = {
 	..LimitDesk.initial,
 	reports: [{ provider: "mock", source: "claude", account: "a", plan: "Max", status: Available, windows: [{ id: "five_hour", label: "5-hour", short: "5h", used_pct: Ok(12.4), resets_at: Err(Missing) }, { id: "weekly", label: "Weekly", short: "wk", used_pct: Ok(95), resets_at: Ok("2026-01-05T09:00:00.000Z") }, { id: "opus", label: "Opus", short: "op", used_pct: Err(Missing), resets_at: Err(Missing) }], balances: [] }],
-	status: { limits: [{ scope: Default, percent: 80 }], sessions: [{ session_id: "s1", used_pct: 75, limit_pct: Ok(80), state: Near }], weeks: [{ provider: "mock", source: "claude", account: "a", used_pct: 95, limit_pct: Err(Missing), state: Ok, resets_at: Err(Missing) }] },
+	status: { limits: [{ scope: Default, percent: 80 }], sessions: [{ session_id: "s1", used_pct: 75, limit_pct: Ok(80), state: Near }], weeks: [{ provider: "mock", source: "claude", account: "a", used_pct: 95, limit_pct: Err(Missing), state: Ok, resets_at: Err(Missing) }], five_hours: [] },
 }
 
 # A limit on its way shows at once, and is undone if refused.

@@ -1,14 +1,14 @@
 ## `limits.v1`: limits, each a percent, on how much of its context window a
-## session fills and how much of its account's weekly quota an account
-## uses, and how near each session and account is to its own. The daemon
+## session fills and how much of its account's 5-hour and weekly quotas an
+## account uses, and how near each session and account is to its own. The daemon
 ## derives it from chat.v1's sessions and usage.v1's reports, keeps the
 ## limits, warns as one nears, and refuses new messages and agents past it.
 Limits := [].{
 
 	## What a limit holds for: one session's context window, every
-	## account's weekly window, or the context window of each session
-	## without a limit of its own.
-	Scope : [Session(Str), Week, Default]
+	## account's weekly or 5-hour window, or the context window of each
+	## session without a limit of its own.
+	Scope : [Session(Str), Week, FiveHour, Default]
 
 	## A limit: at most `percent` (1 to 100) of what its scope measures.
 	Limit : { scope : Scope, percent : U64 }
@@ -22,15 +22,15 @@ Limits := [].{
 	## how near it is.
 	SessionStatus : { session_id : Str, used_pct : U64, limit_pct : Try(U64, [Missing]), state : State }
 
-	## An account's weekly window, its provider, source and account as
-	## usage.v1 names them: the percent used, the weekly limit (left out
-	## while none is set), how near it is, and when it resets.
+	## An account's weekly or 5-hour window, its provider, source and
+	## account as usage.v1 names them: the percent used, the window's limit
+	## (left out while none is set), how near it is, and when it resets.
 	WeekStatus : { provider : Str, source : Str, account : Str, used_pct : U64, limit_pct : Try(U64, [Missing]), state : State, resets_at : Try(Str, [Missing]) }
 
 	## The topic `status`'s one event: the limits set, each session whose
 	## provider tells what its last turn used, and each account that tells
-	## its weekly window.
-	Status : { limits : List(Limit), sessions : List(SessionStatus), weeks : List(WeekStatus) }
+	## its weekly window, and its 5-hour one.
+	Status : { limits : List(Limit), sessions : List(SessionStatus), weeks : List(WeekStatus), five_hours : List(WeekStatus) }
 
 	## `SetLimit` sets a scope's limit, in place of the one it had;
 	## `ClearLimit` clears it. A limit set is enforced: past it, the daemon

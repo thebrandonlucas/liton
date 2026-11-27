@@ -193,5 +193,6 @@ Fixtures := [].{
 		limits: [{ scope: Default, percent: 80 }, { scope: Session("notes"), percent: 40 }, { scope: Week, percent: 90 }],
 		sessions: [{ session_id: "fix-auth", used_pct: 85, limit_pct: Ok(80), state: Over }, { session_id: "notes", used_pct: 37, limit_pct: Ok(40), state: Near }],
 		weeks: [{ provider: "paseo", source: "claude", account: "me@example.com", used_pct: 41, limit_pct: Ok(90), state: Ok, resets_at: Ok("2026-01-05T09:00:00.000Z") }],
+		five_hours: [],
 	}
 }
