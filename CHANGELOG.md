@@ -12,6 +12,7 @@ All notable changes to liton are documented in this file. The format is based on
 - Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled. Edit a ticket's title, description and labels from the ticket itself.
 - Name the repo a project of liton's own is worked in, from any of its tickets' Repo.
 - Start on a ticket of liton's own sets an agent working on it: the ticket moves to In progress, a worktree of its project's repo is made on a branch named for it, as lit-1-attach-images-and, which links the two, and the agent picked beside Start, the last one started at first, is asked to do the ticket and say when it's done or blocked.
+- A meter beside Settings shows, for the 5-hour window and the week, how much the account nearest its limit has used, a bar that fills up to your limit and turns amber near it and red past it, and opens Usage & limits. A 5-hour limit joins the weekly one there: set either below 100% to keep the rest in reserve, as past it liton refuses new messages and agents on the account.
 
 ### Fixed
 

@@ -581,6 +581,7 @@ Liton := [].{
 					[
 						Liton.count_module(model.signal().map(Model.needs_you), "needs-you", "need you"),
 						Liton.count_module(model.signal().map(Model.running), "running", "running"),
+						Liton.usage_meter(model),
 						Liton.settings_toggle(model, "module icon settings-toggle"),
 					],
 				),
@@ -594,6 +595,40 @@ Liton := [].{
 		said : Try({ access : { locked : Bool } }, _)
 		said = Json.parse(text)
 		said.map_ok(|{ access }| access.locked) ?? Bool.False
+	}
+
+	## How much of their limits the accounts nearest them have used, beside
+	## Settings: a bar each for the 5-hour window and the week, filling up
+	## to the limit, or the whole window with none, amber near it and red
+	## past it, opening Settings' Usage & limits. Nothing before an account
+	## tells its usage.
+	usage_meter : State(ctx, Model.State) -> Elem(ctx)
+	usage_meter = |model| {
+		shown = model.signal().map(|state| LimitDesk.meter(state.limits))
+		said = shown.map(|windows| Str.join_with(windows.map(|window| "${window.short} ${window.used_pct.to_str()}%${window.limit_pct.map_ok(|most| " of ${most.to_str()}%") ?? ""}"), " · "))
+		Engine.when(
+			shown.map(|windows| !windows.is_empty()),
+			|| Engine.element(
+				"button",
+				[Engine.attr("type", "button"), Engine.class("module usage-meter"), Html.aria_label_s(said.map(|text| "Usage: ${text}")), Engine.attr_s("title", said), Engine.test_id("usage-meter"), Engine.on_click(model.update(|state| { ..Model.show_section(if (state.show_settings) state else Model.toggle_settings(state), "usage"), menu: "" }))],
+				[
+					Engine.each(
+						shown,
+						|window| window.short,
+						|row|
+							Engine.element(
+								"span",
+								[Engine.class("usage-meter-window")],
+								[
+									Html.span_s(row.field(|window| window.short), [Engine.class("usage-meter-name")]),
+									Html.span_s(Engine.const(""), [Engine.class_s(row.field(|window| Liton.limit_class("usage-bar", window.state))), Engine.attr_s("style", row.field(|window| "--used: ${window.fill.to_str()}")), Engine.attr("aria-hidden", "true")]),
+								],
+							),
+					),
+				],
+			),
+			|| Engine.text(""),
+		)
 	}
 
 	## Opens or closes Settings; in a locked UI, opens its Passkeys & devices
@@ -878,6 +913,7 @@ Liton := [].{
 					"Limits",
 					[
 						limit_row(Week, "Weekly limit", "weekly-limit", "Of each account's weekly quota. Past it, the daemon refuses new messages to its sessions and new agents on it; a turn already running finishes."),
+						limit_row(FiveHour, "5-hour limit", "five-hour-limit", "Of each account's 5-hour window. Past it, the daemon refuses new messages to its sessions and new agents on it; a turn already running finishes. Below 100% keeps the rest in reserve."),
 						limit_row(Default, "Each session's context", "default-limit", "Of its context window, for each session without a limit of its own, set from its composer's context meter. Past it, the daemon refuses new messages to it but /compact."),
 					],
 				),

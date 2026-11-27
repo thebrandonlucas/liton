@@ -125,7 +125,7 @@ expect (AttentionTransformer.part.follows)(fixture) == [{ capability: "chat.v1",
 
 # A session past its context limit is warned, as limits.v1 tells.
 expect {
-	status = { limits: [], sessions: [{ session_id: "s2", used_pct: 90, limit_pct: Ok(80), state: Over }], weeks: [] }
+	status = { limits: [], sessions: [{ session_id: "s2", used_pct: 90, limit_pct: Ok(80), state: Over }], weeks: [], five_hours: [] }
 	match (AttentionTransformer.part.derive)(fixture.append({ capability: "limits.v1", topic: "status", events: [Limits(status)] }), "", 0).topics {
 		[{ topic: "items", events: [Items([first, second])] }] => first.warning == Err(Missing) and second.warning == Ok("Over its context limit: 90% of 80%. Compact it or start fresh")
 		_ => Bool.False

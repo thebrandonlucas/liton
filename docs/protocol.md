@@ -909,20 +909,23 @@ as Claude's and Codex's own command does.
 ### Limits
 
 `limits.v1` holds limits, each a percent: on how much of its context window
-a session fills, and on how much of its weekly quota an account uses. The
+a session fills, and on how much of its 5-hour and weekly quotas an account
+uses. The
 `limits` transformer derives it from chat.v1's `sessions` and usage.v1's
 `reports` (Transformers, below), and keeps the limits set:
 
 ```json
 { "capability": "limits.v1", "request": { "SetLimit": { "scope": { "Session": "fix-auth" }, "percent": 50 } } }
 { "capability": "limits.v1", "request": { "SetLimit": { "scope": "Week", "percent": 90 } } }
+{ "capability": "limits.v1", "request": { "SetLimit": { "scope": "FiveHour", "percent": 80 } } }
 { "capability": "limits.v1", "request": { "SetLimit": { "scope": "Default", "percent": 80 } } }
 { "capability": "limits.v1", "request": { "ClearLimit": { "scope": { "Session": "fix-auth" } } } }
 { "Ok": "Accepted" }
 ```
 
 A limit's scope is one session's context window, `{"Session": id}`; every
-account's weekly window, `Week`; or the context window of each session
+account's weekly window, `Week`, or 5-hour window, `FiveHour`; or the
+context window of each session
 without a limit of its own, `Default`. Setting a scope's limit replaces the
 one it had, and a percent outside 1 to 100 is `Rejected` with why. The
 topic `status` tells the limits set, and how near each is:
@@ -931,13 +934,16 @@ topic `status` tells the limits set, and how near each is:
 { "Limits": {
   "limits": [{ "scope": "Default", "percent": 80 }, { "scope": "Week", "percent": 90 }],
   "sessions": [{ "session_id": "fix-auth", "used_pct": 85, "limit_pct": 80, "state": "Over" }],
-  "weeks": [{ "provider": "paseo", "source": "claude", "account": "me@example.com", "used_pct": 41, "limit_pct": 90, "state": "Ok", "resets_at": "2026-01-05T09:00:00.000Z" }] } }
+  "weeks": [{ "provider": "paseo", "source": "claude", "account": "me@example.com", "used_pct": 41, "limit_pct": 90, "state": "Ok", "resets_at": "2026-01-05T09:00:00.000Z" }],
+  "five_hours": [{ "provider": "paseo", "source": "claude", "account": "me@example.com", "used_pct": 12, "state": "Ok" }] } }
 ```
 
 A session is listed once its provider tells what its last turn used of its
 context window (chat.v1's `usage`), `used_pct` rounded to a whole percent,
 with the limit on it, its own or else the default, left out when there is
-neither. An account is listed once its report tells its weekly window. Each
+neither. An account is listed in `weeks` once its report tells its weekly
+window, and in `five_hours` once it tells its 5-hour one, under that
+window's limit. Each
 `state` is `Ok` below its limit or with none, `Near` within a tenth of it,
 and `Over` at it or past it.
 
@@ -945,8 +951,8 @@ A limit set is enforced (Transformers, Guards). Past its context limit, a
 session's `SendMessage`, a steer too, is `Refused` with
 `"the session is over its context limit (85% of 80%): compact or start fresh"`,
 except a message starting `/compact`, which makes room where its agent
-compacts; past the weekly limit, a message to any session whose agent's
-account it is, and a `Create` of an agent of its kind, are `Refused`, `"the
+compacts; past the weekly or 5-hour limit, a message to any session whose
+agent's account it is, and a `Create` of an agent of its kind, are `Refused`, `"the
 claude account is over its weekly limit (92% of 90%): raise the limit or
 wait until it resets"`. A turn already running is never stopped: it ends as
 it would. A session's account is the report of its provider whose `source`

@@ -35,9 +35,17 @@ Usage := [].{
 	weekly_id : Str
 	weekly_id = "weekly"
 
+	## The id of the window of 5 hours, as Paseo names it.
+	five_hour_id : Str
+	five_hour_id = "five_hour"
+
 	## A report's weekly window, if it has one with a percent used.
 	weekly : Report -> Try(Window, [NotFound])
-	weekly = |report| report.windows.find_first(|window| window.id == Usage.weekly_id and window.used_pct.is_ok())
+	weekly = |report| Usage.window(report, Usage.weekly_id)
+
+	## A report's window `id`, if it has one with a percent used.
+	window : Report, Str -> Try(Window, [NotFound])
+	window = |report, id| report.windows.find_first(|kept| kept.id == id and kept.used_pct.is_ok())
 }
 
 expect {
