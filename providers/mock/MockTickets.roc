@@ -22,6 +22,7 @@ MockTickets := [].{
 			me: Ok(MockTickets.me),
 			people: [MockTickets.me, bo],
 			statuses: [{ id: "open", name: "Open", kind: Open }, { id: "closed", name: "Closed", kind: Done }, { id: "not_planned", name: "Not planned", kind: Canceled }],
+			repo: Err(Missing),
 		},
 		{
 			id: "LIT",
@@ -31,6 +32,7 @@ MockTickets := [].{
 			me: Ok(MockTickets.me),
 			people: [MockTickets.me, bo, cy],
 			statuses: [{ id: "backlog", name: "Backlog", kind: Open }, { id: "todo", name: "Todo", kind: Open }, { id: "in_progress", name: "In Progress", kind: Started }, { id: "done", name: "Done", kind: Done }, { id: "canceled", name: "Canceled", kind: Canceled }],
+			repo: Err(Missing),
 		},
 	]
 

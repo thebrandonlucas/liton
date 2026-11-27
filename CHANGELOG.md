@@ -10,6 +10,8 @@ All notable changes to liton are documented in this file. The format is based on
 - Settings → Usage & limits, beside Hosts, shows each account's plan windows, such as its 5-hour and weekly limits, with how much of each is used and when it resets, and Refresh; and sets the weekly limit of each account and the default limit of each session's context, each a slider. The connection menu shows each account's 5-hour and weekly use as bars, and goes there.
 - Limits, each a percent, on how much of its context window a session fills and how much of its weekly quota an account uses (`limits.v1`, with the accounts' usage in `usage.v1`): past one, the daemon refuses new messages to the session, but `/compact`, and new agents on the account, while a turn already running finishes. The Inbox says when a session nears or passed its limit.
 - Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled. Edit a ticket's title, description and labels from the ticket itself.
+- Name the repo a project of liton's own is worked in, from any of its tickets' Repo.
+- Start on a ticket of liton's own sets an agent working on it: the ticket moves to In progress, a worktree of its project's repo is made on a branch named for it, as lit-1-attach-images-and, which links the two, and the agent picked beside Start, the last one started at first, is asked to do the ticket and say when it's done or blocked.
 
 ### Fixed
 

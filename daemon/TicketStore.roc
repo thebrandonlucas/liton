@@ -10,8 +10,9 @@ TicketStore := [].{
 	provider : Str
 	provider = "tickets"
 
-	## A project as its row keeps it.
-	Project : { id : Str, name : Str, prefix : Str }
+	## A project as its row keeps it, `repo` the workspaces.v1 project its
+	## tickets are worked in, "" for none.
+	Project : { id : Str, name : Str, prefix : Str, repo : Str }
 
 	## A ticket as its row keeps it: `seq` names it across projects,
 	## `number` within its own; `assignees` are people's ids.
@@ -78,14 +79,19 @@ TicketStore := [].{
 	prefix_asked : { name : Str, prefix : Str } -> Str
 	prefix_asked = |{ name, prefix }| if (prefix.trim() == "") TicketStore.prefix_of(name) else Str.from_utf8_lossy(prefix.trim().to_utf8().map(|byte| if (byte >= 'a' and byte <= 'z') byte - 32 else byte))
 
-	## Why a CreateTicket or CreateProject can't be made among `projects`, if
-	## it can't. A prefix is 1 to 6 capitals and digits, a capital first, and
+	## Why a CreateTicket, CreateProject or LinkRepo can't be made among
+	## `projects`, if it can't. A prefix is 1 to 6 capitals and digits, a capital first, and
 	## one project's alone.
 	refusal : List(Project), Tickets.Request -> Try({}, Str)
 	refusal = |projects, request|
 		match request {
 			CreateTicket({ title, .. }) if title.trim() == "" => Err(Tickets.refusal(EmptyTitle))
 			CreateTicket({ source, .. }) =>
+				match TicketStore.project_of(source) {
+					Ok(project_id) if projects.any(|project| project.id == project_id) => Ok({})
+					_ => Err("there is no project ${source}")
+				}
+			LinkRepo({ source, .. }) =>
 				match TicketStore.project_of(source) {
 					Ok(project_id) if projects.any(|project| project.id == project_id) => Ok({})
 					_ => Err("there is no project ${source}")
@@ -109,7 +115,7 @@ TicketStore := [].{
 	## A project as a source, of the `people` its tickets can be assigned to,
 	## and `me`, the person asking.
 	as_source : Project, List(Tickets.Person), Try(Tickets.Person, [Missing]) -> Tickets.Source
-	as_source = |project, people, me| { id: TicketStore.source_id(project), provider: TicketStore.provider, name: project.name, url: "", me, people, statuses: TicketStore.statuses }
+	as_source = |project, people, me| { id: TicketStore.source_id(project), provider: TicketStore.provider, name: project.name, url: "", me, people, statuses: TicketStore.statuses, repo: if (project.repo == "") Err(Missing) else Ok(project.repo) }
 
 	## A kept ticket, its assignees named from `people`, with its `comments`.
 	ticket : Kept, List(Tickets.Person), List(Tickets.Comment) -> Tickets.Ticket
@@ -123,7 +129,7 @@ TicketStore := [].{
 
 expect TicketStore.prefix_of("liton") == "LIT" and TicketStore.prefix_of("Kai box") == "KB" and TicketStore.prefix_of("my-cool web app") == "MCWA" and TicketStore.prefix_of("42") == ""
 expect {
-	projects = [{ id: "p1", name: "liton", prefix: "LIT" }]
+	projects = [{ id: "p1", name: "liton", prefix: "LIT", repo: "" }]
 	(TicketStore.refusal(projects, CreateProject({ name: "Lit", prefix: "" })), TicketStore.refusal(projects, CreateProject({ name: "kai", prefix: "" })), TicketStore.refusal(projects, CreateProject({ name: "x", prefix: "9X" })).is_err(), TicketStore.refusal(projects, CreateTicket({ source: "tickets/p1", title: " ", body: "", labels: [] })).is_err(), TicketStore.refusal(projects, CreateTicket({ source: "tickets/p2", title: "Go", body: "", labels: [] })).is_err())
 		== (Err("the prefix LIT is liton's"), Ok({}), Bool.True, Bool.True, Bool.True)
 }
