@@ -4239,14 +4239,60 @@ Model := [].{
 	tickets_answered = |state, serial, text| {
 		answered : Try(Protocol.Answer(Tickets.Response), _)
 		answered = Json.parse(text)
-		undone = |reason| { ..state, tickets: TicketDesk.answered(state.tickets, serial, Refused), notice: reason }
+		undone = |reason| { ..state, tickets: TicketDesk.created(TicketDesk.answered(state.tickets, serial, Refused), serial, ""), notice: reason }
 		Model.send_waiting(
 			match answered {
+				Ok(Ok(Created({ id, .. }))) => Model.poll({ ..state, tickets: TicketDesk.answered(TicketDesk.created(state.tickets, serial, id), serial, Accepted(state.poll.serial + 1)) })
 				Ok(Ok(_)) => Model.poll({ ..state, tickets: TicketDesk.answered(state.tickets, serial, Accepted(state.poll.serial + 1)) })
 				Ok(Err({ message, .. })) => undone(message)
 				Err(_) => undone("The daemon did not answer.")
 			},
 		)
+	}
+
+	## Opens a Board pane's row for a new ticket, in the first of the
+	## daemon's projects, or naming a new one if it has none.
+	compose_ticket : State, Str -> State
+	compose_ticket = |state, pane_id| { ..state, tickets: TicketDesk.compose(state.tickets, pane_id, TicketDesk.projects(state.tickets).first().map_ok(|project| project.id) ?? "") }
+
+	## Puts a Board pane's new ticket in the project `source`, "" to name a
+	## new one.
+	choose_project : State, Str, Str -> State
+	choose_project = |state, pane_id, source| { ..state, tickets: TicketDesk.compose(state.tickets, pane_id, source) }
+
+	## Closes a Board pane's row for a new ticket.
+	cancel_ticket : State, Str -> State
+	cancel_ticket = |state, pane_id| { ..state, tickets: TicketDesk.uncompose(state.tickets, pane_id) }
+
+	## Creates the project a Board pane's row names, which the row writes in
+	## at once, as it is being created.
+	create_project : State, Str -> State
+	create_project = |state, pane_id| {
+		key = "${pane_id}/new-project"
+		name = Model.draft(state, key).trim()
+		serial = state.call_outbox.serial + 1
+		if name.is_empty() {
+			{ ..state, notice: "Name the project." }
+		} else {
+			asked = Model.ask_tickets(Model.set_draft(state, key, ""), CreateProject({ name, prefix: "" }))
+			{ ..asked, tickets: TicketDesk.compose(asked.tickets, pane_id, "asking:${serial.to_str()}") }
+		}
+	}
+
+	## Creates the ticket a Board pane's row writes, shown at once, and
+	## closes the row.
+	create_ticket : State, Str -> State
+	create_ticket = |state, pane_id| {
+		key = "${pane_id}/new-ticket"
+		title = Model.draft(state, key).trim()
+		match TicketDesk.composing_in(state.tickets, pane_id) {
+			_ if title.is_empty() => { ..state, notice: "Give the ticket a title." }
+			Ok(source) if source != "" and !source.starts_with("asking:") => {
+				asked = Model.ask_tickets(Model.set_draft(state, key, ""), CreateTicket({ source, title, body: "", labels: [] }))
+				{ ..asked, tickets: TicketDesk.uncompose(asked.tickets, pane_id) }
+			}
+			_ => { ..state, notice: "Pick the project it goes in." }
+		}
 	}
 
 	## Links the session the focus shows to a ticket by hand: the one

@@ -2691,6 +2691,33 @@ Liton := [].{
 
 	## A Board pane's list: the tickets of the scope picked, those its search
 	## matches, in groups by the kind of their status, or on a board in
+	## A Board pane's row for a new ticket, while it writes one: the project
+	## it goes in, of the daemon's own, or a new one to name and create
+	## first, then its title.
+	board_compose : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
+	board_compose = |model, id| {
+		source = id.map2(model.signal(), |pane_id, state| TicketDesk.composing_in(state.tickets, pane_id))
+		drafted = |name| id.map2(model.signal(), |pane_id, state| Model.draft(state, "${pane_id}/${name}"))
+		set_draft = |name| model.set_value_by(id.map(|pane_id| "${pane_id}/${name}"), Model.set_draft)
+		Engine.when(
+			source.map(|chosen| chosen.is_ok()),
+			||
+				Html.div_attrs(
+					[Engine.class("board-compose"), Engine.attr("data-part", "compose")],
+					[
+						Dropdown.select(Engine.const("Project"), source.map(|chosen| chosen ?? ""), [], Liton.choices(model.signal().map(|state| TicketDesk.projects(state.tickets).map(|project| { value: project.id, label: project.name }))).append(Dropdown.option("", "New project…")), model.set_value_by(id, Model.choose_project)),
+						Engine.when(
+							source.map(|chosen| chosen == Ok("")),
+							|| Html.div("compose-fields", [Html.text_input(Engine.const("Project name"), "text", drafted("new-project"), [Engine.attr("placeholder", "liton")], set_draft("new-project")), Html.button("Create project", [Engine.class("primary")], model.update_by(id, Model.create_project))]),
+							|| Html.div("compose-fields", [Html.text_input(Engine.const("Title"), "text", drafted("new-ticket"), [Engine.attr("placeholder", "What needs doing")], set_draft("new-ticket")), Html.button("Create", [Engine.class("primary")], model.update_by(id, Model.create_ticket))]),
+						),
+						Html.button("Cancel", [], model.update_by(id, Model.cancel_ticket)),
+					],
+				),
+			|| Engine.text(""),
+		)
+	}
+
 	## columns by status, each with how many it has (`TicketDesk.groups`).
 	board_list : State(PaneCtx, Model.State), Signal(PaneCtx, Str) -> Elem(PaneCtx)
 	board_list = |model, id| {
@@ -2713,10 +2740,12 @@ Liton := [].{
 							|| Html.div("board-filter-actions", [Html.button("Save view", [], model.update_by(id, Model.save_view)), Html.button("×", [Html.aria_label("Clear the filter")], model.update_by(id, |state, pane_id| Model.filter_board(state, pane_id, |_| TicketDesk.everything)))]),
 							|| Engine.text(""),
 						),
+						Html.button("New ticket", [Engine.class("new-ticket")], model.update_by(id, Model.compose_ticket)),
 						laid_out("List", List),
 						laid_out("Board", Board),
 					],
 				),
+				Liton.board_compose(model, id),
 				# A card held moves over the groups, each a pointer zone once it
 				# moves (so a click is in no zone), and
 				# dropped on another takes its status (`Model.drop_card`).

@@ -4,6 +4,10 @@ All notable changes to liton are documented in this file. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Keep tickets in liton itself: a Board's New ticket writes one in a project of liton's own, keyed by the project's prefix and a number, as LIT-12, the prefix made from its name (liton is LIT). Name a new project right there the first time. Its tickets move between Backlog, Todo, In progress, In review, Done and Canceled.
+
 ### Fixed
 
 - A box whose database predates 0.2.0's people, without the Nostr relay's tables, starts again: its devices, pairing codes and invites gain the columns 0.2.0 added, and its devices stay signed in as the owner's, with no expiry, where every request failed with "no such column: person_id" and the browser said it couldn't reach the daemon.
