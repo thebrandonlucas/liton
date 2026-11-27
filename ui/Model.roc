@@ -4295,6 +4295,33 @@ Model := [].{
 		}
 	}
 
+	## Opens pane `pane_id`'s editor of the ticket `ticket_id`, with its title,
+	## body and labels.
+	edit_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	edit_ticket = |state, { pane_id, ticket_id }| {
+		shown = TicketDesk.ticket_shown(state.tickets, ticket_id) ?? TicketDesk.missing
+		drafted = Model.set_draft(Model.set_draft(Model.set_draft(state, "${pane_id}/edit-title", shown.summary.title), "${pane_id}/edit-body", shown.body), "${pane_id}/edit-labels", Str.join_with(shown.summary.labels, ", "))
+		{ ..drafted, tickets: TicketDesk.edit(drafted.tickets, pane_id, ticket_id) }
+	}
+
+	## Saves pane `pane_id`'s edit of the ticket `ticket_id`, shown at once, its
+	## labels comma-separated, and closes the editor.
+	save_ticket : State, { pane_id : Str, ticket_id : Str } -> State
+	save_ticket = |state, { pane_id, ticket_id }| {
+		title = Model.draft(state, "${pane_id}/edit-title").trim()
+		labels = Model.draft(state, "${pane_id}/edit-labels").split_on(",").map(Str.trim).drop_if(Str.is_empty)
+		if title.is_empty() {
+			{ ..state, notice: "Give the ticket a title." }
+		} else {
+			asked = Model.ask_tickets(state, EditTicket({ ticket_id, title, body: Model.draft(state, "${pane_id}/edit-body").trim(), labels }))
+			{ ..asked, tickets: TicketDesk.edit(asked.tickets, pane_id, "") }
+		}
+	}
+
+	## Closes pane `pane_id`'s editor of a ticket.
+	cancel_edit : State, { pane_id : Str, ticket_id : Str } -> State
+	cancel_edit = |state, { pane_id, .. }| { ..state, tickets: TicketDesk.edit(state.tickets, pane_id, "") }
+
 	## Links the session the focus shows to a ticket by hand: the one
 	## focused, or the focused workspace's that needs you most.
 	link_ticket : State, Str -> State
