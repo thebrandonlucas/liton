@@ -4,6 +4,7 @@
 ## as it does when something new happens, or, for a snooze, until the time
 ## runs out. An item is unread once it changes after the user saw it.
 import Chat
+import Limits
 
 Attention := [].{
 
@@ -18,7 +19,8 @@ Attention := [].{
 	## follows yet. `updated` is when its session last changed, as a time such
 	## as 2026-01-01T09:00:00.000Z: as its provider tells, else when the daemon
 	## saw it change. `unread`: it changed since the user saw it (`Seen`) and
-	## its agent isn't working.
+	## its agent isn't working. `warning` says it nears or passed its context
+	## limit (limits.v1), when it does.
 	Item : {
 		session_id : Str,
 		provider : Str,
@@ -31,6 +33,7 @@ Attention := [].{
 		updated : Str,
 		unread : Bool,
 		set_aside : [No, Settled, Snoozed],
+		warning : Try(Str, [Missing]),
 	}
 
 	## `Seen` marks each session seen as its item was `updated`; marked seen
@@ -102,8 +105,20 @@ Attention := [].{
 			updated: session.updated ?? "",
 			unread: Bool.False,
 			set_aside: No,
+			warning: Err(Missing),
 		}
 	}
+
+	## `item` warned that it nears or passed its context limit, as limits.v1's
+	## `status` tells, its signature changed so that a settle or snooze of
+	## it before ends.
+	warned : Item, Limits.Status -> Item
+	warned = |shown, status|
+		match status.sessions.find_first(|row| row.session_id == shown.session_id) {
+			Ok({ used_pct, limit_pct: Ok(limit), state: Near, .. }) => { ..shown, warning: Ok("Near its context limit: ${used_pct.to_str()}% of ${limit.to_str()}%"), signature: "${shown.signature} Near" }
+			Ok({ used_pct, limit_pct: Ok(limit), state: Over, .. }) => { ..shown, warning: Ok("Over its context limit: ${used_pct.to_str()}% of ${limit.to_str()}%. Compact it or start fresh"), signature: "${shown.signature} Over" }
+			_ => shown
+		}
 
 	## Whether a stored settle or snooze still sets its item aside at `now`:
 	## its item is the same as when it was set aside, and a snooze has time left.
@@ -166,6 +181,14 @@ expect {
 	said = { sequence: 2, event: AgentMessage({ text: "Fixed it." }) }
 	shown = Attention.item(session(AwaitingPermission), [said, asked])
 	shown.summary == "Fixed it." and shown.permissions == [Chat.permission({ request_id: "p1", tool: "bash", description: "rm -rf build" })]
+}
+
+# Near or past its limit, an item says so, and a settle of it ends.
+expect {
+	done = Attention.item(session(Finished), [])
+	status = |state| { limits: [], sessions: [{ session_id: "s1", used_pct: 85, limit_pct: Ok(80), state }], weeks: [] }
+	over = Attention.warned(done, status(Over))
+	over.warning == Ok("Over its context limit: 85% of 80%. Compact it or start fresh") and over.signature != done.signature and Attention.warned(done, status(Ok)) == done and Attention.warned(done, status(Near)).warning == Ok("Near its context limit: 85% of 80%")
 }
 
 # Settled, an item stays aside until something new happens to it.

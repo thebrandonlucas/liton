@@ -807,6 +807,9 @@ kbd:empty { display: none; }
 .status-line .status-word::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
 .inbox-item.unread .status-word::before, .status-word.running::before, .status-word.waiting::before { background: currentColor; }
 .status-word.waiting, .status-word.idle, .status-word.done, .status-line .reason { color: var(--warn); }
+.limit-warning { margin: 2px 0 0; color: var(--warn); font-size: 13px; }
+.limit-warning.over { color: var(--fail); }
+.limit-warning:empty { display: none; }
 .status-word.running { color: var(--ok); }
 .status-word.failed { color: var(--fail); }
 .inbox-item:not(.unread) .reason { color: var(--muted); }
@@ -1080,7 +1083,17 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .composer .chip { max-width: 16ch; min-height: 24px; background-color: transparent; color: var(--muted); font-size: 12px; }
 .composer .chip:hover { background-color: var(--field); color: var(--text); }
 .composer .context-ring { --size: 18px; width: var(--size); height: var(--size); min-width: 0; margin: 0 4px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
-  background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--accent) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
+  background: radial-gradient(closest-side, var(--field) 56%, transparent 60%), conic-gradient(var(--ring, var(--accent)) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 45%, transparent) 0); }
+.composer .context-ring.near { --ring: var(--warn); }
+.composer .context-ring.over { --ring: var(--fail); }
+.usage-limit { display: grid; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--edge); }
+.usage-row.pending span:last-child { font-style: italic; color: var(--muted); }
+.limit-slider { width: 100%; margin: 0; accent-color: var(--accent); }
+.usage-compact { justify-self: start; }
+.limit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 6px; padding: 6px 10px; border-radius: var(--radius, 8px); background: var(--warn-tint); color: var(--warn); font-size: 13px; }
+.limit-bar.over { background: color-mix(in srgb, var(--fail) 14%, transparent); color: var(--fail); }
+.limit-bar .limit-said { flex: 1 1 auto; min-width: 0; }
+.limit-bar button { color: inherit; border-color: currentColor; }
 .context-meter { flex: none; display: flex; }
 .context-meter .usage { position-area: block-start span-inline-start; margin: 8px 0; min-width: 200px; padding: 8px 10px; font-size: 12px; }
 .usage-title { margin: 0 0 4px; color: var(--muted); }
@@ -1551,3 +1564,16 @@ button.scope[aria-pressed="true"] { background: var(--selected); }
 .host-badge.empty { display: none; }
 .tree-row .host-badge { flex: none; align-self: center; }
 .host-row .row-menu-toggle { --icon: var(--icon-ellipsis-vertical); --icon-size: 14px; padding: 2px 3px; border-color: transparent; background: none; color: var(--muted); }
+
+/* Usage & limits: an account's windows, each a bar of how much is used. */
+.usage-window, .usage-summary { display: grid; grid-template-columns: minmax(5ch, auto) 1fr auto; align-items: center; gap: 10px; }
+.usage-window { padding: 8px 14px; border-top: 1px solid var(--edge); font-size: 13px; }
+.usage-summary { padding: 2px 10px; font-size: 12px; color: var(--muted); }
+.usage-bar { height: 6px; min-width: 60px; border-radius: 3px; background: linear-gradient(to right, var(--ring, var(--accent)) calc(var(--used) * 1%), color-mix(in srgb, var(--muted) 30%, transparent) 0); }
+.usage-bar.near { --ring: var(--warn); }
+.usage-bar.over { --ring: var(--fail); }
+.usage-window-used { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-account .help:empty, .usage-bar.hidden { display: none; }
+.limit-row { grid-template-columns: 1fr auto; align-items: center; }
+.limit-row .limit-slider, .limit-row .help { grid-column: 1 / -1; }
+.limit-value { font-variant-numeric: tabular-nums; color: var(--muted); }

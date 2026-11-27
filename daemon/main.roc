@@ -50,8 +50,9 @@
 ## passwords and tokens, so the daemon keeps it readable by its user alone.
 ##
 ## LITON_TRANSFORMERS adds transformers to the setup's, comma-separated:
-## `attention`, attention.v1 from chat.v1, and `needs-you`, attention.v1's
-## items that need you, as needs-you.v1.
+## `attention`, attention.v1 from chat.v1, `limits`, limits.v1 from chat.v1
+## and usage.v1, and `needs-you`, attention.v1's items that need you, as
+## needs-you.v1.
 ##
 ## Paseo's sessions get a Goal / Done / Now summary after their turns,
 ## from a background agent Paseo runs (from Paseo 0.15; see
@@ -98,6 +99,7 @@ import cap.Review
 import cap.Rooms
 import cap.Schedules
 import cap.Tickets
+import cap.Usage
 import cap.Voice
 import cap.WorkspaceGit
 import cap.Workspaces
@@ -110,6 +112,7 @@ import paseo.PaseoFiles
 import paseo.PaseoGit
 import paseo.PaseoSchedules
 import paseo.PaseoSummaries
+import paseo.PaseoUsage
 import paseo.PaseoWorkspaces
 import paseo.WebSocket
 import remote.Remote
@@ -117,6 +120,7 @@ import setup.Default
 import setup.Setup
 import speech.LocalSpeech
 import transformers.AttentionTransformer
+import transformers.LimitsTransformer
 import transformers.NeedsYou
 import transformers.Transformer
 import Auth
@@ -267,7 +271,7 @@ setup! = |named| {
 transformers_named : List(Str) -> Try(List(Transformer.Part), Str)
 transformers_named = |named| {
 	ids = named.map(|id| id.trim()).drop_if(|id| id == "")
-	known = [AttentionTransformer.part, NeedsYou.part]
+	known = [AttentionTransformer.part, LimitsTransformer.part, NeedsYou.part]
 	match ids.find_first(|id| !known.any(|part| part.id == id)) {
 		Ok(unknown) => Err("no transformer is called ${unknown}; there are ${Str.join_with(known.map(|part| part.id), ", ")}")
 		Err(NotFound) => Ok(known.keep_if(|part| ids.contains(part.id)))
@@ -1324,7 +1328,12 @@ call! = |context, request| {
 			refused = Err(refusal(context.access, capability))
 			return Ok(json(Json.to_str(refused)))
 		}
-		_ => {}
+		Ok((capability, _)) =>
+			match guarded!(context, manifest, capability, body)? {
+				Err(why) => return Ok(json(Json.to_str(call_failed({ code: Refused, message: why }))))
+				Ok({}) => {}
+			}
+		Err(_) => {}
 	}
 	match routed.map_ok(|(capability, _)| transformer_of(context, manifest, capability)) {
 		Ok(Ok(part)) => return Ok(json(transformer_call!(context, manifest, part, body)?))
@@ -1411,6 +1420,20 @@ call! = |context, request| {
 				answer = match decoded {
 					Ok({ request: asked, .. }) => hosts_call!(context.db, asked)?
 					Err(_) => Err(unanswered("hosts.v1"))
+				}
+				Json.to_str(answer)
+			}
+			Ok(("usage.v1", _)) => {
+				decoded : Try(Protocol.Call(Usage.Request), _)
+				decoded = Json.parse(body)
+				answer : Protocol.Answer(Usage.Response)
+				answer = match decoded {
+					Ok({ request: Refresh, .. }) => {
+						forget_check!(context.db, "usage")?
+						forget_check!(context.db, "cycle")?
+						Ok(Accepted)
+					}
+					Err(_) => Err(unanswered("usage.v1"))
 				}
 				Json.to_str(answer)
 			}
@@ -1574,6 +1597,7 @@ interested! = |context, subject| {
 			wanted!(db, "agent_list", "")?
 			wanted!(db, "workspace_list", "")
 		}
+		UsageReports => if (context.paseo.is_ok()) wanted!(db, "usage", "") else Ok({})
 		VoiceStatus | Threads(_) | RoomList | RoomMembers(_) | RoomMessages(_) | RoomThread(_) | RoomInbox | TicketList | TicketDetail(_) => Ok({})
 		ScheduleList => if (context.paseo.is_ok()) wanted!(db, "schedules", "") else Ok({})
 		ScheduleRuns(schedule_id) => if (context.paseo.is_ok()) wanted!(db, "schedule_runs", schedule_id) else Ok({})
@@ -1630,8 +1654,8 @@ update! = |context, wanted, subject| {
 				Ok(after) => Ok(Protocol.appended(wanted, visible!(context.db, session_id, after)?))
 				Err(error) => Ok(Protocol.failed(wanted, error))
 			}
-		# A transformer offers attention.v1 (see `topic_update!`), never a provider.
-		Items => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
+		# A transformer offers attention.v1 and limits.v1 (see `topic_update!`), never a provider.
+		Items | LimitStatus => Ok(Protocol.failed(wanted, { code: Unsupported, message: "no provider offers ${wanted.capability}" }))
 		WorkspaceList => Ok(Protocol.snapshot(wanted, Listed(workspaces!(context)?)))
 		Importable => Ok(Protocol.snapshot(wanted, Importable(importable!(context)?)))
 		Agents => Ok(Protocol.snapshot(wanted, Agents(agents!(context)?)))
@@ -1664,6 +1688,7 @@ update! = |context, wanted, subject| {
 				Err(_) => Ok(Protocol.failed(wanted, { code: NotFound, message: "no schedule ${schedule_id}" }))
 			}
 		HostList => Ok(Protocol.snapshot(wanted, Hosts(hosts!(context.db)?)))
+		UsageReports => Ok(Protocol.snapshot(wanted, Reports(usage_reports!(context)?)))
 		PeopleList => Ok(Protocol.snapshot(wanted, People(people!(context)?)))
 		PeopleAudit if context.access != Operator => Ok(Protocol.failed(wanted, { code: Refused, message: "only an operator follows the audit" }))
 		PeopleAudit => {
@@ -2697,6 +2722,20 @@ transformer_call! = |context, manifest, part, body| {
 	answered!()
 }
 
+## Whether the offered transformers that guard `capability` let a call of
+## it, `body`, through, or why the first that refuses it does.
+guarded! : Context, Manifest.Offered, Str, Str => Try(Try({}, Str), _)
+guarded! = |context, manifest, capability, body| {
+	guarding = context.transformers.keep_if(|part| part.guards.contains(capability) and manifest.transformers.any(|offered_part| offered_part.id == part.id))
+	for part in guarding {
+		match (part.guard)(inputs!(context, manifest, part)?, transformer_state!(context.db, state_key(context, part))?, body) {
+			Err(why) => return Ok(Err(why))
+			Ok({}) => {}
+		}
+	}
+	Ok(Ok({}))
+}
+
 ## What a transformer's state is stored under: its id and the person's
 ## asking, so each person's settles, snoozes and marks seen are their own.
 state_key : Context, Transformer.Part -> Str
@@ -2721,6 +2760,60 @@ state_swapped! = |db, transformer, stored, state|
 		swapped = Sqlite.query_many!({ db, query: "INSERT INTO transformer_states (transformer, state) VALUES (:transformer, :state) ON CONFLICT (transformer) DO UPDATE SET state = excluded.state WHERE transformer_states.state = :stored RETURNING transformer;", params: { transformer, state, stored }, limits: Sqlite.default_query_limits })?
 		Ok(!swapped.is_empty())
 	}
+
+## The usage reports of the mock's accounts, whose windows fill with the
+## messages sent to its sessions, then of Paseo's as the cycle last fetched
+## them (none before).
+usage_reports! : Context => Try(List(Usage.Report), _)
+usage_reports! = |context| {
+	mock =
+		if context.mock.agents {
+			asked : List({ agent : Str, asked : I64 })
+			asked = Sqlite.query_many!({ db: context.db, query: "SELECT sessions.agent AS agent, count(*) AS asked FROM entries JOIN sessions ON sessions.id = entries.session_id WHERE sessions.provider = 'mock' AND entries.event LIKE '{\"UserMessage\"%' AND entries.visible_at <= :now GROUP BY sessions.agent;", params: { now: now_ms!() }, limits: Sqlite.default_query_limits })?
+			Mock.usage_reports(asked.map(|row| { agent: row.agent, asked: row.asked.to_u64_wrap() }), now_ms!())
+		} else {
+			[]
+		}
+	rows : List({ value : Str })
+	rows = Sqlite.query_many!({ db: context.db, query: "SELECT value FROM paseo_listings WHERE what = 'usage';", params: {}, limits: Sqlite.default_query_limits })?
+	paseo : Try(List(Usage.Report), _)
+	paseo = Json.parse(rows.first().map_ok(|row| row.value) ?? "")
+	Ok(mock.concat(if (context.paseo.is_ok()) paseo ?? [] else []))
+}
+
+## How often, at most, the daemon asks Paseo for its usage reports while a
+## poll follows them: Paseo asks each account's provider in turn.
+usage_interval_ms : I64
+usage_interval_ms = 60_000
+
+## Asks Paseo for its accounts' usage reports, if it tells them, and keeps
+## them; what it last told is kept when asking fails.
+usage_fetched! : Sqlite.Db, Tcp.Connection, Paseo.Features => Try({}, _)
+usage_fetched! = |db, connection, features| {
+	request_id = "liton-usage-${now_ms!().to_str()}"
+	match PaseoUsage.request(features, request_id) {
+		Err(NoUsage) => Ok({})
+		Ok(request) => {
+			connection.write!(WebSocket.text(request, websocket_mask)).map_err(|err| ConnectionLost(Str.inspect(err)))?
+			reports = usage_read!(connection, request_id, [])?
+			Sqlite.execute!({ db, query: "INSERT INTO paseo_listings (what, value) VALUES ('usage', :value) ON CONFLICT (what) DO UPDATE SET value = excluded.value;", params: { value: Json.to_str(reports) } })
+		}
+	}
+}
+
+## The reports Paseo sends for `request_id` after `so_far`, until it says
+## they all came.
+usage_read! : Tcp.Connection, Str, List(Usage.Report) => Try(List(Usage.Report), _)
+usage_read! = |connection, request_id, so_far| {
+	received = message!(connection, []).map_err(|err| ConnectionLost(Str.inspect(err)))?
+	match PaseoUsage.answer(Paseo.provider.id, received, request_id) {
+		Reported(report) => usage_read!(connection, request_id, so_far.append(report))
+		Listed(reports) => Ok(reports)
+		Done => Ok(so_far)
+		Failed(why) => Err(UsageFailed(why))
+		Other => usage_read!(connection, request_id, so_far)
+	}
+}
 
 ## Every enabled provider's projects and workspaces, each workspace with its
 ## sessions and as urgent as the most urgent of them. Paseo's come from what
@@ -3266,6 +3359,12 @@ paseo_cycle! = |{ db, paseo, summary_model, upstream, .. }|
 							pending = Sqlite.query_many!({ db, query: "SELECT kind, subject FROM paseo_pending;", params: {}, limits: Sqlite.default_query_limits })?
 							by_kind = ["agent_list", "workspace_list", "importable", "agent_kinds", "schedules", "schedule_runs", "timeline", "workspace", "uncommitted", "base", "commit_file", "tree", "file"].fold([], |so_far, kind| so_far.concat(wanted.keep_if(|item| item.kind == kind)))
 							asked_each!(db, connection, by_kind.keep_if(|item| pending.contains(item)).concat(by_kind.drop_if(|item| pending.contains(item))), 1, began)
+							if watched.any(|item| item.kind == "usage") and !recently_checked!(db, "usage", usage_interval_ms)? {
+								match usage_fetched!(db, connection, features) {
+									Ok({}) => {}
+									Err(err) => logged!("Paseo: asking for its usage failed: ${Str.inspect(err)}")
+								}
+							}
 							match summary_model {
 								Ok(configured) if features.background_agents =>
 									match summarized!(db, connection, configured) {

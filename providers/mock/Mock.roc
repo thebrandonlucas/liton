@@ -2,6 +2,7 @@ import cap.Capability
 import cap.Chat
 import cap.Files
 import cap.Manifest
+import cap.Usage
 import cap.WorkspaceGit
 import cap.Workspaces
 
@@ -9,11 +10,11 @@ Mock := [].{
 
 	## The mock provider, with every capability it can offer.
 	provider : Manifest.Provider
-	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1, Capability.schedules_v1] }
+	provider = { id: "mock", name: "Mock agents", capabilities: [Capability.chat_v1, Capability.workspace_git_v1, Capability.workspaces_v1, Capability.files_v1, Capability.rooms_v1, Capability.tickets_v1, Capability.schedules_v1, Capability.usage_v1] }
 
 	## The parts of the mock a daemon offers: its scripted agents (chat,
-	## workspaces, workspace.git, files and schedules), its rooms and its
-	## tickets.
+	## workspaces, workspace.git, files, schedules and usage), its rooms and
+	## its tickets.
 	Parts : { agents : Bool, rooms : Bool, tickets : Bool }
 
 	## The mock provider offering only the capabilities of `parts`.
@@ -118,6 +119,14 @@ Mock := [].{
 	## asks for a plan gets one to approve, in Markdown with its own choices.
 	on_message : Str, U64 -> List(Scheduled)
 	on_message = |text, next| {
+		if Mock.compacts(text) {
+			return [
+				{ delay_ms: 0, event: UserMessage({ text: text }) },
+				{ delay_ms: 400, event: StatusChanged(Running) },
+				{ delay_ms: 1200, event: AgentMessage({ text: "Compacted the conversation into a summary." }) },
+				{ delay_ms: 1200, event: StatusChanged(Idle) },
+			]
+		}
 		call_id = "call-${next.to_str()}"
 		request_id = "permission-${next.to_str()}"
 		asked : Chat.Permission
@@ -288,8 +297,8 @@ Mock := [].{
 	## is working on started, waiting for you or not, and when it last
 	## changed.
 	## Its model, mode and thinking level are those of `settings`, or else its
-	## agent's defaults, what its last turn used grows with each message, and
-	## its summary is `Mock.summary`'s.
+	## agent's defaults, what its last turn used grows with each message
+	## since it was last compacted, and its summary is `Mock.summary`'s.
 	session : { id : Str, agent : Str, title : Str, settings : Settings }, List(Workspaces.Workspace), List({ visible_at : I64, event : Chat.Event }) -> Chat.Session
 	session = |{ id, agent, title, settings }, listed_workspaces, timed| {
 		current = Mock.status(timed.map(|shown| { sequence: 0, event: shown.event }))
@@ -299,6 +308,13 @@ Mock := [].{
 		running = (kind.models ?? []).find_first(|offered| offered.id == model)
 		default_thinking = running.map_ok(|offered| offered.thinking.find_first(|level| level.default).map_ok(|level| level.id) ?? "") ?? ""
 		told = |chosen| if (chosen.is_empty()) Err(Missing) else Ok(chosen)
+		compacted_at = timed.find_last_index(
+			|shown| match shown.event {
+				UserMessage({ text }) => Mock.compacts(text)
+				_ => Bool.False
+			},
+		)
+		since_compacted = compacted_at.map_ok(|at| timed.drop_first(at)) ?? timed
 		{
 			..Chat.session({ id, provider: "mock", agent, title, status: current }),
 			model: told(model),
@@ -314,7 +330,7 @@ Mock := [].{
 			mode: told(Mock.or_default(settings.mode, kind.default_mode ?? "")),
 			thinking: told(Mock.or_default(settings.thinking, default_thinking)),
 			modes: kind.modes,
-			usage: Mock.usage(timed.count_if(|shown| Mock.asks(shown.event)), running.map_ok(|offered| offered.context_max ?? 0) ?? 0),
+			usage: Mock.usage(since_compacted.count_if(|shown| Mock.asks(shown.event)), running.map_ok(|offered| offered.context_max ?? 0) ?? 0),
 			summary: Mock.summary(timed.map(|shown| shown.event), current),
 		}
 	}
@@ -383,6 +399,38 @@ Mock := [].{
 			input = 9_000 * turns
 			Ok({ context_used: Ok(U64.min(8_000 + 11_500 * turns, context_max)), context_max: Ok(context_max), input_tokens: Ok(input), cached_input_tokens: Ok(input - 9_000), output_tokens: Ok(1_200 * turns), cost_usd: Ok(0.06 * turns.to_dec()) })
 		}
+
+	## Whether a message compacts its session's context, as `/compact` does.
+	compacts : Str -> Bool
+	compacts = |text| text.trim().starts_with("/compact")
+
+	## The usage reports of the mock's accounts at `now`, ms since the
+	## epoch, one for each kind of agent: its 5-hour and weekly windows fill
+	## with each message its sessions were sent, `asked`, and reset at the
+	## next 5 hours and week from the epoch.
+	usage_reports : List({ agent : Str, asked : U64 }), I64 -> List(Usage.Report)
+	usage_reports = |asked, now| {
+		five_hours = 5 * 3_600_000
+		week = 7 * 24 * 3_600_000
+		Mock.agents.map(
+			|kind| {
+				messages = asked.find_first(|row| row.agent == kind.agent).map_ok(|row| row.asked) ?? 0
+				percent = |base, step| Ok(U64.min(100, base + step * messages).to_dec())
+				{
+					provider: "mock",
+					source: kind.agent,
+					account: "${kind.agent}@mock",
+					plan: "Mock Max",
+					status: Available,
+					windows: [
+						{ id: "five_hour", label: "5-hour", short: "5h", used_pct: percent(6, 4), resets_at: Ok(Chat.timestamp((now // five_hours + 1) * five_hours)) },
+						{ id: Usage.weekly_id, label: "Weekly", short: "wk", used_pct: percent(31, 2), resets_at: Ok(Chat.timestamp((now // week + 1) * week)) },
+					],
+					balances: [],
+				}
+			},
+		)
+	}
 
 	asks : Chat.Event -> Bool
 	asks = |event|
@@ -667,4 +715,18 @@ expect {
 		and set(defaults, Ok("gpt-5"), Err(Missing), Err(Missing)) == Err("the mock's claude runs no model gpt-5")
 		and set(defaults, Err(Missing), Ok("auto"), Err(Missing)) == Err("the mock's claude has no mode auto")
 		and set(defaults, Err(Missing), Err(Missing), Ok("max")) == Err("the model has no thinking level max")
+}
+
+# A session's context grows with each message, and /compact empties it.
+expect {
+	told = |events| Mock.session({ id: "notes", agent: "claude", title: "", settings: defaults }, [], events.map(|event| { visible_at: 0, event })).usage.map_ok(|used| used.context_used)
+	asked = |text| UserMessage({ text: text })
+	told([asked("a"), asked("b")]) == Ok(Ok(31_000)) and told([asked("a"), asked("b"), asked("/compact"), asked("c")]) == Ok(Ok(31_000)) and told([asked("a"), asked("/compact")]) == Ok(Ok(19_500)) and Mock.on_message("/compact", 3).len() == 4
+}
+
+# Each kind of agent's account fills its windows with its messages.
+expect {
+	reports = Mock.usage_reports([{ agent: "codex", asked: 3 }], 3_600_000)
+	weekly = |source| reports.find_first(|report| report.source == source).map_ok(|report| Usage.weekly(report).map_ok(|window| (window.used_pct, window.resets_at)))
+	reports.map(|report| report.source) == ["claude", "codex"] and weekly("codex") == Ok(Ok((Ok(37), Ok("1970-01-08T00:00:00.000Z")))) and weekly("claude") == Ok(Ok((Ok(31), Ok("1970-01-08T00:00:00.000Z"))))
 }

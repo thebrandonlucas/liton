@@ -28,7 +28,9 @@ Transformer := [].{
 	## JSON, "" at first) and the time in ms since the epoch, its new state
 	## and the events of each topic it offers. `call`: from its inputs, state,
 	## a call's body and the time, its new state and the JSON of the call's
-	## `Protocol.Answer`.
+	## `Protocol.Answer`. `guards`: the capabilities whose calls it may
+	## refuse, and `guard`: from its inputs, its state and such a call's
+	## body, `Ok` to let the call through, or why it is refused.
 	Part : {
 		id : Str,
 		name : Str,
@@ -37,6 +39,8 @@ Transformer := [].{
 		follows : List(Input) -> List(Topic),
 		derive : List(Input), Str, I64 -> { state : Str, topics : List(Derived) },
 		call : List(Input), Str, Str, I64 -> { state : Str, answer : Str },
+		guards : List(Str),
+		guard : List(Input), Str, Str -> Try({}, Str),
 	}
 
 	## How the manifest lists a part: the capabilities of the topics it uses.
@@ -90,6 +94,8 @@ counted = {
 	follows: |_| [],
 	derive: |inputs, state, _| { state, topics: [{ topic: "count", events: [Sessions([])] }, { topic: "log", events: inputs.map_with_index(|_, index| Entry({ sequence: index.to_u64() + 1, event: StatusChanged(Idle) })) }] },
 	call: |_, state, _, _| { state, answer: "" },
+	guards: [],
+	guard: |_, _, _| Ok({}),
 }
 
 expect Transformer.declared(counted) == { id: "counted", name: "Counted", offers: { name: "counted", version: 1 }, uses: [Capability.chat_v1] }

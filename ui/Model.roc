@@ -6,6 +6,7 @@ import cap.Chat
 import cap.Context
 import cap.Files
 import cap.Hosts
+import cap.Limits
 import cap.People
 import cap.Manifest
 import cap.Protocol
@@ -13,6 +14,7 @@ import cap.Review
 import cap.Rooms
 import cap.Schedules
 import cap.Tickets
+import cap.Usage
 import cap.WorkspaceGit
 import cap.Workspaces
 import setup.Default
@@ -21,6 +23,7 @@ import setup.Setup
 import Highlight
 import History
 import HostDesk
+import LimitDesk
 import PeopleDesk
 import ReviewDesk
 import ScheduleDesk
@@ -406,6 +409,11 @@ Model := [].{
 		## requests on their way (sent as `call_outbox`).
 		hosts : HostDesk.State,
 
+		## The accounts' usage and the limits (ui/LimitDesk.roc), and the
+		## limits.v1 and usage.v1 requests on their way (sent as
+		## `call_outbox`).
+		limits : LimitDesk.State,
+
 		## What Settings' People shows (ui/PeopleDesk.roc), and the people.v1
 		## requests on their way (sent as `call_outbox`).
 		people : PeopleDesk.State,
@@ -628,6 +636,7 @@ Model := [].{
 				history: History.initial,
 				schedules: ScheduleDesk.initial,
 				hosts: HostDesk.initial,
+				limits: LimitDesk.initial,
 				people: PeopleDesk.initial,
 			},
 			restored.map_ok(Model.layout_of) ?? Model.developer,
@@ -2560,7 +2569,12 @@ Model := [].{
 		hosts = if (state.capabilities.contains(Capability.hosts_v1)) [HostList] else []
 		# The people, and the rooms an invite may name, while Settings shows them.
 		people = if (state.capabilities.contains(Capability.people_v1) and state.show_settings and state.settings_page.section == "people") [PeopleList].concat(if (offered(Capability.rooms_v1)) [RoomList] else []) else []
-		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
+		# The accounts' usage while Settings' Usage & limits or the
+		# connection menu shows it, and the limits while those or a chat do.
+		accounts_shown = (state.show_settings and state.settings_page.section == "usage") or state.menu == "connection"
+		usage = if (state.capabilities.contains(Capability.usage_v1) and accounts_shown) [UsageReports] else []
+		limits = if (state.capabilities.contains(Capability.limits_v1) and (accounts_shown or laid_out.any(|shown| shown.widget == "chat"))) [LimitStatus] else []
+		all = (if (offered(Capability.chat_v1)) [Sessions] else []).concat(hosts).concat(people).concat(usage).concat(limits).concat(schedules).concat(timelines).concat(items).concat(changes).concat(explored).concat(listing).concat(voice).concat(threads).concat(tickets).concat(rooms).concat(agent_choices)
 		all.fold([], |found, subject| if (found.contains(subject)) found else found.append(subject))
 	}
 
@@ -2644,7 +2658,7 @@ Model := [].{
 		edits_left = answered_topics.editing.drop_if(|asked| asked.accepted > 0 and asked.accepted <= sent.serial)
 		applied = if (edits_left.len() == answered_topics.editing.len()) answered_topics else Model.relisted({ ..answered_topics, editing: edits_left })
 		on_tab = Model.focus_latest(applied)
-		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), people: PeopleDesk.settled(applied.people, sent.serial) }
+		settled = { ..on_tab, polling: Bool.False, poll_again: Bool.False, tickets: TicketDesk.settled(applied.tickets, sent.serial), schedules: ScheduleDesk.settled(applied.schedules, sent.serial), hosts: HostDesk.settled(applied.hosts, sent.serial), people: PeopleDesk.settled(applied.people, sent.serial), limits: LimitDesk.settled(applied.limits, sent.serial) }
 		answered0 = { ..settled, sent: settled.sent.drop_if(|sent_request| Model.confirmed(settled, sent_request)), creating: settled.creating.drop_if(|creating| Model.made_listed(settled, creating)), room_asks: Model.posted_sent(settled).room_asks.drop_if(|asked| asked.message_id.is_empty() and asked.accepted > 0 and asked.accepted <= sent.serial) }
 		# A timeline the daemon has yet to fetch is asked for at once.
 		answered = if (answered0.refresh.offered and !answered0.refresh.on_its_way and answered0.refreshing.any(|session_id| !state.refreshing.contains(session_id))) Model.refreshed_again(answered0) else answered0
@@ -2722,6 +2736,8 @@ Model := [].{
 			(_, Schedules(listed)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Listed(listed)) }
 			(ScheduleRuns(schedule_id), Runs(runs)) => { ..state, schedules: ScheduleDesk.received(state.schedules, Ran(schedule_id, runs)) }
 			(_, Hosts(listed)) => { ..state, hosts: { ..state.hosts, listed } }
+			(_, Reports(reports)) => { ..state, limits: { ..state.limits, reports } }
+			(_, Limits(status)) => { ..state, limits: { ..state.limits, status } }
 			(_, People(listed)) => { ..state, people: { ..state.people, listed } }
 			(_, Status({ stt })) => { ..state, voice: { ..state.voice, engine: stt } }
 			(Changes({ context, .. }), Changes({ workspace, status, changes, commits })) =>
@@ -4103,6 +4119,33 @@ Model := [].{
 		}
 	}
 
+	## Sets or clears a limit, shown at once (`LimitDesk`) until the daemon
+	## answers: the slider of `scope` moved to `text` percent, 0 for none.
+	set_limit : State, Limits.Scope, Str -> State
+	set_limit = |state, scope, text|
+		match LimitDesk.request_of(scope, text) {
+			Ok(request) => {
+				serial = state.call_outbox.serial + 1
+				{ ..state, call_outbox: { serial, key: "limits.v1", text: Json.to_str({ capability: "limits.v1", request }) }, limits: LimitDesk.asking(state.limits, serial, request), notice: "" }
+			}
+			Err(NotANumber) => state
+		}
+
+	## Takes the daemon's answer to a limits.v1 request: accepted, it holds
+	## until the poll it asks for shows it; refused, it is undone, with why.
+	limits_answered : State, U64, Str -> State
+	limits_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Limits.Response), _)
+		answered = Json.parse(text)
+		undone = |reason| { ..state, limits: LimitDesk.answered(state.limits, serial, Refused), notice: reason }
+		match answered {
+			Ok(Ok(Rejected(reason))) => undone(reason)
+			Ok(Ok(Accepted)) => Model.poll({ ..state, limits: LimitDesk.answered(state.limits, serial, Accepted(state.poll.serial + 1)) })
+			Ok(Err({ message, .. })) => undone(message)
+			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
 	## Sends a people.v1 request, shown at once until the daemon answers.
 	ask_people : State, People.Request -> State
 	ask_people = |state, request| {
@@ -4134,6 +4177,69 @@ Model := [].{
 			Ok(Ok(_)) => accepted(state.people)
 			Ok(Err({ message, .. })) => undone(message)
 			Err(_) => undone("The daemon did not answer.")
+		}
+	}
+
+	## Asks the providers for their accounts' usage again, shown as
+	## refreshing until the daemon answers.
+	refresh_usage : State -> State
+	refresh_usage = |state| {
+		serial = state.call_outbox.serial + 1
+		request : Usage.Request
+		request = Refresh
+		{ ..state, call_outbox: { serial, key: "usage.v1", text: Json.to_str({ capability: "usage.v1", request }) }, limits: { ..state.limits, refreshing: serial } }
+	}
+
+	## Takes the daemon's answer to a Refresh: the next poll shows the
+	## reports.
+	usage_answered : State, U64, Str -> State
+	usage_answered = |state, serial, text| {
+		answered : Try(Protocol.Answer(Usage.Response), _)
+		answered = Json.parse(text)
+		done = { ..state, limits: { ..state.limits, refreshing: if (state.limits.refreshing == serial) 0 else state.limits.refreshing } }
+		match answered {
+			Ok(Ok(Accepted)) => Model.poll(done)
+			Ok(Err({ message, .. })) => { ..done, notice: message }
+			Err(_) => { ..done, notice: "The daemon did not answer." }
+		}
+	}
+
+	## Whether a session's agent makes room in its context when sent
+	## `/compact`, as Claude's and Codex's do.
+	compacts : Chat.Session -> Bool
+	compacts = |shown_session| ["claude", "codex"].contains(shown_session.agent)
+
+	## Sends `/compact` to the session a chat pane shows, shown as sent at
+	## once, and closes its menu.
+	compact : State, Str -> State
+	compact = |state, pane_id| {
+		session_id = Model.session_of(state, Model.pane(state, pane_id))
+		if (session_id.is_empty()) state else { ..Model.send(state, SendMessage({ session_id, text: "/compact", while_running: Err(Missing) })), menu: "" }
+	}
+
+	## Opens the form to start an agent of the same kind as the session a
+	## chat pane shows, in its workspace, to start fresh.
+	start_fresh : State, Str -> State
+	start_fresh = |state, pane_id| {
+		shown_session = Model.session(state, Model.session_of(state, Model.pane(state, pane_id)))
+		opened = Model.navigator_form({ ..state, menu: "" }, shown_session.id)
+		if (opened.form.kind == Agent and Model.agent_kinds(opened, opened.form.place).contains(shown_session.agent)) { ..opened, form: { ..opened.form, agent: shown_session.agent } } else opened
+	}
+
+	## How near the session a chat pane shows is to its limits: its context
+	## (`Context`), or else its account's week (`Week`), the first Over, or
+	## else Near; `Clear` while neither is.
+	limit_of_pane : State, Str -> [Context(Limits.SessionStatus), Week(Limits.WeekStatus), Clear]
+	limit_of_pane = |state, pane_id| {
+		shown_session = Model.session(state, Model.session_of(state, Model.pane(state, pane_id)))
+		context = LimitDesk.session(state.limits, shown_session.id)
+		week = LimitDesk.week_of(state.limits, shown_session.provider, shown_session.agent)
+		match (context, week) {
+			(Ok(row), _) if row.state == Over => Context(row)
+			(_, Ok(row)) if row.state == Over => Week(row)
+			(Ok(row), _) if row.state == Near => Context(row)
+			(_, Ok(row)) if row.state == Near => Week(row)
+			_ => Clear
 		}
 	}
 

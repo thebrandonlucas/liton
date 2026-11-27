@@ -1,5 +1,6 @@
 ## attention.v1 as a transformer: an item for each of chat.v1's sessions,
-## from its timeline, ranked (see Attention). Its state (`Kept`) is the
+## from its timeline, ranked (see Attention), warned when limits.v1, if
+## offered, says it nears or passed its context limit. Its state (`Kept`) is the
 ## settles and snoozes that still hold, the sessions seen, and when it saw
 ## each session change whose provider doesn't say.
 import cap.Attention
@@ -17,12 +18,14 @@ AttentionTransformer := [].{
 		name: "Attention",
 		offers: { capability: Capability.attention_v1, patterns: ["items"] },
 		uses: [{ capability: "chat.v1", topic: "sessions" }],
-		follows: |inputs| sessions(inputs).map(|session| { capability: "chat.v1", topic: "timeline/${session.id}" }),
+		follows: |inputs| sessions(inputs).map(|session| { capability: "chat.v1", topic: "timeline/${session.id}" }).append({ capability: "limits.v1", topic: "status" }),
 		derive: |inputs, stored, now| {
 			{ kept, items } = attended(inputs, stored, now)
 			{ state: Json.to_str(kept), topics: [{ topic: "items", events: [Items(items)] }] }
 		},
 		call,
+		guards: [],
+		guard: |_, _, _| Ok({}),
 	}
 
 	## `observed`: when the daemon first saw a session as its `signature` is,
@@ -56,7 +59,19 @@ attended = |inputs, stored, now| {
 					_ => Err(NotEntry)
 				},
 		)
-	listed = sessions(inputs).map(|session| Attention.item(session, timeline(session.id)))
+	limits = inputs.join_map(|input| input.events).find_first(
+		|event|
+			match event {
+				Limits(_) => Bool.True
+				_ => Bool.False
+			},
+	)
+	warned = |shown|
+		match limits {
+			Ok(Limits(status)) => Attention.warned(shown, status)
+			_ => shown
+		}
+	listed = sessions(inputs).map(|session| warned(Attention.item(session, timeline(session.id))))
 	decoded : Try(AttentionTransformer.Kept, _)
 	decoded = Json.parse(stored)
 	asides_only : Try(List(Attention.Aside), _)
@@ -106,7 +121,16 @@ fixture = [
 called : Str, Str -> { state : Str, answer : Str }
 called = |stored, request| (AttentionTransformer.part.call)(fixture, stored, "{\"capability\":\"attention.v1\",\"request\":${request}}", 0)
 
-expect (AttentionTransformer.part.follows)(fixture) == [{ capability: "chat.v1", topic: "timeline/s1" }, { capability: "chat.v1", topic: "timeline/s2" }]
+expect (AttentionTransformer.part.follows)(fixture) == [{ capability: "chat.v1", topic: "timeline/s1" }, { capability: "chat.v1", topic: "timeline/s2" }, { capability: "limits.v1", topic: "status" }]
+
+# A session past its context limit is warned, as limits.v1 tells.
+expect {
+	status = { limits: [], sessions: [{ session_id: "s2", used_pct: 90, limit_pct: Ok(80), state: Over }], weeks: [] }
+	match (AttentionTransformer.part.derive)(fixture.append({ capability: "limits.v1", topic: "status", events: [Limits(status)] }), "", 0).topics {
+		[{ topic: "items", events: [Items([first, second])] }] => first.warning == Err(Missing) and second.warning == Ok("Over its context limit: 90% of 80%. Compact it or start fresh")
+		_ => Bool.False
+	}
+}
 
 # Each session's item, from its timeline, ranked, unread, and changed when
 # the daemon saw it change, as the mock's sessions tell no time.
