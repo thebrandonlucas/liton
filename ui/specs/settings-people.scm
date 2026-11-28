@@ -15,6 +15,8 @@
     (expect-text (test-id "invite-failed") "Name whom the invite is for.")
     (fill (label "Who the invite is for") "Eli")
     (click (role button :name "staff"))
+    (expect-attr (role button :name "staff") aria-pressed "true")
+    (expect-attr (role button :name "admin") aria-pressed "false")
     (click (label "In #dispatch"))
     (click (role button :name "Make the invite link"))
     ; Shown before the daemon answers.

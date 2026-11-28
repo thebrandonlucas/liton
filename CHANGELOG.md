@@ -17,6 +17,7 @@ All notable changes to liton are documented in this file. The format is based on
 
 ### Fixed
 
+- Settings → People's invite shows which role it is into: its role buttons are labelled Role, and the one picked is highlighted, where none looked picked.
 - A box whose database predates 0.2.0's people, without the Nostr relay's tables, starts again: its devices, pairing codes and invites gain the columns 0.2.0 added, and its devices stay signed in as the owner's, with no expiry, where every request failed with "no such column: person_id" and the browser said it couldn't reach the daemon.
 
 ## [0.2.0] - 2026-11-24
