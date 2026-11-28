@@ -1064,10 +1064,16 @@ Liton := [].{
 						Html.div(
 							"settings-row people-roles",
 							[
-								Engine.each(
-									desk.map(|shown| shown.listed.roles),
-									|role| role,
-									|row| Html.button_s(row.key(), [Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |role, state| state.people.form.role == role))], model.lift_row().update_by(row.key(), |state, role| { ..state, people: { ..state.people, form: { ..state.people.form, role } } })),
+								Engine.text("Role"),
+								Html.div_attrs(
+									[Engine.class("choices"), Engine.attr("role", "group"), Engine.attr("aria-label", "Role")],
+									[
+										Engine.each(
+											desk.map(|shown| shown.listed.roles),
+											|role| role,
+											|row| Html.button_s(row.key(), [Html.flag("aria-pressed", row.key().map2(model.signal().lift_row(), |role, state| state.people.form.role == role))], model.lift_row().update_by(row.key(), |state, role| { ..state, people: { ..state.people, form: { ..state.people.form, role } } })),
+										),
+									],
 								),
 							],
 						),
